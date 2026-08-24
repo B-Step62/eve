@@ -230,6 +230,7 @@ function createResolvedAgentConfig(
 
   if (manifest.config.experimental !== undefined) {
     config.experimental = {
+      codeMode: manifest.config.experimental.codeMode,
       instrumentationProviders: manifest.config.experimental.instrumentationProviders,
       tasks: manifest.config.experimental.tasks,
       workflow:

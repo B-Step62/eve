@@ -592,6 +592,7 @@ const compiledAgentConfigBaseFields = {
   description: z.string().optional(),
   experimental: z
     .object({
+      codeMode: z.union([z.literal(false), z.literal("eager"), z.literal("lazy")]).optional(),
       instrumentationProviders: z.boolean().optional(),
       tasks: z.boolean().optional(),
       workflow: compiledAgentWorkflowDefinitionSchema.optional(),
@@ -1134,6 +1135,7 @@ function cloneCompiledAgentDefinition(config: CompiledAgentDefinition): Compiled
       config.experimental === undefined
         ? undefined
         : {
+            codeMode: config.experimental.codeMode,
             instrumentationProviders: config.experimental.instrumentationProviders,
             tasks: config.experimental.tasks,
             workflow:
