@@ -192,11 +192,12 @@ export interface AgentLimitsDefinition {
  */
 export interface AgentExperimentalDefinition {
   /**
-   * Runs this agent's ordinary executable tools through a `code_mode` sandbox
-   * tool instead of direct tool calls. The model writes JavaScript that calls
-   * them as `tools.name(input)` inside an isolated sandbox; the tools leave
-   * the direct model surface. Delegations, approval-gated tools, background
-   * tools, and control-plane tools stay directly callable.
+   * Runs this agent's ordinary executable tools through one workflow-backed
+   * `code_mode` tool instead of direct model calls. The model writes JavaScript
+   * that calls them as `tools.name(input)` inside an isolated sandbox. Each
+   * outer call owns a dedicated Workflow run; an abandoned execution fails
+   * without replaying the program. Delegations, dynamically approval-gated
+   * tools, background tools, and control-plane tools stay directly callable.
    *
    * - `"eager"`: the tool description inlines every sandboxed tool signature.
    * - `"lazy"`: the tool description lists names only; generated code

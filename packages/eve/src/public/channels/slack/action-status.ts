@@ -67,6 +67,8 @@ function toolCallLabel(toolName: string, input: Readonly<Record<string, unknown>
  */
 export function describeActionRequest(action: RuntimeActionRequest): string {
   switch (action.kind) {
+    case "code-mode-run":
+      return toolCallLabel("code_mode", action.input);
     case "load-skill":
       return toolCallLabel("load_skill", action.input);
     case "remote-agent-call":

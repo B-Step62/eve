@@ -27,10 +27,10 @@ import {
 } from "#harness/proxy-input-requests.js";
 import { abandonRunningAgentTurns } from "#harness/handles/transitions.js";
 import { clearPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
+import { clearCodeModeRun } from "#execution/code-mode-run/state.js";
 import { createInstrumentationHandleEvent } from "#harness/instrumentation/native-events.js";
 import { getInstrumentationRuntime } from "#harness/instrumentation/runtime.js";
 import { getTurnUsageState, toUsage } from "#harness/turn-tag-state.js";
-import { clearPendingWorkflowInterrupt } from "#harness/workflow-interrupt-state.js";
 import {
   encodeMessageStreamEvent,
   type UnstampedMessageStreamEvent,

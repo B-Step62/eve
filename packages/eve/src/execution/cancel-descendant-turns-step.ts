@@ -8,6 +8,8 @@ import {
   resolveRemoteAgentForAction,
 } from "#execution/remote-agent-dispatch.js";
 import { requestWorkflowTurnCancellation } from "#execution/workflow-runtime.js";
+import { getCodeModeRun } from "#execution/code-mode-run/state.js";
+import { cancelRun, getWorld } from "#internal/workflow/runtime.js";
 import { getAgentHandleStore, type AgentHandle } from "#harness/handles/store.js";
 import { createLogger, logError } from "#internal/logging.js";
 import type { RuntimeSubagentRegistry } from "#runtime/subagents/registry.js";
@@ -32,11 +34,13 @@ export async function cancelDescendantTurnsStep(input: {
   "use step";
 
   let running: readonly RunningAgentHandle[];
+  let codeModeRunId: string | undefined;
   try {
     const session = await readDurableSession(input.sessionState);
     running = (getAgentHandleStore(session.state)?.handles ?? []).filter(
       (handle): handle is RunningAgentHandle => handle.phase === "running",
     );
+    codeModeRunId = getCodeModeRun(session.state)?.runId;
   } catch (error) {
     logError(log, "failed to read pending descendants during cancellation", error, {
       sessionId: input.sessionState.sessionId,
@@ -44,7 +48,7 @@ export async function cancelDescendantTurnsStep(input: {
     return;
   }
 
-  if (running.length === 0) return;
+  if (running.length === 0 && codeModeRunId === undefined) return;
 
   let remoteContext:
     | Promise<{
@@ -58,13 +62,22 @@ export async function cancelDescendantTurnsStep(input: {
       registry: ctx.require(BundleKey).subagentRegistry.subagentsByNodeId,
     })));
 
-  await Promise.all(
-    running.map((handle) =>
+  await Promise.all([
+    ...running.map((handle) =>
       handle.address.kind === "agent/remote"
         ? cancelRemoteDescendant({ handle, remoteContext: getRemoteContext() })
         : cancelLocalDescendant({ handle }),
     ),
-  );
+    ...(codeModeRunId === undefined
+      ? []
+      : [
+          cancelRun(await getWorld(), codeModeRunId, {
+            cancelReason: "Parent turn cancelled",
+          }).catch((error) => {
+            logError(log, "failed to cancel code-mode run", error, { runId: codeModeRunId });
+          }),
+        ]),
+  ]);
 }
 
 async function cancelLocalDescendant(input: {

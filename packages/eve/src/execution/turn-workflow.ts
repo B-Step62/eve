@@ -1,4 +1,5 @@
 import { isInboxSubagentResultFromRunningHandle } from "#harness/handles/query.js";
+import { isCodeModeRunResult } from "#execution/code-mode-run/state.js";
 import {
   createHook,
   getWorkflowMetadata,
@@ -12,7 +13,7 @@ import { sendTurnControlStep, type TurnInboxPayload } from "#execution/turn-cont
 import { dispatchRuntimeActionsStep } from "#execution/dispatch-runtime-actions-step.js";
 import { acknowledgeDelegatedTasksStep } from "#execution/tasks/parent/delegate.js";
 import { dispatchTaskStep } from "#execution/tasks/parent/dispatch-task-step.js";
-import { dispatchWorkflowRuntimeActionsStep } from "#execution/dispatch-workflow-runtime-actions-step.js";
+import { acknowledgeCodeModeRunsStep } from "#execution/code-mode-run/ready-step.js";
 import {
   migrateTurnWorkflowInput,
   type TurnStepInput,
@@ -107,9 +108,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
       };
       const result = await turnStep(cursor.createStepInput(nextStepInput, cancellation?.signal));
       const pendingActionKeys =
-        result.action === "dispatch-workflow-runtime-actions" || result.action === "park"
-          ? result.pendingRuntimeActionKeys
-          : undefined;
+        result.action === "park" ? result.pendingRuntimeActionKeys : undefined;
       const hasBackgroundTasks = (result.backgroundTasks?.length ?? 0) > 0;
 
       if (hasBackgroundTasks) {
@@ -195,9 +194,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
         await cursor.adopt(result);
         const hasPendingTasks = result.action === "park" && result.tasksEnabled;
         let dispatch;
-        if (result.action === "dispatch-workflow-runtime-actions") {
-          dispatch = dispatchWorkflowRuntimeActionsStep;
-        } else if (hasPendingTasks) {
+        if (hasPendingTasks) {
           dispatch = dispatchTaskStep;
         } else {
           dispatch = dispatchRuntimeActionsStep;
@@ -211,6 +208,13 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
         });
         const initialAcceptedAtMs = dispatchResult.results.length === 0 ? undefined : Date.now();
         await cursor.adopt(dispatchResult);
+        await acknowledgeCodeModeRunsStep(
+          "pendingCodeModeRuns" in dispatchResult &&
+            Array.isArray(dispatchResult.pendingCodeModeRuns)
+            ? dispatchResult.pendingCodeModeRuns
+            : [],
+          cursor.sessionState,
+        );
         await acknowledgeDelegatedTasksStep({ tasks: dispatchResult.pendingTasks });
 
         const results = await waitForRuntimeActionResults({
@@ -388,6 +392,16 @@ async function waitForRuntimeActionResults(input: {
     if (next.done) throw new Error("Turn inbox closed before runtime actions completed.");
 
     const value = next.value;
+    if (value.kind === "code-mode-result") {
+      const sessionSnapshotState = input.cursor.sessionState.snapshot?.session.state;
+      if (isCodeModeRunResult(sessionSnapshotState, value.result)) {
+        await input.cursor.adopt({ sessionState: value.sessionState });
+        const acceptedAtMs = Date.now();
+        results.push(value.result);
+        acceptedAtMsByKey.set(getRuntimeActionResultKey(value.result), acceptedAtMs);
+      }
+      continue;
+    }
     if (value.kind === "runtime-action-result") {
       // The inbox token is shared by every callee in the batch, so an inbox
       // subagent result must bind to a running agent handle in the adopted
@@ -399,7 +413,9 @@ async function waitForRuntimeActionResults(input: {
       // dispatch error already in `results`) still resolves the wait.
       const sessionSnapshotState = input.cursor.sessionState.snapshot?.session.state;
       const accepted = value.results.filter((result) =>
-        isInboxSubagentResultFromRunningHandle(sessionSnapshotState, result),
+        result.kind === "tool-result"
+          ? isCodeModeRunResult(sessionSnapshotState, result)
+          : isInboxSubagentResultFromRunningHandle(sessionSnapshotState, result),
       );
       if (accepted.length > 0) {
         const acceptedAtMs = Date.now();
@@ -473,22 +489,6 @@ async function runLegacyTurnWorkflow(input: TurnWorkflowInput): Promise<void> {
               sessionState: result.sessionState,
               usage: result.usage,
               usageDelta: result.usageDelta,
-            },
-            kind: "turn-result",
-          },
-        });
-        return;
-      }
-
-      if (result.action === "dispatch-workflow-runtime-actions") {
-        await sendTurnControlStep({
-          controlToken: input.completionToken,
-          payload: {
-            action: {
-              kind: "dispatch-workflow-runtime-actions",
-              pendingActionKeys: result.pendingRuntimeActionKeys,
-              serializedContext: result.serializedContext,
-              sessionState: result.sessionState,
             },
             kind: "turn-result",
           },

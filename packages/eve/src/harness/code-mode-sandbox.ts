@@ -6,11 +6,9 @@ import { isNeverApproval } from "#tools/approval/policies.js";
 import { FINAL_OUTPUT_TOOL_NAME } from "#runtime/framework-tools/final-output.js";
 import { LOAD_SKILL_TOOL_NAME } from "#runtime/skills/fragment-context.js";
 import {
-  createWorkflowSandboxTool,
-  WORKFLOW_TOOL_NAME,
-  type WorkflowSandboxContinuationSecurity,
-  type WorkflowSandboxLifecycle,
-} from "#shared/workflow-sandbox.js";
+  createCodeModeRuntimeTool,
+  type CodeModeContinuationSecurity,
+} from "#shared/code-mode-runtime.js";
 
 /** Model-facing tool name for the experimental code-mode sandbox. */
 export const CODE_MODE_TOOL_NAME = "code_mode";
@@ -35,13 +33,12 @@ const CODE_MODE_ORCHESTRATION_INSTRUCTION =
 const NEVER_SANDBOXED_TOOL_NAMES: ReadonlySet<string> = new Set([
   LOAD_SKILL_TOOL_NAME,
   FINAL_OUTPUT_TOOL_NAME,
-  // A sandbox never nests the other sandbox tool.
-  WORKFLOW_TOOL_NAME,
 ]);
 
 export type CodeModeMode = "eager" | "lazy";
 
 interface CodeModeToolSet {
+  readonly claimedToolNames: readonly string[];
   readonly modelTools: ToolSet;
 }
 
@@ -57,7 +54,7 @@ interface CodeModeToolSet {
  *
  * - it has a server-side `execute`;
  * - it is not a subagent/remote-agent delegation (`runtimeAction`), which
- *   parks on durable interrupts (that is the `Workflow` tool's job);
+ *   remains a direct model tool with its own durable child-session lifecycle;
  * - it has no approval policy or explicit `never()`; dynamically gated tools
  *   stay direct because native approval runs outside `execute`;
  * - it is not a background-execution tool (its execute needs batch wiring).
@@ -65,9 +62,8 @@ interface CodeModeToolSet {
  * Everything unclaimed stays a direct model tool.
  */
 export async function applyCodeModeTool(input: {
-  readonly continuationSecurity: WorkflowSandboxContinuationSecurity;
+  readonly continuationSecurity: CodeModeContinuationSecurity;
   readonly harnessTools: HarnessToolMap;
-  readonly lifecycle?: WorkflowSandboxLifecycle;
   readonly mode: CodeModeMode;
   readonly tools: ToolSet;
 }): Promise<CodeModeToolSet> {
@@ -83,21 +79,22 @@ export async function applyCodeModeTool(input: {
   }
 
   if (Object.keys(hostTools).length === 0) {
-    return { modelTools: input.tools };
+    return { claimedToolNames: [], modelTools: input.tools };
   }
+
+  const claimedToolNames = Object.keys(hostTools);
 
   if (input.mode === "lazy") {
     Object.assign(hostTools, createDiscoveryTools(hostTools));
   }
 
-  const codeModeTool = await createWorkflowSandboxTool({
+  const codeModeTool = await createCodeModeRuntimeTool({
     bridgeRequestLimit: CODE_MODE_BRIDGE_REQUEST_LIMIT,
     continuationSecurity: input.continuationSecurity,
     hostTools: hostTools as ToolSet,
-    lifecycle: input.lifecycle,
   });
 
-  modelTools[CODE_MODE_TOOL_NAME] =
+  const advertisedCodeModeTool =
     input.mode === "lazy"
       ? ({
           ...codeModeTool,
@@ -107,8 +104,44 @@ export async function applyCodeModeTool(input: {
           ...codeModeTool,
           description: `${CODE_MODE_ORCHESTRATION_INSTRUCTION}\n\n${codeModeTool.description ?? ""}`,
         } as ToolSet[string]);
+  modelTools[CODE_MODE_TOOL_NAME] = {
+    ...advertisedCodeModeTool,
+    execute: undefined,
+  } as ToolSet[string];
 
-  return { modelTools: modelTools as ToolSet };
+  return { claimedToolNames, modelTools: modelTools as ToolSet };
+}
+
+/** Executes one generated program against a reconstructed static host surface. */
+export async function executeCodeModeProgram(input: {
+  readonly continuationSecurity: CodeModeContinuationSecurity;
+  readonly harnessTools: HarnessToolMap;
+  readonly js: string;
+  readonly mode: CodeModeMode;
+  readonly toolCallId: string;
+  readonly toolNames: readonly string[];
+  readonly tools: ToolSet;
+}): Promise<unknown> {
+  const hostTools: Record<string, ToolSet[string]> = {};
+  for (const name of input.toolNames) {
+    const tool = input.tools[name];
+    if (tool !== undefined && claimsForCodeMode(name, tool, input.harnessTools)) {
+      hostTools[name] = wrapHostToolForCodeMode(tool);
+    }
+  }
+  if (input.mode === "lazy") Object.assign(hostTools, createDiscoveryTools(hostTools));
+  const codeModeTool = await createCodeModeRuntimeTool({
+    bridgeRequestLimit: CODE_MODE_BRIDGE_REQUEST_LIMIT,
+    continuationSecurity: input.continuationSecurity,
+    hostTools: hostTools as ToolSet,
+  });
+  if (codeModeTool.execute === undefined) throw new Error("code_mode has no executor");
+  return await codeModeTool.execute(
+    { js: input.js } as never,
+    {
+      toolCallId: input.toolCallId,
+    } as never,
+  );
 }
 
 function claimsForCodeMode(
@@ -120,7 +153,7 @@ function claimsForCodeMode(
   if (tool.execute === undefined) return false;
 
   const harnessTool = harnessTools.get(name);
-  if (harnessTool === undefined) return true;
+  if (harnessTool === undefined) return false;
   if (harnessTool.runtimeAction !== undefined) return false;
   if (harnessTool.approval !== undefined && !isNeverApproval(harnessTool.approval)) return false;
   if (harnessTool.execution === "background") return false;

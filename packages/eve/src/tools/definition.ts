@@ -372,3 +372,38 @@ export function isDisabledToolSentinel(value: unknown): value is DisabledToolSen
     (value as { kind?: unknown }).kind === DISABLED_TOOL_SENTINEL_KIND
   );
 }
+
+const EXPERIMENTAL_WORKFLOW_TOOL_KIND = "eve:enable-workflow-tool";
+
+/** @deprecated Use `defineAgent({ experimental: { codeMode } })`. */
+export interface ExperimentalWorkflowToolInput {
+  readonly maxSubagents?: number;
+}
+
+/** @deprecated The model-facing `Workflow` tool was replaced by `code_mode`. */
+export interface ExperimentalWorkflowToolDefinition extends ExperimentalWorkflowToolInput {
+  readonly kind: typeof EXPERIMENTAL_WORKFLOW_TOOL_KIND;
+}
+
+/**
+ * @deprecated The model-facing `Workflow` tool was replaced by
+ * `defineAgent({ experimental: { codeMode: "eager" | "lazy" } })`.
+ */
+export function experimental_workflow(
+  _input: ExperimentalWorkflowToolInput = {},
+): ExperimentalWorkflowToolDefinition {
+  throw new Error(
+    'experimental_workflow() was removed. Configure defineAgent({ experimental: { codeMode: "eager" | "lazy" } }) instead.',
+  );
+}
+
+/** @deprecated Retained only for source compatibility during migration. */
+export function isExperimentalWorkflowToolDefinition(
+  value: unknown,
+): value is ExperimentalWorkflowToolDefinition {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === EXPERIMENTAL_WORKFLOW_TOOL_KIND
+  );
+}

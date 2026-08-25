@@ -4,9 +4,9 @@ import type { HookPayload } from "#channel/types.js";
 import { SessionDynamicModelReferenceKey } from "#context/keys.js";
 import { cancelDescendantTurnsStep } from "#execution/cancel-descendant-turns-step.js";
 import { dispatchRuntimeActionsStep } from "#execution/dispatch-runtime-actions-step.js";
-import { dispatchWorkflowRuntimeActionsStep } from "#execution/dispatch-workflow-runtime-actions-step.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import { acknowledgeDelegatedTasksStep } from "#execution/tasks/parent/delegate.js";
+import { acknowledgeCodeModeRunsStep } from "#execution/code-mode-run/ready-step.js";
 import { runProxySubagentEventStep } from "#execution/subagent-event-proxy-step.js";
 import { turnWorkflow } from "#execution/turn-workflow.js";
 import {
@@ -47,16 +47,16 @@ vi.mock("./dispatch-runtime-actions-step.js", () => ({
   dispatchRuntimeActionsStep: vi.fn(),
 }));
 
-vi.mock("./dispatch-workflow-runtime-actions-step.js", () => ({
-  dispatchWorkflowRuntimeActionsStep: vi.fn(),
-}));
-
 vi.mock("./cancel-descendant-turns-step.js", () => ({
   cancelDescendantTurnsStep: vi.fn(),
 }));
 
 vi.mock("./tasks/parent/delegate.js", () => ({
   acknowledgeDelegatedTasksStep: vi.fn(),
+}));
+
+vi.mock("./code-mode-run/ready-step.js", () => ({
+  acknowledgeCodeModeRunsStep: vi.fn(),
 }));
 
 vi.mock("./workflow-callback-url.js", () => ({
@@ -693,6 +693,71 @@ describe("turnWorkflow", () => {
     now.mockRestore();
   });
 
+  it("adopts a code-mode run before ready and its returned session before resume", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(4_321);
+    const initialState = createSessionState();
+    const pendingState = withCodeModeRun(createSessionState(), "call-code");
+    const returnedState = withCodeModeRun(
+      createSessionState({ continuationToken: "http:returned" }),
+      "call-code",
+    );
+    const completedState = createSessionState({ continuationToken: "http:returned" });
+    installInbox([
+      {
+        kind: "code-mode-result",
+        result: {
+          callId: "call-code",
+          kind: "tool-result",
+          output: { ok: true },
+          toolName: "code_mode",
+        },
+        sessionState: returnedState,
+      },
+    ]);
+    vi.mocked(dispatchRuntimeActionsStep).mockResolvedValue({
+      pendingCodeModeRuns: [{ hookToken: "run-hook", runId: "run-code" }],
+      pendingTasks: [],
+      results: [],
+      sessionState: pendingState,
+    });
+    vi.mocked(turnStep)
+      .mockResolvedValueOnce({
+        action: "park",
+        hasPendingAuthorization: false,
+        hasPendingInputBatch: false,
+        pendingRuntimeActionKeys: ["tool-call:code_mode:call-code"],
+        serializedContext: { state: "pending" },
+        sessionState: initialState,
+      })
+      .mockResolvedValueOnce({
+        action: "done",
+        output: "done",
+        serializedContext: { state: "done" },
+        sessionState: completedState,
+      });
+
+    const { input } = createInput({
+      driverCapabilities: { turnInbox: true },
+      mode: "task",
+      sessionState: initialState,
+    });
+    await turnWorkflow(input);
+
+    expect(acknowledgeCodeModeRunsStep).toHaveBeenCalledWith(
+      [{ hookToken: "run-hook", runId: "run-code" }],
+      pendingState,
+    );
+    expect(vi.mocked(turnStep).mock.calls[1]?.[0]).toMatchObject({
+      input: {
+        acceptedAtMsByCallId: { "call-code": 4_321 },
+        kind: "runtime-action-result",
+        results: [expect.objectContaining({ callId: "call-code", output: { ok: true } })],
+      },
+      sessionState: returnedState,
+    });
+    now.mockRestore();
+  });
+
   it("waits for dispatch adoption before cascading a cancellation", async () => {
     const initialState = createSessionState({ continuationToken: "http:parent" });
     const pendingState = createSessionState({ continuationToken: "http:parent:turn" });
@@ -748,64 +813,6 @@ describe("turnWorkflow", () => {
     expect(vi.mocked(dispatchRuntimeActionsStep).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(cancelDescendantTurnsStep).mock.invocationCallOrder[0]!,
     );
-  });
-
-  it("keeps dynamic-workflow child dispatch and immediate remote failures in the same turn", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(2_345);
-    const pendingState = createSessionState();
-    const completedState = createSessionState();
-    installInbox([]);
-    vi.mocked(dispatchWorkflowRuntimeActionsStep).mockResolvedValue({
-      results: [
-        {
-          callId: "call-1",
-          isError: true,
-          kind: "subagent-result",
-          origin: "dispatch",
-          output: { code: "REMOTE_AGENT_START_FAILED", message: "remote unavailable" },
-          subagentName: "research",
-        },
-      ],
-      sessionState: pendingState,
-      pendingTasks: [],
-    });
-    vi.mocked(turnStep)
-      .mockResolvedValueOnce({
-        action: "dispatch-workflow-runtime-actions",
-        pendingRuntimeActionKeys: ["subagent-call:research:call-1"],
-        serializedContext: { state: "pending" },
-        sessionState: pendingState,
-      })
-      .mockResolvedValueOnce({
-        action: "done",
-        output: "handled failure",
-        serializedContext: { state: "done" },
-        sessionState: completedState,
-      });
-
-    const { input, parentWritable } = createInput({
-      driverCapabilities: { turnInbox: true },
-      mode: "task",
-      sessionState: pendingState,
-    });
-    await turnWorkflow(input);
-
-    expect(dispatchWorkflowRuntimeActionsStep).toHaveBeenCalledWith({
-      callbackBaseUrl: "https://eve.example.com",
-      parentContinuationToken: "turn-token:inbox",
-      parentWritable,
-      serializedContext: { state: "pending" },
-      sessionState: pendingState,
-    });
-    expect(vi.mocked(turnStep).mock.calls[1]?.[0].input).toEqual({
-      acceptedAtMsByCallId: { "call-1": 2_345 },
-      kind: "runtime-action-result",
-      results: [expect.objectContaining({ callId: "call-1", isError: true })],
-    });
-    expect(
-      resumeHookMock.mock.calls.filter((call) => call[1]?.kind === "turn-result"),
-    ).toHaveLength(1);
-    now.mockRestore();
   });
 
   it("proxies child HITL and pulls the response through the active turn", async () => {
@@ -1355,6 +1362,28 @@ function createSessionState(overrides: Partial<DurableSessionState> = {}): Durab
     sessionId: "wrun_test_123",
     version: 1,
     ...overrides,
+  };
+}
+
+function withCodeModeRun(state: DurableSessionState, callId: string): DurableSessionState {
+  return {
+    ...state,
+    snapshot: {
+      session: {
+        agent: { system: "" },
+        continuationToken: state.continuationToken,
+        history: [],
+        sessionId: state.sessionId,
+        state: {
+          "eve.runtime.codeModeRun": {
+            callId,
+            hookToken: "run-hook",
+            runId: "run-code",
+          },
+        },
+      },
+      version: 1,
+    },
   };
 }
 

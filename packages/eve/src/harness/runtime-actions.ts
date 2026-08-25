@@ -9,6 +9,7 @@ import type { AgentTurnOutcome } from "#shared/agent-turn-outcome.js";
 import { findRunningAgentHandle, isResultBoundToRunningHandle } from "#harness/handles/query.js";
 import { settleAgentTurn } from "#harness/handles/transitions.js";
 import { clearProxyInputRequestsForChild } from "#harness/proxy-input-requests.js";
+import { clearCodeModeRun, getCodeModeRun } from "#execution/code-mode-run/state.js";
 import {
   accumulateSessionUsage,
   getTurnUsageState,
@@ -275,6 +276,16 @@ export async function resolvePendingRuntimeActions(input: {
     }
   }
 
+  if (
+    readyResults.some(
+      (result) =>
+        result.kind === "tool-result" &&
+        getCodeModeRun(nextSession.state)?.callId === result.callId,
+    )
+  ) {
+    nextSession = clearCodeModeRun(nextSession);
+  }
+
   const state = { ...nextSession.state };
   delete state[PENDING_RUNTIME_ACTION_BATCH_KEY];
   nextSession = {
@@ -372,6 +383,19 @@ export function createRuntimeActionRequestFromToolCall(input: {
         toolName: input.toolCall.toolName,
       }),
       kind: "load-skill",
+    };
+  }
+
+  if (definition?.runtimeAction?.kind === "code-mode-run") {
+    return {
+      callId: input.toolCall.toolCallId,
+      input: resolveToolCallInputObject(input.toolCall.input, {
+        callId: input.toolCall.toolCallId,
+        toolName: input.toolCall.toolName,
+      }),
+      kind: "code-mode-run",
+      mode: definition.runtimeAction.mode,
+      toolNames: [...definition.runtimeAction.toolNames],
     };
   }
 

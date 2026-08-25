@@ -46,6 +46,7 @@ import {
   stampMessageStreamEvent,
 } from "#protocol/message.js";
 import type {
+  RuntimeCodeModeRunActionRequest,
   RuntimeActionRequest,
   RuntimeActionResult,
   RuntimeRemoteAgentCallActionRequest,
@@ -53,6 +54,10 @@ import type {
   RuntimeSubagentDispatchFailure,
   RuntimeToolCallActionRequest,
 } from "#shared/action-types.js";
+import { startCodeModeRun } from "#execution/code-mode-run/start.js";
+import { setCodeModeRun } from "#execution/code-mode-run/state.js";
+import { createRuntimeToolResultFromValue } from "#harness/action-result-helpers.js";
+import { toError } from "#shared/errors.js";
 import { type DurableSessionState, readDurableSession } from "#execution/durable-session-store.js";
 import {
   createRecursiveAgentRootOnlyResult,
@@ -88,6 +93,7 @@ type DynamicRemoteAgentConfig = NonNullable<
 >;
 
 export type DispatchPlanEntry =
+  | { readonly kind: "code-mode-run"; readonly action: RuntimeCodeModeRunActionRequest }
   | {
       readonly kind: "resume";
       readonly action: RuntimeAgentHandleAction;
@@ -134,6 +140,7 @@ export interface RuntimeActionDispatchResult {
     readonly taskId: string;
     readonly taskRunId: string;
   }[];
+  pendingCodeModeRuns?: readonly { readonly hookToken: string; readonly runId: string }[];
 }
 
 /** Everything preflight produces before either step's dispatch loop runs. */
@@ -401,6 +408,7 @@ function planDispatch(input: {
   const handles = getAgentHandleStore(input.session.state)?.handles ?? [];
 
   return input.actions.map((action): DispatchPlanEntry => {
+    if (action.kind === "code-mode-run") return { action, kind: "code-mode-run" };
     if (input.taskControls && isTaskControlAction(action)) {
       return { action, kind: "task-control" };
     }
@@ -441,6 +449,51 @@ function planDispatch(input: {
       session: input.session,
     });
   });
+}
+
+export async function startCodeModeAction(input: {
+  readonly action: RuntimeCodeModeRunActionRequest;
+  readonly parentContinuationToken: string;
+  readonly prepared: PreparedRuntimeActionDispatch;
+  readonly session: RuntimeSession;
+  readonly sessionState: DurableSessionState;
+}): Promise<{
+  readonly pending?: { readonly hookToken: string; readonly runId: string };
+  readonly result?: RuntimeActionResult;
+  readonly session: RuntimeSession;
+}> {
+  try {
+    const started = await startCodeModeRun({
+      callId: input.action.callId,
+      input: input.action.input,
+      mode: input.action.mode,
+      nodeId: input.prepared.bundle.nodeId,
+      parentInboxToken: input.parentContinuationToken,
+      parentSessionId: input.session.sessionId,
+      parentTurnId: input.prepared.batch.event.turnId,
+      serializedContext: input.prepared.serializedContext,
+      stepIndex: input.prepared.batch.event.stepIndex,
+      toolNames: input.action.toolNames,
+    });
+    return {
+      pending: started,
+      session: setCodeModeRun(input.session, {
+        callId: input.action.callId,
+        hookToken: started.hookToken,
+        runId: started.runId,
+      }),
+    };
+  } catch (error) {
+    return {
+      result: createRuntimeToolResultFromValue({
+        callId: input.action.callId,
+        isError: true,
+        output: toError(error),
+        toolName: "code_mode",
+      }),
+      session: input.session,
+    };
+  }
 }
 
 /**

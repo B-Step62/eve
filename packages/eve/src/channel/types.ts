@@ -3,10 +3,14 @@ import type { UserContent } from "ai";
 import type { MessageStreamEvent, UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { CancelTurnResult as ProtocolCancelTurnResult } from "#protocol/cancel-turn.js";
 import type { RunMode } from "#shared/run-mode.js";
-import type { RuntimeSubagentChildResult } from "#shared/action-types.js";
+import type {
+  RuntimeSubagentChildResult,
+  RuntimeToolResultActionResult,
+} from "#shared/action-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
 import type { ChannelAdapter } from "#channel/adapter.js";
 import type { AgentLimitsDefinition } from "#shared/agent-definition.js";
+import type { CodeModeRunResultPayload } from "#execution/code-mode-run/types.js";
 import type { JsonObject } from "#shared/json.js";
 import type { TaskView } from "#tasks/types.js";
 
@@ -291,7 +295,7 @@ export interface ClearSessionHookPayload {
  */
 export interface RuntimeActionResultHookPayload {
   readonly kind: "runtime-action-result";
-  readonly results: readonly RuntimeSubagentChildResult[];
+  readonly results: readonly (RuntimeSubagentChildResult | RuntimeToolResultActionResult)[];
 }
 
 /**
@@ -354,6 +358,7 @@ export interface SubagentAuthorizationEventHookPayload {
  * Serializable payload sent through the workflow `resumeHook`.
  */
 export type HookPayload =
+  | CodeModeRunResultPayload
   | ClearSessionHookPayload
   | CompactSessionHookPayload
   | DeliverHookPayload

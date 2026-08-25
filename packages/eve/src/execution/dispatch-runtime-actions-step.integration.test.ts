@@ -43,6 +43,7 @@ import type { ResolvedSandboxDefinition } from "#runtime/types.js";
 import { mockSandbox } from "#internal/testing/mocks/mock-sandbox.js";
 
 const mocks = vi.hoisted(() => ({
+  startCodeModeRun: vi.fn(),
   continueRemoteAgentSession: vi.fn(),
   createDurableSessionState: vi.fn(),
   deserializeContext: vi.fn(),
@@ -53,6 +54,10 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   startRemoteAgentSession: vi.fn(),
   startWorkflowPreferLatest: vi.fn(),
+}));
+
+vi.mock("#execution/code-mode-run/start.js", () => ({
+  startCodeModeRun: mocks.startCodeModeRun,
 }));
 
 vi.mock("#context/serialize.js", () => ({
@@ -169,6 +174,7 @@ beforeEach(() => {
     sessionId: "remote-session-123456789012",
   });
   mocks.startWorkflowPreferLatest.mockResolvedValue({ runId: "task-run-1" });
+  mocks.startCodeModeRun.mockResolvedValue({ hookToken: "code-mode-hook", runId: "code-mode-run" });
   mocks.resumeHook.mockResolvedValue({ runId: "task-run-1" });
   mocks.hydrateDurableSession.mockImplementation(({ durable }) => durable);
   mocks.createDurableSessionState.mockImplementation(({ session }) => ({
@@ -178,6 +184,56 @@ beforeEach(() => {
 });
 
 describe("dispatchRuntimeActionsStep child starts", () => {
+  it("starts and records one code-mode workflow run", async () => {
+    const session = createBaseSession();
+    const ctx = new ContextContainer();
+    ctx.set(AuthKey, null);
+    ctx.set(InitiatorAuthKey, null);
+    ctx.set(ChannelKey, ADAPTER);
+    ctx.set(BundleKey, {
+      compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: { subagentsByNodeId: new Map() },
+      turnAgent: session.agent,
+    } as never);
+    const pending = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId: "call-code",
+          input: { js: "return 1" },
+          kind: "code-mode-run",
+          mode: "eager",
+          toolNames: ["read_file"],
+        },
+      ],
+      event: { sequence: 1, stepIndex: 2, turnId: "turn-1" },
+      responseMessages: [],
+      session,
+    });
+    mocks.readDurableSession.mockResolvedValue(pending);
+    mocks.deserializeContext.mockResolvedValue(ctx);
+
+    const result = await dispatchRuntimeActionsStep({
+      parentContinuationToken: "parent-inbox",
+      parentWritable: new TransformStream<Uint8Array, Uint8Array>().writable,
+      serializedContext: {},
+      sessionState: BASE_STATE,
+    });
+
+    expect(mocks.startCodeModeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callId: "call-code",
+        parentInboxToken: "parent-inbox",
+        parentSessionId: session.sessionId,
+        parentTurnId: "turn-1",
+      }),
+    );
+    expect(result.pendingCodeModeRuns).toEqual([
+      { hookToken: "code-mode-hook", runId: "code-mode-run" },
+    ]);
+    expect(result.results).toEqual([]);
+  });
+
   const startOperationId = deriveAgentOperationId({
     callId: "call-1",
     parentSessionId: "parent-session",

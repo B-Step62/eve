@@ -231,13 +231,6 @@ export type CompiledToolDefinition = InternalToolDefinition &
   };
 
 /**
- * Serializable configuration for the experimental framework `Workflow` tool.
- */
-export interface CompiledWorkflowToolDefinition extends ModuleSourceRef {
-  readonly maxSubagents?: number;
-}
-
-/**
  * Compiled dynamic tool resolver entry. The resolver function lives in the
  * compiled module map; the manifest entry carries only the metadata needed
  * to load and invoke it at runtime.
@@ -576,16 +569,6 @@ const compiledAgentLimitsDefinitionSchema = z
   })
   .strict();
 
-const compiledWorkflowToolDefinitionSchema: z.ZodType<CompiledWorkflowToolDefinition> = z
-  .object({
-    exportName: z.string().optional(),
-    logicalPath: z.string(),
-    maxSubagents: z.number().int().positive().optional(),
-    sourceId: z.string(),
-    sourceKind: z.literal("module"),
-  })
-  .strict();
-
 const compiledAgentConfigBaseFields = {
   build: compiledAgentBuildDefinitionSchema.optional(),
   compaction: compiledAgentCompactionDefinitionSchema.optional(),
@@ -893,7 +876,6 @@ const compiledAgentResourceFields = {
   connections: z.array(compiledConnectionDefinitionSchema),
   diagnosticsSummary: discoverDiagnosticsSummarySchema,
   sourceComposition: agentSourceCompositionSchema,
-  workflowTool: compiledWorkflowToolDefinitionSchema.optional(),
   webSearchProvider: z.enum(["exa", "parallel"]).optional(),
   dynamicInstructions: z.array(compiledDynamicInstructionsDefinitionSchema).default([]),
   dynamicSkills: z.array(compiledDynamicSkillDefinitionSchema).default([]),
@@ -1002,7 +984,6 @@ export const compiledAgentManifestSchema = z
     connections: z.array(compiledConnectionDefinitionSchema),
     diagnosticsSummary: discoverDiagnosticsSummarySchema,
     sourceComposition: agentSourceCompositionSchema,
-    workflowTool: compiledWorkflowToolDefinitionSchema.optional(),
     webSearchProvider: z.enum(["exa", "parallel"]).optional(),
     dynamicInstructions: z.array(compiledDynamicInstructionsDefinitionSchema).default([]),
     dynamicSkills: z.array(compiledDynamicSkillDefinitionSchema).default([]),
@@ -1032,7 +1013,6 @@ export interface CreateCompiledAgentResourcesInput {
   readonly connections?: readonly CompiledConnectionDefinition[];
   readonly diagnosticsSummary?: DiscoverDiagnosticsSummary;
   readonly sourceComposition: AgentSourceComposition;
-  readonly workflowTool?: CompiledWorkflowToolDefinition;
   readonly webSearchProvider?: WebSearchProvider;
   readonly dynamicInstructions?: readonly CompiledDynamicInstructionsDefinition[];
   readonly dynamicSkills?: readonly CompiledDynamicSkillDefinition[];
@@ -1072,7 +1052,6 @@ export function createCompiledAgentResources(
     sourceComposition: {
       entries: [...input.sourceComposition.entries],
     },
-    workflowTool: input.workflowTool === undefined ? undefined : { ...input.workflowTool },
     webSearchProvider: input.webSearchProvider,
     dynamicInstructions: [...(input.dynamicInstructions ?? [])],
     dynamicSkills: [...(input.dynamicSkills ?? [])],
@@ -1219,7 +1198,6 @@ export function createCompiledAgentManifest(input: {
   readonly connections?: readonly CompiledConnectionDefinition[];
   readonly diagnosticsSummary?: DiscoverDiagnosticsSummary;
   readonly sourceComposition: AgentSourceComposition;
-  readonly workflowTool?: CompiledWorkflowToolDefinition;
   readonly webSearchProvider?: WebSearchProvider;
   readonly dynamicInstructions?: readonly CompiledDynamicInstructionsDefinition[];
   readonly dynamicSkills?: readonly CompiledDynamicSkillDefinition[];

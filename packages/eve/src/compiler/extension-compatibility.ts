@@ -47,8 +47,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     dropped: {},
   },
   hook: {
-    current: 14,
-    supported: [10, 11, 12, 13, 14],
+    current: 15,
+    supported: [10, 11, 12, 13, 14, 15],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -62,11 +62,11 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   skill: { current: 1, supported: [1], dropped: {} },
-  dynamicSkill: { current: 12, supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], dropped: {} },
+  dynamicSkill: { current: 13, supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], dropped: {} },
   instructions: { current: 2, supported: [1, 2], dropped: {} },
   dynamicInstructions: {
-    current: 13,
-    supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+    current: 14,
+    supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
     dropped: {},
   },
   config: { current: 1, supported: [1], dropped: {} },

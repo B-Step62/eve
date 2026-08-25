@@ -91,7 +91,7 @@ function resolveProductionNitroPreset(): "vercel" | undefined {
 /** Whether any agent needs the dynamic Workflow sandbox runtime. */
 function manifestNeedsCodeModeRuntime(manifest: CompiledAgentManifest): boolean {
   const nodes = [manifest, ...manifest.subagents.map((subagent) => subagent.agent)];
-  return nodes.some((node) => node.workflowTool !== undefined || nodeEnablesCodeMode(node));
+  return nodes.some(nodeEnablesCodeMode);
 }
 
 /**
@@ -694,7 +694,7 @@ function createApplicationNitroPlugins(preparedHost: PreparedApplicationHost): s
   ];
   if (manifestNeedsCodeModeRuntime(preparedHost.compileResult.manifest)) {
     nitroPlugins.push(
-      resolvePackageSourceFilePath("src/internal/nitro/host/workflow-sandbox-runtime-plugin.ts"),
+      resolvePackageSourceFilePath("src/internal/nitro/host/code-mode-runtime-plugin.ts"),
     );
   }
   if (preparedHost.compiledArtifacts.instrumentationPluginPath !== undefined) {

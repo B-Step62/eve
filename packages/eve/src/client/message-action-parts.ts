@@ -95,6 +95,12 @@ export function approvedApproval(part: EveDynamicToolPart | undefined):
 /** Maps a runtime action request onto its normalized tool descriptor. */
 export function normalizeActionRequest(action: RuntimeActionRequest): ActionDescriptor {
   switch (action.kind) {
+    case "code-mode-run":
+      return {
+        kind: "tool-call",
+        name: "code_mode",
+        toolName: "code_mode",
+      };
     case "load-skill":
       return {
         kind: "load-skill",

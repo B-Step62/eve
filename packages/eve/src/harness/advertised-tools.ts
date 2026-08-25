@@ -5,13 +5,11 @@ import { AGENT_TOOL_NAME } from "#tools/framework/agent-contract.js";
 import { TASK_TOOL_NAMES, TASK_UPDATE_TOOL_NAME } from "#tools/framework/task-contract.js";
 import { ROOT_RUNTIME_AGENT_NODE_ID } from "#runtime/graph.js";
 import {
-  ensureWorkflowContinuationSecurity,
-  getWorkflowContinuationSecurity,
-} from "#harness/workflow-continuation-security.js";
+  ensureCodeModeContinuationSecurity,
+  getCodeModeContinuationSecurity,
+} from "#harness/code-mode-continuation-security.js";
 import { applyCodeModeTool, type CodeModeMode } from "#harness/code-mode-sandbox.js";
-import { applyWorkflowTool } from "#harness/workflow-sandbox.js";
 import type { HarnessSession, HarnessToolMap } from "#harness/types.js";
-import type { WorkflowSandboxLifecycle } from "#shared/workflow-sandbox.js";
 
 type AdvertisedToolSession = Pick<HarnessSession, "rootSessionId" | "subagentDepth">;
 
@@ -29,23 +27,12 @@ type AdvertisedToolDefinitionsInput = {
 
 type AdvertisedModelToolsInput = {
   readonly codeMode?: {
-    readonly lifecycle?: (input: {
-      readonly session: HarnessSession;
-      readonly tools: HarnessToolMap;
-    }) => WorkflowSandboxLifecycle | undefined;
     readonly mode: CodeModeMode;
   };
   readonly delegatedCaller?: boolean;
   readonly modelTools: ToolSet;
   readonly session: HarnessSession;
   readonly tools: HarnessToolMap;
-  readonly workflow?: {
-    readonly lifecycle?: (input: {
-      readonly session: HarnessSession;
-      readonly tools: HarnessToolMap;
-    }) => WorkflowSandboxLifecycle | undefined;
-    readonly maxSubagents?: number;
-  };
 };
 
 type AdvertisedModelTools = {
@@ -93,36 +80,39 @@ async function getAdvertisedModelTools(
   );
   let session = input.session;
   let modelTools = input.modelTools;
-
-  if (input.workflow !== undefined) {
-    const workflowHostTools = filterWorkflowHostToolsForRootSession(tools, session);
-    if (workflowHostTools.size > 0) {
-      session = ensureWorkflowContinuationSecurity(session);
-      const applied = await applyWorkflowTool({
-        continuationSecurity: getWorkflowContinuationSecurity(session),
-        harnessTools: workflowHostTools,
-        lifecycle: input.workflow.lifecycle?.({ session, tools: workflowHostTools }),
-        maxSubagents: input.workflow.maxSubagents,
-        tools: modelTools,
-      });
-      modelTools = applied.modelTools;
-    }
-  }
+  let harnessTools = tools;
 
   if (input.codeMode !== undefined) {
-    session = ensureWorkflowContinuationSecurity(session);
+    session = ensureCodeModeContinuationSecurity(session);
     const applied = await applyCodeModeTool({
-      continuationSecurity: getWorkflowContinuationSecurity(session),
+      continuationSecurity: getCodeModeContinuationSecurity(session),
       harnessTools: tools,
-      lifecycle: input.codeMode.lifecycle?.({ session, tools }),
       mode: input.codeMode.mode,
       tools: modelTools,
     });
     modelTools = applied.modelTools;
+    const codeModeTool = modelTools.code_mode;
+    if (codeModeTool !== undefined && applied.claimedToolNames.length > 0) {
+      const augmentedTools = new Map(tools);
+      augmentedTools.set("code_mode", {
+        description:
+          typeof codeModeTool.description === "string"
+            ? codeModeTool.description
+            : "Execute one code-mode program.",
+        inputSchema: codeModeTool.inputSchema,
+        name: "code_mode",
+        runtimeAction: {
+          kind: "code-mode-run",
+          mode: input.codeMode.mode,
+          toolNames: applied.claimedToolNames,
+        },
+      });
+      harnessTools = augmentedTools;
+    }
   }
 
   return {
-    harnessTools: tools,
+    harnessTools,
     modelTools,
     session,
   };
@@ -156,25 +146,6 @@ function filterUnavailableDelegationToolMap(
       continue;
     }
     filteredTools.set(name, tool);
-  }
-  return filteredTools;
-}
-
-function filterWorkflowHostToolsForRootSession(
-  tools: HarnessToolMap,
-  session: AdvertisedToolSession,
-): HarnessToolMap {
-  const filteredTools = new Map<string, HarnessToolDefinition>();
-  const subagentDepth = resolveSubagentDepth(session);
-
-  if (session.rootSessionId !== undefined || subagentDepth.currentDepth > 0) {
-    return filteredTools;
-  }
-
-  for (const [name, tool] of tools) {
-    if (tool.workflowCallable === true) {
-      filteredTools.set(name, tool);
-    }
   }
   return filteredTools;
 }
