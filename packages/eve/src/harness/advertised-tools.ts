@@ -1,4 +1,4 @@
-import type { ToolSet } from "ai";
+import type { FlexibleSchema, ToolSet } from "ai";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import { resolveSubagentDepth } from "#harness/subagent-depth.js";
 import { AGENT_TOOL_NAME } from "#tools/framework/agent-contract.js";
@@ -91,16 +91,14 @@ async function getAdvertisedModelTools(
       tools: modelTools,
     });
     modelTools = applied.modelTools;
-    const codeModeTool = modelTools.code_mode;
-    if (codeModeTool !== undefined && applied.claimedToolNames.length > 0) {
+    const codeModeDefinition = applied.codeModeDefinition;
+    if (codeModeDefinition !== undefined && applied.claimedToolNames.length > 0) {
       const augmentedTools = new Map(tools);
       augmentedTools.set("code_mode", {
-        description:
-          typeof codeModeTool.description === "string"
-            ? codeModeTool.description
-            : "Execute one code-mode program.",
-        inputSchema: codeModeTool.inputSchema,
+        description: codeModeDefinition.description,
+        inputSchema: codeModeDefinition.inputSchema as FlexibleSchema,
         name: "code_mode",
+        outputSchema: codeModeDefinition.outputSchema as FlexibleSchema | undefined,
         runtimeAction: {
           kind: "code-mode-run",
           mode: input.codeMode.mode,

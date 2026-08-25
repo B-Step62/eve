@@ -3,12 +3,14 @@ import { z } from "#compiled/zod/index.js";
 
 import type { HarnessToolMap } from "#harness/types.js";
 import { isNeverApproval } from "#tools/approval/policies.js";
+import { defineTool, type ToolDefinition } from "#tools/definition.js";
 import { FINAL_OUTPUT_TOOL_NAME } from "#runtime/framework-tools/final-output.js";
 import { LOAD_SKILL_TOOL_NAME } from "#runtime/skills/fragment-context.js";
 import {
   createCodeModeRuntimeTool,
   type CodeModeContinuationSecurity,
 } from "#shared/code-mode-runtime.js";
+import type { PublicToolInputSchema, PublicToolOutputSchema } from "#tools/definition.js";
 
 /** Model-facing tool name for the experimental code-mode sandbox. */
 export const CODE_MODE_TOOL_NAME = "code_mode";
@@ -39,6 +41,7 @@ export type CodeModeMode = "eager" | "lazy";
 
 interface CodeModeToolSet {
   readonly claimedToolNames: readonly string[];
+  readonly codeModeDefinition?: ToolDefinition;
   readonly modelTools: ToolSet;
 }
 
@@ -104,12 +107,23 @@ export async function applyCodeModeTool(input: {
           ...codeModeTool,
           description: `${CODE_MODE_ORCHESTRATION_INSTRUCTION}\n\n${codeModeTool.description ?? ""}`,
         } as ToolSet[string]);
+  const codeModeDefinition = defineTool<unknown, unknown>({
+    description:
+      typeof advertisedCodeModeTool.description === "string"
+        ? advertisedCodeModeTool.description
+        : "Execute one code-mode program.",
+    inputSchema: advertisedCodeModeTool.inputSchema as PublicToolInputSchema,
+    outputSchema: advertisedCodeModeTool.outputSchema as PublicToolOutputSchema | undefined,
+    execute() {
+      throw new Error("code_mode is handled by eve's durable code-mode dispatcher.");
+    },
+  });
   modelTools[CODE_MODE_TOOL_NAME] = {
-    ...advertisedCodeModeTool,
+    ...codeModeDefinition,
     execute: undefined,
   } as ToolSet[string];
 
-  return { claimedToolNames, modelTools: modelTools as ToolSet };
+  return { claimedToolNames, codeModeDefinition, modelTools: modelTools as ToolSet };
 }
 
 /** Executes one generated program against a reconstructed static host surface. */

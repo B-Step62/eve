@@ -12,6 +12,7 @@ import {
 import { buildToolSet } from "#harness/tools.js";
 import type { HarnessToolMap } from "#harness/types.js";
 import { never } from "#tools/approval/policies.js";
+import { isBrandedToolEntry } from "#tools/dynamic.js";
 import { unwrapCodeModeRuntimeResult } from "#shared/code-mode-runtime.js";
 
 const continuationSecurity = { signingKey: "code-mode-sandbox-test-key" };
@@ -80,7 +81,7 @@ describe("applyCodeModeTool", () => {
   it("demotes claimed tools out of the direct surface", async () => {
     const harnessTools = sampleTools();
     const flatTools = buildToolSet({ tools: harnessTools });
-    const { modelTools } = await applyCodeModeTool({
+    const { codeModeDefinition, modelTools } = await applyCodeModeTool({
       continuationSecurity,
       harnessTools,
       mode: "eager",
@@ -89,6 +90,10 @@ describe("applyCodeModeTool", () => {
 
     expect(modelTools[CODE_MODE_TOOL_NAME]).toBeDefined();
     expect(modelTools[CODE_MODE_TOOL_NAME]?.execute).toBeUndefined();
+    expect(isBrandedToolEntry(codeModeDefinition)).toBe(true);
+    expect(codeModeDefinition?.execute).toThrow(
+      "code_mode is handled by eve's durable code-mode dispatcher.",
+    );
     // Claimed tools leave the direct model surface: sandbox-only.
     expect(modelTools.get_weather).toBeUndefined();
     expect(modelTools.send_email).toBeUndefined();
