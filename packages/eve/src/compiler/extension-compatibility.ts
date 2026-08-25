@@ -27,8 +27,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     dropped: { 15: "TaskExec replaces stageEffect with send" },
   },
   dynamicTool: {
-    current: 19,
-    supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    current: 20,
+    supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     dropped: {},
   },
   channel: { current: 9, supported: [1, 2, 3, 4, 5, 6, 7, 8, 9], dropped: {} },
@@ -62,7 +62,11 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   skill: { current: 1, supported: [1], dropped: {} },
-  dynamicSkill: { current: 13, supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], dropped: {} },
+  dynamicSkill: {
+    current: 13,
+    supported: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+    dropped: {},
+  },
   instructions: { current: 2, supported: [1, 2], dropped: {} },
   dynamicInstructions: {
     current: 14,

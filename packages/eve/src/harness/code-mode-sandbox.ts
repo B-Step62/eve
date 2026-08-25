@@ -4,7 +4,7 @@ import { z } from "#compiled/zod/index.js";
 import type { HarnessToolMap } from "#harness/types.js";
 import { isNeverApproval } from "#tools/approval/policies.js";
 import { defineTool, type ToolDefinition } from "#tools/definition.js";
-import { FINAL_OUTPUT_TOOL_NAME } from "#runtime/framework-tools/final-output.js";
+import { FINAL_OUTPUT_TOOL_NAME } from "#harness/final-output.js";
 import { LOAD_SKILL_TOOL_NAME } from "#runtime/skills/fragment-context.js";
 import {
   createCodeModeRuntimeTool,
