@@ -141,10 +141,8 @@ export async function settleCancelledTurnStep(input: {
     setHarnessEmissionState(
       clearPendingSessionLimitPrompt(
         clearAllProxyInputRequests(
-          clearPendingWorkflowInterrupt(
-            clearPendingRuntimeActionBatch(
-              abandonRunningAgentTurns({ ...session, outputSchema: undefined }),
-            ),
+          clearPendingRuntimeActionBatch(
+            abandonRunningAgentTurns({ ...session, outputSchema: undefined }),
           ),
         ),
       ),
