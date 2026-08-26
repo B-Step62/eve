@@ -89,10 +89,6 @@ export async function dispatchTaskStep(
         results.push(control.result);
         continue;
       }
-      if (entry.kind === "code-mode-run") {
-        throw new Error("code_mode runs cannot be dispatched as background tasks.");
-      }
-
       if (entry.kind === "resume") {
         const busy = await checkTaskContinuationAvailability({
           action: entry.action,

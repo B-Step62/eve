@@ -1,7 +1,7 @@
 import { defineEval } from "eve/evals";
 
 export default defineEval({
-  description: "code_mode executes in a child Workflow run and resumes the parent turn.",
+  description: "code_mode executes one synchronous sandbox program and returns to the model.",
   async test(t) {
     await t.send("Run the code-mode fixture.");
     t.succeeded();

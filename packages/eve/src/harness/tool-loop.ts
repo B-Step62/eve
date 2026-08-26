@@ -2628,10 +2628,6 @@ async function handleStepResult(input: {
       }),
     );
 
-  if (pendingRuntimeActions.filter((action) => action.kind === "code-mode-run").length > 1) {
-    throw new Error("A model response may call code_mode at most once.");
-  }
-
   if (pendingRuntimeActions.length > 0) {
     // Stamp the live emission state onto the parked session so the
     // resume turn is classified as a continuation (turnId set), not a

@@ -1,13 +1,9 @@
-import type { FlexibleSchema, ToolSet } from "ai";
+import type { ToolSet } from "ai";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import { resolveSubagentDepth } from "#harness/subagent-depth.js";
 import { AGENT_TOOL_NAME } from "#tools/framework/agent-contract.js";
 import { TASK_TOOL_NAMES, TASK_UPDATE_TOOL_NAME } from "#tools/framework/task-contract.js";
 import { ROOT_RUNTIME_AGENT_NODE_ID } from "#runtime/graph.js";
-import {
-  ensureCodeModeContinuationSecurity,
-  getCodeModeContinuationSecurity,
-} from "#harness/code-mode-continuation-security.js";
 import { applyCodeModeTool, type CodeModeMode } from "#harness/code-mode-sandbox.js";
 import type { HarnessSession, HarnessToolMap } from "#harness/types.js";
 
@@ -78,35 +74,17 @@ async function getAdvertisedModelTools(
     input.session,
     input.delegatedCaller,
   );
-  let session = input.session;
+  const session = input.session;
   let modelTools = input.modelTools;
   let harnessTools = tools;
 
   if (input.codeMode !== undefined) {
-    session = ensureCodeModeContinuationSecurity(session);
     const applied = await applyCodeModeTool({
-      continuationSecurity: getCodeModeContinuationSecurity(session),
       harnessTools: tools,
       mode: input.codeMode.mode,
       tools: modelTools,
     });
     modelTools = applied.modelTools;
-    const codeModeDefinition = applied.codeModeDefinition;
-    if (codeModeDefinition !== undefined && applied.claimedToolNames.length > 0) {
-      const augmentedTools = new Map(tools);
-      augmentedTools.set("code_mode", {
-        description: codeModeDefinition.description,
-        inputSchema: codeModeDefinition.inputSchema as FlexibleSchema,
-        name: "code_mode",
-        outputSchema: codeModeDefinition.outputSchema as FlexibleSchema | undefined,
-        runtimeAction: {
-          kind: "code-mode-run",
-          mode: input.codeMode.mode,
-          toolNames: applied.claimedToolNames,
-        },
-      });
-      harnessTools = augmentedTools;
-    }
   }
 
   return {

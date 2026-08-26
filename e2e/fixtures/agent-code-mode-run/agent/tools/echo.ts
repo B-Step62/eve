@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-const COUNTER = Symbol.for("eve.e2e.code-mode-run.counter");
+const COUNTER = Symbol.for("eve.e2e.code-mode.counter");
 
 export default defineTool({
   description: "Echo a value and report this process's execution count.",

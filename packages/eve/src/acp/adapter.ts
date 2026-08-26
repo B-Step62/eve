@@ -491,10 +491,8 @@ function promptContent(params: PromptRequest): Array<{ type: "text"; text: strin
 
 function toolCallForAction(action: RuntimeActionRequest): ToolCall {
   const title =
-    action.kind === "tool-call" || action.kind === "code-mode-run"
-      ? action.kind === "code-mode-run"
-        ? "code_mode"
-        : action.toolName
+    action.kind === "tool-call"
+      ? action.toolName
       : action.kind === "load-skill"
         ? "Load skill"
         : action.name;

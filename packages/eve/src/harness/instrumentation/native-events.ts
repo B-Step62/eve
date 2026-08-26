@@ -200,7 +200,7 @@ async function publishActionStarts(
         callId: action.callId,
         idempotencyKey,
         input: hooks.capturesContent ? action.input : undefined,
-        kind: action.kind === "code-mode-run" ? "tool-call" : action.kind,
+        kind: action.kind,
         name: actionName(action),
         scope,
         type: "action.started",
@@ -280,7 +280,6 @@ function actionUsage(result: RuntimeActionResult): InstrumentationUsage | undefi
 }
 
 function actionName(action: RuntimeActionRequest): string {
-  if (action.kind === "code-mode-run") return "code_mode";
   if (action.kind === "tool-call") return action.toolName;
   if (action.kind === "load-skill") return "load_skill";
   return action.name;

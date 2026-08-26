@@ -185,7 +185,7 @@ async function dispatchSubagent(input: SubagentDispatchInput): Promise<SubagentD
     sessionState: input.sessionState,
   });
   const entry = prepared.plan[0];
-  if (entry === undefined || entry.kind === "task-control" || entry.kind === "code-mode-run") {
+  if (entry === undefined || entry.kind === "task-control") {
     throw new Error("Subagent tool dispatch produced no executable plan entry.");
   }
   if (entry.kind === "reject") {

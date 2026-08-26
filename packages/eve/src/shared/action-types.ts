@@ -24,18 +24,6 @@ export const runtimeToolCallActionRequestSchema = z
   })
   .strict();
 
-export type RuntimeCodeModeRunActionRequest = z.infer<typeof runtimeCodeModeRunActionRequestSchema>;
-
-const runtimeCodeModeRunActionRequestSchema = z
-  .object({
-    callId: z.string(),
-    input: jsonObjectSchema,
-    kind: z.literal("code-mode-run"),
-    mode: z.enum(["eager", "lazy"]),
-    toolNames: z.array(z.string()).readonly(),
-  })
-  .strict();
-
 /**
  * Runtime-owned subagent-call request surfaced by a harness and executed later
  * by workflow-backed runtime code.
@@ -105,7 +93,6 @@ const runtimeLoadSkillActionRequestSchema = z
  * `load-skill` and runtime-dispatched subagent calls.
  */
 export type RuntimeActionRequest =
-  | RuntimeCodeModeRunActionRequest
   | RuntimeLoadSkillActionRequest
   | RuntimeRemoteAgentCallActionRequest
   | RuntimeSubagentCallActionRequest
@@ -115,7 +102,6 @@ export type RuntimeActionRequest =
  * Zod schema for one runtime action request.
  */
 export const runtimeActionRequestSchema = z.discriminatedUnion("kind", [
-  runtimeCodeModeRunActionRequestSchema,
   runtimeLoadSkillActionRequestSchema,
   runtimeRemoteAgentCallActionRequestSchema,
   runtimeSubagentCallActionRequestSchema,

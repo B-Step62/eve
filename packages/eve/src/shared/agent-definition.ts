@@ -192,16 +192,15 @@ export interface AgentLimitsDefinition {
  */
 export interface AgentExperimentalDefinition {
   /**
-   * Runs this agent's ordinary executable tools through one workflow-backed
+   * Runs this agent's ordinary executable tools through one synchronous
    * `code_mode` tool instead of direct model calls. The model writes JavaScript
-   * that calls them as `tools.name(input)` inside an isolated sandbox. Each
-   * outer call owns a dedicated Workflow run; an abandoned execution fails
-   * without replaying the program. Delegations, dynamically approval-gated
-   * tools, background tools, and control-plane tools stay directly callable.
+   * that calls them as `tools.name(input)` inside isolated QuickJS. Delegations,
+   * dynamically approval-gated tools, background tools, and control-plane tools
+   * stay directly callable. Code mode follows ordinary tool retry semantics.
    *
-   * - `"eager"`: the tool description inlines every sandboxed tool signature.
+   * - `"eager"`: the tool description inlines every sandboxed input/output signature.
    * - `"lazy"`: the tool description lists names only; generated code
-   *   discovers signatures at runtime via `tools.search_tools` /
+   *   discovers input/output schemas at runtime via `tools.search_tools` /
    *   `tools.describe_tools`.
    * - `false` or unset: no sandbox tool.
    */

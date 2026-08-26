@@ -23,44 +23,6 @@ describe("applyWorkflowTransform", () => {
     });
   });
 
-  it("registers the code-mode child run and its zero-retry execution step", async () => {
-    const workflowFilename = "src/execution/code-mode-run/workflow.ts";
-    const workflow = await applyWorkflowTransform(
-      workflowFilename,
-      [
-        "export async function codeModeRunWorkflow(): Promise<void> {",
-        '  "use workflow";',
-        "}",
-        "",
-      ].join("\n"),
-      "workflow",
-      resolvePackageSourceFilePath(workflowFilename),
-      resolvePackageRoot(),
-    );
-    expect(workflow.workflowManifest.workflows?.[workflowFilename]?.codeModeRunWorkflow).toEqual({
-      workflowId: "workflow//eve//codeModeRunWorkflow",
-    });
-
-    const stepFilename = "src/execution/code-mode-run/execute-step.ts";
-    const step = await applyWorkflowTransform(
-      stepFilename,
-      [
-        "export async function executeCodeModeProgramStep(): Promise<void> {",
-        '  "use step";',
-        "}",
-        "executeCodeModeProgramStep.maxRetries = 0;",
-        "",
-      ].join("\n"),
-      "step",
-      resolvePackageSourceFilePath(stepFilename),
-      resolvePackageRoot(),
-    );
-    expect(step.workflowManifest.steps?.[stepFilename]?.executeCodeModeProgramStep).toEqual({
-      stepId: "step//./src/execution/code-mode-run/execute-step//executeCodeModeProgramStep",
-    });
-    expect(step.code).toContain("maxRetries = 0");
-  });
-
   it("registers step functions in step mode", async () => {
     const transformed = await applyWorkflowTransform(
       "steps/ping.ts",

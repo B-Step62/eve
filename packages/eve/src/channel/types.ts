@@ -10,7 +10,6 @@ import type {
 import type { InputRequest, InputResponse } from "#shared/input.js";
 import type { ChannelAdapter } from "#channel/adapter.js";
 import type { AgentLimitsDefinition } from "#shared/agent-definition.js";
-import type { CodeModeRunResultPayload } from "#execution/code-mode-run/types.js";
 import type { JsonObject } from "#shared/json.js";
 import type { TaskView } from "#tasks/types.js";
 
@@ -358,7 +357,6 @@ export interface SubagentAuthorizationEventHookPayload {
  * Serializable payload sent through the workflow `resumeHook`.
  */
 export type HookPayload =
-  | CodeModeRunResultPayload
   | ClearSessionHookPayload
   | CompactSessionHookPayload
   | DeliverHookPayload

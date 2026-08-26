@@ -1,5 +1,4 @@
 import { isInboxSubagentResultFromRunningHandle } from "#harness/handles/query.js";
-import { isCodeModeRunResult } from "#execution/code-mode-run/state.js";
 import {
   createHook,
   getWorkflowMetadata,
@@ -13,7 +12,6 @@ import { sendTurnControlStep, type TurnInboxPayload } from "#execution/turn-cont
 import { dispatchRuntimeActionsStep } from "#execution/dispatch-runtime-actions-step.js";
 import { acknowledgeDelegatedTasksStep } from "#execution/tasks/parent/delegate.js";
 import { dispatchTaskStep } from "#execution/tasks/parent/dispatch-task-step.js";
-import { acknowledgeCodeModeRunsStep } from "#execution/code-mode-run/ready-step.js";
 import {
   migrateTurnWorkflowInput,
   type TurnStepInput,
@@ -208,13 +206,6 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
         });
         const initialAcceptedAtMs = dispatchResult.results.length === 0 ? undefined : Date.now();
         await cursor.adopt(dispatchResult);
-        await acknowledgeCodeModeRunsStep(
-          "pendingCodeModeRuns" in dispatchResult &&
-            Array.isArray(dispatchResult.pendingCodeModeRuns)
-            ? dispatchResult.pendingCodeModeRuns
-            : [],
-          cursor.sessionState,
-        );
         await acknowledgeDelegatedTasksStep({ tasks: dispatchResult.pendingTasks });
 
         const results = await waitForRuntimeActionResults({
@@ -392,16 +383,6 @@ async function waitForRuntimeActionResults(input: {
     if (next.done) throw new Error("Turn inbox closed before runtime actions completed.");
 
     const value = next.value;
-    if (value.kind === "code-mode-result") {
-      const sessionSnapshotState = input.cursor.sessionState.snapshot?.session.state;
-      if (isCodeModeRunResult(sessionSnapshotState, value.result)) {
-        await input.cursor.adopt({ sessionState: value.sessionState });
-        const acceptedAtMs = Date.now();
-        results.push(value.result);
-        acceptedAtMsByKey.set(getRuntimeActionResultKey(value.result), acceptedAtMs);
-      }
-      continue;
-    }
     if (value.kind === "runtime-action-result") {
       // The inbox token is shared by every callee in the batch, so an inbox
       // subagent result must bind to a running agent handle in the adopted
@@ -412,10 +393,10 @@ async function waitForRuntimeActionResults(input: {
       // dispatch failed — is dropped; the genuine child's result (or the
       // dispatch error already in `results`) still resolves the wait.
       const sessionSnapshotState = input.cursor.sessionState.snapshot?.session.state;
-      const accepted = value.results.filter((result) =>
-        result.kind === "tool-result"
-          ? isCodeModeRunResult(sessionSnapshotState, result)
-          : isInboxSubagentResultFromRunningHandle(sessionSnapshotState, result),
+      const accepted = value.results.filter(
+        (result) =>
+          result.kind === "subagent-result" &&
+          isInboxSubagentResultFromRunningHandle(sessionSnapshotState, result),
       );
       if (accepted.length > 0) {
         const acceptedAtMs = Date.now();

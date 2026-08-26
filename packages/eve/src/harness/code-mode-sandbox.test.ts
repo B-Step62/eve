@@ -1,4 +1,4 @@
-import { jsonSchema } from "ai";
+import { jsonSchema, type ToolSet } from "ai";
 import { describe, expect, it } from "vitest";
 
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
@@ -6,16 +6,19 @@ import {
   applyCodeModeTool,
   CODE_MODE_TOOL_NAME,
   DESCRIBE_TOOLS_NAME,
-  executeCodeModeProgram,
   SEARCH_TOOLS_NAME,
 } from "#harness/code-mode-sandbox.js";
 import { buildToolSet } from "#harness/tools.js";
 import type { HarnessToolMap } from "#harness/types.js";
 import { never } from "#tools/approval/policies.js";
-import { isBrandedToolEntry } from "#tools/dynamic.js";
-import { unwrapCodeModeRuntimeResult } from "#shared/code-mode-runtime.js";
 
-const continuationSecurity = { signingKey: "code-mode-sandbox-test-key" };
+async function runCodeMode(modelTools: ToolSet, js: string): Promise<unknown> {
+  const execute = modelTools[CODE_MODE_TOOL_NAME]?.execute as
+    | ((input: { readonly js: string }, options: any) => unknown)
+    | undefined;
+  if (execute === undefined) throw new Error("code_mode has no executor");
+  return await execute({ js }, { messages: [], toolCallId: "code-mode-1" });
+}
 
 function sampleTools(): HarnessToolMap {
   return new Map<string, HarnessToolDefinition>([
@@ -30,6 +33,11 @@ function sampleTools(): HarnessToolMap {
           type: "object",
         }),
         name: "get_weather",
+        outputSchema: jsonSchema({
+          properties: { city: { type: "string" }, tempC: { type: "number" } },
+          required: ["city", "tempC"],
+          type: "object",
+        }),
       },
     ],
     [
@@ -81,19 +89,14 @@ describe("applyCodeModeTool", () => {
   it("demotes claimed tools out of the direct surface", async () => {
     const harnessTools = sampleTools();
     const flatTools = buildToolSet({ tools: harnessTools });
-    const { codeModeDefinition, modelTools } = await applyCodeModeTool({
-      continuationSecurity,
+    const { modelTools } = await applyCodeModeTool({
       harnessTools,
       mode: "eager",
       tools: flatTools,
     });
 
     expect(modelTools[CODE_MODE_TOOL_NAME]).toBeDefined();
-    expect(modelTools[CODE_MODE_TOOL_NAME]?.execute).toBeUndefined();
-    expect(isBrandedToolEntry(codeModeDefinition)).toBe(true);
-    expect(codeModeDefinition?.execute).toThrow(
-      "code_mode is handled by eve's durable code-mode dispatcher.",
-    );
+    expect(modelTools[CODE_MODE_TOOL_NAME]?.execute).toBeTypeOf("function");
     // Claimed tools leave the direct model surface: sandbox-only.
     expect(modelTools.get_weather).toBeUndefined();
     expect(modelTools.send_email).toBeUndefined();
@@ -116,7 +119,6 @@ describe("applyCodeModeTool", () => {
   it("inlines signatures in eager mode", async () => {
     const harnessTools = sampleTools();
     const { modelTools } = await applyCodeModeTool({
-      continuationSecurity,
       harnessTools,
       mode: "eager",
       tools: buildToolSet({ tools: harnessTools }),
@@ -127,13 +129,14 @@ describe("applyCodeModeTool", () => {
     expect(description).toContain("declare const tools:");
     expect(description).toContain("at most once per response");
     expect(description).toContain("city");
+    expect(description).toContain("tempC");
+    expect(description).toContain("Promise<");
     expect(description).not.toContain(SEARCH_TOOLS_NAME);
   });
 
   it("lists names only and adds discovery tools in lazy mode", async () => {
     const harnessTools = sampleTools();
     const { modelTools } = await applyCodeModeTool({
-      continuationSecurity,
       harnessTools,
       mode: "lazy",
       tools: buildToolSet({ tools: harnessTools }),
@@ -154,74 +157,53 @@ describe("applyCodeModeTool", () => {
   it("executes generated code against bridged host tools", async () => {
     const harnessTools = sampleTools();
     const flatTools = buildToolSet({ tools: harnessTools });
-    const { claimedToolNames } = await applyCodeModeTool({
-      continuationSecurity,
+    const { modelTools } = await applyCodeModeTool({
       harnessTools,
       mode: "eager",
       tools: flatTools,
     });
-    const raw = await executeCodeModeProgram({
-      continuationSecurity,
-      harnessTools,
-      js: "const w = await tools.get_weather({ city: 'lisbon' }); return w.tempC + 1;",
-      mode: "eager",
-      toolCallId: "code-mode-1",
-      toolNames: claimedToolNames,
-      tools: flatTools,
-    });
-    const result = await unwrapCodeModeRuntimeResult(raw, continuationSecurity);
-    expect(result).toEqual({ output: 22, status: "completed" });
+    const result = await runCodeMode(
+      modelTools,
+      "const w = await tools.get_weather({ city: 'lisbon' }); return w.tempC + 1;",
+    );
+    expect(result).toBe(22);
   });
 
   it("executes a single host call inside the generated program", async () => {
     const harnessTools = sampleTools();
     const flatTools = buildToolSet({ tools: harnessTools });
-    const { claimedToolNames } = await applyCodeModeTool({
-      continuationSecurity,
+    const { modelTools } = await applyCodeModeTool({
       harnessTools,
       mode: "eager",
       tools: flatTools,
     });
-    await executeCodeModeProgram({
-      continuationSecurity,
-      harnessTools,
-      js: "return await tools.get_weather({ city: 'lisbon' });",
-      mode: "eager",
-      toolCallId: "code-mode-1",
-      toolNames: claimedToolNames,
-      tools: flatTools,
-    });
+    await runCodeMode(modelTools, "return await tools.get_weather({ city: 'lisbon' });");
   });
 
   it("supports runtime discovery from generated code in lazy mode", async () => {
     const harnessTools = sampleTools();
     const flatTools = buildToolSet({ tools: harnessTools });
-    const { claimedToolNames } = await applyCodeModeTool({
-      continuationSecurity,
+    const { modelTools } = await applyCodeModeTool({
       harnessTools,
       mode: "lazy",
       tools: flatTools,
     });
-    const raw = await executeCodeModeProgram({
-      continuationSecurity,
-      harnessTools,
-      js: `
+    const result = await runCodeMode(
+      modelTools,
+      `
           const hits = await tools.${SEARCH_TOOLS_NAME}({ query: "weather" });
           const specs = await tools.${DESCRIBE_TOOLS_NAME}({ names: hits.map((h) => h.name) });
-          return { hits, hasSchema: specs[0].inputSchema !== undefined };
+          return {
+            hits,
+            hasInputSchema: specs[0].inputSchema !== undefined,
+            hasOutputSchema: specs[0].outputSchema !== undefined,
+          };
         `,
-      mode: "lazy",
-      toolCallId: "code-mode-1",
-      toolNames: claimedToolNames,
-      tools: flatTools,
-    });
-    const result = await unwrapCodeModeRuntimeResult(raw, continuationSecurity);
+    );
     expect(result).toEqual({
-      output: {
-        hasSchema: true,
-        hits: [{ description: "Get the weather for a city.", name: "get_weather" }],
-      },
-      status: "completed",
+      hasInputSchema: true,
+      hasOutputSchema: true,
+      hits: [{ description: "Get the weather for a city.", name: "get_weather" }],
     });
   });
 
@@ -243,7 +225,6 @@ describe("applyCodeModeTool", () => {
     ]);
     const flatTools = buildToolSet({ tools: harnessTools });
     const { modelTools } = await applyCodeModeTool({
-      continuationSecurity,
       harnessTools,
       mode: "eager",
       tools: flatTools,

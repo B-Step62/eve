@@ -22,12 +22,7 @@ export type HarnessRuntimeActionDefinition =
       readonly remoteAgentName?: string;
       readonly subagentName: string;
     }
-  | { readonly kind: "task-control" }
-  | {
-      readonly kind: "code-mode-run";
-      readonly mode: "eager" | "lazy";
-      readonly toolNames: readonly string[];
-    };
+  | { readonly kind: "task-control" };
 
 /**
  * Unified harness-owned tool definition.

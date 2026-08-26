@@ -88,7 +88,7 @@ function resolveProductionNitroPreset(): "vercel" | undefined {
   return process.env.VERCEL ? "vercel" : undefined;
 }
 
-/** Whether any agent needs the dynamic Workflow sandbox runtime. */
+/** Whether any agent needs the code-mode QuickJS runtime. */
 function manifestNeedsCodeModeRuntime(manifest: CompiledAgentManifest): boolean {
   const nodes = [manifest, ...manifest.subagents.map((subagent) => subagent.agent)];
   return nodes.some(nodeEnablesCodeMode);

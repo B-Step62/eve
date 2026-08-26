@@ -137,7 +137,7 @@ export default defineAgent({
 });
 ```
 
-`"eager"` puts every claimed tool signature in the `code_mode` description. `"lazy"` lists names and gives generated code `search_tools` and `describe_tools` for runtime discovery. Both modes expose the same host capabilities.
+`"eager"` puts every claimed tool's input and output signature in the `code_mode` description. `"lazy"` lists names and gives generated code `search_tools` and `describe_tools` for runtime discovery of the same input/output schemas. Both modes expose the same host capabilities.
 
 The model should call `code_mode` at most once per response. One program can express dependent calls, cursor loops, retries, and parallel work:
 
@@ -156,22 +156,15 @@ return details;
 
 ### Claimed tools
 
-Code mode claims static server-executed tools with no approval policy or explicit `approval: never()`. Dynamically approval-gated tools, background tools, provider-managed tools, subagent/remote-agent calls, `load_skill`, and `final_output` stay direct. Dynamic per-turn tools also stay direct because a child run cannot reconstruct their transient catalog.
+Code mode claims static server-executed tools with no approval policy or explicit `approval: never()`. Dynamically approval-gated tools, background tools, provider-managed tools, subagent/remote-agent calls, `load_skill`, and `final_output` stay direct. Dynamic per-turn tools also stay direct because they are assembled after the static host catalog.
 
-`experimental.codeMode` and `experimental.tasks` cannot be enabled together. Code-mode programs are foreground work owned by the current turn.
+Code-mode programs are foreground work owned by the current turn. Background and task-control tools remain directly callable rather than entering the sandbox.
 
-### Workflow run
+### Execution
 
-Each outer `code_mode` call starts one dedicated Workflow run. The parent turn parks, durably records the run, and then acknowledges it. A deterministic ownership hook ensures duplicate parent dispatches cannot execute two programs.
+`code_mode` is an ordinary synchronous AI SDK tool. Its executor creates a fresh QuickJS context, runs the complete program, waits for every nested host-tool call, and returns the program's JSON value before the model continues.
 
-The generated program runs inside one isolated QuickJS execution step. That step has retries disabled and checks its durable attempt number before building tools or invoking QuickJS:
-
-- attempt 1 executes the program;
-- any later physical invocation returns `CODE_MODE_EXECUTION_LOST` without re-entering the program.
-
-The child returns its updated session state and tool result to the parked parent. A normal program/tool error returns `CODE_MODE_EXECUTION_FAILED`. A crash or abandoned execution returns a non-retryable `CODE_MODE_EXECUTION_LOST` result with `partialEffectsPossible: true`.
-
-This is at-most-once entry into the generated program, not atomic execution. A crash can leave some nested side effects committed and later calls unexecuted. The model must inspect external state before starting a new program after `CODE_MODE_EXECUTION_LOST`.
+Code mode follows the same retry semantics as other synchronous tools. If the enclosing Eve step is replayed, the program may run again. Tools with non-idempotent effects should use their normal idempotency and external-state checks; code mode does not add an exactly-once boundary.
 
 ### Sandbox boundary
 

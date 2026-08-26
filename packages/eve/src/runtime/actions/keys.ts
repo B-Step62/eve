@@ -6,8 +6,6 @@ import type { RuntimeActionRequest, RuntimeActionResult } from "#shared/action-t
  */
 export function getRuntimeActionRequestKey(action: RuntimeActionRequest): string {
   switch (action.kind) {
-    case "code-mode-run":
-      return `tool-call:code_mode:${action.callId}`;
     case "load-skill":
       return `runtime-action:${action.kind}:${action.callId}`;
     case "remote-agent-call":

@@ -23,7 +23,6 @@ import {
   type RuntimeActionDispatchInput,
   type RuntimeActionDispatchResult,
   startSubagent,
-  startCodeModeAction,
 } from "#execution/dispatch-runtime-actions-shared.js";
 import { createDurableSessionState } from "#execution/durable-session-store.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
@@ -49,7 +48,6 @@ export async function dispatchRuntimeActionsStep(
 
   let nextSession = session;
   const results: RuntimeActionResult[] = [];
-  const pendingCodeModeRuns: { hookToken: string; runId: string }[] = [];
 
   try {
     for (const entry of prepared.plan) {
@@ -61,20 +59,6 @@ export async function dispatchRuntimeActionsStep(
         // Unreachable: the plan was built with `taskControls: false`.
         throw new Error("Task-control actions require the task dispatch step.");
       }
-      if (entry.kind === "code-mode-run") {
-        const started = await startCodeModeAction({
-          action: entry.action,
-          parentContinuationToken: input.parentContinuationToken ?? session.continuationToken,
-          prepared,
-          session: nextSession,
-          sessionState: input.sessionState,
-        });
-        nextSession = started.session;
-        if (started.result !== undefined) results.push(started.result);
-        if (started.pending !== undefined) pendingCodeModeRuns.push(started.pending);
-        continue;
-      }
-
       let outcome: DispatchOutcome;
       switch (entry.kind) {
         case "resume":
@@ -134,7 +118,7 @@ export async function dispatchRuntimeActionsStep(
     writer.releaseLock();
   }
 
-  const output: RuntimeActionDispatchResult = {
+  return {
     results,
     sessionState:
       nextSession === session
@@ -142,6 +126,4 @@ export async function dispatchRuntimeActionsStep(
         : createDurableSessionState({ session: nextSession }),
     pendingTasks: [],
   };
-  if (pendingCodeModeRuns.length > 0) output.pendingCodeModeRuns = pendingCodeModeRuns;
-  return output;
 }

@@ -3,14 +3,9 @@ import { z } from "#compiled/zod/index.js";
 
 import type { HarnessToolMap } from "#harness/types.js";
 import { isNeverApproval } from "#tools/approval/policies.js";
-import { defineTool, type ToolDefinition } from "#tools/definition.js";
 import { FINAL_OUTPUT_TOOL_NAME } from "#harness/final-output.js";
 import { LOAD_SKILL_TOOL_NAME } from "#runtime/skills/fragment-context.js";
-import {
-  createCodeModeRuntimeTool,
-  type CodeModeContinuationSecurity,
-} from "#shared/code-mode-runtime.js";
-import type { PublicToolInputSchema, PublicToolOutputSchema } from "#tools/definition.js";
+import { createCodeModeRuntimeTool } from "#shared/code-mode-runtime.js";
 
 /** Model-facing tool name for the experimental code-mode sandbox. */
 export const CODE_MODE_TOOL_NAME = "code_mode";
@@ -20,8 +15,7 @@ export const SEARCH_TOOLS_NAME = "search_tools";
 export const DESCRIBE_TOOLS_NAME = "describe_tools";
 
 /**
- * Sandboxed nested tool calls one `code_mode` invocation may make. Mirrors the
- * Workflow sandbox default bridge limit.
+ * Maximum sandbox-to-host requests one `code_mode` invocation may make.
  */
 const CODE_MODE_BRIDGE_REQUEST_LIMIT = 256;
 const CODE_MODE_ORCHESTRATION_INSTRUCTION =
@@ -40,8 +34,6 @@ const NEVER_SANDBOXED_TOOL_NAMES: ReadonlySet<string> = new Set([
 export type CodeModeMode = "eager" | "lazy";
 
 interface CodeModeToolSet {
-  readonly claimedToolNames: readonly string[];
-  readonly codeModeDefinition?: ToolDefinition;
   readonly modelTools: ToolSet;
 }
 
@@ -65,7 +57,6 @@ interface CodeModeToolSet {
  * Everything unclaimed stays a direct model tool.
  */
 export async function applyCodeModeTool(input: {
-  readonly continuationSecurity: CodeModeContinuationSecurity;
   readonly harnessTools: HarnessToolMap;
   readonly mode: CodeModeMode;
   readonly tools: ToolSet;
@@ -82,10 +73,8 @@ export async function applyCodeModeTool(input: {
   }
 
   if (Object.keys(hostTools).length === 0) {
-    return { claimedToolNames: [], modelTools: input.tools };
+    return { modelTools: input.tools };
   }
-
-  const claimedToolNames = Object.keys(hostTools);
 
   if (input.mode === "lazy") {
     Object.assign(hostTools, createDiscoveryTools(hostTools));
@@ -93,7 +82,6 @@ export async function applyCodeModeTool(input: {
 
   const codeModeTool = await createCodeModeRuntimeTool({
     bridgeRequestLimit: CODE_MODE_BRIDGE_REQUEST_LIMIT,
-    continuationSecurity: input.continuationSecurity,
     hostTools: hostTools as ToolSet,
   });
 
@@ -107,55 +95,9 @@ export async function applyCodeModeTool(input: {
           ...codeModeTool,
           description: `${CODE_MODE_ORCHESTRATION_INSTRUCTION}\n\n${codeModeTool.description ?? ""}`,
         } as ToolSet[string]);
-  const codeModeDefinition = defineTool<unknown, unknown>({
-    description:
-      typeof advertisedCodeModeTool.description === "string"
-        ? advertisedCodeModeTool.description
-        : "Execute one code-mode program.",
-    inputSchema: advertisedCodeModeTool.inputSchema as PublicToolInputSchema,
-    outputSchema: advertisedCodeModeTool.outputSchema as PublicToolOutputSchema | undefined,
-    execute() {
-      throw new Error("code_mode is handled by eve's durable code-mode dispatcher.");
-    },
-  });
-  modelTools[CODE_MODE_TOOL_NAME] = {
-    ...codeModeDefinition,
-    execute: undefined,
-  } as ToolSet[string];
+  modelTools[CODE_MODE_TOOL_NAME] = advertisedCodeModeTool;
 
-  return { claimedToolNames, codeModeDefinition, modelTools: modelTools as ToolSet };
-}
-
-/** Executes one generated program against a reconstructed static host surface. */
-export async function executeCodeModeProgram(input: {
-  readonly continuationSecurity: CodeModeContinuationSecurity;
-  readonly harnessTools: HarnessToolMap;
-  readonly js: string;
-  readonly mode: CodeModeMode;
-  readonly toolCallId: string;
-  readonly toolNames: readonly string[];
-  readonly tools: ToolSet;
-}): Promise<unknown> {
-  const hostTools: Record<string, ToolSet[string]> = {};
-  for (const name of input.toolNames) {
-    const tool = input.tools[name];
-    if (tool !== undefined && claimsForCodeMode(name, tool, input.harnessTools)) {
-      hostTools[name] = wrapHostToolForCodeMode(tool);
-    }
-  }
-  if (input.mode === "lazy") Object.assign(hostTools, createDiscoveryTools(hostTools));
-  const codeModeTool = await createCodeModeRuntimeTool({
-    bridgeRequestLimit: CODE_MODE_BRIDGE_REQUEST_LIMIT,
-    continuationSecurity: input.continuationSecurity,
-    hostTools: hostTools as ToolSet,
-  });
-  if (codeModeTool.execute === undefined) throw new Error("code_mode has no executor");
-  return await codeModeTool.execute(
-    { js: input.js } as never,
-    {
-      toolCallId: input.toolCallId,
-    } as never,
-  );
+  return { modelTools: modelTools as ToolSet };
 }
 
 function claimsForCodeMode(
@@ -223,6 +165,7 @@ function createDiscoveryTools(
     description: typeof tool.description === "string" ? tool.description : "",
     inputSchema: tool.inputSchema,
     name,
+    outputSchema: tool.outputSchema,
   }));
 
   const search: ToolSet[string] = {
@@ -249,7 +192,7 @@ function createDiscoveryTools(
   } as ToolSet[string];
 
   const describe: ToolSet[string] = {
-    description: "Describe sandboxed tools: full description and JSON Schema of the input.",
+    description: "Describe sandboxed tools: full description and input/output JSON Schemas.",
     inputSchema: z.object({
       names: z.array(z.string()).describe("Tool names to describe."),
     }),
@@ -261,6 +204,8 @@ function createDiscoveryTools(
           description: entry.description,
           inputSchema: asSchema(entry.inputSchema).jsonSchema,
           name,
+          outputSchema:
+            entry.outputSchema === undefined ? undefined : asSchema(entry.outputSchema).jsonSchema,
         };
       });
     },
