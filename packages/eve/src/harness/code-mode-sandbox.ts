@@ -238,7 +238,7 @@ function lazyCodeModeDescription(codeModeTool: ToolSet[string], hostTools: ToolS
     "declare const tools: {",
     `  /** Search the tool catalog. Omit query to list everything. */`,
     `  ${SEARCH_TOOLS_NAME}: (input: { query?: string; }) => Promise<{ name: string; description: string; }[]>;`,
-    `  /** Full description and input JSON Schema per tool. */`,
+    `  /** Full description and input/output JSON Schemas per tool. */`,
     `  ${DESCRIBE_TOOLS_NAME}: (input: { names: string[]; }) => Promise<unknown[]>;`,
     "  // ...plus every tool listed below, callable as tools.name(input).",
     "};",
