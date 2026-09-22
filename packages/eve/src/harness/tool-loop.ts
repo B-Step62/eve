@@ -1384,6 +1384,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
         approvedTools,
         disabledProviderTools: opts.disabledProviderTools,
         modelReference: requireSessionModelReference(session),
+        modelProvider: typeof model === "string" ? "gateway" : model.provider,
         tools: advertisedHarnessTools,
       });
 
