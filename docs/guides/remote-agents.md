@@ -59,9 +59,16 @@ remain lazy and resolve before each outbound request without entering durable
 workflow state.
 
 Author `auth` and `headers` directly in the `defineRemoteAgent({ ... })` object
-and keep their functions self-contained with module imports or environment
-variables. They are rehydrated outside the event handler, so they cannot close
-over `_event`, `ctx`, or handler-local values.
+and keep their functions self-contained with module imports, module-level
+constants, or environment variables. They are rehydrated outside the event
+handler, so they cannot close over `_event`, `ctx`, or handler-local values. The
+build fails with an error that names the handler-local value when they do.
+
+eve compiles only `auth` and `headers` written directly in the
+`defineRemoteAgent({ ... })` object in the subagent file. When they arrive
+through a spread, a variable passed as the argument, or a definition built in
+another module, eve rejects the definition at runtime, logs the error, and runs
+the agent without that subagent.
 
 ## Runtime URLs
 
