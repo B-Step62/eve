@@ -60,7 +60,10 @@ function assertSafePrepareTarget(src, dst) {
   const realDst = path.join(fs.realpathSync(path.dirname(path.resolve(dst))), path.basename(dst));
   const within = (child, parent) => {
     const rel = path.relative(parent, child);
-    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    // `..` alone or `../…` leaves `parent`; a name like `..bench` does not.
+    return (
+      rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+    );
   };
   if (within(realDst, realSrc) || within(realSrc, realDst)) {
     throw new Error(`refusing to prepare: ${dst} overlaps the source store ${src}`);

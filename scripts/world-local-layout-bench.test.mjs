@@ -67,6 +67,15 @@ test("prepare refuses a new destination inside the source", async (t) => {
   assert.equal(fs.existsSync(path.join(store, "copy")), false);
 });
 
+test("prepare refuses a destination inside the source whose name starts with ..", async (t) => {
+  const { store } = await fixture(t);
+  const before = hashTree(store);
+  const dst = path.join(store, "..bench");
+  assertRefused(prepare(store, dst), /overlaps/);
+  assert.deepEqual(hashTree(store), before);
+  assert.equal(fs.existsSync(dst), false);
+});
+
 test("prepare refuses a destination reached through a symlink to the source", async (t) => {
   const { root, store } = await fixture(t);
   const alias = path.join(root, "alias");
