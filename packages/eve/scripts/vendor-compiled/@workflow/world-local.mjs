@@ -60,7 +60,20 @@ export default {
   packageName: "@workflow/world-local",
   compiledPath: "@workflow/world-local",
   chunkGroup: "workflow",
-  fingerprintFiles: ["dist/fs.js"],
+  // Every file patches/@workflow__world-local@5.0.1.patch changes, so editing
+  // the patch re-vendors even though the package version stays the same.
+  fingerprintFiles: [
+    "dist/fs.js",
+    "dist/index.js",
+    "dist/storage/events-storage.js",
+    "dist/storage/helpers.js",
+    "dist/storage/hook-index.js",
+    "dist/storage/index.js",
+    "dist/storage/layout.js",
+    "dist/storage/legacy.js",
+    "dist/storage/run-retention.js",
+    "dist/storage/steps-storage.js",
+  ],
   declaration: await loadDeclaration("workflow-world-local.d.ts"),
   plugins: [workflowWorldLocalVersionPlugin],
 };
