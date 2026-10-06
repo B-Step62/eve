@@ -3,8 +3,10 @@
 //   node scripts/world-local-layout-bench.mjs prepare <srcStore> <dstStore> [targetEvents=50000]
 //   node scripts/world-local-layout-bench.mjs run <worldLocalIndexJs> <store> [label]
 //
-// `prepare` clones a store (APFS clone, no extra disk) and pads events/ with
-// cloned files under fake run ids until it holds `targetEvents` files.
+// `prepare` clones a store (APFS clone, no extra disk) into <dstStore> and pads
+// events/ with cloned files under fake run ids until it holds `targetEvents`
+// files. <dstStore> must not exist yet and must not overlap <srcStore>; the
+// command refuses both before writing anything.
 // `run` imports the given world-local build and measures:
 //   - events.list of the largest real run, a mid-size run, and a 1-event run
 //   - events.create for a brand-new run: run_created, run_started, 50 steps
@@ -40,10 +42,43 @@ function runCounts(store) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
+/**
+ * `prepare` writes only to a brand-new `dst`. Refuse, before touching
+ * anything, a `dst` that already exists or that overlaps `src` (the same
+ * path, an ancestor or a descendant, including through symlinks).
+ */
+function assertSafePrepareTarget(src, dst) {
+  if (!src || !dst) {
+    throw new Error("usage: prepare <srcStore> <dstStore> [targetEvents]");
+  }
+  const realSrc = fs.realpathSync(src);
+  if (fs.existsSync(dst) || isBrokenSymlink(dst)) {
+    throw new Error(
+      `refusing to prepare into ${dst}: it already exists (the destination must be new)`,
+    );
+  }
+  const realDst = path.join(fs.realpathSync(path.dirname(path.resolve(dst))), path.basename(dst));
+  const within = (child, parent) => {
+    const rel = path.relative(parent, child);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  };
+  if (within(realDst, realSrc) || within(realSrc, realDst)) {
+    throw new Error(`refusing to prepare: ${dst} overlaps the source store ${src}`);
+  }
+}
+
+function isBrokenSymlink(p) {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 if (cmd === "prepare") {
   const [src, dst, targetArg] = args;
   const target = Number(targetArg ?? 50000);
-  fs.rmSync(dst, { recursive: true, force: true });
+  assertSafePrepareTarget(src, dst);
   execFileSync("cp", ["-cR", src, dst]);
   const dir = path.join(dst, "events");
   let files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));

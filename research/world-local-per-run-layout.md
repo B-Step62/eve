@@ -42,7 +42,8 @@ Every path below did one `readdir` of the full flat directory per call:
 Harness: [`scripts/world-local-layout-bench.mjs`](../scripts/world-local-layout-bench.mjs).
 
 ```sh
-# APFS clone of a real store (no extra disk), padded to 50k event files
+# APFS clone of a real store (no extra disk), padded to 50k event files.
+# <benchStore> must be a new path outside <realStore>; prepare refuses anything else.
 node scripts/world-local-layout-bench.mjs prepare <realStore> <benchStore> 50000
 # Point at a world-local build's dist/index.js
 node scripts/world-local-layout-bench.mjs run <world-local>/dist/index.js <benchStore> <label>
