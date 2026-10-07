@@ -804,6 +804,7 @@ const compiledWorkspaceResourceRootSchema = z
 
 const compiledConnectionDefinitionSchema = z
   .object({
+    experimental_events: z.literal(true).optional(),
     connectionName: z.string(),
     description: z.string(),
     exportName: z.string().optional(),
