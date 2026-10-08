@@ -7,8 +7,6 @@ import { createDurableSessionValues } from "#execution/durable-session-store.js"
 import type { DurableStepResult } from "#execution/session/turn-step-types.js";
 import type { HarnessSession, StepInput, StepResult } from "#harness/types.js";
 import { appliedSession, saveSessionProjection } from "#harness/session-machine/current.js";
-import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
-import { isEmptyInput } from "#harness/hitl/delivery.js";
 import { preserveSerializedInstrumentationState } from "#instrumentation/state.js";
 import { preserveSerializedAgentTraceState } from "#tracing/agent-trace-context-store.js";
 
@@ -18,10 +16,9 @@ export interface CompletedModelCallCheckpoint {
 }
 
 /**
- * The session the cut call applied, with the delivery's message kept in history. The applied queue
- * already reflects what the call consumed, so answers it resolved don't come back. A message it
- * deferred behind those answers moves to history, as an ordinary cancelled turn's message does,
- * and leaves the queue so it doesn't reach the model again; the rest of the queue stays.
+ * The session the cut call applied, or the one the batch started with, with the delivery's message
+ * kept in history, as an ordinary cancelled turn's message is. A message the call deferred behind
+ * the answers it resolved is kept instead, so it reaches the model once.
  */
 async function cancelledWithoutCheckpoint(
   ctx: ContextContainer,
@@ -29,15 +26,13 @@ async function cancelledWithoutCheckpoint(
   stepInput: StepInput | undefined,
 ): Promise<HarnessSession> {
   const applied = appliedSession<HarnessSession>(ctx);
-  const { queued, ...turn } = readTurnState(applied?.state);
-  let session = applied ?? initial;
-  let preserved = stepInput;
-  if (applied !== undefined && queued?.message !== undefined) {
-    const { message, ...rest } = queued;
-    session = writeTurnState(applied, isEmptyInput(rest) ? turn : { ...turn, queued: rest });
-    preserved = { ...stepInput, message };
-  }
-  return await contextStorage.run(ctx, () => preserveCancelledTurnMessage(session, preserved));
+  const preserved =
+    applied?.deferredMessage === undefined
+      ? stepInput
+      : { ...stepInput, message: applied.deferredMessage };
+  return await contextStorage.run(ctx, () =>
+    preserveCancelledTurnMessage(applied?.session ?? initial, preserved),
+  );
 }
 
 /** Builds the successful step result that commits a cancelled batch's completed model calls. */

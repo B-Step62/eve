@@ -1,12 +1,13 @@
 import { contextStorage } from "#context/container.js";
 import type { ContextReader } from "#context/key.js";
-import type { HarnessSessionBase, SessionStateMap } from "#harness/types.js";
+import type { HarnessSessionBase, SessionStateMap, StepInput } from "#harness/types.js";
 import {
   foldSession,
   pruneSessionProjection,
   type SessionProjection,
 } from "#protocol/session-projection.js";
 import type { MessageStreamEvent, UnstampedMessageStreamEvent } from "#protocol/message.js";
+import { readTurnState, writeTurnState } from "./state.js";
 import { SESSION_PROJECTION_STATE_KEY, storedProjection } from "./view.js";
 
 // A step-local holder for the projection as the step publishes. It survives provider scope
@@ -66,9 +67,27 @@ export function recordAppliedSession(ctx: ContextReader, session: HarnessSession
   appliedSessions.set(ctx, session);
 }
 
-/** The session the step's last applied transition produced, if it applied any. */
-export function appliedSession<T extends HarnessSessionBase>(ctx: ContextReader): T | undefined {
-  return appliedSessions.get(ctx) as T | undefined;
+/**
+ * The session the step's last applied transition produced, if it applied any, for a step a
+ * cancellation cut short. Its queue already reflects what the step consumed, so answers it resolved
+ * stay resolved. The message it deferred behind those answers leaves the queue and comes back as
+ * `deferredMessage`, for the cancelled turn to keep in history once; the rest of the queue stays.
+ */
+export function appliedSession<T extends HarnessSessionBase>(
+  ctx: ContextReader,
+): { readonly deferredMessage?: StepInput["message"]; readonly session: T } | undefined {
+  const session = appliedSessions.get(ctx) as T | undefined;
+  if (session === undefined) return undefined;
+  const { queued, ...turn } = readTurnState(session.state);
+  if (queued?.message === undefined) return { session };
+  const { message, ...rest } = queued;
+  return {
+    deferredMessage: message,
+    session: writeTurnState(
+      session,
+      Reflect.ownKeys(rest).length === 0 ? turn : { ...turn, queued: rest },
+    ),
+  };
 }
 
 export function saveSessionProjection<T extends HarnessSessionBase>(
