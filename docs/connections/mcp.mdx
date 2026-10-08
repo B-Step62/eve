@@ -328,3 +328,13 @@ as stopped. `expiresAt: null` removes the Connect monitoring deadline; it does
 not keep an ended eve session alive.
 Subscription cleanup failures do not prevent child-task termination or hide an
 existing session failure from its waiting caller.
+
+The runtime vendors `@ai-sdk/mcp@2.0.73`, which includes managed event operations
+and the transport-context adapter factory.
+The Connect bridge binds subscriptions to the same URL as the connection and
+forwards it as `source.url`; you do not need to configure that URL a second time.
+The backend must support and authorize that endpoint before forwarding provider
+credentials. A connection URL alone does not grant permission to use it.
+
+eve wraps the bridge's bound operations in the AI SDK's `createAdapter` contract.
+This is internal wiring; authored connections only specify their MCP URL once.
