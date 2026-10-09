@@ -2,7 +2,7 @@ import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionStateMap } from "#harness/types.js";
 
-const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
+import { readApprovalState, writeApprovalState } from "./session-state.js";
 
 type ApprovalCandidateStatus =
   | "pending"
@@ -56,7 +56,7 @@ export interface ActiveApprovalCandidate {
   readonly authorizationChallenges?: readonly AuthorizationChallenge[];
 }
 
-interface DurableApprovalState {
+export interface DurableApprovalState {
   readonly activeCandidates: Readonly<Record<string, ActiveApprovalCandidate>>;
   readonly nextCandidateSequence: number;
   readonly candidateHistory: readonly ApprovalCandidateAuditRecord[];
@@ -357,66 +357,6 @@ export function sameResponder(
 }
 
 /**
- * A candidate is an Approve unless it records Cancel: candidates persisted
- * before Cancel was authorized carry no decision, and their responder pressed
- * Approve.
- */
-function readActiveCandidates(
-  candidates: Readonly<Record<string, ActiveApprovalCandidate>>,
-): Readonly<Record<string, ActiveApprovalCandidate>> {
-  return Object.fromEntries(
-    Object.entries(candidates).map(([candidateId, candidate]) => [
-      candidateId,
-      { ...candidate, decision: candidate.decision === "cancel" ? "cancel" : "approve" },
-    ]),
-  );
-}
-
-function readApprovalState(state: SessionStateMap | undefined): DurableApprovalState {
-  const value = state?.[APPROVAL_STATE_KEY];
-  if (typeof value !== "object" || value === null) {
-    return {
-      activeCandidates: {},
-      candidateHistory: [],
-      nextCandidateSequence: 0,
-      settlements: {},
-    };
-  }
-  const candidate = value as Partial<DurableApprovalState>;
-  return {
-    activeCandidates:
-      typeof candidate.activeCandidates === "object" && candidate.activeCandidates !== null
-        ? readActiveCandidates(candidate.activeCandidates)
-        : {},
-    candidateHistory: Array.isArray(candidate.candidateHistory) ? candidate.candidateHistory : [],
-    nextCandidateSequence:
-      typeof candidate.nextCandidateSequence === "number" &&
-      Number.isSafeInteger(candidate.nextCandidateSequence) &&
-      candidate.nextCandidateSequence >= 0
-        ? candidate.nextCandidateSequence
-        : deriveNextCandidateSequence(candidate),
-    settlements:
-      typeof candidate.settlements === "object" && candidate.settlements !== null
-        ? candidate.settlements
-        : {},
-  };
-}
-
-function deriveNextCandidateSequence(state: Partial<DurableApprovalState>): number {
-  return (
-    Object.keys(state.activeCandidates ?? {}).length +
-    (Array.isArray(state.candidateHistory) ? state.candidateHistory.length : 0)
-  );
-}
-
-function writeApprovalState(
-  state: SessionStateMap | undefined,
-  approvalState: DurableApprovalState,
-): SessionStateMap {
-  return { ...state, [APPROVAL_STATE_KEY]: approvalState };
-}
-
-/**
  * The held turn moved on, steered or cancelled: the responders still checking one of its
  * approvals stop, their candidates stale.
  */
@@ -435,12 +375,4 @@ export function retireActiveCandidates(
     });
   }
   return next;
-}
-
-/** The full auth of whoever approved `requestId`, when it was allowed. */
-export function approverOfRequest(
-  state: SessionStateMap | undefined,
-  requestId: string,
-): SessionAuthContext | undefined {
-  return readApprovalState(state).settlements[requestId]?.approver;
 }

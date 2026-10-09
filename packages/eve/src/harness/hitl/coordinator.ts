@@ -20,10 +20,9 @@ import {
   type ApprovalCandidateDecision,
   type ApprovalSettlementAuditRecord,
 } from "#harness/hitl/candidates.js";
+import { clearPendingAuthorization, getPendingAuthorization } from "./session-state.js";
 import {
-  clearPendingAuthorization,
   getAuthorizationResult,
-  getPendingAuthorization,
   isAuthorizationSignal,
   type AuthorizationChallenge,
 } from "#harness/authorization.js";

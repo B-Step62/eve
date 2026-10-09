@@ -8,7 +8,7 @@ import type {
 } from "#shared/action-types.js";
 import { markRuntimeWorkflowToolAction } from "#shared/action-types.js";
 import { parseJsonObject, type JsonObject } from "#shared/json.js";
-import { getProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { getProxyInputRequests } from "#harness/hitl/session-state.js";
 import {
   findBlockingWorkflowToolRun,
   removeBlockingWorkflowToolRuns,

@@ -33,8 +33,8 @@ import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { startWorkflowTask } from "#execution/tools/workflow/start.js";
 import { TurnCancelledError } from "#harness/turn-cancellation.js";
-import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
-import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { getPendingAuthorization, setPendingAuthorization } from "#harness/hitl/session-state.js";
+import { upsertProxyInputRequests } from "#harness/hitl/session-state.js";
 import {
   positionOf,
   positionState,

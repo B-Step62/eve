@@ -3,7 +3,6 @@ import type { ModelMessage } from "ai";
 import type { SessionAuthContext } from "#channel/types.js";
 import { buildResponseAuthorizationTools } from "#context/build-dynamic-tools.js";
 import { AuthKey, SessionKey } from "#context/keys.js";
-import { clearPendingAuthorization } from "#harness/authorization.js";
 import type { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-authorization.js";
 import { validateHarnessModelMessages } from "#harness/messages.js";
 import { fail, hold } from "#harness/session-machine/transitions.js";
@@ -41,6 +40,7 @@ export {
 } from "./intake.js";
 export { extractToolApprovalInputRequests } from "#harness/input-extraction.js";
 export { hasRunnableQueue } from "./approvals.js";
+export { discardClearedHumanInput } from "./session-state.js";
 
 /**
  * A model step made calls that need a person's approval: the step parks on them beside any
@@ -147,18 +147,6 @@ export function humanInputContext(step: Step): {
       view.turn.suspended.flatMap((parked) => parked.requests),
     ),
   };
-}
-
-const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
-
-/**
- * Drops what a cleared context owned: sign-in attempts and responders' approval progress. `clear`
- * reported each close; relay routes for live tasks stay.
- */
-export function discardClearedHumanInput<T extends HarnessSessionBase>(session: T): T {
-  const { [APPROVAL_STATE_KEY]: _approvals, ...state } =
-    clearPendingAuthorization(session.state) ?? {};
-  return { ...session, state: Object.keys(state).length > 0 ? state : undefined };
 }
 
 function responseTools(step: Step): HarnessToolMap {
