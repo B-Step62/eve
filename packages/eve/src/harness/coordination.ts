@@ -8,7 +8,7 @@ import type {
 } from "#shared/action-types.js";
 import { markRuntimeWorkflowToolAction } from "#shared/action-types.js";
 import { parseJsonObject, type JsonObject } from "#shared/json.js";
-import { getProxyInputRequests } from "#harness/hitl/session-state.js";
+import { readHitlState } from "#harness/hitl/session-state.js";
 import {
   findBlockingWorkflowToolRun,
   removeBlockingWorkflowToolRuns,
@@ -49,7 +49,7 @@ export function forgetFinishedRuns(
     if (result.kind !== "tool-result") continue;
     const record = findBlockingWorkflowToolRun(next.state, result.callId, turnId);
     if (record === undefined) continue;
-    for (const [requestId, route] of getProxyInputRequests(next.state)) {
+    for (const [requestId, route] of readHitlState(next.state).relays) {
       if (route.runId === record.address.runId) requestIds.push(requestId);
     }
     next = removeBlockingWorkflowToolRuns(next, turnId, record.callId);
