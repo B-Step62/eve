@@ -91,9 +91,40 @@ Provenance stays separate from ownership: which run made a call (and so which tu
 - **Fixtures (mock model):** `agent-tools-hitl` 69 of 69, `agent-subagents-hitl` 8 of 8, `agent-subagents` 16 of 16, `agent-cancellation` 9 of 9, `agent-workflow-tools` 33 of 34 (`webhook-deploy` fails on the base too). One eval changed: `sign-off-plan.cancel` reads `interrupted` for its question. The full mock matrix, 30 fixtures, matches #4616 fixture by fixture.
 - **Not done:** removing the 86 hand-built scopes now that the writer stamps them (it overrides them, and the suite agrees with every one; about 100–150 lines), and the relay unification below.
 
+## One taxonomy, inside and out
+
+v27 changed the wire, not the model. Both sides kept the v26 one: the engine built
+`InputRequest`s and converted them to facts, and readers folded the facts and converted rows back
+into `InputRequest`s, so a question made the round trip `InputRequest` → `interaction.opened` →
+row → `InputRequest`. That, not lifecycle closing, is where v27's added code went.
+
+`proto/one-taxonomy` makes the interaction family the model everywhere, for interactions and
+sign-ins:
+
+- **The engine builds interaction requests** and keeps interaction ids; an approval stores its
+  call (`callId`, `toolName`, `input`), and the budget prompt asks about its turn rather than a
+  made-up tool call.
+- **An answer is `{ interactionId, optionId?, text? }`**: a response's value and the interaction
+  it answers, from client to channel to engine.
+- **Readers read rows:** `askedInteraction` (the request's own fields, its id, and the call it asks
+  about), `readerRequest` (where, how it stands, the deciding answer), and outcomes as
+  `InteractionOutcome`, sign-ins included.
+- **A child relays its own interaction facts** in one payload kind: the requests one commit
+  opened, together, or one other fact. It decides all of them; the serving session mirrors them,
+  and its route back is routing only.
+
+Measured: production **+1,704 / −2,708 (−1,004)**, tests −1,324. Two things only evals found:
+
+- **A child's commit must relay as one commit.** Relaying fact by fact asked a child's two
+  approvals in two parent commits, so the person saw two pauses for one question set.
+- **Open strings hide stale comparisons.** `InteractionRequest.kind` is open, so a leftover
+  `=== "tool-approval"` compiles and never matches; every one had to be found by search.
+
+Calls (`RuntimeActionRequest`/`Result` ↔ call facts) and user parts are the next families with
+converters both ways. Instrumentation is a third public vocabulary over the same events.
+
 ## Still on the table
 
-- **Relays in one vocabulary.** A child relays a question two ways: the older `InputRequest` batch (`subagent-input-request`) and v27 interaction facts (`subagent-authorization-event`). Collapsing to "a child relays its own interaction and response facts" removes a route table keyed by batch entries and the special cases around it; about 200–300 lines, estimated. The parent/child protocol crosses deployments, so this is worth deciding before 1.0.
 - **A shared owner field on the wire.** Every introducing fact could name its owner as `owner`. It would let a generic reader draw the tree without family knowledge, but rule 1's ownership changes still need code, so the gain is small. Not recommended unless external tooling needs it.
 - **A shared outcome core.** Rule 2's table could become uniform if every family had `interrupted` and `abandoned`. It's one small table today, so not worth churning the vocabulary.
 
