@@ -19,7 +19,7 @@ This doc is about everything that changes during an eve session: the model, tool
 - **Hooks act on occurrences.** A hook can cancel or compact once per occurrence, and gets a stable key for its own side effects ([Hooks: occurrences, not values](#hooks-occurrences-not-values)).
 - **Most things get simpler, and one thing is lost.** Values can depend on anything in the session's view, packages return plain tools, and one rule covers every kind's failures. A value can't latch what something was at a past moment ([What gets harder](#what-gets-harder-and-what-we-give-up)).
 
-**Status.** #4616 prototypes the runner, `select` and `resolve` for every kind, the dynamic `model` field, `auto()`, and hooks that return intents, and it deletes main's lifecycles, transforms, and durable callbacks. It doesn't yet have `build`, named lifetimes, hooks as occurrences, the single failure and drift rule, or a cap on selections. Where this doc and #4616 differ, this doc is the target.
+**Status.** #4616 implements this model: the runner, `select`, `resolve`, and `build` for every kind, named lifetimes, the dynamic `model` field and `auto()`, hooks as occurrences, one failure and drift rule, and a cap on selections. It deletes main's lifecycles, transforms, and durable callbacks. Not yet: a dynamic remote agent with `auth` or `headers` ([Data or code](#data-or-code)).
 
 ## How dynamism works on `main`
 
@@ -215,16 +215,18 @@ The second argument holds the session's ID, auth, schedule, and predecessor, and
 
 `build` exists only where a value carries code:
 
-| Kind                                    | The value                        | `build`                                         |
-| --------------------------------------- | -------------------------------- | ----------------------------------------------- |
-| Instructions                            | Content and role                 | None                                            |
-| Skills                                  | Markdown, and files              | None                                            |
-| A local subagent                        | Its agent config                 | None                                            |
-| A model by gateway ID                   | The ID and its settings          | eve's                                           |
-| A model as a provider object            | Whatever config the author needs | The author's: it creates the provider           |
-| Tools                                   | Whatever data the tools need     | The author's, always                            |
-| Connections                             | Whatever data they need          | The author's: it creates `getToken` and headers |
-| A remote agent with `auth` or `headers` | Its URL and description          | The author's                                    |
+| Kind                         | The value                        | `build`                                         |
+| ---------------------------- | -------------------------------- | ----------------------------------------------- |
+| Instructions                 | Content and role                 | None                                            |
+| Skills                       | Markdown, and files              | None                                            |
+| A local subagent             | Its agent config                 | None                                            |
+| A model by gateway ID        | The ID and its settings          | eve's                                           |
+| A model as a provider object | Whatever config the author needs | The author's: it creates the provider           |
+| Tools                        | Whatever data the tools need     | The author's, always                            |
+| Connections                  | Whatever data they need          | The author's: it creates `getToken` and headers |
+| A remote agent               | Its URL and description          | None yet, so it can't carry `auth` or `headers` |
+
+A remote agent's `auth` and `headers` are the one case left. Its selection reaches the remote through the steps that run the child session, which read the recorded JSON and have no `build` to call yet, so a dynamic remote agent can't carry them, and an authenticated remote agent is static.
 
 Both rules fail loudly. A `resolve` that returns a tool isn't JSON, so it fails with "`resolve` must return JSON: build tools in `build`". A `build` that returns a promise fails because `build` is synchronous.
 
@@ -267,19 +269,19 @@ a step needs a value's code
 ```
 
 - **`resolve` never runs again for a selection it already resolved.** A fresh process builds from the record, so a cold start reads no database, asks no router, and mints no token.
-- **What the model was offered is recorded too,** such as tool declarations and the model's reference. A rebuild that offers something different fails closed: a changed tool's calls fail with `Tool "query" changed since it was offered.`, and a changed model with `The model changed since this session chose it`. That's one rule for every kind, and it fires only when `build` isn't deterministic.
-- **A new deployment resolves again.** Only idle sessions move to a new deployment, so values with code resolve under it before the next turn uses them. Values that are only data keep theirs until their selection changes.
+- **What the model was offered is recorded too,** such as tool declarations and the model's reference. A build that offers something different withdraws the value, with `"tools/query.ts" built something other than what this session was offered.` The tool isn't offered, or the model call fails. That's one rule for every kind, and it fires only when `build` isn't deterministic.
+- **A new deployment resolves again.** Only idle sessions move to a new deployment. A fresh process under it builds the step's code from the record, without the check, and values with code resolve again at the step's first commit. Values that are only data keep theirs until their selection changes.
 
 This is the path `auto()` needed, made general and public:
 
-| `auto()` in #4616                                                    | With `build`                        |
+| `auto()` before `build`                                              | With `build`                        |
 | -------------------------------------------------------------------- | ----------------------------------- |
 | `select` returns `{ turnId, input }`                                 | `select`                            |
 | `resolve` asks the router, and returns an option key                 | `resolve`, whose result is recorded |
 | The option key becomes a model                                       | `build(recorded)`                   |
 | A fresh process calls an internal `rebuild` from the recorded option | A fresh process calls `build`       |
 
-The internal `rebuild` and every kind's `reconcile` go away. Re-running `resolve` in a fresh process, which #4616 does for every kind but `auto()`, goes too.
+The internal `rebuild` and every kind's `reconcile` are gone, and so is re-running `resolve` in a fresh process, which #4616 did for every kind but `auto()` before `build`. What's left of `auto()`'s special case is that its `resolve` reads the conversation before the turn.
 
 ### Freshness
 
@@ -315,7 +317,7 @@ What a hook returns is different in kind from what a dynamic value returns:
 - **Intents are applied once per occurrence.** `cancel(reason?)` stops the turn running when the hook resolved, and `compact({ reason? })` compacts before the next model call. A second idle stretch is a new occurrence, so it compacts again.
 - **Side effects run at least once.** `ctx.occurrence` is a stable key for the occurrence, to pass as an idempotency key: an email, a charge, a ticket.
 
-In #4616, intents sit in the hook's slot like a value, with a set of keys already acted on. A plain `compact()` is keyed `default`, so it compacts once per session, and an author has to invent a name per occurrence. Treating results as occurrences removes the set and the naming.
+Before this change, #4616 kept intents in the hook's slot like a value, with a set of keys already acted on. A plain `compact()` is keyed `default`, so it compacts once per session, and an author has to invent a name per occurrence. Treating results as occurrences removed the set and the naming. A map of intents is still accepted, but its names don't matter.
 
 The split is the one Signals makes between computeds and effects: values are derived and cached, hooks act. They share `select` and "run when the selection changes", and nothing else.
 
@@ -397,7 +399,7 @@ model: defineDynamic({
 }),
 ```
 
-In #4616, this re-ran `decide()` in every fresh process that needed a provider object, and failed the call if the decision came out differently.
+Before `build`, #4616 re-ran `decide()` in every fresh process that needed a provider object, and failed the call if the decision came out differently.
 
 ### An enterprise-only subagent
 
@@ -579,7 +581,7 @@ This one shows what happens to a value that isn't a function of its inputs:
   return { lucky: defineTool({ description: "Returns the lucky number.", execute: () => ({ x }) }) };
 },
 
-// #4616
+// #4616 before build
 select: () => null,
 resolve: () => {
   const x = Math.random();
@@ -592,11 +594,11 @@ resolve: () => Math.random(),
 build: (x) => ({ lucky: defineTool({ description: "Returns the lucky number.", execute: () => ({ x }) }) }),
 ```
 
-|           | What a cold start does                                                                            | What the author sees                                                                                                                                                                                                                                                           |
-| --------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `main`    | Calls the hoisted `execute` with the snapshot `{ x }`                                             | The same number for the whole session                                                                                                                                                                                                                                          |
-| #4616     | Runs `resolve` again, which picks a new `x`. The declaration matches, so the new tool is accepted | A different number whenever a step lands in a process without the session's code: another instance, an evicted cache, a restart. Never locally. If `x` were in the description, the tool would fail closed, and with a constant selection it would stay failed for the session |
-| Reactions | Calls `build` with the recorded `x`                                                               | The same number for the whole session. A `resolve` that returned the tool directly would fail immediately, because a tool isn't JSON                                                                                                                                           |
+|                      | What a cold start does                                                                            | What the author sees                                                                                                                                                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `main`               | Calls the hoisted `execute` with the snapshot `{ x }`                                             | The same number for the whole session                                                                                                                                                                                                                                          |
+| #4616 before `build` | Runs `resolve` again, which picks a new `x`. The declaration matches, so the new tool is accepted | A different number whenever a step lands in a process without the session's code: another instance, an evicted cache, a restart. Never locally. If `x` were in the description, the tool would fail closed, and with a constant selection it would stay failed for the session |
+| Reactions            | Calls `build` with the recorded `x`                                                               | The same number for the whole session. A `resolve` that returned the tool directly would fail immediately, because a tool isn't JSON                                                                                                                                           |
 
 Only randomness inside `build` could still drift, and `build` is the one function documented as pure.
 
@@ -706,7 +708,7 @@ Most of main's dynamic-capabilities guide explains these: the events table for e
 
 - **Deleted:** the six lifecycles, dynamic tool building and metadata, the two transforms and their bundler plugin, durable callbacks and schemas, rebind, and the memory lifecycle: the 4,330 lines [above](#inside-eve).
 - **In their place:** one runner and an adapter per kind, about 2,200 lines in #4616. Across the repo, #4616 adds about 5,400 lines and removes about 16,400, tests and fixtures included.
-- **With `build`,** more goes: each kind's `reconcile`, the internal `rebuild`, and re-running `resolve` in a fresh process. `auto()` stops being a special case.
+- **Adding `build`,** named lifetimes, and occurrences removed each kind's `reconcile`, the internal `rebuild`, re-running `resolve` in a fresh process, and the hooks' set of satisfied keys. It left production code about the same size: 35 more lines of code and 36 more of comments. The engine (the runner, the kinds, `auto()`, and memory tools) shed about 95 lines of special cases and gained the `build` path and recorded skill files, about 40 fewer lines net. The definition types, validation, and exports for three forms gained about 75. The complexity moved from the engine to the authoring surface, where it's written down once.
 - **Builds stop parsing authored source.**
 
 ## What gets harder, and what we give up
