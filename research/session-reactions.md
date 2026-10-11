@@ -6,18 +6,20 @@ last_updated: "2026-10-11"
 
 # Session reactions and dynamic values
 
-This doc is about everything that changes during an eve session: the model, tools, skills, instructions, connections, subagents, and what hooks do in response. It describes how `main` handles them, what that costs authors and eve, and the model that replaces it: **reactions**, and the **dynamic values** authors write with them. It replaces the earlier `session-reactions.md` and `dynamic-values.md`.
+This doc covers everything that changes during an eve session: the model, tools, skills, instructions, connections, subagents, and what hooks do in response. It describes how `main` handles them, what that costs authors and eve, and the model that replaces it: **reactions**, and the **dynamic values** authors write with them. It replaces the earlier `session-reactions.md` and `dynamic-values.md`.
 
-`main` was read at `caf61ffb9`. The prototype is [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack. Code examples labelled "main" come from main's docs unless they say otherwise.
+The prototype is [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack. Code examples labelled "main" come from main's docs unless they say otherwise.
 
 ## Summary
 
-- **On `main`, dynamism is handlers on three lifecycle events.** Each kind allows a different subset of `session.started`, `turn.started`, and `step.started`, fails in its own way, and survives a cold start through a compiler pass that snapshots what its callbacks capture ([How dynamism works on main](#how-dynamism-works-on-main)).
+- **On `main`, dynamism is implemented as handlers on three lifecycle events.** Each kind allows a different subset of `session.started`, `turn.started`, and `step.started`, fails in its own way, and survives a cold start through a compiler pass that snapshots what its callbacks capture ([How dynamism works on main](#how-dynamism-works-on-main)).
 - **That costs authors a list of exceptions per kind, and eve about 4,300 lines** of lifecycles, transforms, and durable callbacks. Some things can't be said at all: a hook can't compact, and nothing can depend on state other than those three events ([What that costs](#what-that-costs)).
-- **Every reaction is `select`, `render`, and sometimes `record`.** `select` says what it depends on, and `render` says what the session should have, given that. When `render` needs something to await, `record` fetches it once per selection, and eve keeps the result. Named lifetimes (`once`, `perTurn`, `perStep`) cover the common selections ([The model](#the-model)).
-- **Record once, render anywhere.** A fresh process renders again from what was recorded and never records again, so a cold start reads no database and asks no router, and nothing parses authored source. `auto()` is an ordinary definition of this shape ([Cold starts](#cold-starts)).
-- **Hooks are reactions too.** A hook's `render` returns intents, such as `compact()`, which act once per new selection, and its side effects go in `record` ([Hooks](#hooks)).
-- **Most things get simpler, and a few get harder or are lost.** Values can depend on anything in the session's view, packages return plain tools, and one rule covers every kind's failures. Dynamic remote agents can't carry credentials yet ([What gets harder](#what-gets-harder-and-what-we-give-up)).
+- **Proposal: all dynamism is a reaction** An internal `defineReaction` interface supports all dynamic use case. It consists of three functions, `select`, `record`, and `render`. `record` is optional and omitted for many common cases. ([The model](#the-model))
+  - `select` is what the reaction depends on. it's a function of the state of the session, and returns a small JSON-encodable object. this is intended to be fast and cheap, as it runs on every commit that mutates the state of the session. examples include 'the current turn id', 'is the session idle', 'does message history contain any image attachments'. Eve exports named lifetimes for common cases (`once`, `perTurn`, `perStep`)
+  - `record` is an optional step that handles any async or non-deterministic work. It takes `select`'s output as input, and returns a separate JSON-encodable object. This function only runs when the value of `select` changes, meaning it is safe to do more expensive work here. Examples would be "query the database for rows describing tools that should be available to this tenant" or "query Jev for what model should be used for this session and store its id". This is broken out from `build` because its values must survive cold process restarts. If we did not have this escape hatch, each cold process restart would run the expensive or non-deterministic code independently. ([Cold starts](#cold-starts))
+  - `build` takes in the output of `record` (or `select`, if `record` is not specified) and returns a definition (skill, tool, agent, etc.), data, or intent (compact, clear, etc.).
+- **Hooks are reactions.** Reactions can return intents from `render`, and side effects ("send an email when budget limits are exceeded" go in `record`) ([Hooks](#hooks))
+- **Most things get simpler to express, a few things get harder.** The lifecycle of when things run and change becomes much more explicit and consistent across our API surface area, and you're able to depend on things that were previously impossible to express. On the flip side, some things get more difficult to express, and there is one small gap vis-a-vis today that becomes impossible to express (addressable, with a bit of extra complexity if we care)([What gets harder](#what-gets-harder-and-what-we-give-up)).
 
 **Status.** #4616 implements this model for every kind, including hooks and `auto()`, and deletes main's lifecycles, transforms, and durable callbacks. Not yet: a dynamic remote agent with `auth` or `headers`.
 
@@ -111,8 +113,6 @@ Hooks observe. "Handlers are observe-only. They cannot inject model context." Th
 | Dynamic connection registry and recovery                       | 83              |
 | The memory lifecycle                                           | 598             |
 | **Total**                                                      | **4,330**       |
-
-Tests come on top. The transforms also run in every build: across this repo's fixtures and extensions, they parse 164 modules at about 0.6 ms each, and the output is 1.7 times the source.
 
 ## What that costs
 
