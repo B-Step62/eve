@@ -118,11 +118,11 @@ export default defineEval({
         t.log(
           `Alice prepares a change; after a refused answer and reload, finish with ${decision}.`,
         );
-        const session = await t.session({ headers: ALICE });
+        // Create with the first message instead of prewarming an empty
+        // session and racing its owner bootstrap with an ID-addressed send.
         const page = new EveAgentStore({
           host,
           headers: ALICE,
-          initialSession: session.state,
           reducer: defaultMessageReducer(),
         });
         stores.push(page);
@@ -130,7 +130,9 @@ export default defineEval({
           "Initial approval request",
           page.send({ message: "Prepare an authorized change.", signal: t.signal }),
         );
-        const parked = (await t.target.watchTurn(session.sessionId).result()).expectOk();
+        const sessionId = page.snapshot.session!.sessionId;
+        await t.target.attachSession(sessionId);
+        const parked = (await t.target.watchTurn(sessionId).result()).expectOk();
         const approval = parked.session.requireInputRequest({ toolName: TOOL });
         const { requestId } = approval;
         const callId = approval.action.callId;
@@ -145,7 +147,7 @@ export default defineEval({
         const reload = new EveAgentStore({
           host,
           headers: ALICE,
-          initialSession: { sessionId: session.sessionId, streamIndex: 0 },
+          initialSession: { sessionId, streamIndex: 0 },
           reducer: defaultMessageReducer(),
         });
         stores.push(reload);
@@ -180,9 +182,7 @@ export default defineEval({
         );
         await t.require(reload.snapshot.status, equals("ready"));
         await t.require(reload.snapshot.error, equals(undefined));
-        const finished = (
-          await t.target.watchTurn(session.sessionId, { startIndex }).result()
-        ).expectOk();
+        const finished = (await t.target.watchTurn(sessionId, { startIndex }).result()).expectOk();
         finished.event("approval.settled", {
           data: { requestId, outcome: decision === "approve" ? "approved" : "cancelled" },
           count: 1,
