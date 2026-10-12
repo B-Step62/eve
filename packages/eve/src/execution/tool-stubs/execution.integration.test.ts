@@ -5,6 +5,7 @@ import { getWorld } from "#internal/workflow/runtime.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
 import { startSessionOwner } from "#internal/testing/workflow-test-helpers.js";
 import { buildSerializedContext, handoffFollowUp } from "#internal/testing/entry-test-helpers.js";
+import { waitForParkedTurnStep } from "#internal/testing/session-test-helpers.js";
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
 import { workflowEntry } from "#execution/session/entry.js";
 import { dispatchWorkflowSessionCommand } from "#execution/workflow-runtime.js";
@@ -237,6 +238,8 @@ describe("tool replacement through the session runtime", () => {
         let write: ReturnType<typeof vi.spyOn> | undefined;
         try {
           await stream.nextTurn();
+          // Publication precedes commit; handoff requires an idle, committed owner.
+          if (handoff) await waitForParkedTurnStep(run.runId);
           write = vi.spyOn(world.streams, "write").mockImplementation(async (...args) => {
             const namespace = Buffer.from(args[1].split("_").at(-1)!, "base64url").toString();
             if (
