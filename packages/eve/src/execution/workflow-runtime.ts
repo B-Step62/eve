@@ -381,13 +381,15 @@ async function dispatchWorkflowCommand<TCommand extends SessionCommand>(
   }
 
   if (command.kind === "reset") {
+    const deadline = Date.now() + SESSION_HOOK_HANDOVER_TIMEOUT_MS;
     await waitForSessionHooksRelease(
       [sessionCommandHookToken(hook.sessionId), logicalSessionToken(token)],
       hook.runId,
+      deadline,
     );
     // Hook disposal precedes finalization. Do not acknowledge reset while the
     // owner (or its stream anchor) can still be classified as not ready.
-    await waitForResetRunsToEnd([hook.runId, hook.sessionId]);
+    await waitForResetRunsToEnd([hook.runId, hook.sessionId], deadline);
   }
 
   return activeCommandResult(command, hook.sessionId);
@@ -477,12 +479,14 @@ export async function requestWorkflowTurnCancellation(
   return await dispatchWorkflowSessionCommand({ command, sessionId: input.sessionId });
 }
 
-async function waitForResetRunsToEnd(runIds: readonly string[]): Promise<void> {
-  const deadline = Date.now() + SESSION_HOOK_HANDOVER_TIMEOUT_MS;
+// Reset is already committed. Finalization only delays acknowledgement; a
+// timeout must not turn a successful reset into an HTTP failure.
+async function waitForResetRunsToEnd(runIds: readonly string[], deadline: number): Promise<void> {
   for (const runId of new Set(runIds)) {
     while (await isRunActive(runId)) {
       if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for reset session run "${runId}" to finish.`);
+        log.warn("Timed out waiting for reset session run to finish", { runId });
+        return;
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
     }
