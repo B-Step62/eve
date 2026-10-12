@@ -897,6 +897,78 @@ describe("defaultMessageReducer", () => {
     ]);
   });
 
+  it("shows a relayed question in the turn of the call it serves", () => {
+    const reducer = defaultMessageReducer();
+    // The child session is on its own `turn_2` while the root is on `turn_0`.
+    const data = reduceServerEvents(reducer, reducer.initial(), [
+      createMessageReceivedEvent({
+        message: "Ask Alice's researcher",
+        sequence: 0,
+        turnId: "turn_0",
+      }),
+      createActionsRequestedEvent({
+        actions: [
+          {
+            callId: "call_research",
+            input: { message: "Go" },
+            kind: "tool-call",
+            toolName: "researcher",
+          },
+        ],
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn_0",
+      }),
+      createActionResultEvent({
+        result: {
+          callId: "call_research",
+          kind: "tool-result",
+          output: "Started task task_1.",
+          toolName: "researcher",
+        },
+        sequence: 2,
+        stepIndex: 0,
+        turnId: "turn_0",
+      }),
+      createInputRequestedEvent({
+        callId: "call_research",
+        requests: [
+          {
+            action: { callId: "child_ask", input: {}, kind: "tool-call", toolName: "ask_question" },
+            kind: "question",
+            prompt: "Which quarter?",
+            requestId: "question_1",
+          },
+        ],
+        sequence: 5,
+        stepIndex: 2,
+        taskId: "task_1",
+        turnId: "turn_2",
+      }),
+      createTurnCompletedEvent({ sequence: 3, turnId: "turn_0" }),
+      createMessageReceivedEvent({ message: "Thanks", sequence: 0, turnId: "turn_1" }),
+      createMessageCompletedEvent({
+        finishReason: "stop",
+        message: "You're welcome.",
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    ]);
+
+    expect(data.messages.map((message) => `${message.metadata?.turnId}:${message.role}`)).toEqual([
+      "turn_0:user",
+      "turn_0:assistant",
+      "turn_1:user",
+      "turn_1:assistant",
+    ]);
+    expect(
+      data.messages[1]?.parts
+        .filter((part) => part.type === "dynamic-tool")
+        .map((part) => part.toolCallId),
+    ).toEqual(["call_research", "child_ask"]);
+  });
+
   it("projects denied tool output distinctly from generic failures", () => {
     const reducer = defaultMessageReducer();
     const data = reduceServerEvents(reducer, reducer.initial(), [

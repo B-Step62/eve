@@ -208,6 +208,14 @@ function reduceContent(data: EveMessageData, event: EveAgentReducerEvent): EveMe
     }
 
     case "input.requested": {
+      // A relayed request keeps the asking session's coordinates, and that session's turn ids
+      // are not this one's, so the request shows in the turn of the call it serves.
+      const served =
+        event.data.callId === undefined
+          ? undefined
+          : conversationProjection(data).calls[event.data.callId];
+      const turnId = served?.turnId ?? event.data.turnId;
+      const stepIndex = served?.stepIndex ?? event.data.stepIndex;
       let next = data;
       for (const request of event.data.requests) {
         const existing = findToolPart(next, request.action.callId);
@@ -218,13 +226,13 @@ function reduceContent(data: EveMessageData, event: EveAgentReducerEvent): EveMe
           continue;
         }
         const descriptor = normalizeActionRequest(request.action);
-        next = updateAssistantMessage(next, event.data.turnId, (message) =>
-          upsertPart(ensureStepStartPart(message, event.data.stepIndex), {
+        next = updateAssistantMessage(next, turnId, (message) =>
+          upsertPart(ensureStepStartPart(message, stepIndex), {
             ...existing,
             approval: { id: request.requestId },
             input: request.action.input,
             state: "approval-requested",
-            stepIndex: existing?.stepIndex ?? event.data.stepIndex,
+            stepIndex: existing?.stepIndex ?? stepIndex,
             toolCallId: request.action.callId,
             toolMetadata: createToolMetadata(descriptor, {
               inputRequest: toMessageInputRequest(request),
