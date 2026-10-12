@@ -160,7 +160,20 @@ export class SelfModificationHarness {
     this.#turns.add(liveParent);
     const parent = await liveParent.result();
     parent.expectOk();
-    const call = parent.requireToolCall(SELF_MODIFICATION_AGENT);
+    // A parent can delegate, wait, then send a follow-up to the same child in
+    // one turn. Require successful delegation, not exactly one invocation.
+    parent.calledTool(SELF_MODIFICATION_AGENT, { status: "completed" });
+    const calls = parent.toolCalls.filter((call) => call.name === SELF_MODIFICATION_AGENT);
+    const call = calls.at(-1);
+    if (call === undefined || calls.some((call) => call.status !== "completed"))
+      throw new Error("Self-modification delegation did not complete.");
+    const taskIds = liveParent.events.flatMap((event) =>
+      event.type === "task.started" && event.data.name === SELF_MODIFICATION_AGENT
+        ? [event.data.taskId]
+        : [],
+    );
+    if (new Set(taskIds).size !== 1)
+      throw new Error("Self-modification parent must delegate to exactly one child task.");
     const taskId = typeof call.input.taskId === "string" ? call.input.taskId : undefined;
     const message = taskId === undefined ? undefined : call.input.message;
     if (taskId !== undefined && (typeof message !== "string" || message.length === 0))
