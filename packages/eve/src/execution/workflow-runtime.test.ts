@@ -424,6 +424,23 @@ describe("createWorkflowRuntime command dispatch", () => {
     );
   });
 
+  it("does not acknowledge reset in the disposed-inbox / running-owner gap", async () => {
+    resumeHookMock.mockResolvedValue(currentSessionHook("eve:token", "session-1"));
+    getHookByTokenMock.mockRejectedValue(new HookNotFoundError("released"));
+    getRunMock
+      .mockReturnValueOnce({ status: Promise.resolve("running") })
+      .mockReturnValue({ status: Promise.resolve("completed") });
+
+    await expect(
+      buildRuntime().dispatchContinuation({
+        command: { kind: "reset" },
+        continuationToken: "eve:token",
+      }),
+    ).resolves.toEqual({ previousSessionId: "session-1", status: "reset" });
+    expect(getRunMock).toHaveBeenCalledTimes(2);
+    expect(getRunMock).toHaveBeenCalledWith("session-1");
+  });
+
   it("waits for reset to release the stable command inbox", async () => {
     const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
     resumeHookMock.mockResolvedValue(currentSessionHook("eve:token", "session-1"));
