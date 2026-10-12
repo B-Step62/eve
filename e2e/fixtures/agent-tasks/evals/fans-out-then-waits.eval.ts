@@ -12,7 +12,7 @@ export default defineEval({
   tags: ["real-model"],
   async test(t) {
     const turn = await t.send(
-      "Alice needs the churn report and the latency report for Monday's review. Please compile both and give me each report id with its headline.",
+      "Alice needs the churn report and the latency report for Monday's review. Please start compiling both before waiting, then use eve__task_wait until both results arrive. Do not reply while either report is compiling. Once both are ready, give me each report id with its headline.",
     );
     turn.expectOk();
 
