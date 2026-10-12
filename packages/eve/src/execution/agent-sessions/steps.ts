@@ -61,11 +61,15 @@ export type AgentSessionAddress =
       readonly forwardPrincipal?: boolean;
       readonly name: string;
       readonly nodeId: string;
-      /** Keys the authored credential functions, as on `agent.started`. */
+      /** Keys the authored credential functions, as on `child.opened`. */
       readonly resolverId?: string;
       readonly sessionId: string;
       readonly url: string;
+      /** The child's remote agent protocol, when it speaks an earlier one than this deployment. */
+      readonly earlierProtocol?: number;
     };
+
+type RemoteAgentSessionAddress = Extract<AgentSessionAddress, { readonly kind: "remote" }>;
 
 /** A session a run opened, with the context of the call that opened it: its lineage. */
 export interface OpenedAgentSession {
@@ -351,7 +355,9 @@ async function startRemoteSession(
     remote,
     session: { continuationToken: input.replyTo },
   });
-  return {
+  const address: {
+    -readonly [K in keyof RemoteAgentSessionAddress]: RemoteAgentSessionAddress[K];
+  } = {
     callbackBaseUrl,
     kind: "remote",
     forwardPrincipal: remote.forwardPrincipal,
@@ -361,6 +367,8 @@ async function startRemoteSession(
     sessionId: child.sessionId,
     url: remote.url,
   };
+  if (child.earlierProtocol !== undefined) address.earlierProtocol = child.earlierProtocol;
+  return address;
 }
 
 function createParentContext(context: AgentSessionContext, replyTo: string): SubagentParentContext {
