@@ -24,7 +24,7 @@ The broader idea is simple: **the session has a durable history, reactions make 
 - **Hooks use `select` and `run`, or an event handler.** They perform effects or return commands such as `cancel()` and `compact()`. They share the reaction lifecycle, but do not need a rendering step.
 - **A system instruction is held; a user instruction joins the conversation.** A system instruction applies while it is selected. A user instruction joins the conversation once per occurrence and stays, as on `main` ([Instructions](#instructions-held-or-joined)).
 - **Unhandled errors fail the turn.** Nothing silently drops a required instruction or a failed credential check. Optional behavior is expressed in ordinary code, not a separate framework failure policy.
-- **The prototype is about 3,400 lines of production code smaller than its base,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
+- **The prototype is about 3,100 lines of production code smaller than its base,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
 - **Unify the machinery, not every surface.** Selection, occurrences, recorded outcomes, and recovery belong underneath both APIs. A public universal reaction API and a separate guard API are not part of the initial change.
 
 ## Why change
@@ -975,15 +975,15 @@ export default defineHook({
 
 ## Why the prototype is smaller
 
-Against its base, `trial/v27-on-hitl`, #4616 adds 8,073 lines and removes 15,872 across 328 files:
+Against its base, `trial/v27-on-hitl`, #4616 adds 8,677 lines and removes 15,883 across 337 files:
 
 | Area                                    | Added | Removed | Net    |
 | --------------------------------------- | ----- | ------- | ------ |
-| eve production code                     | 4,270 | 7,689   | −3,419 |
-| Tests                                   | 1,777 | 6,238   | −4,461 |
+| eve production code                     | 4,542 | 7,685   | −3,143 |
+| Tests                                   | 2,072 | 6,243   | −4,171 |
 | Extension contract reports and fixtures | 178   | 7       | +171   |
 | Fixtures, templates, and extension code | 1,096 | 1,183   | −87    |
-| Documentation                           | 732   | 755     | −23    |
+| Documentation                           | 769   | 765     | +4     |
 
 In production code, the runner, the kind adapters, and the definitions add about 2,700 lines. The largest deletions are:
 
@@ -1002,7 +1002,7 @@ Four reasons account for it:
 - **Precedence and replay rules disappear.** Turn results shadowing session results, steering skipping `turn.started`, and re-running handlers to rebind callbacks are cases that one selection per value doesn't have, and neither do their tests.
 - **Tests follow the code.** Most of the deleted test lines covered the deleted lifecycles and transforms. The extension contract history stays: dropping an epoch keeps its published report and fixture.
 
-Two caveats. The runner reads the v27 public view, which exists for clients anyway; on v26's events, that view would have to be built too. And the design settled here cost some code back. Rendering remote credentials, checking waiting calls against their record, failing turns for hooks and values, the two schedules, and occurrence identity added about 430 lines of code and 120 of comments to the prototype, about a third of it for remote credentials.
+Two caveats. The runner reads the v27 public view, which exists for clients anyway; on v26's events, that view would have to be built too. And the design settled here cost some code back. Rendering remote credentials, checking waiting calls against their record, failing turns for hooks and values, the two schedules, and occurrence identity added about 430 lines of code and 120 of comments to the prototype, about a third of it for remote credentials. Keeping each turn's recall where the prompt cache expects it, and capturing memory before compaction, added about 220 lines of code and 40 of comments more.
 
 ## Pros and cons
 
@@ -1014,7 +1014,7 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **`auto()` is ordinary.** Its caching moves into the framework, and authors can write their own routers without internals.
 - **Hooks can act on state.** They can compact or cancel when a condition becomes true, not only observe individual facts.
 - **Visible failures.** A required instruction or credential check can't silently disappear, and transient errors recover at the next boundary.
-- **Less code.** About 3,400 fewer lines of production code, and no compiler pass over authored source in every build.
+- **Less code.** About 3,100 fewer lines of production code, and no compiler pass over authored source in every build.
 
 ### Cons
 
@@ -1022,8 +1022,9 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **A simple async resolver becomes two functions:** a data-fetching `record` and a `render` that constructs from it.
 - **First-value snapshots are indirect.** "The parent's model when the session started" isn't a function of the current view; it takes a hook that latches it into session state. A `once` value that captured the first caller captures whoever is current after a deployment change.
 - **A caught failure sticks.** A value that catches an error and returns `null` keeps that `null` until its selection changes.
-- **Behavior changes from `main`.** Hooks that throw fail the turn rather than being logged. Values that read `session.auth.current` follow the current caller rather than the first, and a subagent that selects `view.model` follows the parent's model. Memory recall is no longer part of history, so providers lose `recall["compaction.completed"]`, which it made redundant, and `capture["compaction.requested"]`, which let a provider save a long turn before compaction summarized it.
+- **Behavior changes from `main`.** Hooks that throw fail the turn rather than being logged. Values that read `session.auth.current` follow the current caller rather than the first, and a subagent that selects `view.model` follows the parent's model. Memory recall is no longer part of history: each turn's recall stays just ahead of that turn's input in every later call, so the prompt cache holds and compaction never summarizes it. That makes `recall["compaction.completed"]` and `visibility` redundant; another scope or a clear starts the recall over instead.
 - **Extensions must be rebuilt.** The dynamic tool, skill, and instruction contracts, and the subagent, connection, and hook contracts, drop their earlier epochs. Subagents and connections have no separate dynamic contract, so an extension with only static ones is rebuilt too.
+- **Retrieved memory accumulates.** A provider that retrieves different records each turn keeps them for the session, in every model call, as on `main`. Recall that never joins history means compaction can't shrink it either; a provider that returns its current state under stable `id`s stays bounded.
 - **Records are carried by every step.** A large record costs on every step of the session, not once. The 1 MB cap bounds it, but authors still have to choose what to record.
 - **Performance needs end-to-end evidence.** The prototype's unchanged selectors are cheap, but that does not measure database latency, growing conversation scans, checkpoint size, or provider prompt-cache misses. Removing compiler machinery is valuable even without claiming that every session gets faster.
 - **Recovery needs to be explainable.** Diagnostics should show which input triggered an evaluation, which revision produced the value, and whether work failed or is waiting to retry. Otherwise an explicit lifecycle in code can still be opaque in production.
