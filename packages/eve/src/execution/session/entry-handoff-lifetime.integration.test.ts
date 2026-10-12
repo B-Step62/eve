@@ -222,6 +222,18 @@ describe("workflowEntry integration", () => {
       const runtime = await createTestRuntime({ agent: { name: "workflow-entry-compaction" } });
 
       await runtime.run(async () => {
+        const world = await getWorld();
+        const createEvent = world.events.create.bind(world.events);
+        let delayedStart = false;
+        // Turbo begins execution before run_started is persisted. Force the
+        // provisional and persisted start timestamps to differ.
+        const startWrite = vi.spyOn(world.events, "create").mockImplementation(async (...args) => {
+          if (!delayedStart && args[1].eventType === "run_started") {
+            delayedStart = true;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          return createEvent(...args);
+        });
         const anchor = await startSessionOwner(workflowEntry, [
           {
             kind: "initial",
@@ -235,7 +247,6 @@ describe("workflowEntry integration", () => {
           },
         ]);
         const stream = captureTurnEvents(anchor);
-        const world = await getWorld();
         const workflowRuntime = createWorkflowRuntime({
           compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
         });
@@ -259,6 +270,8 @@ describe("workflowEntry integration", () => {
           expect((await stream.nextTurn()).at(-1)?.type).toBe("session.waiting");
           await waitForParkedTurnStep(anchor.runId);
           const originalTimer = await readSessionTimer(anchor.runId);
+          const owner = await world.runs.get(anchor.runId);
+          expect(originalTimer.deadline.getTime()).toBe(owner.startedAt!.getTime() + 60_000);
 
           const successor = await compactTo(anchor.runId);
           expect((await readSessionTimer(successor.runId)).deadline).toEqual(
@@ -335,6 +348,7 @@ describe("workflowEntry integration", () => {
           completed = true;
         } finally {
           stream.dispose();
+          startWrite.mockRestore();
           if (!completed) await anchor.cancel();
         }
       });
