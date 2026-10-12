@@ -10,7 +10,7 @@ This doc covers everything that changes during an eve session: the model, tools,
 
 The broader idea is simple: **the session has a durable history, reactions make decisions from it, and work produces new observations that become part of that history.**
 
-**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, prototypes recorded dynamic values and hooks with `select`, `record`, and `render`, and removes main's per-kind lifecycles and closure transforms. This doc describes the proposed direction, which revises the prototype in a few places: hooks use `run` instead of `render`, an unhandled error fails the turn instead of withdrawing the value, dynamic values are evaluated before each model call rather than after every commit, occurrences get their own identity, a tool call checks that its tool hasn't changed since it was offered, a user-role instruction joins the conversation once per occurrence, skill files are rendered rather than stored, and a dynamic remote agent can carry credentials. Examples are proposed authoring shapes unless labelled `main`.
+**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, implements this design: recorded dynamic values and hooks with `select`, `record`, `render`, and `run`, evaluated as described below, in place of main's per-kind lifecycles and closure transforms. Not yet: keeping provider-visible tool lists stable for prompt caching, diagnostics beyond debug logs, and a public fact for a hook that fails between turns. Examples are authoring shapes the prototype accepts unless labelled `main`.
 
 ## Summary
 
@@ -24,7 +24,7 @@ The broader idea is simple: **the session has a durable history, reactions make 
 - **Hooks use `select` and `run`, or an event handler.** They perform effects or return commands such as `cancel()` and `compact()`. They share the reaction lifecycle, but do not need a rendering step.
 - **A system instruction is held; a user instruction joins the conversation.** A system instruction applies while it is selected. A user instruction joins the conversation once per occurrence and stays, as on `main` ([Instructions](#instructions-held-or-joined)).
 - **Unhandled errors fail the turn.** Nothing silently drops a required instruction or a failed credential check. Optional behavior is expressed in ordinary code, not a separate framework failure policy.
-- **The prototype is about 4,000 lines of production code smaller than `main`,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
+- **The prototype is about 3,500 lines of production code smaller than `main`,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
 - **Unify the machinery, not every surface.** Selection, occurrences, recorded outcomes, and recovery belong underneath both APIs. A public universal reaction API and a separate guard API are not part of the initial change.
 
 ## Why change
@@ -430,8 +430,8 @@ This is the author-facing contract, rather than an incidental order of internal 
 - **Hooks run after each commit.** A state-selected hook checks its selection after every commit, inside a turn or between turns, so "the session went idle" is noticed when it happens. An event hook runs for each matching fact.
 - **Dynamic values are evaluated before each model call.** eve runs their selects, records what changed, and fixes the model, tools, and context that call uses. Changes during a tool batch affect the next model call.
 - **A cancelling hook stops subsequent work at that boundary.** Hooks run before values, so a cancel takes effect before any value fetches data.
-- **A requested tool runs only as it was offered.** Each call keeps a digest of the record its tool was rendered from. If the tool's current record differs when the call executes, because the caller's role or tenant changed during an approval wait, the call fails with a tool error saying the tool changed since it was offered, and the model can request it again. A re-evaluation that records the same data, such as a `perTurn` value, is not a change. Authorization is still checked at execution time.
-- **`record` and `run` read the conversation explicitly.** `await ctx.messages()` loads it, in a turn or between turns. A hook's `select` that reads `view.messages` runs only where the conversation is loaded. `select` is pure, so skipping it repeats no work.
+- **A requested tool runs only as it was offered.** A call that waits for approval keeps a digest of the record its tool was rendered from. If the tool's current record differs when the call executes, because the caller's role or tenant changed during an approval wait, the call fails with a tool error saying the tool changed since it was offered, and the model can request it again. A re-evaluation that records the same data, such as a `perTurn` value, is not a change. Authorization is still checked at execution time.
+- **`record` and `run` read the conversation explicitly.** `await ctx.messages()` returns it wherever the step holds it: before every model call, and in every commit of a turn step, including the ones where a turn settles and the session goes idle. Steps that settle background work between turns, such as a task finishing, don't carry it, and reading it there throws. A hook's `select` that reads `view.messages` runs only where the conversation is held. `select` is pure, so skipping it repeats no work.
 
 Which model calls are boundaries:
 
@@ -461,7 +461,7 @@ The comparison is a useful check, not proof that arbitrary callbacks behave iden
 
 ### Failures are visible
 
-An unhandled error in `select`, `record`, `render`, or a hook fails the owning execution. During a turn, it fails the turn. That includes event handlers that only observe: an audit or metrics hook that mustn't fail a turn catches its own errors. On `main`, a throwing hook is logged and the turn continues, so a hook can't enforce anything by throwing.
+An unhandled error in `select`, `record`, `render`, or a hook fails the owning execution. During a turn, it fails the turn: a value's before the model call it was evaluated for, and a hook's before the turn's next model call, or as the turn would otherwise settle. That includes event handlers that only observe: an audit or metrics hook that mustn't fail a turn catches its own errors. On `main`, a throwing hook is logged and the turn continues, so a hook can't enforce anything by throwing.
 
 - **A failed evaluation of a value is never recorded.** The last good record stays in place, and the next boundary evaluates again even if the selection hasn't changed. A transient error therefore can't break a `once` value for the rest of the session.
 - **A failed hook occurrence is not run again later.** A compaction meant for an idle moment shouldn't happen an hour later. Within the occurrence, the workflow's own step retries still apply.
@@ -481,7 +481,7 @@ Some values are needed where the session's state isn't: a remote child is opened
 
 With reactions, those places render the value instead:
 
-- **A rendered reference travels with the child.** It names the reaction and carries the record the remote agent was rendered from, in the selection a call carries and in the child's address. Records hold no secrets, so copying one there is safe.
+- **A rendered reference travels with the call.** It names the reaction and carries the record the remote agent was rendered from, in the selection a call carries to the steps that open and message its child. The route that follows the child reads the same record from the parent's session. Records hold no secrets, so copying one there is safe.
 - **eve renders by reaction from the deployed definitions.** Given the reference, it finds the definition's `render`, calls it with the record, and takes the `auth` and `headers` it returns. Nothing about this is specific to remote agents.
 - **The destination is checked before credentials are used.** The rendered URL, name, and path must match what the child was opened with. A child opened before a deployment change keeps its URL; if the current selection names another, the request fails rather than sending new credentials to the old destination.
 
@@ -506,14 +506,14 @@ export default defineDynamic({
 });
 ```
 
-`auth` still takes no arguments: it closes over `tenant`, and `render` can recreate it anywhere. A dynamic `defineWorkspaceAgent`, which `main`'s compiler pass never handled, works the same way.
+`auth` still takes no arguments: it closes over `tenant`, and `render` can recreate it anywhere. A dynamic `defineWorkspaceAgent`, which `main`'s compiler pass never handled, goes through the same path, though the prototype doesn't test it yet.
 
 ### What eve stores
 
 - **A selection is at most 64 KB, and a record at most 1 MB.** The error names the reaction and suggests recording an ID and fetching the rest when it is used.
 - **Records are private.** They live in the session's checkpointed state, never on the public stream.
 - **Stored state rides along every step.** A turn step's input and result carry the session's state and history, so a record is re-sent and re-persisted on each step. `main` has the same cost for its closure snapshots, which it stores separately for each callback, with no cap.
-- **Diagnostics go to logs and traces.** Each evaluation reports the reaction, the occurrence, what triggered it (a new selection, a retry after failure, a deployment change, or a render that didn't match), how long it took, and its outcome. There is no public API for them.
+- **Diagnostics go to logs, and later traces.** Each evaluation reports the reaction, the occurrence, what triggered it (a new selection, a retry after failure, a deployment change, or a render that didn't match), how long it took, and whether its value changed. The prototype logs them at debug level. There is no public API for them.
 
 ## Before and after
 
@@ -975,16 +975,16 @@ export default defineHook({
 
 ## Why the prototype is smaller
 
-Against its base, `trial/v27-on-hitl`, #4616 adds 6,107 lines and removes 16,523 across 386 files:
+Against its base, `trial/v27-on-hitl`, #4616 adds 6,798 lines and removes 16,548 across 395 files:
 
 | Area                                    | Added | Removed | Net    |
 | --------------------------------------- | ----- | ------- | ------ |
-| eve production code                     | 3,675 | 7,662   | −3,987 |
-| Tests                                   | 1,384 | 6,089   | −4,705 |
+| eve production code                     | 4,177 | 7,674   | −3,497 |
+| Tests                                   | 1,550 | 6,094   | −4,544 |
 | Extension compatibility snapshots       | 1     | 1,597   | −1,596 |
-| Fixtures, templates, and extension code | 1,033 | 1,175   | −142   |
+| Fixtures, templates, and extension code | 1,052 | 1,183   | −131   |
 
-In production code, the runner, the kind adapters, and the definitions add about 2,400 lines. The largest deletions are:
+In production code, the runner, the kind adapters, and the definitions add about 2,700 lines. The largest deletions are:
 
 | Deleted                                                                                        | Lines |
 | ---------------------------------------------------------------------------------------------- | ----- |
@@ -1001,7 +1001,7 @@ Four reasons account for it:
 - **Precedence and replay rules disappear.** Turn results shadowing session results, steering skipping `turn.started`, and re-running handlers to rebind callbacks are cases that one selection per value doesn't have, and neither do their tests.
 - **Tests and snapshots follow the code.** Most of the deleted test lines covered the deleted lifecycles and transforms. The snapshot deletions are the old dynamic-tool extension contract at each of its versions.
 
-Two caveats. The runner reads the v27 public view, which exists for clients anyway; on v26's events, that view would have to be built too. And the revisions in this doc, such as failing turns, occurrence identity, and checking calls against their record, add some code back, likely a few hundred lines.
+Two caveats. The runner reads the v27 public view, which exists for clients anyway; on v26's events, that view would have to be built too. And the design settled here cost some code back. Rendering remote credentials, checking waiting calls against their record, failing turns for hooks and values, the two schedules, and occurrence identity added about 390 lines of code and 90 of comments to the prototype, about a third of it for remote credentials.
 
 ## Pros and cons
 
@@ -1013,7 +1013,7 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **`auto()` is ordinary.** Its caching moves into the framework, and authors can write their own routers without internals.
 - **Hooks can act on state.** They can compact or cancel when a condition becomes true, not only observe individual facts.
 - **Visible failures.** A required instruction or credential check can't silently disappear, and transient errors recover at the next boundary.
-- **Less code.** About 4,000 fewer lines of production code, and no compiler pass over authored source in every build.
+- **Less code.** About 3,500 fewer lines of production code, and no compiler pass over authored source in every build.
 
 ### Cons
 
