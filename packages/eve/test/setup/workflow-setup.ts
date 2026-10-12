@@ -30,6 +30,7 @@ const world = createWorld({
 
 await world.start?.();
 await world.clear();
+const activeHandlers = new Set<Promise<Response>>();
 world.registerHandler(
   deriveEveWorkflowQueuePrefix(WORKFLOW_TEST_AGENT_NAME),
   createLazyHandler(join(outDir, "workflows.mjs")),
@@ -37,19 +38,29 @@ world.registerHandler(
 setWorld(world);
 
 afterAll(async () => {
-  setWorld(undefined);
+  // close() stops new queue deliveries but does not await direct handlers
+  // already running. They can still deserialize forwarded writables, which
+  // resolve the World lazily. Keep it installed until those handlers finish.
   await world.close?.();
+  await Promise.allSettled([...activeHandlers]);
+  setWorld(undefined);
 });
 
 function createLazyHandler(bundlePath: string): (request: Request) => Promise<Response> {
   let handler: ((request: Request) => Promise<Response>) | undefined;
   let loading: Promise<(request: Request) => Promise<Response>> | undefined;
 
-  return async (request: Request) => {
-    loading ??= import(/* @vite-ignore */ pathToFileURL(bundlePath).href).then(
-      (mod: { POST: (request: Request) => Promise<Response> }) => mod.POST,
-    );
-    handler ??= await loading;
-    return await handler(request);
+  return (request: Request) => {
+    const response = (async () => {
+      loading ??= import(/* @vite-ignore */ pathToFileURL(bundlePath).href).then(
+        (mod: { POST: (request: Request) => Promise<Response> }) => mod.POST,
+      );
+      handler ??= await loading;
+      return await handler(request);
+    })();
+    activeHandlers.add(response);
+    const settled = () => activeHandlers.delete(response);
+    void response.then(settled, settled);
+    return response;
   };
 }
