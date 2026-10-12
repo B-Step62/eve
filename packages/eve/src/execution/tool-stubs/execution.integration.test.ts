@@ -8,7 +8,14 @@ import { buildSerializedContext, handoffFollowUp } from "#internal/testing/entry
 import { waitForParkedTurnStep } from "#internal/testing/session-test-helpers.js";
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
 import { workflowEntry } from "#execution/session/entry.js";
-import { dispatchWorkflowSessionCommand } from "#execution/workflow-runtime.js";
+import {
+  sessionCommandHookToken,
+  sessionInboxHookToken,
+} from "#execution/session-inbox/address.js";
+import {
+  waitForCommandHookOwner,
+  dispatchWorkflowSessionCommand,
+} from "#execution/workflow-runtime.js";
 import { readStubFailure } from "#execution/tool-stubs/steps.js";
 import { STUB_CONTEXT_KEY } from "#tool-stubs/types.js";
 import { defineWorkflowTool } from "#tools/workflow-definition.js";
@@ -171,11 +178,13 @@ describe("tool replacement through the session runtime", () => {
           expect(JSON.stringify(failures)).toContain("Deployment service timed out");
           expect(filterEventsByType(events, "turn.failed")).toEqual([]);
           expect(await readStubFailure(run.runId)).toBeUndefined();
+          await waitForParkedTurnStep(run.runId);
           await dispatchWorkflowSessionCommand({
             sessionId: run.runId,
             command: handoffFollowUp("dpl_successor", message, "retry-after-injected-error"),
           });
           const retried = await stream.nextTurn();
+          await expectSuccessor(run.runId);
           const results =
             entryPoint === "task" || entryPoint === "serve"
               ? filterEventsByType(retried, "task.settled").map((event) => event.data)
@@ -260,6 +269,16 @@ describe("tool replacement through the session runtime", () => {
               : { kind: "send", payload: { message: 'Run deploy_service with service "api"' } },
           });
           const events = await stream.nextTurn();
+          if (handoff) {
+            // The failed successor has already removed its inbox hook.
+            const steps = await world.steps.list({ runId: run.runId, resolveData: "none" });
+            expect(steps.data).toContainEqual(
+              expect.objectContaining({
+                stepName: expect.stringContaining("//startSessionOwnerStep"),
+                status: "completed",
+              }),
+            );
+          }
           expect(filterEventsByType(events, "session.failed")).toHaveLength(1);
           expect(filterEventsByType(events, "session.completed")).toHaveLength(0);
           expect(await readStubFailure(run.runId)).toBe("Tool stub playback failed.");
@@ -525,6 +544,7 @@ describe("tool replacement through the session runtime", () => {
         expect(
           filterEventsByType(first, "action.result").map((event) => event.data.result),
         ).toContainEqual(expect.objectContaining({ output: { state: "pending" } }));
+        await waitForParkedTurnStep(run.runId);
         await dispatchWorkflowSessionCommand({
           sessionId: run.runId,
           command: handoffFollowUp(
@@ -534,6 +554,7 @@ describe("tool replacement through the session runtime", () => {
           ),
         });
         const second = await stream.nextTurn();
+        await expectSuccessor(run.runId);
         expect(
           filterEventsByType(second, "action.result").map((event) => event.data.result),
         ).toContainEqual(expect.objectContaining({ output: { state: "completed" } }));
@@ -614,3 +635,9 @@ describe("tool replacement through the session runtime", () => {
     });
   });
 });
+
+async function expectSuccessor(anchorRunId: string): Promise<void> {
+  const token = sessionInboxHookToken(sessionCommandHookToken(anchorRunId));
+  const owner = await waitForCommandHookOwner(token);
+  expect(owner.runId).not.toBe(anchorRunId);
+}
