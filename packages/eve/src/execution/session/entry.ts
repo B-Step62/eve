@@ -159,7 +159,10 @@ export async function bootInitialOwner(
   const sessionWritable = getWritable<Uint8Array>();
   const inbox = createSessionInbox(sessionId);
   const sessionTimeoutMs = input.sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
-  const deadline = await resolveSessionTimeoutDeadlineStep({ timeoutMs: sessionTimeoutMs });
+  const deadlinePromise =
+    sessionTimeoutMs === false
+      ? Promise.resolve(undefined)
+      : resolveSessionTimeoutDeadlineStep({ timeoutMs: sessionTimeoutMs });
   const continuationToken = (serializedContext["eve.continuationToken"] as string) || "";
   const serializedBundle = serializedContext["eve.bundle"] as {
     source: DurableCompiledArtifactsSource;
@@ -179,11 +182,13 @@ export async function bootInitialOwner(
       rootSessionId: readRootSessionId(serializedContext),
       sessionId,
     });
-    const ownerPreparationPromise = prepareInitialOwner(inbox, {
-      continuationToken,
-      deadline,
-      sessionId,
-    });
+    const ownerPreparationPromise = deadlinePromise.then((deadline) =>
+      prepareInitialOwner(inbox, {
+        continuationToken,
+        deadline,
+        sessionId,
+      }),
+    );
     const callerResolutionPromise = hasDelegatedSessionContext(serializedContext)
       ? resolveInitialTurnCallerStep({ serializedContext })
       : Promise.resolve(undefined);
@@ -208,6 +213,7 @@ export async function bootInitialOwner(
       return undefined;
     }
     const caller = unwrapSettled(callerResolution);
+    const deadline = await deadlinePromise;
     return {
       inbox,
       session: {

@@ -112,6 +112,21 @@ beforeEach(() => {
 });
 
 describe("bootInitialOwner timeout startup", () => {
+  it("starts session creation and caller resolution while the deadline step is pending", async () => {
+    const deadline = deferred<Date>();
+    vi.mocked(resolveSessionTimeoutDeadlineStep).mockReturnValue(deadline.promise);
+    vi.mocked(hasDelegatedSessionContext).mockReturnValue(true);
+    const inbox = createInbox();
+    vi.mocked(createSessionInbox).mockReturnValue(inbox as never);
+    const bootPromise = bootInitialOwner(initialInput(), "session-1");
+    expect(createSessionStep).toHaveBeenCalledOnce();
+    expect(resolveInitialTurnCallerStep).toHaveBeenCalledOnce();
+    expect(inbox.claimSessionHook).not.toHaveBeenCalled();
+    deadline.resolve(new Date(61_000));
+    await bootPromise;
+    expect(inbox.claimSessionHook).toHaveBeenCalled();
+  });
+
   it("prepares controls and starts the timeout while session creation is pending", async () => {
     const sessionCreation = deferred<never>();
     const timeoutStartup = deferred<{ runId: string }>();
@@ -258,6 +273,7 @@ describe("bootInitialOwner timeout startup", () => {
     expect(boot?.session.sessionTimeoutControl).toBeUndefined();
     expect(createTurnControl).toHaveBeenCalledOnce();
     expect(startSessionTimeoutStep).not.toHaveBeenCalled();
+    expect(resolveSessionTimeoutDeadlineStep).not.toHaveBeenCalled();
   });
 
   it("does not start a very short timeout until ownership is ready", async () => {

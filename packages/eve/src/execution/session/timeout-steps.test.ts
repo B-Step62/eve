@@ -63,13 +63,16 @@ afterEach(() => {
 });
 
 describe("session timeout steps", () => {
-  it("uses the persisted start time even when turbo metadata differs", async () => {
-    getWorldMock.mockResolvedValue({
-      runs: { get: vi.fn(async () => ({ startedAt: new Date(1001) })) },
-    });
-    await expect(resolveSessionTimeoutDeadlineStep({ timeoutMs: 60_000 })).resolves.toEqual(
-      new Date(61_001),
-    );
+  it("records the deadline without reading the not-yet-started owner", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1001);
+    try {
+      await expect(resolveSessionTimeoutDeadlineStep({ timeoutMs: 60_000 })).resolves.toEqual(
+        new Date(61_001),
+      );
+      expect(getWorldMock).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("does not read the owner when timeouts are disabled", async () => {
