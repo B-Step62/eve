@@ -9,23 +9,8 @@ export default defineEval({
     // Availability, not the model's delegation count, is the contract here.
     selected.calledSubagent("conditional-marker");
     selected.noFailedActions();
-    selected.eventsSatisfy("every conditional-marker delegation completes", (events) => {
-      const calls = events.flatMap((event) =>
-        event.type === "task.started" && event.data.name === "conditional-marker"
-          ? [event.data.callId]
-          : [],
-      );
-      return (
-        calls.length > 0 &&
-        calls.every((callId) =>
-          events.some(
-            (event) =>
-              event.type === "task.settled" &&
-              event.data.callId === callId &&
-              event.data.status === "completed",
-          ),
-        )
-      );
+    selected.notEvent("task.settled", {
+      data: { name: "conditional-marker", status: (status) => status !== "completed" },
     });
     selected.messageIncludes("DYNAMIC_SUBAGENT_ENABLED");
 
