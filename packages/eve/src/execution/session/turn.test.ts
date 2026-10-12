@@ -965,7 +965,7 @@ describe("SessionExecution checkpoints", () => {
             const real = await vi.importActual<
               typeof import("#execution/tools/workflow/interrupt.js")
             >("#execution/tools/workflow/interrupt.js");
-            vi.spyOn(workflowCore, "getStepMetadata").mockReturnValue({ attempt: 13 } as ReturnType<
+            vi.spyOn(workflowCore, "getStepMetadata").mockReturnValue({ attempt: 61 } as ReturnType<
               typeof workflowCore.getStepMetadata
             >);
             vi.spyOn(workflowRuntime, "resumeHook").mockRejectedValue(

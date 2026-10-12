@@ -66,7 +66,7 @@ it.each(["pending", "running"])(
     const maxRetries = (
       interruptWorkflowToolRun as typeof interruptWorkflowToolRun & { maxRetries: number }
     ).maxRetries;
-    expect(maxRetries).toBe(12);
+    expect(maxRetries).toBe(60);
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       vi.mocked(getStepMetadata).mockReturnValue({ attempt } as ReturnType<typeof getStepMetadata>);
       await expect(interruptWorkflowToolRun(address)).rejects.toBeInstanceOf(RetryableError);
@@ -81,7 +81,7 @@ it.each(["pending", "running"])(
 it.each(["delivery", "status"])(
   "does not fail the calling turn on exhausted %s errors",
   async (kind) => {
-    vi.mocked(getStepMetadata).mockReturnValue({ attempt: 13 } as ReturnType<
+    vi.mocked(getStepMetadata).mockReturnValue({ attempt: 61 } as ReturnType<
       typeof getStepMetadata
     >);
     vi.mocked(resumeHook).mockRejectedValue(

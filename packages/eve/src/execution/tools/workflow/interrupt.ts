@@ -8,12 +8,12 @@ import { resumeHook } from "#internal/workflow/runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
 
 const INTERRUPT: WorkflowToolRunControlMessage = { kind: "interrupt" };
-const INTERRUPT_MAX_RETRIES = 12;
+const INTERRUPT_MAX_RETRIES = 60;
 const log = createLogger("execution.workflow-tool-run");
 
 /**
  * Aborts the `execute` call's `abortSignal`. A fresh run may not have registered
- * its hook yet: allow a minute for startup, then drop this best-effort steer
+ * its hook yet: retry every second for a minute while it starts, then drop this best-effort steer
  * instead of failing the calling turn when the durable retry budget runs out.
  */
 export async function interruptWorkflowToolRun(run: WorkflowToolRunAddress): Promise<void> {
@@ -26,7 +26,7 @@ export async function interruptWorkflowToolRun(run: WorkflowToolRunAddress): Pro
       if (!isTaskWorkflowTargetGone(error)) throw error;
       if (!(await isWorkflowToolRunLive(run.runId))) return;
       throw new RetryableError("Workflow tool control hook is not registered yet", {
-        retryAfter: "5s",
+        retryAfter: "1s",
       });
     }
   } catch (error) {
