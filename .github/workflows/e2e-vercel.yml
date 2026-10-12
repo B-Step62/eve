@@ -158,14 +158,21 @@ jobs:
           if [ -n "${VERCEL_TOKEN:-}" ]; then
             token_args=(--token "$VERCEL_TOKEN")
           fi
-          team_args=()
           scope_args=()
           if [ -n "${VERCEL_ORG_ID:-}" ]; then
-            team_args=(--team "$VERCEL_ORG_ID")
             scope_args=(--scope "$VERCEL_ORG_ID")
           fi
 
-          vercel link --yes --project "$VERCEL_PROJECT_ID" "${team_args[@]}" "${token_args[@]}"
+          # IDs are already supplied by CI. `vercel link` redundantly looks up
+          # the project twice (link + fresh OIDC token); env pull below supplies
+          # the token. Avoid those lookups in every matrix job.
+          node --input-type=module -e '
+            import { mkdirSync, writeFileSync } from "node:fs";
+            const { VERCEL_ORG_ID: orgId, VERCEL_PROJECT_ID: projectId } = process.env;
+            if (!orgId || !projectId) throw new Error("Vercel project and organization IDs are required");
+            mkdirSync(".vercel", { recursive: true });
+            writeFileSync(".vercel/project.json", JSON.stringify({ orgId, projectId }));
+          '
           vercel env pull --yes --environment=preview "${token_args[@]}"
           VERCEL_OIDC_TOKEN="$(node --env-file=.env.local -p 'process.env.VERCEL_OIDC_TOKEN ?? ""')"
           # Sandbox templates key on VERCEL_PROJECT_ID (present at build and
