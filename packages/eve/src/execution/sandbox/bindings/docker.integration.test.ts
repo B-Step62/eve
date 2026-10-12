@@ -185,6 +185,26 @@ describe("Docker provider prewarm", () => {
     );
   });
 
+  it.each([
+    { env: undefined, expected: "AI_AGENT=eve" },
+    { env: { AI_AGENT: "alice-bot" }, expected: "AI_AGENT=alice-bot" },
+  ])("sets $expected on the container from environment env $env", async ({ env, expected }) => {
+    const appRoot = await createScratchDirectory("eve-docker-sandbox-");
+    const { calls, cli } = createFakeDockerCli((args) =>
+      args[0] === "image" &&
+      args[1] === "inspect" &&
+      String(args.at(-1)).startsWith("eve-sandbox-template:")
+        ? { exitCode: 1, stderr: "No such image" }
+        : undefined,
+    );
+
+    await createEngine({ cli, options: { env } }).prepare({ appRoot, seedFiles: [] });
+
+    const runArgs = findCall(calls, (args) => args[0] === "run")?.args ?? [];
+    expect(runArgs.filter((arg) => arg.startsWith("AI_AGENT="))).toEqual([expected]);
+    expect(runArgs[runArgs.indexOf(expected) - 1]).toBe("-e");
+  });
+
   it("builds, seeds, commits, and cleans up when the template image is missing", async () => {
     const appRoot = await createScratchDirectory("eve-docker-sandbox-");
     const { calls, cli } = createFakeDockerCli((args) => {
