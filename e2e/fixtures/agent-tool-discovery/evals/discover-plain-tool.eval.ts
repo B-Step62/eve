@@ -20,6 +20,7 @@ export default defineEval({
       [
         "Bob is planning his week around the mobile app release.",
         "When does the next mobile release train depart, and who is its release captain?",
+        "Search the tool catalog for the action that returns the release train schedule, then run it to answer. Do not search docs or Slack for this live schedule.",
       ].join(" "),
     );
 
