@@ -1,3 +1,4 @@
+import { sessionFetch, type SessionRequestDiagnostic } from "#client/session-diagnostics.js";
 import { TurnSegment } from "#client/session-utils.js";
 import type { AgentStartedStreamEvent, MessageStreamEvent } from "#protocol/message.js";
 import { EVE_SESSION_ID_HEADER } from "#protocol/message.js";
@@ -53,6 +54,7 @@ interface FollowSessionOptions extends StreamOptions {
  */
 export interface ClientSessionContext {
   readonly host: string;
+  readonly requestDiagnostics?: SessionRequestDiagnostic[];
   readonly redirect?: ClientRedirectPolicy;
   resolveHeaders(perRequest?: Readonly<Record<string, string>>): Promise<Headers>;
 }
@@ -385,13 +387,17 @@ async function postCreateSession(
   const headers = await context.resolveHeaders(options.headers);
   const body = options.stubs === undefined ? undefined : JSON.stringify({ stubs: options.stubs });
   if (body !== undefined) headers.set("content-type", "application/json");
-  const response = await fetch(createClientUrl(context.host, EVE_SESSION_ROUTE_PATH), {
-    body,
-    headers,
-    method: "POST",
-    redirect: context.redirect,
-    signal: options.signal ?? null,
-  });
+  const response = await sessionFetch(
+    createClientUrl(context.host, EVE_SESSION_ROUTE_PATH),
+    {
+      body,
+      headers,
+      method: "POST",
+      redirect: context.redirect,
+      signal: options.signal ?? null,
+    },
+    context.requestDiagnostics,
+  );
   if (!response.ok) {
     const responseBody = await response.text();
     throw new ClientError(response.status, responseBody, response.headers);
@@ -422,13 +428,17 @@ async function postTurn(
 
   const headers = await context.resolveHeaders(input.headers);
   headers.set("content-type", "application/json");
-  const response = await fetch(createClientUrl(context.host, path), {
-    body: JSON.stringify(body),
-    headers,
-    method: "POST",
-    redirect: context.redirect,
-    signal: input.signal ?? null,
-  });
+  const response = await sessionFetch(
+    createClientUrl(context.host, path),
+    {
+      body: JSON.stringify(body),
+      headers,
+      method: "POST",
+      redirect: context.redirect,
+      signal: input.signal ?? null,
+    },
+    context.requestDiagnostics,
+  );
   if (!response.ok) {
     const responseBody = await response.text();
     throw createClientError(response.status, responseBody, response.headers);

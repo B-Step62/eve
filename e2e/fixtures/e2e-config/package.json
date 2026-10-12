@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./workflow-diagnostics": "./src/workflow-diagnostics.ts",
     "./cache-checks": "./src/cache-checks.ts",
     "./catalog-tools": "./src/catalog-tools.ts",
     "./instrumentation": "./src/instrumentation.ts",

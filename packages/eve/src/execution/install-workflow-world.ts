@@ -1,3 +1,4 @@
+import { captureE2EQueueAttempts } from "#execution/e2e-queue-diagnostics.js";
 import { getWorld, setWorld } from "#internal/workflow/runtime.js";
 import { guardStrandedSessionReplay } from "#execution/session-inbox/stranded-replay-guard.js";
 import {
@@ -12,7 +13,7 @@ import {
  */
 export async function installWorkflowWorld(input: ValidateWorkflowWorldInput): Promise<void> {
   validateWorkflowWorld(input);
-  const world = guardStrandedSessionReplay(input.world);
+  const world = captureE2EQueueAttempts(guardStrandedSessionReplay(input.world));
   setWorld(world);
   await getWorld();
   await world.start?.();

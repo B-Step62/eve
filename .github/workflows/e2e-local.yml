@@ -83,6 +83,7 @@ jobs:
 
     env:
       AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+      EVE_E2E_WORKFLOW_DIAGNOSTICS: ${{ matrix.fixture == 'agent-memory' || matrix.fixture == 'agent-subagents' }}
       EVE_E2E_MODEL: ${{ matrix.model_id }}
       EVE_EVAL_IDS_JSON: ${{ toJSON(matrix.eval_ids) }}
       EVE_EVAL_JUNIT_DIR: ${{ github.workspace }}/.junit

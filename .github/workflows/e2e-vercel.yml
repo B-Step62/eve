@@ -81,6 +81,7 @@ jobs:
         include: ${{ fromJSON(needs.discover-fixtures.outputs.world_matrix) }}
 
     env:
+      EVE_E2E_WORKFLOW_DIAGNOSTICS: ${{ matrix.fixture == 'agent-memory' || matrix.fixture == 'agent-subagents' }}
       EVE_E2E_MODEL: mock
       EVE_EVAL_JUNIT_DIR: ${{ github.workspace }}/.junit
       EVE_SANDBOX_IMAGE_TAG: latest
@@ -178,6 +179,7 @@ jobs:
             pnpm exec eve build --profile "$EVE_BUILD_PROFILE"
           DEPLOYMENT_URL="$(vercel deploy --prebuilt --yes --target=preview \
             --env "EVE_E2E_MODEL=$EVE_E2E_MODEL" \
+            --env "EVE_E2E_WORKFLOW_DIAGNOSTICS=$EVE_E2E_WORKFLOW_DIAGNOSTICS" \
             --env "EVE_SANDBOX_IMAGE_TAG=$EVE_SANDBOX_IMAGE_TAG" \
             "${token_args[@]}" | tail -n 1)"
 

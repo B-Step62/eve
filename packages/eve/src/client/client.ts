@@ -1,3 +1,4 @@
+import { sessionDiagnostics, type SessionRequestDiagnostic } from "#client/session-diagnostics.js";
 import { EVE_HEALTH_ROUTE_PATH, EVE_INFO_ROUTE_PATH } from "#protocol/routes.js";
 import { AgentInfoResponseError } from "#client/agent-info-error.js";
 import { HealthResponseError } from "#client/health-response-error.js";
@@ -33,15 +34,27 @@ export class Client {
   /** Explicit create/attach surface for ID-addressed sessions. */
   readonly sessions: ClientSessions;
 
-  constructor(options: ClientOptions) {
+  constructor(options: ClientOptions & { [sessionDiagnostics]?: SessionRequestDiagnostic[] }) {
     this.#host = options.host;
     this.#auth = options.auth;
     this.#headers = options.headers;
     this.#redirect = options.redirect;
     this.sessions = new ClientSessions({
       host: this.#host,
+      requestDiagnostics: options[sessionDiagnostics],
       redirect: this.#redirect,
       resolveHeaders: (perRequest) => this.#resolveHeaders(perRequest),
+    });
+  }
+
+  /** Internal clone: keeps concurrent eval request buffers isolated. */
+  [sessionDiagnostics](records: SessionRequestDiagnostic[]): Client {
+    return new Client({
+      host: this.#host,
+      auth: this.#auth,
+      headers: this.#headers,
+      redirect: this.#redirect,
+      [sessionDiagnostics]: records,
     });
   }
 

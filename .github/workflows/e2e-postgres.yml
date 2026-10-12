@@ -94,6 +94,7 @@ jobs:
       # Mock models never reach the gateway; the placeholder keeps any
       # credential-presence checks satisfied without granting live access.
       AI_GATEWAY_API_KEY: invalid-e2e-world-suite-key
+      EVE_E2E_WORKFLOW_DIAGNOSTICS: ${{ matrix.fixture == 'agent-memory' || matrix.fixture == 'agent-subagents' }}
       EVE_E2E_MODEL: mock
       # The world package comes from this world's e2e/matrix.json entry.
       EVE_E2E_WORKFLOW_WORLD: ${{ matrix.world_package }}

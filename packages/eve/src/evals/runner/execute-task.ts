@@ -1,3 +1,4 @@
+import { sessionDiagnostics, type SessionRequestDiagnostic } from "#client/session-diagnostics.js";
 import { runUntilAborted } from "#evals/abort.js";
 import type { Client } from "#client/client.js";
 import type { MessageStreamEvent, RuntimeIdentity } from "#protocol/message.js";
@@ -60,8 +61,9 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<ExecuteT
   const { client, evaluation, target, timeoutMs } = options;
   const signal = timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : neverAbortSignal();
   const collector = new AssertionCollector(targetTools(target));
+  const requestDiagnostics: SessionRequestDiagnostic[] = [];
   const manager = new EvalSessionManager({
-    client,
+    client: client[sessionDiagnostics](requestDiagnostics),
     collector,
     onSessionStart: options.onSessionStart,
     signal,
@@ -95,6 +97,42 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<ExecuteT
     } else if (!(err instanceof EvalRequirementFailed)) {
       error = toErrorMessage(err);
     }
+  }
+
+  // Snapshot delivery evidence before timeout cleanup cancels the failing runs.
+  if (error !== undefined) {
+    const emit = (message: string) => {
+      logs.push(message);
+      options.onLog?.(message);
+    };
+    emit(`session-request-diagnostics ${JSON.stringify(requestDiagnostics)}`);
+    const runIds = [
+      ...new Set(
+        requestDiagnostics.flatMap((record) => {
+          const pathId = record.path.match(/^\/eve\/v1\/session\/(wrun_[A-Za-z0-9]+)$/)?.[1];
+          return [record.sessionId, pathId].filter((id): id is string => id !== undefined);
+        }),
+      ),
+    ];
+    await Promise.all(
+      runIds.map(async (runId) => {
+        try {
+          const deadline = AbortSignal.timeout(2_000);
+          await runUntilAborted(
+            (async () => {
+              const response = await target.fetch(`/fixture-workflow-diagnostics/${runId}`, {
+                signal: deadline,
+              });
+              if (response.ok)
+                emit(`workflow-diagnostics ${JSON.stringify(await response.json())}`);
+            })(),
+            deadline,
+          );
+        } catch {
+          emit(`workflow-diagnostics unavailable for ${runId}`);
+        }
+      }),
+    );
   }
 
   if (timeoutMs !== undefined && signal.aborted) {
