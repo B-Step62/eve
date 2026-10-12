@@ -1,7 +1,7 @@
 ---
 issue: "None (maintainer-requested research)"
 status: draft
-last_updated: "2026-10-11"
+last_updated: "2026-10-12"
 ---
 
 # Session reactions and dynamic values
@@ -24,7 +24,7 @@ The broader idea is simple: **the session has a durable history, reactions make 
 - **Hooks use `select` and `run`, or an event handler.** They perform effects or return commands such as `cancel()` and `compact()`. They share the reaction lifecycle, but do not need a rendering step.
 - **A system instruction is held; a user instruction joins the conversation.** A system instruction applies while it is selected. A user instruction joins the conversation once per occurrence and stays, as on `main` ([Instructions](#instructions-held-or-joined)).
 - **Unhandled errors fail the turn.** Nothing silently drops a required instruction or a failed credential check. Optional behavior is expressed in ordinary code, not a separate framework failure policy.
-- **The prototype is about 3,500 lines of production code smaller than `main`,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
+- **The prototype is about 3,400 lines of production code smaller than its base,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
 - **Unify the machinery, not every surface.** Selection, occurrences, recorded outcomes, and recovery belong underneath both APIs. A public universal reaction API and a separate guard API are not part of the initial change.
 
 ## Why change
@@ -481,9 +481,9 @@ Some values are needed where the session's state isn't: a remote child is opened
 
 With reactions, those places render the value instead:
 
-- **A rendered reference travels with the call.** It names the reaction and carries the record the remote agent was rendered from, in the selection a call carries to the steps that open and message its child. The route that follows the child reads the same record from the parent's session. Records hold no secrets, so copying one there is safe.
-- **eve renders by reaction from the deployed definitions.** Given the reference, it finds the definition's `render`, calls it with the record, and takes the `auth` and `headers` it returns. Nothing about this is specific to remote agents.
-- **The destination is checked before credentials are used.** The rendered URL, name, and path must match what the child was opened with. A child opened before a deployment change keeps its URL; if the current selection names another, the request fails rather than sending new credentials to the old destination.
+- **A child is bound to the record it was opened with.** The step that opens a remote child records the record its remote agent was rendered from on the child's address. The steps that message, reset, and cancel it, the parent's binding for the route that follows its stream, and the relay that answers its questions all carry that record, so every request renders the credentials the child was opened with, whatever the parent selects later. The copies stay private: a record may hold anything `record` returned, so it rides only the parent's own step state and private side stream, never a public fact or a request to the child.
+- **eve renders by reaction from the deployed definitions.** Given the record, it finds the definition's `render`, calls it, and takes the `auth` and `headers` it returns. Nothing about this is specific to remote agents.
+- **The destination is checked before credentials are used.** The rendered name and URL must match what the child was opened with. If the deployment's `render` no longer returns that destination for the child's record, the request fails rather than sending credentials elsewhere.
 
 ```ts
 // agent/subagents/finance.ts
@@ -975,14 +975,15 @@ export default defineHook({
 
 ## Why the prototype is smaller
 
-Against its base, `trial/v27-on-hitl`, #4616 adds 6,798 lines and removes 16,548 across 395 files:
+Against its base, `trial/v27-on-hitl`, #4616 adds 8,073 lines and removes 15,872 across 328 files:
 
 | Area                                    | Added | Removed | Net    |
 | --------------------------------------- | ----- | ------- | ------ |
-| eve production code                     | 4,177 | 7,674   | −3,497 |
-| Tests                                   | 1,550 | 6,094   | −4,544 |
-| Extension compatibility snapshots       | 1     | 1,597   | −1,596 |
-| Fixtures, templates, and extension code | 1,052 | 1,183   | −131   |
+| eve production code                     | 4,270 | 7,689   | −3,419 |
+| Tests                                   | 1,777 | 6,238   | −4,461 |
+| Extension contract reports and fixtures | 178   | 7       | +171   |
+| Fixtures, templates, and extension code | 1,096 | 1,183   | −87    |
+| Documentation                           | 732   | 755     | −23    |
 
 In production code, the runner, the kind adapters, and the definitions add about 2,700 lines. The largest deletions are:
 
@@ -999,9 +1000,9 @@ Four reasons account for it:
 - **Six lifecycles did one job six times.** Each decided when to run, where to keep its result, how a later result replaced an earlier one, and how to recover after a restart, with its own rules. That is what authors learned per kind, and it is what the code repeated. One runner does it once; a kind supplies how its value contributes to the session, in a few dozen lines.
 - **Recovering closures needs a compiler.** Persisting what a callback captured means parsing authored source, finding the captures, rewriting callbacks into factories, registering them, and rebinding them on recovery, plus a parallel API for code the compiler can't see. Recording data and rendering again needs none of it, and builds stop parsing authored source.
 - **Precedence and replay rules disappear.** Turn results shadowing session results, steering skipping `turn.started`, and re-running handlers to rebind callbacks are cases that one selection per value doesn't have, and neither do their tests.
-- **Tests and snapshots follow the code.** Most of the deleted test lines covered the deleted lifecycles and transforms. The snapshot deletions are the old dynamic-tool extension contract at each of its versions.
+- **Tests follow the code.** Most of the deleted test lines covered the deleted lifecycles and transforms. The extension contract history stays: dropping an epoch keeps its published report and fixture.
 
-Two caveats. The runner reads the v27 public view, which exists for clients anyway; on v26's events, that view would have to be built too. And the design settled here cost some code back. Rendering remote credentials, checking waiting calls against their record, failing turns for hooks and values, the two schedules, and occurrence identity added about 390 lines of code and 90 of comments to the prototype, about a third of it for remote credentials.
+Two caveats. The runner reads the v27 public view, which exists for clients anyway; on v26's events, that view would have to be built too. And the design settled here cost some code back. Rendering remote credentials, checking waiting calls against their record, failing turns for hooks and values, the two schedules, and occurrence identity added about 430 lines of code and 120 of comments to the prototype, about a third of it for remote credentials.
 
 ## Pros and cons
 
@@ -1013,7 +1014,7 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **`auto()` is ordinary.** Its caching moves into the framework, and authors can write their own routers without internals.
 - **Hooks can act on state.** They can compact or cancel when a condition becomes true, not only observe individual facts.
 - **Visible failures.** A required instruction or credential check can't silently disappear, and transient errors recover at the next boundary.
-- **Less code.** About 3,500 fewer lines of production code, and no compiler pass over authored source in every build.
+- **Less code.** About 3,400 fewer lines of production code, and no compiler pass over authored source in every build.
 
 ### Cons
 
@@ -1021,7 +1022,8 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **A simple async resolver becomes two functions:** a data-fetching `record` and a `render` that constructs from it.
 - **First-value snapshots are indirect.** "The parent's model when the session started" isn't a function of the current view; it takes a hook that latches it into session state. A `once` value that captured the first caller captures whoever is current after a deployment change.
 - **A caught failure sticks.** A value that catches an error and returns `null` keeps that `null` until its selection changes.
-- **Behavior changes from `main`.** Hooks that throw fail the turn rather than being logged. Values that read `session.auth.current` follow the current caller rather than the first, and a subagent that selects `view.model` follows the parent's model.
+- **Behavior changes from `main`.** Hooks that throw fail the turn rather than being logged. Values that read `session.auth.current` follow the current caller rather than the first, and a subagent that selects `view.model` follows the parent's model. Memory recall is no longer part of history, so providers lose `recall["compaction.completed"]`, which it made redundant, and `capture["compaction.requested"]`, which let a provider save a long turn before compaction summarized it.
+- **Extensions must be rebuilt.** The dynamic tool, skill, and instruction contracts, and the subagent, connection, and hook contracts, drop their earlier epochs. Subagents and connections have no separate dynamic contract, so an extension with only static ones is rebuilt too.
 - **Records are carried by every step.** A large record costs on every step of the session, not once. The 1 MB cap bounds it, but authors still have to choose what to record.
 - **Performance needs end-to-end evidence.** The prototype's unchanged selectors are cheap, but that does not measure database latency, growing conversation scans, checkpoint size, or provider prompt-cache misses. Removing compiler machinery is valuable even without claiming that every session gets faster.
 - **Recovery needs to be explainable.** Diagnostics should show which input triggered an evaluation, which revision produced the value, and whether work failed or is waiting to retry. Otherwise an explicit lifecycle in code can still be opaque in production.
