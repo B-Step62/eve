@@ -153,6 +153,29 @@ describe("SUBAGENT_ADAPTER authorization handlers", () => {
     });
   });
 
+  it("forwards the requests it withdrew, which its parent still offers", async () => {
+    resumeHookMock.mockClear();
+    const at = { sequence: 2, stepIndex: 1, turnId: "turn-hitl" };
+    const withdrawn = {
+      kind: "question" as const,
+      outcome: "cancelled" as const,
+      requestId: "q",
+    };
+
+    await callAdapterEventHandler(
+      SUBAGENT_ADAPTER,
+      { data: { ...at, resolutions: [withdrawn] }, type: "input.resolved" },
+      makeContext(),
+    );
+    expect(resumeHookMock).toHaveBeenCalledWith("parent-token", {
+      callId: "call-123",
+      childSessionId: "child-session",
+      event: { data: { ...at, resolutions: [withdrawn] }, type: "input.resolved" },
+      kind: "subagent-authorization-event",
+      subagentName: "linear",
+    });
+  });
+
   it("skips forwarding when the adapter state is invalid", async () => {
     resumeHookMock.mockClear();
     const base = makeContext();

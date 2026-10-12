@@ -258,7 +258,9 @@ seconds for the body to finish unwinding, then ends as cancelled. A `serve` tool
 available instead: its waiting calls settle as `cancelled`, the stretch's `abortSignal` aborts, and
 the task becomes idle, as long as the body catches that abort and returns to `receive()`. For an
 agent, that cancels the agent's current turn and keeps its conversation, so a later call with the
-same `taskId` continues where it left off. A `serve` body that doesn't return to `receive()` within
+same `taskId` continues where it left off. The cancelled turn withdraws the agent's pending
+questions and session-limit prompts, and the session's stream reports them with `input.resolved`
+and `outcome: "cancelled"`. A `serve` body that doesn't return to `receive()` within
 30 seconds of a cancel ends, and the task finishes.
 
 ## Stream events

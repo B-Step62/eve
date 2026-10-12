@@ -6,6 +6,7 @@ import type {
 } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import { authorizationEventFields } from "#harness/authorization-event-fields.js";
+import { resolvedByChild } from "#harness/proxy-input-requests.js";
 import {
   type TurnWaitingOn,
   createActionResultEvent,
@@ -532,12 +533,29 @@ export function relay(
       }),
     );
   } else {
-    const { event } = payload;
-    events.push(event);
-    if (event.type !== "authorization.required") return unchanged(view, events);
+    const event = relayedEvent(view, payload.event);
+    if (event !== undefined) events.push(event);
+    if (payload.event.type !== "authorization.required") return unchanged(view, events);
   }
   events.push(...hold(view, { on: "input" }).events);
   return unchanged(view, events);
+}
+
+/**
+ * A child's withdrawal closes only the requests this session still offers: it already closed
+ * the ones it answered or withdrew itself.
+ */
+function relayedEvent(
+  view: SessionView,
+  event: SubagentAuthorizationEventHookPayload["event"],
+): SubagentAuthorizationEventHookPayload["event"] | undefined {
+  if (event.type !== "input.resolved") return event;
+  const open = new Set(openInputs(view.projection).map((input) => input.request.requestId));
+  const resolutions = event.data.resolutions.filter(
+    ({ kind, requestId }) => resolvedByChild(kind) || open.has(requestId),
+  );
+  if (resolutions.length === 0) return undefined;
+  return { ...event, data: { ...event.data, resolutions } };
 }
 
 /**

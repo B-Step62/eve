@@ -476,6 +476,64 @@ describe("session machine", () => {
     });
     expect(machine.projection.turns.turn_0?.waiting).toBe(true);
   });
+
+  it("closes a relayed question its child withdrew, once", async () => {
+    const machine = createMachine();
+    await machine.apply(receive(machine.view(), { message: "Ask the researcher." }));
+    await machine.apply(startStep(machine.view(), { modelId: "test-model" }));
+    const position = machine.position();
+    await machine.stream(
+      createActionsRequestedEvent({
+        actions: [{ callId: "call-1", input: {}, kind: "tool-call", toolName: "researcher" }],
+        sequence: position.sequence,
+        stepIndex: position.stepIndex,
+        turnId: position.turnId,
+      }),
+    );
+    const at = { sequence: 4, stepIndex: 2, turnId: "child-turn" };
+    const child = { callId: "call-1", childSessionId: "child", subagentName: "researcher" };
+    await machine.apply(
+      relay(machine.view(), {
+        payload: {
+          ...child,
+          childContinuationToken: "child-token",
+          event: {
+            ...at,
+            requests: [
+              { ...approval("child-call"), kind: "question", requestId: "child-question" },
+            ],
+          },
+          kind: "subagent-input-request",
+        },
+      }),
+    );
+    const withdrawal = () =>
+      relay(machine.view(), {
+        payload: {
+          ...child,
+          event: {
+            data: {
+              ...at,
+              resolutions: [
+                { kind: "question", outcome: "cancelled", requestId: "child-question" },
+              ],
+            },
+            type: "input.resolved",
+          },
+          kind: "subagent-authorization-event",
+        },
+      });
+
+    const before = machine.events.length;
+    await machine.apply(withdrawal());
+    await machine.apply(withdrawal());
+
+    expect(machine.events.slice(before)).toEqual(["input.resolved"]);
+    expect(machine.projection.inputs["child-question"]).toMatchObject({
+      outcome: "cancelled",
+      status: "settled",
+    });
+  });
 });
 
 describe("checkpoint", () => {

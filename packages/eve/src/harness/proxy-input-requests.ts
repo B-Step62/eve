@@ -74,12 +74,15 @@ export function resolvedByChild(kind: InputRequestKind): boolean {
 
 /**
  * The part of a child's `input.resolved` its parent relays: the requests the parent leaves for
- * the child to close. `undefined` when the parent already closed all of them.
+ * the child to close, and the requests the child withdrew, such as when a task cancel stops its
+ * turn, which the parent still offers. `undefined` when the parent already closed all of them.
  */
 export function resolvedForParent(
   data: InputResolvedStreamEvent["data"],
 ): InputResolvedStreamEvent["data"] | undefined {
-  const resolutions = data.resolutions.filter(({ kind }) => resolvedByChild(kind));
+  const resolutions = data.resolutions.filter(
+    ({ kind, outcome }) => resolvedByChild(kind) || outcome === "cancelled",
+  );
   return resolutions.length === 0 ? undefined : { ...data, resolutions };
 }
 
