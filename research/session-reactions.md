@@ -10,7 +10,7 @@ This doc covers everything that changes during an eve session: the model, tools,
 
 The broader idea is simple: **the session has a durable history, reactions make decisions from it, and work produces new observations that become part of that history.**
 
-**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, prototypes recorded dynamic values and hooks with `select`, `record`, and `render`, and removes main's per-kind lifecycles and closure transforms. This doc describes the proposed direction, which revises the prototype in a few places: hooks use `run` instead of `render`, an unhandled error fails the turn instead of withdrawing the value, dynamic values are evaluated before each model call rather than after every commit, occurrences get their own identity, a tool call checks that its tool hasn't changed since it was offered, and a user-role instruction joins the conversation once per occurrence. Examples are proposed authoring shapes unless labelled `main`.
+**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, prototypes recorded dynamic values and hooks with `select`, `record`, and `render`, and removes main's per-kind lifecycles and closure transforms. This doc describes the proposed direction, which revises the prototype in a few places: hooks use `run` instead of `render`, an unhandled error fails the turn instead of withdrawing the value, dynamic values are evaluated before each model call rather than after every commit, occurrences get their own identity, a tool call checks that its tool hasn't changed since it was offered, a user-role instruction joins the conversation once per occurrence, skill files are rendered rather than stored, and a dynamic remote agent can carry credentials. Examples are proposed authoring shapes unless labelled `main`.
 
 ## Summary
 
@@ -146,20 +146,20 @@ The folder or field determines what the value may return. A tools file returns t
 
 Each of these widens a field from `T` to `T | Dynamic<T>`, so a static definition still type-checks and adding one later is additive for authors. The cost falls on code that reads definitions, such as agent info and build-time name checks.
 
-| Place                                                                        | Status                                     | What it would enable                                                         |
-| ---------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------- |
-| A whole file in `tools/`, `skills/`, `instructions/`, `connections/`         | In the prototype                           | Capabilities per caller, tenant, or conversation                             |
-| A whole subagent at `subagents/<name>/` or `subagents/<name>.ts`             | In the prototype                           | Optional local and remote subagents. Remote ones can't carry credentials yet |
-| `defineAgent({ model })`, at the root and in a subagent                      | In the prototype, including `auto()`       | Routing, per-plan models                                                     |
-| `available` on a subagent, remote agent, tool, or connection                 | Candidate; the clearest payoff             | Showing a capability per caller without making its whole file dynamic        |
-| A tool's or subagent's `description`                                         | Candidate                                  | Wording per tenant or locale                                                 |
-| A tool's `inputSchema`                                                       | Candidate                                  | An enum of the caller's projects or accounts                                 |
-| `limits`, such as `maxTokenCostUsdPerSession`                                | Candidate                                  | Budgets per plan. Checked where the budget is checked, before a model call   |
-| `compaction.model` and `compaction.thresholdPercent`                         | Candidate                                  | Compaction that follows the chosen model's context window                    |
-| A connection's or remote agent's `url`                                       | Candidate                                  | Endpoints per tenant. Needs target comparison on cold starts                 |
-| A remote agent's `auth` and `headers`                                        | Gap; needs rendering in remote child steps | Credentials per tenant or caller, as on `main`                               |
-| The sandbox                                                                  | Awkward                                    | A sandbox outlives a selection; changing it means a new sandbox              |
-| `build`, channels, schedules, workflow tools, `defaultTools`, `experimental` | Not candidates                             | Read at build time or before any session exists                              |
+| Place                                                                        | Status                                  | What it would enable                                                       |
+| ---------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
+| A whole file in `tools/`, `skills/`, `instructions/`, `connections/`         | In the prototype                        | Capabilities per caller, tenant, or conversation                           |
+| A whole subagent at `subagents/<name>/` or `subagents/<name>.ts`             | In the prototype                        | Optional local and remote subagents                                        |
+| `defineAgent({ model })`, at the root and in a subagent                      | In the prototype, including `auto()`    | Routing, per-plan models                                                   |
+| `available` on a subagent, remote agent, tool, or connection                 | Candidate; the clearest payoff          | Showing a capability per caller without making its whole file dynamic      |
+| A tool's or subagent's `description`                                         | Candidate                               | Wording per tenant or locale                                               |
+| A tool's `inputSchema`                                                       | Candidate                               | An enum of the caller's projects or accounts                               |
+| `limits`, such as `maxTokenCostUsdPerSession`                                | Candidate                               | Budgets per plan. Checked where the budget is checked, before a model call |
+| `compaction.model` and `compaction.thresholdPercent`                         | Candidate                               | Compaction that follows the chosen model's context window                  |
+| A connection's or remote agent's `url`                                       | Candidate                               | Endpoints per tenant. Needs target comparison on cold starts               |
+| A remote agent's `auth` and `headers`                                        | Proposed, as part of a dynamic subagent | Credentials per tenant or caller, as on `main`                             |
+| The sandbox                                                                  | Awkward                                 | A sandbox outlives a selection; changing it means a new sandbox            |
+| `build`, channels, schedules, workflow tools, `defaultTools`, `experimental` | Not candidates                          | Read at build time or before any session exists                            |
 
 `reasoning`, `modelContextWindowTokens`, and `modelOptions` already vary with the model: the dynamic `model` field returns them together, because they are one coupled decision.
 
@@ -246,6 +246,8 @@ The database rows are kept. `crmTool` is an ordinary function that constructs a 
 `render` must be pure, not merely synchronous. Time, randomness, and mutable process state can change a callback's behavior even if its tool description stays the same. Values that need to survive a restart belong in the record.
 
 Without `record`, the selection is the data used to render. Without `render`, a JSON result can be used directly, such as a gateway model ID. Tools and connections always need rendering because they contain executable code.
+
+A skill's supporting files are rendered too, not stored. eve keeps the skill's name, description, markdown, and a revision hash, and renders the files from the record whenever a sandbox needs them: when the skill first appears, when its revision changes, or when the session gets a new sandbox. Files that come from code, such as imported assets or a map of playbooks, are never stored. Files fetched in `record` are in the record, because `render` can't fetch them.
 
 ### Common lifetimes
 
@@ -431,6 +433,13 @@ This is the author-facing contract, rather than an incidental order of internal 
 - **A requested tool runs only as it was offered.** Each call keeps a digest of the record its tool was rendered from. If the tool's current record differs when the call executes, because the caller's role or tenant changed during an approval wait, the call fails with a tool error saying the tool changed since it was offered, and the model can request it again. A re-evaluation that records the same data, such as a `perTurn` value, is not a change. Authorization is still checked at execution time.
 - **`record` and `run` read the conversation explicitly.** `await ctx.messages()` loads it, in a turn or between turns. A hook's `select` that reads `view.messages` runs only where the conversation is loaded. `select` is pure, so skipping it repeats no work.
 
+Which model calls are boundaries:
+
+- **`perStep` covers the ordinary model calls of a turn,** including the call after a tool batch and the call after an approval resumes. Compaction's summarizing call, the evaluator `auto()` asks, and `evaluate` inside a tool are not boundaries.
+- **A steering message is visible at the next boundary.** It is not a new turn, so `perTurn` values don't evaluate again; a selection that reads messages sees it before the next model call.
+- **A resumed approval runs its calls first.** Approved calls execute, with the check above, and then values are evaluated before the next model call. Nothing evaluates while a turn waits.
+- **Compaction is not a boundary.** The next boundary sees the compacted conversation, so a selection over messages may change: the image model returns to text once a summary replaces the image.
+
 eve may check selections earlier as an optimization. Checking whether a value changed and installing it into a model request are not the same operation. This also leaves room to keep provider-visible tool lists stable where prompt caching benefits from it.
 
 ### Cold starts reuse committed answers
@@ -452,7 +461,7 @@ The comparison is a useful check, not proof that arbitrary callbacks behave iden
 
 ### Failures are visible
 
-An unhandled error in `select`, `record`, `render`, or a hook fails the owning execution. During a turn, it fails the turn.
+An unhandled error in `select`, `record`, `render`, or a hook fails the owning execution. During a turn, it fails the turn. That includes event handlers that only observe: an audit or metrics hook that mustn't fail a turn catches its own errors. On `main`, a throwing hook is logged and the turn continues, so a hook can't enforce anything by throwing.
 
 - **A failed evaluation of a value is never recorded.** The last good record stays in place, and the next boundary evaluates again even if the selection hasn't changed. A transient error therefore can't break a `once` value for the rest of the session.
 - **A failed hook occurrence is not run again later.** A compaction meant for an idle moment shouldn't happen an hour later. Within the occurrence, the workflow's own step retries still apply.
@@ -465,6 +474,46 @@ There is no initial failure-policy option. If behavior is optional, the author c
 Only idle sessions move to a new deployment. At that transition, dynamic values are invalidated whether they contain code or only data, and reevaluated before the next model call. A `once` instruction should not keep an obsolete policy just because it is plain text. For the same reason, a `once` value that captured the first caller in `record` captures whoever is current after a deployment change.
 
 The new deployment must not blindly render old data with an incompatible new renderer. Start with reevaluation as the uniform rule; explicit cross-deployment record reuse can come later if needed. Completed hook occurrences are not replayed merely because a deployment changed.
+
+### Values used outside the session
+
+Some values are needed where the session's state isn't: a remote child is opened, messaged, reset, and cancelled by steps of their own, and its stream is followed by a route. On `main`, a compiler pass found a dynamic remote agent's `auth` and `headers` and registered them by ID for those places.
+
+With reactions, those places render the value instead:
+
+- **A rendered reference travels with the child.** It names the reaction and carries the record the remote agent was rendered from, in the selection a call carries and in the child's address. Records hold no secrets, so copying one there is safe.
+- **eve renders by reaction from the deployed definitions.** Given the reference, it finds the definition's `render`, calls it with the record, and takes the `auth` and `headers` it returns. Nothing about this is specific to remote agents.
+- **The destination is checked before credentials are used.** The rendered URL, name, and path must match what the child was opened with. A child opened before a deployment change keeps its URL; if the current selection names another, the request fails rather than sending new credentials to the old destination.
+
+```ts
+// agent/subagents/finance.ts
+import { defineDynamic, defineRemoteAgent } from "eve";
+import { mintTenantToken, tenants } from "../lib/tenants";
+
+export default defineDynamic({
+  select: (_view, { session }) => session.auth.current?.attributes.tenantId ?? null,
+  record: async (tenantId) => (tenantId === null ? null : await tenants.lookup(tenantId)), // { id, region }
+  render: (tenant) =>
+    tenant === null
+      ? null
+      : defineRemoteAgent({
+          description: "Analyze financial and accounting data.",
+          url: `https://${tenant.region}.finance.example.com`,
+          auth: async () => ({
+            headers: { authorization: `Bearer ${await mintTenantToken(tenant.id)}` },
+          }),
+        }),
+});
+```
+
+`auth` still takes no arguments: it closes over `tenant`, and `render` can recreate it anywhere. A dynamic `defineWorkspaceAgent`, which `main`'s compiler pass never handled, works the same way.
+
+### What eve stores
+
+- **A selection is at most 64 KB, and a record at most 1 MB.** The error names the reaction and suggests recording an ID and fetching the rest when it is used.
+- **Records are private.** They live in the session's checkpointed state, never on the public stream.
+- **Stored state rides along every step.** A turn step's input and result carry the session's state and history, so a record is re-sent and re-persisted on each step. `main` has the same cost for its closure snapshots, which it stores separately for each callback, with no cap.
+- **Diagnostics go to logs and traces.** Each evaluation reports the reaction, the occurrence, what triggered it (a new selection, a retry after failure, a deployment change, or a render that didn't match), how long it took, and its outcome. There is no public API for them.
 
 ## Before and after
 
@@ -591,7 +640,7 @@ export default defineDynamic({
 ```
 
 - **The behavior differs.** `main` snapshots the parent's model when the session starts. Here the parent's model is part of the selection, so the subagent follows it. Keeping the first model takes a hook that latches it into session state.
-- **A remote subagent** has the same shape, returning `defineRemoteAgent({ description, url })`. One with `auth` or `headers` is the remaining gap ([Pros and cons](#cons)).
+- **A remote subagent** has the same shape, returning `defineRemoteAgent({ description, url })`. Its `auth` and `headers` are rendered from the record wherever the child is reached ([Values used outside the session](#values-used-outside-the-session)).
 
 ### One connection per account
 
@@ -973,17 +1022,10 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **First-value snapshots are indirect.** "The parent's model when the session started" isn't a function of the current view; it takes a hook that latches it into session state. A `once` value that captured the first caller captures whoever is current after a deployment change.
 - **A caught failure sticks.** A value that catches an error and returns `null` keeps that `null` until its selection changes.
 - **Behavior changes from `main`.** Hooks that throw fail the turn rather than being logged. Values that read `session.auth.current` follow the current caller rather than the first, and a subagent that selects `view.model` follows the parent's model.
-- **Dynamic remote agents can't carry credentials yet.** On `main`, a dynamic remote agent could return `auth` or `headers`: a per-tenant URL with a per-tenant token, or credentials derived from the caller. The steps that open and message a remote child read only the recorded selection, so they have no `render` to call. A static remote agent's `auth` takes no arguments and can't see the session.
+- **Records are carried by every step.** A large record costs on every step of the session, not once. The 1 MB cap bounds it, but authors still have to choose what to record.
 - **Performance needs end-to-end evidence.** The prototype's unchanged selectors are cheap, but that does not measure database latency, growing conversation scans, checkpoint size, or provider prompt-cache misses. Removing compiler machinery is valuable even without claiming that every session gets faster.
 - **Recovery needs to be explainable.** Diagnostics should show which input triggered an evaluation, which revision produced the value, and whether work failed or is waiting to retry. Otherwise an explicit lifecycle in code can still be opaque in production.
 
-## Scope and open questions
+## Scope
 
-The initial change is dynamic values and hooks on the v27 view, with shared selection, occurrences, records, and recovery. Keep `defineDynamic`, retain event hooks, and add state-selected hooks and returned commands. Do not add `defineGuard`, a universal public `defineReaction`, arbitrary dependency graphs, or a new task-authoring API.
-
-To resolve before this leaves draft:
-
-- **Remote agents:** render dynamic remote agents from their record in remote child steps and routes, or ship without credentials for dynamic remote agents.
-- **Hooks that observe:** whether an event handler that throws fails the turn, as a state-selected hook does, or is logged as on `main`.
-- **The model-call boundary:** which calls `perStep` covers, and when a steering message or a resumed approval is visible to selections.
-- **Storage:** a cap on what `record` keeps, and which diagnostics to expose without publishing records.
+The initial change is dynamic values and hooks on the v27 view, with shared selection, occurrences, records, and recovery. Keep `defineDynamic`, retain event hooks, and add state-selected hooks and returned commands. Do not add `defineGuard`, a universal public `defineReaction`, arbitrary dependency graphs, a command for adding messages, or a new task-authoring API.
