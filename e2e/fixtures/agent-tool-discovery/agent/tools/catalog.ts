@@ -8,6 +8,7 @@ import { CATALOG_TOOLS, referenceOf } from "../lib/catalog";
  * the same deferred entries as authored files would give it.
  */
 export default defineDynamic({
+  deferred: true,
   events: {
     "session.started": () =>
       Object.fromEntries(

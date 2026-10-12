@@ -255,6 +255,7 @@ describe("step catalog in the harness (real AI SDK)", () => {
         messages: [],
         resolvers: [
           {
+            deferred: true,
             eventNames: ["session.started"],
             events: {
               "session.started": () =>

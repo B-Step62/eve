@@ -330,6 +330,12 @@ function createMetadata(input: {
   readonly name: string;
   readonly resolver: ResolvedDynamicToolResolver;
 }): CurrentDynamicToolMetadata {
+  // Without catalog tools, a deferred entry from this resolver would be unreachable.
+  if (input.entry.deferred === true && input.resolver.deferred !== true) {
+    throw new Error(
+      `Dynamic tool "${input.name}" sets deferred: true, but its resolver "${input.resolver.logicalPath}" doesn't declare deferred: true. Add deferred: true to defineDynamic() so eve adds eve__search and eve__tool to reach it, or remove deferred from the entry.`,
+    );
+  }
   return {
     availableInSubagents: input.entry.availableInSubagents,
     deferred: input.entry.deferred,

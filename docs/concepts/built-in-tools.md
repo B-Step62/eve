@@ -303,7 +303,7 @@ export default disableTool();
 
 These tools let the model reach what isn't in its tool list. `eve__search` finds tools defined with `deferred: true`, agents defined with `tool: "deferred"`, every tool from the agent's [connections](../connections), and deferred [skills](../skills). `eve__tool` calls a deferred tool, agent, or connection tool by name, and `eve__skill` loads a skill, deferred or not. There is no add command; eve adds each one from what the agent declares, even when `defaultTools` is `false`:
 
-- `eve__tool` comes with anything it can call: a deferred tool or agent, a connection, or a dynamic resolver in `agent/tools/`, `agent/subagents/`, or `agent/connections/` that may add one at runtime.
+- `eve__tool` comes with anything it can call: a deferred tool or agent, a connection, a dynamic tool resolver that sets [`deferred: true`](../guides/dynamic-capabilities#return-deferred-dynamic-tools), or a dynamic resolver in `agent/subagents/` or `agent/connections/` that may add one at runtime.
 - `eve__skill` comes with any skill, static or from a dynamic skill resolver, so an agent whose only catalog entries are listed skills gets `eve__skill` alone.
 - `eve__search` comes with anything it could find: whatever `eve__tool` can call, plus deferred skills and dynamic skill resolvers.
 - An agent with none of these gets no catalog tools.

@@ -363,6 +363,8 @@ export interface ResolvedDynamicToolResolver extends Readonly<ModuleSourceRef> {
     Record<string, (event: unknown, ctx: unknown) => unknown | Promise<unknown>>
   >;
   readonly rebindMissingCallbacks?: boolean;
+  /** `true` when the resolver declares that it may return deferred entries. */
+  readonly deferred?: true;
   /**
    * Mount namespace when this resolver comes from an extension. Names of tools
    * the resolver produces are prefixed with `${extensionNamespace}__`.

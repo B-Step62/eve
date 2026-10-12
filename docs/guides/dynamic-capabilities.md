@@ -274,6 +274,36 @@ export default defineDynamic({
 });
 ```
 
+### Return deferred dynamic tools
+
+A dynamic tool entry can set `deferred: true` to stay out of the model's tool list, like a [deferred tool](../tools#keep-a-tool-out-of-the-tool-list). The model then reaches it through [`eve__search` and `eve__tool`](../concepts/built-in-tools#eve__search-eve__tool-and-eve__skill), and eve decides whether to add those before any resolver runs. Set `deferred: true` on `defineDynamic()` to declare that the resolver may return deferred entries:
+
+```ts title="agent/tools/ledger.ts"
+import { defineDynamic, defineTool } from "eve/tools";
+import { z } from "zod";
+import { listRegions, readLedger } from "../lib/ledger";
+
+export default defineDynamic({
+  deferred: true,
+  events: {
+    "session.started": async () =>
+      Object.fromEntries(
+        (await listRegions()).map((region) => [
+          `ledger__${region}`,
+          defineTool({
+            deferred: true,
+            description: `Read the ${region} ledger.`,
+            inputSchema: z.object({ account: z.string() }),
+            execute: ({ account }) => readLedger(region, account),
+          }),
+        ]),
+      ),
+  },
+});
+```
+
+A resolver without it returns only tools for the model's tool list and doesn't bring the catalog tools. If it returns a deferred entry anyway, the call fails and eve skips the resolver's result for that event. `deferred: true` is the only value `defineDynamic()` accepts, and only `agent/tools/` resolvers accept the option.
+
 ### Author replayable callbacks
 
 Write callback properties as inline function expressions, arrows, method shorthand, or module-level function references. eve transforms authored modules that import `defineTool`, including helper modules outside `agent/tools/`, and stores each callback's referenced closure values independently.

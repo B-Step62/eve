@@ -96,7 +96,7 @@ type DynamicEventMapHandler<TEvents extends DynamicEvents> = Extract<
   NonNullable<TEvents[keyof TEvents]>,
   (...args: never[]) => unknown
 >;
-type DynamicEventMapResult<TEvents extends DynamicEvents> = Awaited<
+export type DynamicEventMapResult<TEvents extends DynamicEvents> = Awaited<
   ReturnType<DynamicEventMapHandler<TEvents>>
 >;
 
@@ -182,8 +182,11 @@ export function defineDynamic<TResult = unknown>(definition: {
 export function assertResolverOnlyDynamicSentinel(
   sentinel: DynamicSentinel,
   message: string,
+  allowedKeys: readonly string[] = [],
 ): void {
-  const unknownKeys = Object.keys(sentinel).filter((key) => key !== "events" && key !== "kind");
+  const unknownKeys = Object.keys(sentinel).filter(
+    (key) => key !== "events" && key !== "kind" && !allowedKeys.includes(key),
+  );
   if (unknownKeys.length > 0) {
     throw new Error(`${message} Unknown key(s): ${unknownKeys.join(", ")}.`);
   }

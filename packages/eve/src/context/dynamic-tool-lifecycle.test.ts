@@ -1547,6 +1547,47 @@ describe("dispatchDynamicToolEvent", () => {
     );
   });
 
+  it("rejects a deferred entry from a resolver that doesn't declare deferred: true, since no catalog tool could reach it", async () => {
+    const logs = captureLogRecords();
+    const ctx = createCtx();
+    const resolver = createResolver("export_report", ["session.started"], () =>
+      Object.assign(createReplayableTool(), { deferred: true }),
+    );
+
+    await dispatchDynamicToolEvent({
+      ctx,
+      resolvers: [resolver],
+      messages: [],
+      event: makeEvent("session.started"),
+    });
+
+    expect(buildDynamicTools(ctx)).toHaveLength(0);
+    expect(JSON.stringify(logs.records)).toContain(
+      'Dynamic tool \\"export_report\\" sets deferred: true, but its resolver \\"agent/tools/export_report.ts\\" doesn\'t declare deferred: true.',
+    );
+  });
+
+  it("keeps a deferred entry from a resolver that declares deferred: true", async () => {
+    const ctx = createCtx();
+    const resolver = {
+      ...createResolver("export_report", ["session.started"], () =>
+        Object.assign(createReplayableTool(), { deferred: true }),
+      ),
+      deferred: true as const,
+    };
+
+    await dispatchDynamicToolEvent({
+      ctx,
+      resolvers: [resolver],
+      messages: [],
+      event: makeEvent("session.started"),
+    });
+
+    expect(buildDynamicTools(ctx).map(({ name, deferred }) => ({ name, deferred }))).toEqual([
+      { name: "export_report", deferred: true },
+    ]);
+  });
+
   it("uses file slug when handler returns a single entry", async () => {
     const ctx = createCtx();
     const resolver = createResolver("analytics", ["session.started"], () => createReplayableTool());

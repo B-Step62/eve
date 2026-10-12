@@ -8,6 +8,7 @@ import { TASK_ID_INPUT, withTaskIdSchema } from "#execution/tasks/task-id-input.
 import { isObject } from "#shared/guards.js";
 import type { JsonObject } from "#shared/json.js";
 import { isDisabledToolSentinel } from "#tools/definition.js";
+import { readDynamicToolDeferred } from "#tools/dynamic.js";
 import { isWebSearchToolDefinition } from "#tools/provided/web-search.js";
 import {
   WEB_SEARCH_FALLBACK_PROVIDERS,
@@ -98,7 +99,8 @@ type NormalizedToolEntry =
  */
 export function normalizeToolDefinition(value: unknown, message: string): NormalizedToolEntry {
   if (isDynamicSentinel(value)) {
-    assertResolverOnlyDynamicSentinel(value, message);
+    assertResolverOnlyDynamicSentinel(value, message, ["deferred"]);
+    readDynamicToolDeferred(value, message);
     return {
       kind: "dynamic-tool",
       eventNames: Object.keys(value.events) as DynamicToolEventName[],

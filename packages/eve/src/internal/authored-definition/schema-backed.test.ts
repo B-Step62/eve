@@ -3,6 +3,7 @@ import { z as z3 } from "zod/v3";
 import { z } from "#compiled/zod/index.js";
 
 import { defineDynamic } from "#dynamic/definition.js";
+import { defineDynamic as defineDynamicTool } from "#tools/dynamic.js";
 import { defineTool, disableTool } from "#tools/definition.js";
 import { once } from "#tools/approval/policies.js";
 import { webSearch } from "#tools/provided/web-search.js";
@@ -392,6 +393,26 @@ describe("normalizeToolDefinition", () => {
 
     expect(() => normalizeToolDefinition(dynamicTools, FAILURE_MESSAGE)).toThrow(
       "Unknown key(s): fallback",
+    );
+  });
+
+  it("accepts deferred: true on a defineDynamic tool export", () => {
+    const dynamicTool = defineDynamicTool({
+      deferred: true,
+      events: { "turn.started": async () => null },
+    });
+
+    expect(normalizeToolDefinition(dynamicTool, FAILURE_MESSAGE).kind).toBe("dynamic-tool");
+  });
+
+  it("rejects any other deferred value on a defineDynamic tool export", () => {
+    const dynamicTool = {
+      ...defineDynamicTool({ events: { "turn.started": async () => null } }),
+      deferred: false,
+    } as never;
+
+    expect(() => normalizeToolDefinition(dynamicTool, FAILURE_MESSAGE)).toThrow(
+      "defineDynamic() accepts only `deferred: true`",
     );
   });
 

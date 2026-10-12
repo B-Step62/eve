@@ -70,10 +70,14 @@ describe("buildStepCatalog", () => {
     /** The tool list of an agent that declares one dynamic resolver of `kind`. */
     function advertisedWithResolver(
       kind: "dynamicConnectionResolvers" | "dynamicSkillResolvers" | "dynamicToolResolvers",
+      resolver: object = {},
     ) {
       const bundle = catalogBundle();
       const ctx = new ContextContainer();
-      ctx.set(BundleKey, { ...bundle, resolvedAgent: { ...bundle.resolvedAgent, [kind]: [{}] } });
+      ctx.set(BundleKey, {
+        ...bundle,
+        resolvedAgent: { ...bundle.resolvedAgent, [kind]: [resolver] },
+      });
       return names(
         buildStepCatalog({ agentTools: toolMap(), ctx, endsTurn: true, session: {} }).advertised,
       );
@@ -182,7 +186,6 @@ describe("buildStepCatalog", () => {
     });
 
     it.each([
-      ["dynamicToolResolvers", [SEARCH_TOOL_NAME, CALL_TOOL_NAME]],
       ["dynamicConnectionResolvers", [SEARCH_TOOL_NAME, CALL_TOOL_NAME]],
       ["dynamicSkillResolvers", [SEARCH_TOOL_NAME, SKILL_TOOL_NAME]],
     ] as const)(
@@ -191,6 +194,14 @@ describe("buildStepCatalog", () => {
         expect(advertisedWithResolver(kind)).toEqual(tools);
       },
     );
+
+    it("gives search and eve__tool only for a dynamic tool resolver that declares deferred: true", () => {
+      expect(advertisedWithResolver("dynamicToolResolvers")).toEqual([]);
+      expect(advertisedWithResolver("dynamicToolResolvers", { deferred: true })).toEqual([
+        SEARCH_TOOL_NAME,
+        CALL_TOOL_NAME,
+      ]);
+    });
   });
 
   it("hides root-only entries, direct or deferred, from delegated sessions", async () => {

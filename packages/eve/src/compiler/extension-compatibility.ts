@@ -89,10 +89,10 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   dynamicTool: {
-    current: 81,
+    current: 82,
     supported: [
       1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 31, 32, 33, 52, 54,
-      60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 72, 73, 75, 76, 77, 78, 79, 80, 81,
+      60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 72, 73, 75, 82,
     ],
     dropped: {
       21: "Message and reasoning append events now expose deltas instead of cumulative snapshots.",
@@ -130,6 +130,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       59: "Approval response policies now run for Cancel as well as Approve; a policy written for Approve only could reject every Cancel.",
       71: "AI SDK evaluation models became decision models; auto() accepts decision models only",
       74: "Sandbox provider handle hooks were renamed to onSandboxStop and onSandboxDelete.",
+      76: "Dynamic tool resolvers that return deferred entries must declare deferred: true on defineDynamic().",
+      77: "Dynamic tool resolvers that return deferred entries must declare deferred: true on defineDynamic().",
+      78: "Dynamic tool resolvers that return deferred entries must declare deferred: true on defineDynamic().",
+      79: "Dynamic tool resolvers that return deferred entries must declare deferred: true on defineDynamic().",
+      80: "Dynamic tool resolvers that return deferred entries must declare deferred: true on defineDynamic().",
+      81: "Dynamic tool resolvers that return deferred entries must declare deferred: true on defineDynamic().",
     },
   },
   channel: {

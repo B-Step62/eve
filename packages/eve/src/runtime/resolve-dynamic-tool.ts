@@ -3,6 +3,7 @@ import type { CompiledModuleMap } from "#compiler/module-map.js";
 import { expectFunction, expectObjectRecord } from "#internal/authored-module.js";
 import { registerDefinitionSource } from "#internal/authored-definition/source-identity.js";
 import { isDynamicSentinel, type DynamicSentinel } from "#dynamic/definition.js";
+import { readDynamicToolDeferred } from "#tools/dynamic.js";
 import { toErrorMessage } from "#shared/errors.js";
 import type { ModuleSourceRef } from "#shared/source-ref.js";
 import { loadResolvedModuleExport, ResolveAgentError } from "#runtime/resolve-helpers.js";
@@ -96,6 +97,7 @@ function createResolvedDynamicToolResolver(
   });
 
   return {
+    deferred: readDynamicToolDeferred(value, describe(source, "to match the public eve shape.")),
     eventNames: [...eventNames],
     events: handlers as ResolvedDynamicToolResolver["events"],
     exportName: source.exportName,

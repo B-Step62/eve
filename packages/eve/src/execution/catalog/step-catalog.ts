@@ -96,7 +96,7 @@ function catalogToolsFor(
   const tools =
     connections ||
     agentTools.some((definition) => definition.deferred === true) ||
-    (agent?.dynamicToolResolvers.length ?? 0) > 0 ||
+    (agent?.dynamicToolResolvers ?? []).some((resolver) => resolver.deferred === true) ||
     (bundle?.subagentRegistry.dynamicResolvers.length ?? 0) > 0;
   return {
     connections,

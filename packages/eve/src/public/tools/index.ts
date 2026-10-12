@@ -15,7 +15,7 @@ export {
   type ToolModelOutput,
   type ToolModelOutputPart,
 } from "#tools/definition.js";
-export { defineDynamic } from "#dynamic/definition.js";
+export { defineDynamic } from "#tools/dynamic.js";
 export { defineDurableSchema } from "#tools/durable-schema.js";
 export { serializeModelInputSchema } from "#tools/schema.js";
 export { defineDurableCallback } from "#tools/durable-callbacks.js";
@@ -24,6 +24,7 @@ export type { DynamicEvents, DynamicResolveContext, DynamicSentinel } from "#dyn
 export type {
   DynamicToolEntry,
   DynamicToolEvents,
+  DynamicToolSentinel,
   DynamicToolSet,
   DynamicToolResult,
 } from "#tools/dynamic.js";

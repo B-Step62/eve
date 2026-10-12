@@ -1,5 +1,12 @@
 import type { Approval } from "#approval/definition.js";
-import type { DynamicResolveContext, DynamicToolEventName } from "#dynamic/definition.js";
+import {
+  defineDynamic as defineDynamicBase,
+  type DynamicEventMapResult,
+  type DynamicEvents,
+  type DynamicResolveContext,
+  type DynamicSentinel,
+  type DynamicToolEventName,
+} from "#dynamic/definition.js";
 import type {
   PublicToolInputSchema,
   PublicToolOutputSchema,
@@ -100,5 +107,66 @@ export function isBrandedToolEntry(value: unknown): boolean {
     typeof value === "object" &&
     value !== null &&
     (value as Record<symbol, unknown>)[TOOL_BRAND] === true
+  );
+}
+
+/** Return value of the `eve/tools` `defineDynamic`. */
+export type DynamicToolSentinel<TResult = unknown> = DynamicSentinel<TResult> & {
+  readonly deferred?: true;
+};
+
+/**
+ * Defines a dynamic tool resolver in `agent/tools/`. Each event handler
+ * returns a `defineTool(...)` named after the file slug, a
+ * `Record<string, defineTool(...)>` named by its keys, or `null`. Handlers run
+ * at `session.started`, `turn.started`, and `step.started`.
+ *
+ * Set `deferred: true` when the resolver may return entries with
+ * `deferred: true`. eve then adds `eve__search` and `eve__tool` so the model can
+ * find and call them. Without it, eve rejects a returned deferred entry.
+ *
+ * ```ts
+ * import { defineDynamic, defineTool } from "eve/tools";
+ * import { z } from "zod";
+ *
+ * export default defineDynamic({
+ *   deferred: true,
+ *   events: {
+ *     "session.started": async () =>
+ *       Object.fromEntries(
+ *         (await listRegions()).map((region) => [
+ *           `ledger__${region}`,
+ *           defineTool({
+ *             deferred: true,
+ *             description: `Read the ${region} ledger.`,
+ *             inputSchema: z.object({ account: z.string() }),
+ *             execute: ({ account }) => readLedger(region, account),
+ *           }),
+ *         ]),
+ *       ),
+ *   },
+ * });
+ * ```
+ */
+export function defineDynamic<const TEvents extends DynamicEvents>(definition: {
+  readonly deferred?: true;
+  readonly events: TEvents;
+}): DynamicToolSentinel<DynamicEventMapResult<TEvents>> {
+  const sentinel = defineDynamicBase({ events: definition.events });
+  // Assigning in place keeps the definition key that defineDynamicBase stamps on the object.
+  return definition.deferred === true
+    ? Object.assign(sentinel, { deferred: true as const })
+    : sentinel;
+}
+
+/** Reads a dynamic tool resolver's `deferred` declaration, rejecting any value but `true`. */
+export function readDynamicToolDeferred(
+  sentinel: DynamicSentinel,
+  message: string,
+): true | undefined {
+  if (!("deferred" in sentinel) || sentinel.deferred === undefined) return undefined;
+  if (sentinel.deferred === true) return true;
+  throw new Error(
+    `${message} defineDynamic() accepts only \`deferred: true\`, which declares that the resolver may return deferred entries; omit it otherwise.`,
   );
 }
