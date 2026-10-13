@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hasMatrix, readMatrix, readRows, summarize } from "./summary.mjs";
+import { readMatrix, readRows, summarize } from "./summary.mjs";
 
 const cwd = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -12,15 +12,7 @@ const summaryAt = process.argv.indexOf("--summary");
 if (summaryAt !== -1) {
   const path = resolve(process.argv[summaryAt + 1] ?? `${cwd}/results/baseline/measurements.jsonl`);
   const rows = readRows(path);
-  // Datasets without a saved matrix fall back to the configurations they recorded.
-  const matrix = hasMatrix(path)
-    ? readMatrix(path)
-    : {
-        models: [...new Set(rows.map((r) => r.model))],
-        sizes: [...new Set(rows.map((r) => r.size))],
-        arms: [...new Set(rows.map((r) => r.arm))],
-        repetitions: Math.max(0, ...rows.map((r) => r.repetition)),
-      };
+  const matrix = readMatrix(path);
   process.stdout.write(summarize(rows, matrix));
   process.exit(0);
 }
