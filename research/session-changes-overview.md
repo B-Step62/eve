@@ -137,37 +137,6 @@ consumer.
   `turn.settled`, `call.requested`/`call.settled` and `interaction.opened`/`interaction.settled`,
   each ending carrying the fact's outcome.
 
-### Where the code moves
-
-```mermaid
-flowchart TB
-  subgraph main["main"]
-    direction TB
-    B["protocol/message.ts: v26 types, 38 create…Event builders"]
-    B --> M1["client: message-reducer, conversation-reducer, tool-part-state"]
-    B --> M2["hitl: candidates, coordinator"]
-    B --> M3["instrumentation/state.ts: per-call and per-request maps"]
-    B --> M4["turn-tag-state.ts: private usage"]
-    B --> M5["evals: derive-run-facts"]
-    B --> M6["session-projection.ts: server fold"]
-    B --> M7["channels: task-card model, per-channel handlers"]
-    T1["transitions: closing and scopes built by hand"] --> B
-  end
-  subgraph v27["v27 stack"]
-    direction TB
-    T2["transitions: only what changes state"] --> CA["cascade.ts: closes what an end leaves open, stamps scope"]
-    CA --> K["session-events/: schemas, catalog, envelope"]
-    K --> FO["session-projection/: fold, tables, tree, selectors"]
-    FO --> N1["client: conversation.ts, messages.ts"]
-    FO --> N2["hitl: response rows, responders.ts"]
-    FO --> N3["instrumentation: native-events transform"]
-    FO --> N4["session-usage.ts"]
-    FO --> N5["evals: run facts from rows"]
-    FO --> N6["channels: surface.ts, task cards from call rows"]
-  end
-  main ~~~ v27
-```
-
 ### Framework examples
 
 **Readers derive from rows.** This is the biggest source of deletions. On main, the client
