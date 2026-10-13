@@ -39,14 +39,8 @@ async function measure(runtime, label, calls) {
     ms: +(performance.now() - start).toFixed(3),
   });
 }
-const runtimes = [new MontyProgramRuntime()];
-try {
-  const { JavaScriptProgramRuntime } = await import("./javascript-runtime.ts");
-  runtimes.unshift(new JavaScriptProgramRuntime());
-} catch (error) {
-  if (error.code !== "ERR_MODULE_NOT_FOUND") throw error;
-  console.error("JS runtime not yet present in stacked base; Python-only results.");
-}
+const { JavaScriptProgramRuntime } = await import("./javascript.ts");
+const runtimes = [new JavaScriptProgramRuntime(), new MontyProgramRuntime()];
 for (const runtime of runtimes) {
   await measure(runtime, "cold", 0);
   await measure(runtime, "warm", 0);
