@@ -8,6 +8,7 @@ type NetworkPolicySandboxSession = SandboxSession & {
 };
 
 import {
+  GITHUB_READ_PERMISSIONS,
   executeGitHubShell,
   githubShellApproval,
   parseCommand,
@@ -81,21 +82,23 @@ test("runs clone without approval while retaining repository-scoped write-capabl
   const tokenCalls: Array<{ connector: string; params: ConnectTokenParams }> = [];
   const runs: Parameters<SandboxSession["run"]>[0][] = [];
 
-  await executeGitHubShell(CLONE, CONFIG, {
-    sessionId: "session-1",
-    async getConnectToken(connector, params) {
-      tokenCalls.push({ connector, params });
-      return "secret-token";
-    },
-    async getSandbox() {
-      return fakeSandbox(runs, { exitCode: 0, stdout: "", stderr: "" });
-    },
-  });
-
+  for (const config of [CONFIG, { ...CONFIG, access: "write" as const }]) {
+    await executeGitHubShell(CLONE, config, {
+      sessionId: "session-1",
+      async getConnectToken(connector, params) {
+        tokenCalls.push({ connector, params });
+        return "secret-token";
+      },
+      async getSandbox() {
+        return fakeSandbox(runs, { exitCode: 0, stdout: "", stderr: "" });
+      },
+    });
+  }
   assert.equal(githubShellApproval(CLONE), "not-applicable");
   assert.equal(CLONE.permissions[0].access, "write");
-  assert.deepEqual(tokenCalls, [
-    {
+  assert.equal(tokenCalls.length, 2);
+  for (const tokenCall of tokenCalls)
+    assert.deepEqual(tokenCall, {
       connector: "github/citron-compass",
       params: {
         authorizationDetails: [
@@ -107,9 +110,77 @@ test("runs clone without approval while retaining repository-scoped write-capabl
         ],
         subject: { type: "app" },
       },
-    },
+    });
+  assert.equal(runs.length, 2);
+});
+
+test("read-only tokens request explicit GitHub read permissions without filtering writes", async () => {
+  assert.deepEqual(GITHUB_READ_PERMISSIONS, [
+    "metadata:read",
+    "contents:read",
+    "pull_requests:read",
+    "issues:read",
+    "checks:read",
+    "statuses:read",
+    "actions:read",
   ]);
+  const input = {
+    ...READ,
+    command: "gh pr create --repo vercel/internal-agents",
+    permissions: [{ ...READ.permissions[0], access: "read" as const }],
+  };
+  assert.equal(githubShellApproval(input), "not-applicable");
+  const runs: Parameters<SandboxSession["run"]>[0][] = [];
+  const output = await executeGitHubShell(
+    input,
+    { ...CONFIG, access: "read" },
+    {
+      sessionId: "read-token",
+      async getConnectToken(connector, params) {
+        assert.equal(connector, CONFIG.connector);
+        assert.deepEqual(params, {
+          authorizationDetails: [
+            {
+              type: "github_app_installation",
+              org: CONFIG.org,
+              repositories: ["internal-agents"],
+              permissions: [...GITHUB_READ_PERMISSIONS],
+            },
+          ],
+          subject: { type: "app" },
+        });
+        return "read-token";
+      },
+      async getSandbox() {
+        return fakeSandbox(runs, { exitCode: 1, stdout: "", stderr: "GitHub: forbidden" });
+      },
+    },
+  );
   assert.equal(runs.length, 1);
+  assert.match(runs[0].command, /'pr' 'create'/u);
+  assert.equal(output.exitCode, 1);
+});
+
+test("access mismatches fail before sandbox access or token minting", async () => {
+  for (const [config, access, expected] of [
+    [{ ...CONFIG, access: "read" as const }, "write", "read"],
+    [CONFIG, "read", "write"],
+    [{ ...CONFIG, access: "write" as const }, "read", "write"],
+  ] as const) {
+    const input = { ...READ, permissions: [{ ...READ.permissions[0], access }] };
+    await assert.rejects(
+      executeGitHubShell(input, config, {
+        sessionId: "mismatch",
+        async getSandbox() {
+          assert.fail("must not access sandbox");
+        },
+        async getConnectToken() {
+          assert.fail("must not mint token");
+        },
+      }),
+      new RegExp(`require access "${expected}" as configured`, "u"),
+    );
+  }
 });
 
 test("approves the full syntactically valid gh surface", () => {
@@ -131,11 +202,18 @@ test("fails closed on invalid permissions, missing commands, env assignments, an
     ...WRITE,
     permissions: [{ ...WRITE.permissions[0], access: "read" as const }] as const,
   };
-  // @ts-expect-error Exercise runtime rejection of unsupported read-only permissions.
-  assert.deepEqual(githubShellApproval(readPush), {
-    type: "denied",
-    reason: "GitHub App commands require explicit write-capable access.",
-  });
+  assert.equal(githubShellApproval(readPush), "not-applicable");
+  assert.deepEqual(
+    githubShellApproval({
+      ...READ,
+      // @ts-expect-error Exercise malformed access from a runtime caller.
+      permissions: [{ ...READ.permissions[0], access: "admin" }],
+    }),
+    {
+      type: "denied",
+      reason: 'GitHub App commands require explicit "read" or "write" access.',
+    },
+  );
   for (const command of [
     "gh",
     "GH_TOKEN=stolen gh auth status",

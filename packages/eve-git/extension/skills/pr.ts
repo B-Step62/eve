@@ -8,8 +8,8 @@ export default defineDynamic({
     "session.started": () => {
       const github = extension.config.github !== undefined;
       return defineSkill({
-        description: prSkillDescription(github),
-        markdown: prSkillMarkdown(github),
+        description: prSkillDescription(github, extension.config.github?.access),
+        markdown: prSkillMarkdown(github, extension.config.github?.access),
       });
     },
   },

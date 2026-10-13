@@ -22,7 +22,22 @@ Use GitHub CLI commands through the \`gh\` tool for issues, pull requests, revie
 Repositories that require verified signatures reject ordinary sandbox commits. Stage the intended changes explicitly, run \`gh-signed-commit --repo owner/name --branch <branch> -m <headline>\` through the \`gh\` tool, then create the draft pull request through the same tool.
 `;
 
-export function githubInstructions(github: boolean): string {
+const READ_ONLY_INSTRUCTIONS = `# GitHub
+
+GitHub credentials are not available to ordinary \`bash\`. Use the \`gh\` tool for every authenticated GitHub operation. Declare exactly one repository in the configured organization with access "read". The token is read-only: reads work; GitHub rejects pushes, pull request creation, comments, reviews, and merges. Do not attempt to publish changes or bypass this policy with other credentials. If access is denied, report it plainly and stop.
+
+Use \`gh repo clone owner/name\`, \`gh pr view\`, \`gh pr checks\`, and other GitHub reads. Authenticated \`git fetch\`, \`git pull\`, and \`git ls-remote\` also use the \`gh\` tool. Local git commands use ordinary \`bash\`.
+
+Discover the target repository from the task and source. Every command declares exactly one repository and Connect mints a token scoped to it. Explicit command targets must match the declaration. Pass simple argv with ordinary quoting, never environment assignments, pipes, redirects, substitutions, or other shell syntax. Never put credentials in URLs or commands.
+`;
+
+const READ_ONLY_PR = `# Prepare a proposal
+
+GitHub access is read-only. Inspect the base, pull requests, and CI through the \`gh\` tool with access "read". Prepare local changes and a proposal with motivation and truthful validation evidence, but do not push, use gh-signed-commit, or create a pull request. GitHub rejects publication, comments, reviews, and merges. Report the prepared proposal and the access limitation to the requester; do not bypass it with other credentials.
+`;
+
+export function githubInstructions(github: boolean, access: "read" | "write" = "write"): string {
+  if (github && access === "read") return READ_ONLY_INSTRUCTIONS;
   return `${github ? CONNECT_INSTRUCTIONS : SHELL_INSTRUCTIONS}\n${PUBLISHING}\n`;
 }
 
@@ -37,13 +52,16 @@ The command commits only staged changes and synchronizes the checkout to the sig
 
 const PLAIN_COMMIT = `Stage only the intended changes, commit them, and push the branch. Then write the PR body to a file and create one draft:`;
 
-export function prSkillDescription(github: boolean): string {
+export function prSkillDescription(github: boolean, access: "read" | "write" = "write"): string {
+  if (github && access === "read")
+    return "Prepare a local proposal with read-only GitHub access; publication is unavailable.";
   return github
     ? "Prepare and publish a draft pull request with a signed commit, motivation-led description, testable hypothesis, and validation evidence."
     : "Prepare and publish a draft pull request with a motivation-led description, testable hypothesis, and validation evidence.";
 }
 
-export function prSkillMarkdown(github: boolean): string {
+export function prSkillMarkdown(github: boolean, access: "read" | "write" = "write"): string {
+  if (github && access === "read") return READ_ONLY_PR;
   return `# Publish a proposal
 
 Fetch the current base immediately before publication. Rebase onto it, or replay only the intended diff onto a clean checkout when local commits are unavailable. Stop on conflicts, stale refs, unexpected paths, or unrelated reversions.

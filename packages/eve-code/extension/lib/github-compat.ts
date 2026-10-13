@@ -11,5 +11,9 @@ export function deprecatedGitHubConfigured(): boolean {
   return extension.config.github !== undefined;
 }
 
+export function deprecatedGitHubAccess(): "read" | "write" {
+  return extension.config.github?.access ?? "write";
+}
+
 /** @deprecated Mount `eve/extensions/git` with `github` config, or import `gh` from `eve/extensions/git/tools`. */
 export const gh = defineGhTool(() => extension.config.github);

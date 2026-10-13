@@ -48,3 +48,18 @@ test("deprecated code({ github }) keeps the gh tool, GitHub instructions, and si
   assert.match(skill.markdown, /gh-signed-commit/u);
   assert.match(skill.markdown, /gh pr create --draft/u);
 });
+
+test("deprecated read-only config updates an already-defined gh tool and guidance", async () => {
+  extension({
+    github: { connector: "github/acme-bot", org: "acme", access: "read", broker: async () => {} },
+  });
+  const { guidance, skill, tool } = await resolve();
+  assert.ok(tool && "description" in tool);
+  assert.match(tool.description, /token is read-only/u);
+  assert.match(tool.description, /Declare access "read"/u);
+  assert.ok(guidance && "content" in guidance);
+  assert.match(guidance.content ?? "", /access "read"/u);
+  assert.ok(skill);
+  assert.match(skill.description, /publication is unavailable/u);
+  assert.doesNotMatch(skill.markdown, /gh pr create --draft/u);
+});

@@ -7,7 +7,7 @@ import { shellQuote } from "./shell.ts";
 import { GITHUB_TOOLING_PATHS } from "./tooling.ts";
 
 export interface GitHubPermission {
-  readonly access: "write";
+  readonly access: "read" | "write";
   readonly provider: "github";
   readonly repositories: readonly string[];
 }
@@ -26,7 +26,20 @@ export interface GitHubShellOutput {
   readonly truncated: boolean;
 }
 
+/** GitHub App permissions used for read-only credential leases. */
+export const GITHUB_READ_PERMISSIONS = [
+  "metadata:read",
+  "contents:read",
+  "pull_requests:read",
+  "issues:read",
+  "checks:read",
+  "statuses:read",
+  "actions:read",
+] as const;
+
 export interface GitHubConfig {
+  /** Token access policy, enforced by GitHub. Defaults to "write"; "read" rejects writes. */
+  readonly access?: "read" | "write";
   readonly broker: (
     sandbox: SandboxSession,
     rules: Readonly<Record<string, readonly GitHubLeaseRule[]>> | null,
@@ -75,7 +88,7 @@ export async function executeGitHubShell(
   dependencies: GitHubShellDependencies,
 ): Promise<GitHubShellOutput> {
   if (!config) throw new Error("GitHub command access is not configured for this agent.");
-  const argv = validateGitHubShellInput(input);
+  const argv = validateGitHubShellInput(input, config.access ?? "write");
   const sandbox = await dependencies.getSandbox();
   let workingDirectory = resolveWorkingDirectory(sandbox, input.workingDirectory);
   if (argv[0] === "git" || argv[0] === "gh-signed-commit") {
@@ -90,7 +103,14 @@ export async function executeGitHubShell(
   );
   const repositories = repositoryNames(declaredRepositories, config.org);
   const tokenParams: ConnectTokenParams = {
-    authorizationDetails: [{ type: "github_app_installation", org: config.org, repositories }],
+    authorizationDetails: [
+      {
+        type: "github_app_installation",
+        org: config.org,
+        repositories,
+        ...(config.access === "read" ? { permissions: [...GITHUB_READ_PERMISSIONS] } : {}),
+      },
+    ],
     subject: { type: "app" },
   };
   const token = await (dependencies.getConnectToken ?? getToken)(config.connector, tokenParams);
@@ -269,14 +289,22 @@ export function parseCommand(command: string): string[] {
   return argv;
 }
 
-function validateGitHubShellInput(input: GitHubShellInput): string[] {
+function validateGitHubShellInput(
+  input: GitHubShellInput,
+  configuredAccess?: "read" | "write",
+): string[] {
   const argv = parseCommand(input.command);
   const permission = input.permissions[0];
   if (input.permissions.length !== 1 || permission?.provider !== "github") {
     throw new Error("Exactly one GitHub permission is required.");
   }
-  if (permission.access !== "write") {
-    throw new Error("GitHub App commands require explicit write-capable access.");
+  if (permission.access !== "read" && permission.access !== "write") {
+    throw new Error('GitHub App commands require explicit "read" or "write" access.');
+  }
+  if (configuredAccess !== undefined && permission.access !== configuredAccess) {
+    throw new Error(
+      `GitHub App commands require access "${configuredAccess}" as configured for this agent.`,
+    );
   }
   if (!input.description.trim()) throw new Error("description must describe the intended result.");
   const [executable, subcommand] = argv;

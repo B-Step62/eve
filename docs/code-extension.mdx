@@ -95,10 +95,13 @@ Configure `github` to broker GitHub access through Connect instead. The extensio
 | Option             | Required      | Effect                                                                                     |
 | ------------------ | ------------- | ------------------------------------------------------------------------------------------ |
 | `github.connector` | With `github` | Connector that mints a GitHub token                                                        |
+| `github.access`    | No            | `"write"` (default) or `"read"` for read-only GitHub App tokens                            |
 | `github.org`       | With `github` | Organization whose repositories the `gh` tool can access                                   |
 | `github.broker`    | With `github` | `broker(sandbox, rules)` callback that installs, then removes, the GitHub credential rules |
 
 The `gh` tool requests a token scoped to exactly one repository in `github.org` for each invocation. The sandbox process receives a placeholder `GH_TOKEN`, and the firewall exchanges it on matching GitHub requests. Your `github.broker` callback receives the header-transform rules for the command, then `null` to remove the lease. The callback must preserve your other network rules. GitHub authentication has no command-delivery option.
+
+Set `github.access: "read"` to restrict the token at GitHub rather than filtering commands. Reads work; GitHub rejects pushes, pull request creation, comments, reviews, and merges. The tool must declare `access: "read"`, and the pull request skill prepares a local proposal without publishing it. This option also applies to the deprecated `code({ github })` configuration.
 
 ### Migrate from `code({ github })`
 

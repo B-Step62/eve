@@ -28,6 +28,8 @@ test("gh permission schemas use homogeneous array items for provider compatibili
 
 test("gh still requires exactly one permission and one repository", () => {
   assert.deepEqual(githubShellInputSchema.parse(input), input);
+  const read = { ...input, permissions: [{ ...permission, access: "read" }] };
+  assert.deepEqual(githubShellInputSchema.parse(read), read);
   for (const permissions of [
     [],
     [permission, permission],
@@ -35,7 +37,7 @@ test("gh still requires exactly one permission and one repository", () => {
     [{ ...permission, repositories: ["vercel/eve", "vercel/other"] }],
     [{ ...permission, repositories: ["not-a-repository"] }],
     [{ ...permission, provider: "other" }],
-    [{ ...permission, access: "read" }],
+    [{ ...permission, access: "admin" }],
   ]) {
     assert.equal(githubShellInputSchema.safeParse({ ...input, permissions }).success, false);
   }

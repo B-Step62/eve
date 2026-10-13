@@ -1,5 +1,6 @@
 /** Consumer-facing helpers exported as `eve/extensions/git/sandbox`. */
 export {
+  GITHUB_READ_PERMISSIONS,
   executeGitHubShell,
   githubShellApproval,
   type GitHubConfig,

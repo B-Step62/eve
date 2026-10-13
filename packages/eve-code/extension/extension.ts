@@ -29,6 +29,7 @@ export default defineExtension({
       .object({
         connector: z.string().min(1),
         org: z.string().min(1),
+        access: z.enum(["read", "write"]).optional(),
         broker: fn<GitHubLeaseBroker>(),
       })
       .optional(),

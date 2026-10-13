@@ -96,8 +96,10 @@ export {
 
 /** @deprecated Import from `eve/extensions/git/sandbox`. */
 export {
+  GITHUB_READ_PERMISSIONS,
   executeGitHubShell,
   githubShellApproval,
+  type GitHubConfig,
   type GitHubLeaseRule,
   type GitHubShellInput,
   type GitHubShellOutput,

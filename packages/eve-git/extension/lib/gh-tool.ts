@@ -17,7 +17,7 @@ export function defineGhTool(
   github: () => GitHubConfig | undefined,
   description = GH_TOOL_DESCRIPTION,
 ) {
-  return defineTool({
+  const tool = defineTool({
     description,
     approval: ({ toolInput }) => githubShellApproval(toolInput as GitHubShellInput | undefined),
     inputSchema: githubShellInputSchema,
@@ -34,4 +34,13 @@ export function defineGhTool(
       });
     },
   });
+  // Exported tools are defined before an extension mount resolves its config.
+  Object.defineProperty(tool, "description", {
+    enumerable: true,
+    get: () =>
+      github()?.access === "read"
+        ? `${description} The token is read-only: reads work; GitHub rejects pushes, pull request creation, comments, reviews, and merges. Declare access "read".`
+        : description,
+  });
+  return tool;
 }

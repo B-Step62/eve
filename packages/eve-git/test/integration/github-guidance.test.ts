@@ -52,3 +52,17 @@ test("with github config, GitHub goes through the brokered gh tool and signed co
   assert.match(skill.description, /signed commit/u);
   assert.match(skill.markdown, /gh pr create --draft/u);
 });
+
+test("read-only config guides reads and prepares proposals without publication", async () => {
+  extension({
+    github: { connector: "github/acme-bot", org: "acme", access: "read", broker: async () => {} },
+  });
+  const { content, skill, tool } = await resolve();
+  assert.ok(tool && "description" in tool);
+  assert.match(tool.description, /token is read-only/u);
+  assert.match(tool.description, /Declare access "read"/u);
+  assert.match(content, /access "read"/u);
+  assert.match(skill.description, /publication is unavailable/u);
+  assert.doesNotMatch(skill.markdown, /gh pr create --draft/u);
+  assert.match(skill.markdown, /do not push/u);
+});
