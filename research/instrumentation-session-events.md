@@ -58,27 +58,8 @@ its span names don't change.
 
 Hooks, channel `events` and instrumentation all key handlers by event type. The proposal gives
 instrumentation the hook context too: fact handlers receive the literal fact, and `select` with
-`run` covers derived state.
-
-```ts title="agent/instrumentation/audit.ts"
-import { defineInstrumentation } from "eve/instrumentation";
-
-export default defineInstrumentation({
-  events: {
-    "call.settled": (event, { view }) => {
-      const call = view.calls[event.data.callId];
-      console.log({
-        tool: call.capability.name,
-        durationMs: Date.parse(call.endedAt!) - Date.parse(call.startedAt),
-        outcome: event.data.outcome,
-      });
-    },
-  },
-});
-```
-
-The published guide does the same thing with two handlers: `call.requested` stores the name and
-start time in `ctx.state`, and `call.settled` reads them back. The call row already holds both.
+`run` covers derived state. [Examples from the guide](#examples-from-the-guide) shows four of
+the published examples rewritten.
 
 What changes for authors:
 
@@ -103,6 +84,201 @@ What stays different from hooks: an instrumentation handler is failure-isolated,
 is ignored, it never cancels a turn, it runs after the commit without blocking it, and
 `tracePolicy` decides which content each provider receives. `setup`, `flush` and `shutdown`
 stay.
+
+## Examples from the guide
+
+Each "before" is the example as `docs/guides/instrumentation/instrumentation.mdx` publishes it on
+the stack, where it already uses PR 10's names. Each "after" is the proposed shape. The proposed
+API isn't implemented, so these are sketches.
+
+### Time a tool call
+
+The guide stores the tool name and start time in `ctx.state` when the call is requested and reads
+them back when it settles.
+
+Before:
+
+```ts title="agent/instrumentation/audit.ts"
+import { defineInstrumentation } from "eve/instrumentation";
+
+export default defineInstrumentation({
+  events: {
+    "call.requested": (event, ctx) => {
+      ctx.state.set({ name: event.toolName, startedAt: Date.now() });
+    },
+    "call.settled": (event, ctx) => {
+      const started = ctx.state.get() as { name: string; startedAt: number } | undefined;
+      if (started === undefined) return;
+
+      console.log({
+        tool: started.name,
+        durationMs: Date.now() - started.startedAt,
+        outcome: event.outcome,
+      });
+    },
+  },
+});
+```
+
+After:
+
+```ts title="agent/instrumentation/audit.ts"
+import { defineInstrumentation } from "eve/instrumentation";
+
+export default defineInstrumentation({
+  events: {
+    "call.settled": (event, { view }) => {
+      const call = view.calls[event.data.callId];
+      console.log({
+        tool: call.capability.name,
+        durationMs: Date.parse(call.endedAt!) - Date.parse(call.startedAt),
+        outcome: event.data.outcome,
+      });
+    },
+  },
+});
+```
+
+One handler replaces two, and the `undefined` guard goes. Both times come from the lines that
+introduced and ended the call, so the duration is the same in whichever process the handler
+runs. As before, it includes time spent waiting for an approval.
+
+### Send a redacted audit record
+
+The guide's `id` is `idempotencyKey`. The guide says a start and its end share it, and to use it
+as a stable key when upserting records across replays.
+
+Before:
+
+```ts title="agent/instrumentation/audit.ts"
+export default defineInstrumentation({
+  tracePolicy: () => ({ emit: true, recordInputs: true, recordOutputs: false }),
+  events: {
+    "call.requested": async (event) => {
+      await sendAuditRecord({
+        id: event.idempotencyKey,
+        input: redactApiKey(event.input),
+        kind: event.kind, // "tool-call" | "load-skill" | "subagent-call" | "remote-agent-call"
+        name: event.toolName,
+      });
+    },
+  },
+});
+```
+
+After:
+
+```ts title="agent/instrumentation/audit.ts"
+export default defineInstrumentation({
+  tracePolicy: () => ({ emit: true, recordInputs: true, recordOutputs: false }),
+  events: {
+    "call.requested": async (event, { occurrence }) => {
+      await sendAuditRecord({
+        id: occurrence.id, // this fact; a retried step computes the same one
+        callId: event.data.callId, // the call, shared with its call.settled
+        input: redactApiKey(event.data.input),
+        kind: event.data.capability.kind, // "tool" | "agent" | "skill" | "control"
+        name: event.data.capability.name,
+      });
+    },
+  },
+});
+```
+
+`idempotencyKey` did two jobs, deduplicating replays and naming the operation, and each now has
+its own key. `kind` becomes the session's capability
+kind, where `agent` covers local and remote subagents alike; telling them apart would mean
+reading the call's child row.
+
+### Capture model input and output
+
+The guide logs the prompt and the response under a policy that records content only for public
+conversations and in development.
+
+Before:
+
+```ts title="agent/instrumentation/audit.ts"
+export default defineInstrumentation({
+  tracePolicy: ({ audience, environment }) => ({
+    emit: true,
+    recordInputs: audience === "public" || environment === "development",
+    recordOutputs: audience === "public" || environment === "development",
+  }),
+  events: {
+    "model.call.started": (event) => {
+      console.log("input", event.input);
+    },
+    "model.call.completed": (event) => {
+      console.log("output", event.content);
+    },
+  },
+});
+```
+
+After:
+
+```ts title="agent/instrumentation/audit.ts"
+export default defineInstrumentation({
+  tracePolicy: ({ audience, environment }) => ({
+    emit: true,
+    recordInputs: audience === "public" || environment === "development",
+    recordOutputs: audience === "public" || environment === "development",
+  }),
+  events: {
+    "model.call.started": (event) => {
+      console.log("input", event.input); // still a live event
+    },
+    "content.completed": (event) => {
+      if (event.data.phase === "reply") console.log("output", event.data.value);
+    },
+  },
+});
+```
+
+Output comes from the `content.completed` fact, as it does for hooks. No fact records the prompt
+and instructions, so `model.call.started` stays. `tracePolicy` now has to strip `event.data.value`
+when outputs aren't recorded, which is the content-policy work under
+[What doesn't get simpler](#what-doesnt-get-simpler).
+
+### Report who the session is waiting on
+
+The guide has no example for this. On the stack, a provider would count open requests from
+`interaction.opened` and `interaction.settled`, sending a change for each event. Those events
+skip sign-ins, so the "after" filters them out too. `metrics` stands for any metrics client.
+
+Before:
+
+```ts title="agent/instrumentation/waiting.ts"
+export default defineInstrumentation({
+  events: {
+    "interaction.opened": (event) => {
+      metrics.increment("eve.waiting_on_person", { kind: event.kind });
+    },
+    "interaction.settled": (event) => {
+      metrics.decrement("eve.waiting_on_person", { kind: event.kind });
+    },
+  },
+});
+```
+
+After:
+
+```ts title="agent/instrumentation/waiting.ts"
+export default defineInstrumentation({
+  select: (view) =>
+    Object.values(view.interactions)
+      .filter((row) => row.status === "open" && row.request.kind !== "sign-in")
+      .map((row) => row.request.kind),
+  run: (open, ctx) => {
+    metrics.gauge("eve.waiting_on_person", open.length, { session: ctx.session.id });
+  },
+});
+```
+
+A counter built from deltas drifts when a provider misses an event, such as a handler that timed
+out. The selection is the whole state, so each `run` sets the gauge to what the view says. Main's
+`session.waiting` doesn't fill this gap: it fires whenever the session suspends, including when it
+goes idle after a turn.
 
 ## What gets simpler internally
 
