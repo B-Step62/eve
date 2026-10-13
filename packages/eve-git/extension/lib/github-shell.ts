@@ -102,15 +102,17 @@ export async function executeGitHubShell(
     sandbox,
   );
   const repositories = repositoryNames(declaredRepositories, config.org);
+  const installation = {
+    type: "github_app_installation",
+    org: config.org,
+    repositories,
+  };
+  const installationDetail =
+    config.access === "read"
+      ? { ...installation, permissions: [...GITHUB_READ_PERMISSIONS] }
+      : installation;
   const tokenParams: ConnectTokenParams = {
-    authorizationDetails: [
-      {
-        type: "github_app_installation",
-        org: config.org,
-        repositories,
-        ...(config.access === "read" ? { permissions: [...GITHUB_READ_PERMISSIONS] } : {}),
-      },
-    ],
+    authorizationDetails: [installationDetail],
     subject: { type: "app" },
   };
   const token = await (dependencies.getConnectToken ?? getToken)(config.connector, tokenParams);
