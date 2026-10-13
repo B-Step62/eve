@@ -12,8 +12,4 @@ export default defineMcpClientConnection({
   // Meeting sessions have no signed-in user, so the agent acts in Linear with
   // the connector's own credential.
   auth: connect({ connector: linearConnector, principalType: "app" }),
-  // Anyone in the meeting can reach these tools, so a destructive call waits
-  // for a numbered reply in the meeting chat.
-  approval: ({ toolAnnotations }) =>
-    toolAnnotations?.destructiveHint === true ? "user-approval" : "not-applicable",
 });
