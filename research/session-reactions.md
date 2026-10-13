@@ -8,9 +8,9 @@ last_updated: "2026-10-12"
 
 This doc covers everything that changes during an eve session: the model, tools, skills, instructions, connections, subagents, and what hooks do in response. It proposes a common model underneath them: **durable reactions**. Dynamic values describe what the session should have; hooks describe what should happen. They share an execution model without needing identical authoring APIs.
 
-The broader idea is simple: **the session has a durable history, reactions make decisions from it, and work produces new observations that become part of that history.**
+The broader idea: **the session has a durable history, reactions make decisions from it, and work produces new observations that become part of that history.**
 
-**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, implements this design: recorded dynamic values and hooks with `select`, `record`, `render`, and `run`, evaluated as described below, in place of main's per-kind lifecycles and closure transforms. Not yet: keeping provider-visible tool lists stable for prompt caching, diagnostics beyond debug logs, and a public fact for a hook that fails between turns. Examples are authoring shapes the prototype accepts unless labelled `main`.
+**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, implements this design: recorded dynamic values and hooks with `select`, `record`, `render`, and `run`, evaluated as described below, in place of main's per-kind lifecycles and closure transforms.
 
 ## Summary
 
@@ -22,10 +22,8 @@ The broader idea is simple: **the session has a durable history, reactions make 
   - `render` turns that data into a live definition, such as a tool, skill, connection, or model. Without `record`, it receives the selection directly. It is synchronous and deterministic, so a fresh process can reconstruct the same capability without fetching its configuration again.
 - **`auto()` stops being special.** On `main` it hand-writes this pattern with framework internals. Here it is an ordinary `select`, `record`, and `render`, and an author can write their own router the same way ([How `auto()` works](#how-auto-works-on-main-and-now)).
 - **Hooks use `select` and `run`, or an event handler.** They perform effects or return commands such as `cancel()` and `compact()`. They share the reaction lifecycle, but do not need a rendering step.
-- **A system instruction is held; a user instruction joins the conversation.** A system instruction applies while it is selected. A user instruction joins the conversation once per occurrence and stays, as on `main` ([Instructions](#instructions-held-or-joined)).
-- **Unhandled errors fail the turn.** Nothing silently drops a required instruction or a failed credential check. Optional behavior is expressed in ordinary code, not a separate framework failure policy.
+- **Unhandled errors fail the turn.** Nothing silently drops a required instruction or a failed credential check. Optional behavior is expressed in ordinary code.
 - **The prototype is about 3,100 lines of production code smaller than its base,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
-- **Unify the machinery, not every surface.** Selection, occurrences, recorded outcomes, and recovery belong underneath both APIs. A public universal reaction API and a separate guard API are not part of the initial change.
 
 ## Why change
 
@@ -57,7 +55,7 @@ Reactions replace these two sources of complexity:
 | Hooks observe, with a special cancellation callback    | Hooks handle occurrences and return session commands         |
 | Different failure behavior for different kinds         | An unhandled error fails the owning execution                |
 
-The goal is not just less framework code. It is a persistence boundary authors can see and a lifecycle they can explain.
+The goal here is both to simplify the internals of the system, as well as to make a consistent lifecycle that applies everywhere.
 
 ## The common model
 
@@ -72,7 +70,7 @@ session history → session view → reaction → recorded outcome
        │                         ▼                         ▼
        │                 capability to hold         command to apply
        │                         │                         │
-       └──────── observations from subsequent work ───────┘
+       └──────── observations from subsequent work ────────┘
 ```
 
 There are two kinds of contribution:
@@ -96,7 +94,7 @@ This is a conceptual model of durable history, not a requirement to put every pr
 
 ## Dynamic values: what the session should have
 
-### Select what matters
+### Select
 
 The playbook can follow the caller directly:
 
@@ -223,7 +221,7 @@ export default defineAgent({
 });
 ```
 
-### Record data, render code
+### Record
 
 When constructing a capability needs an external answer, add `record`:
 
@@ -241,9 +239,9 @@ export default defineDynamic({
 
 The database rows are kept. `crmTool` is an ordinary function that constructs a tool, including its schema and callbacks. A package can supply it without a special compiler transform or durable callback wrapper.
 
-`record` is for data acquisition and computation, not for sending emails or charging cards; those effects belong in a hook's `run` or in execution callbacks. What `record` returns must be JSON. A secret returned here is stored too, so record configuration rather than tokens, and obtain credentials in callbacks such as `getToken` when they are used.
+`record` is for data acquisition and computation, and must return JSON..
 
-`render` must be pure, not merely synchronous. Time, randomness, and mutable process state can change a callback's behavior even if its tool description stays the same. Values that need to survive a restart belong in the record.
+`render` must be pure and synchronous. Time, randomness, and mutable process state can change a callback's behavior even if its tool description stays the same. Values that need to survive a restart belong in the record.
 
 Without `record`, the selection is the data used to render. Without `render`, a JSON result can be used directly, such as a gateway model ID. Tools and connections always need rendering because they contain executable code.
 
@@ -297,7 +295,7 @@ export default defineAgent({
 
 The tier is recorded, and `render` picks the live model. Data fetched from outside eve stays current only as far as its selection asks; selecting `perTurn` refreshes it each turn, not whenever the database changes.
 
-## Hooks: what should happen
+## Hooks
 
 Hooks share selection and durable evaluation with dynamic values, but their authoring shape is `select` plus `run`. `run(selection, ctx)` can do I/O and return a command. There is no live capability to reconstruct, so a hook does not need `render`.
 
@@ -335,7 +333,7 @@ export default defineHook({
 
 The hook returns a decision; eve applies it before evaluating the turn's dynamic values or starting model work. If the credential check throws, the turn fails rather than continuing without the check. On `main`, a throwing hook is logged and the turn continues. No separate guard API is needed for the initial design. Resource-specific authorization still belongs at the point a tool accesses that resource.
 
-### Occurrences, not just equal values
+### Occurrences
 
 A reaction's selection and its occurrence are different things:
 
@@ -386,7 +384,7 @@ An effect can succeed just before a process fails to save its result. The handle
 
 Returned commands also belong to the occurrence. Restoring a committed command does not request it again. `cancel()` targets the turn the occurrence belongs to, never a later one; `compact()` requests compaction before the next model call. Applying session commands remains eve's responsibility, including deciding whether they are still valid.
 
-## Instructions: held or joined
+## Instructions
 
 An instruction's role decides which kind of contribution it is.
 
@@ -1022,12 +1020,7 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **A simple async resolver becomes two functions:** a data-fetching `record` and a `render` that constructs from it.
 - **First-value snapshots are indirect.** "The parent's model when the session started" isn't a function of the current view; it takes a hook that latches it into session state. A `once` value that captured the first caller captures whoever is current after a deployment change.
 - **A caught failure sticks.** A value that catches an error and returns `null` keeps that `null` until its selection changes.
-- **Behavior changes from `main`.** Hooks that throw fail the turn rather than being logged. Values that read `session.auth.current` follow the current caller rather than the first, and a subagent that selects `view.model` follows the parent's model. Memory recall is no longer part of history: each turn's recall stays just ahead of that turn's input in every later call, so the prompt cache holds and compaction never summarizes it. That makes `recall["compaction.completed"]` and `visibility` redundant; another scope or a clear starts the recall over instead.
-- **Extensions must be rebuilt.** The dynamic tool, skill, and instruction contracts, and the subagent, connection, and hook contracts, drop their earlier epochs. Subagents and connections have no separate dynamic contract, so an extension with only static ones is rebuilt too.
-- **Retrieved memory accumulates.** A provider that retrieves different records each turn keeps them for the session, in every model call, as on `main`. Recall that never joins history means compaction can't shrink it either; a provider that returns its current state under stable `id`s stays bounded.
 - **Records are carried by every step.** A large record costs on every step of the session, not once. The 1 MB cap bounds it, but authors still have to choose what to record.
-- **Performance needs end-to-end evidence.** The prototype's unchanged selectors are cheap, but that does not measure database latency, growing conversation scans, checkpoint size, or provider prompt-cache misses. Removing compiler machinery is valuable even without claiming that every session gets faster.
-- **Recovery needs to be explainable.** Diagnostics should show which input triggered an evaluation, which revision produced the value, and whether work failed or is waiting to retry. Otherwise an explicit lifecycle in code can still be opaque in production.
 
 ## Scope
 
