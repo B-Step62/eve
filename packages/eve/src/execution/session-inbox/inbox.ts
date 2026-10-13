@@ -22,7 +22,14 @@ export interface SessionFailurePayload {
   readonly error: string;
 }
 
+/** Internal owner initialization request; callers cannot supply creator identity. */
+export interface SandboxRequestPayload {
+  readonly kind: "sandbox-request";
+  readonly replyTo: string;
+}
+
 export type SessionInboxPayload =
+  | SandboxRequestPayload
   | SessionFailurePayload
   | HookPayload
   | SessionCommand
@@ -255,7 +262,6 @@ export function createSessionInbox(sessionId: string): SessionInboxHandle {
 
 export function isWorkflowMessage(value: SessionInboxPayload): value is WorkflowToolRunMessage {
   return (
-    value.kind === "sandbox-request" ||
     value.kind === "agent-started" ||
     value.kind === "started" ||
     value.kind === "report" ||

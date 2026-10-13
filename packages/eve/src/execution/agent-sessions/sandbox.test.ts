@@ -8,9 +8,9 @@ import { createDurableSessionState, readDurableSession } from "#execution/durabl
 import { shutdownActiveSandboxHandles } from "#execution/sandbox/active-handles.js";
 import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
-import { handleWorkflowToolRunMessage } from "#execution/session-workflow-tool-run.js";
+import { handleSandboxRequest } from "#execution/session-sandbox-request.js";
 import type { WorkflowToolRunContext } from "#execution/tools/workflow/ask.js";
-import type { WorkflowSandboxRequest } from "#execution/tools/workflow/messages.js";
+import type { SandboxRequestPayload } from "#execution/session-inbox/inbox.js";
 import { mockSandbox } from "#internal/testing/mocks/mock-sandbox.js";
 import { defineSandbox, defineParentSandbox } from "#public/definitions/sandbox.js";
 import { defineState } from "#public/definitions/state.js";
@@ -174,7 +174,12 @@ describe("shared sandbox at child start", () => {
       const ctx = new ContextContainer();
       ctx.set(BundleKey, bundle);
       ctx.set(SessionIdKey, ownerId);
-      ctx.set(AuthKey, null);
+      ctx.set(AuthKey, {
+        attributes: {},
+        authenticator: "test",
+        principalId: "delegating-user",
+        principalType: "user",
+      });
       const session: HarnessSession = {
         sessionId: ownerId,
         continuationToken: "owner-token",
@@ -191,9 +196,10 @@ describe("shared sandbox at child start", () => {
       });
       // The session inbox services requests sequentially, including parallel child starts.
       let requests = Promise.resolve();
-      runtime.request.mockImplementation((token: string, message: WorkflowSandboxRequest) => {
+      runtime.request.mockImplementation((token: string, message: SandboxRequestPayload) => {
         expect(token).toBe(`eve:inbox:v1:eve:session:${ownerId}:inbox`);
-        const request = requests.then(() => handleWorkflowToolRunMessage({ cursor, message }));
+        expect(message).toEqual({ kind: "sandbox-request", replyTo: expect.any(String) });
+        const request = requests.then(() => handleSandboxRequest({ cursor, message }));
         requests = request.then(() => {});
         return request;
       });
@@ -223,7 +229,7 @@ describe("shared sandbox at child start", () => {
           current: {
             attributes: {},
             authenticator: "test",
-            principalId: "delegating-user",
+            principalId: "workflow-caller",
             principalType: "user",
           },
           initiator: null,
@@ -271,7 +277,7 @@ describe("shared sandbox at child start", () => {
       await contextStorage.run(durableContext, async () =>
         expect(owner.creator.get()).toBe("delegating-user"),
       );
-      expect(durableContext.get(AuthKey)).toBeNull();
+      expect(durableContext.get(AuthKey)?.principalId).toBe("delegating-user");
       expect(readDurableSession(cursor.sessionState).sandboxState?.session).toBeTruthy();
       cursor = new SessionStateCursor({
         serializedContext: serializeContext(durableContext),

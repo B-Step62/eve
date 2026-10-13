@@ -22,10 +22,22 @@ import { defineSandbox } from "#public/definitions/sandbox.js";
 import { defineWorkflowTool } from "#tools/workflow-definition.js";
 import { agent } from "#tools/framework/agent.js";
 import { workflowEntry } from "#execution/session/entry.js";
-import { getWorld, start } from "#internal/workflow/runtime.js";
+import {
+  sessionCommandHookToken,
+  sessionInboxHookToken,
+} from "#execution/session-inbox/address.js";
+import { getWorld, start, resumeHook } from "#internal/workflow/runtime.js";
 
 // Only model output is scripted. Sessions, workflow tools, steps, inboxes,
 // reply hooks, and the sandbox provider use the production runtime.
+const ALICE = {
+  attributes: {},
+  authenticator: "test",
+  principalId: "alice",
+  principalType: "user" as const,
+};
+const BOB = { ...ALICE, principalId: "bob" };
+
 function module(logicalPath: string, value: unknown) {
   return { logicalPath, loadNamespace: async () => ({ default: value }) };
 }
@@ -74,6 +86,7 @@ describe("sandbox requests over the real local workflow world", () => {
             'import { defineParentSandbox } from "eve/sandbox"; export default defineParentSandbox();',
         },
       });
+      const observedCallers: (string | undefined)[] = [];
       const provider = defineSandboxProvider({
         name: "inbox-test",
         environment: () => ({
@@ -107,7 +120,10 @@ describe("sandbox requests over the real local workflow world", () => {
                 logicalPath: "sandbox.ts",
                 loadNamespace: async () => ({
                   environment,
-                  default: defineSandbox(() => environment.open()),
+                  default: defineSandbox((ctx) => {
+                    observedCallers.push(ctx.session.auth.current?.principalId);
+                    return environment.open();
+                  }),
                 }),
               },
             ],
@@ -135,14 +151,23 @@ describe("sandbox requests over the real local workflow world", () => {
           {
             kind: "initial",
             ownerDeploymentId: "dpl_inline",
-            input: { message: path },
-            serializedContext: buildSerializedContext({ channelKind: "http" }),
+            input: { message: "hello" },
+            serializedContext: buildSerializedContext({ auth: ALICE, channelKind: "http" }),
             sessionTimeoutMs: false,
           },
         ]);
         const stream = captureTurnEvents(run);
         try {
-          const events = await withTimeout(stream.nextTurn(), `${path} sandbox child turn`);
+          const initial = await withTimeout(stream.nextTurn(), "Alice's initial turn");
+          expect(filterEventsByType(initial, "turn.completed")).toHaveLength(1);
+          expect(observedCallers).toEqual([]);
+          await resumeHook(sessionInboxHookToken(sessionCommandHookToken(run.runId)), {
+            kind: "send",
+            auth: BOB,
+            payload: { message: path },
+          });
+          const events = await withTimeout(stream.nextTurn(), `${path} Bob sandbox child turn`);
+          expect(observedCallers).toEqual(["bob"]);
           expect(filterEventsByType(events, "turn.failed")).toHaveLength(0);
           expect(filterEventsByType(events, "session.failed")).toHaveLength(0);
           expect(filterEventsByType(events, "agent.started")).toHaveLength(1);

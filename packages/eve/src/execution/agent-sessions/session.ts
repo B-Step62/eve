@@ -240,8 +240,6 @@ class RunAgentSession implements AgentSession {
           await claimHookOwnership(hook);
           await resumeHookStep(sessionInboxHookToken(sessionCommandHookToken(ownerSessionId)), {
             kind: "sandbox-request",
-            auth: message.auth,
-            from,
             replyTo: hook.token,
           });
           const response = await hook;

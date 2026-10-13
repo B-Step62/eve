@@ -145,15 +145,7 @@ export interface WorkflowToolRunStartedMessage {
   readonly from: WorkflowToolRunRef;
 }
 
-export interface WorkflowSandboxRequest {
-  readonly kind: "sandbox-request";
-  readonly auth: SessionAuth;
-  readonly from: WorkflowToolRunRef;
-  readonly replyTo: string;
-}
-
 export type WorkflowToolRunMessage =
-  | WorkflowSandboxRequest
   | ({ readonly kind: "agent-started" } & WorkflowToolRunAgentStartedMessage)
   | ({ readonly kind: "started" } & WorkflowToolRunStartedMessage)
   | ({ readonly kind: "report" } & WorkflowToolRunReport)

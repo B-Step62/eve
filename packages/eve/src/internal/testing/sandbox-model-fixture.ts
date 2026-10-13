@@ -9,7 +9,7 @@ const model = markMockModel(
     modelId: "sandbox-inbox-model",
     provider: "eve-test",
     doStream: async ({ prompt }) => {
-      const user = JSON.stringify(prompt.find((message) => message.role === "user")?.content);
+      const user = JSON.stringify(prompt.findLast((message) => message.role === "user")?.content);
       const hasResult = prompt.some((message) => message.role === "tool");
       if (hasResult) return textStreamResult("done");
       if (user.includes("builtin")) {

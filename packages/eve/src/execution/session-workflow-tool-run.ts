@@ -1,6 +1,3 @@
-import { initializeOwnerSandboxStep } from "#execution/sandbox/initialize-owner-step.js";
-import { resumeHookStep } from "#execution/tools/workflow/resume-hook-step.js";
-import { toErrorMessage } from "#shared/errors.js";
 import { deliverWorkflowAuthorization } from "#execution/tools/workflow/owner.js";
 import type { AppliedRunMessage } from "#execution/tools/workflow/apply-run-messages-step.js";
 import {
@@ -62,19 +59,6 @@ export async function handleWorkflowToolRunMessage(
 ): Promise<RuntimeActionResult | undefined> {
   const { message } = input;
   switch (message.kind) {
-    case "sandbox-request": {
-      let response;
-      try {
-        const result = await input.cursor.advance((state) =>
-          initializeOwnerSandboxStep({ ...state, auth: message.auth }),
-        );
-        response = { state: result.sandboxState };
-      } catch (error) {
-        response = { error: toErrorMessage(error) };
-      }
-      await resumeHookStep(message.replyTo, response);
-      return undefined;
-    }
     // Only task runs report started, reply, or usage, and the session applies those as it reads them.
     case "started":
     case "reply":

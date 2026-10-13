@@ -1,7 +1,6 @@
-import { AuthKey, InitiatorAuthKey, SandboxKey } from "#context/keys.js";
+import { SandboxKey } from "#context/keys.js";
 import { withContextScope } from "#context/run-step.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
-import type { SessionAuth } from "#context/session-context.js";
 import { createDurableSessionState, readDurableSession } from "#execution/durable-session-store.js";
 import { resolveEffectiveAgentRuntime } from "#execution/effective-agent-config.js";
 import type { SessionStepState } from "#execution/publish-session-events.js";
@@ -10,11 +9,7 @@ import { withSessionStateDelta } from "#execution/session/state-delta.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 
 /** Runs only in the sandbox owner's sequential session workflow. */
-export async function initializeOwnerSandboxStep(
-  input: SessionStepState & {
-    readonly auth: SessionAuth;
-  },
-) {
+export async function initializeOwnerSandboxStep(input: SessionStepState) {
   "use step";
   return await withSessionStateDelta(input, async (current) => {
     const durable = readDurableSession(current.sessionState);
@@ -34,18 +29,10 @@ export async function initializeOwnerSandboxStep(
       durable,
       turnAgent: effectiveAgent.turnAgent,
     });
-    const auth = ctx.get(AuthKey);
-    const initiator = ctx.get(InitiatorAuthKey);
-    ctx.set(AuthKey, current.auth.current);
-    ctx.set(InitiatorAuthKey, current.auth.initiator);
     const scoped = await withContextScope(ctx, session, async (owner) => {
       await ctx.require(SandboxKey).get();
       return { result: undefined, session: owner };
     });
-    if (auth === undefined) ctx.delete(AuthKey);
-    else ctx.set(AuthKey, auth);
-    if (initiator === undefined) ctx.delete(InitiatorAuthKey);
-    else ctx.set(InitiatorAuthKey, initiator);
     const sandboxState = scoped.session.sandboxState;
     if (sandboxState?.session == null) {
       throw new Error("The sandbox owner did not initialize a sandbox for its child.");
