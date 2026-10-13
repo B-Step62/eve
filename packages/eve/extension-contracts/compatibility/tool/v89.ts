@@ -1,6 +1,6 @@
 import { defineTool } from "#public/tools/index.js";
 
-// Epoch 89 tools can obtain credentials from Connect providers without an events bridge.
+// Existing Connect auth providers still work without event support.
 export default defineTool({
   description: "Check that the issue service is authorized.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
