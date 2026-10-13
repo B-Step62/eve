@@ -64,35 +64,12 @@ template and extension contracts). Everything is measured on the pushed branches
 `7ef3e507e` and #4616's head `ce473e5ff`. Reactions now sits on the stack, so the combined figure
 is exact. The reactions doc's −3,143 and this doc's earlier −3,127 are from before the restack.
 
-```mermaid
-sankey-beta
-Old v26 protocol and builders,v27,2832
-Client reducers,v27,1578
-HITL candidates and coordinator,v27,1099
-Instrumentation state,v27,339
-Channel card model and handlers,v27,220
-Private usage tallies,v27,197
-Checkpoint migrations and legacy,v27,135
-v27,Event contract,1825
-v27,Read model,1999
-v27,Writer and session machine,1169
-v27,Dev checker,331
-v27,Temporary dynamic adapter,211
-v27,Other v27 additions,351
-v27,Net removed by v27,514
-Per-kind lifecycles,Reactions,2253
-Durable callbacks and tool rebuilding,Reactions,1266
-Closure transforms,Reactions,1045
-Participants and change points,Reactions,462
-Memory state,Reactions,297
-Other reactions deletions,Reactions,647
-Reactions,Runner and kinds,2625
-Reactions,Definitions,233
-Reactions,Net removed by reactions,3112
-```
+![Production lines by area: what v27 and reactions remove, what each writes, and the net each saves](./assets/session-changes-sankey.svg)
 
-The sankey uses net lines per area. The left side is what went away, the middle node is the step
-that removed it, and the right side is what that step wrote. v27 now removes more than it adds:
+The sankey uses net lines per area. The left side (red) is what went away, the middle node is the
+step that removed it, and the right side is what that step wrote (blue) and its net saving
+(green). Both panels share one scale. `assets/session-changes-sankey.py` draws it from the
+figures in the tables below. v27 now removes more than it adds:
 514 lines net, with the prep PRs' −269 under it. Reactions removes 3,112 more than it adds.
 
 <details>
