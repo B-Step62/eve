@@ -12,8 +12,10 @@ model and the cleanup built on it (six prep PRs, then PRs 1–10, as GitHub stac
 ([#4616](https://github.com/vercel/eve/pull/4616)), one commit on top of PR 10. The design docs
 have additional detail: [`session-event-lifecycle.md`](./session-event-lifecycle.md) (the facts),
 [`session-event-tree.md`](./session-event-tree.md) (ownership and closing),
-[`session-core-target.md`](./session-core-target.md) (waiting, and what 1.0 locks), and
-[`session-reactions.md`](./session-reactions.md) (dynamic values and hooks).
+[`session-core-target.md`](./session-core-target.md) (waiting, and what 1.0 locks),
+[`session-reactions.md`](./session-reactions.md) (dynamic values and hooks), and
+[`instrumentation-session-events.md`](./instrumentation-session-events.md) (instrumentation
+alongside main's tracing library and reactions).
 
 ## Summary
 
@@ -131,7 +133,9 @@ consumer.
   cards, HITL, usage, instrumentation and eval facts.
 - **Instrumentation speaks the stream's vocabulary.** Providers hear `session.ended`,
   `turn.settled`, `call.requested`/`call.settled` and `interaction.opened`/`interaction.settled`,
-  each ending carrying the fact's outcome.
+  each ending carrying the fact's outcome. How this meets main's new tracing library, and a
+  proposal to give providers the hook context after reactions, are in
+  [`instrumentation-session-events.md`](./instrumentation-session-events.md).
 
 ### Framework examples
 
@@ -399,8 +403,8 @@ round up (`Math.ceil` of UTF-8 bytes / 4), because they reach an integer field o
 <summary>Instrumentation, usage and evals read facts</summary>
 
 - **Instrumentation** becomes a transform over each committed fact and the tables after it
-  (`native-events.ts`). The private per-call and per-request scope maps
-  (`instrumentation/state.ts`), `setAttemptScope`/`getAttemptScope`, and HITL's
+  (`native-events.ts`). The private per-call and per-request scope maps (157 lines of
+  `instrumentation/state.ts`), `setAttemptScope`/`getAttemptScope`, and HITL's
   `publishInputResolutions` are deleted. Model attempts are facts (`model.started` per attempt,
   `model.retried`), so instrumentation doesn't keep its own record of them.
 - **One vocabulary (PR 10).** Providers used to hear endings under names of their own, one event
@@ -921,11 +925,16 @@ flowchart LR
 | Facts and their meaning                              | Yes           | Clients fold them, and stored streams are read forever               |
 | `eve/events` tables and selectors                    | Yes           | Hooks, channels and clients read them through `ctx.view`             |
 | Hook and channel keys, `committed`                   | Yes           | Authored code keys on them                                           |
-| Instrumentation event names and outcomes             | Yes           | Providers such as Braintrust key on them                             |
+| Instrumentation event names and outcomes             | Yes           | Providers key on them; see the proposal below the table              |
 | Client types: `eve/client`, `react`, `vue`, `svelte` | Yes           | Frontends render them                                                |
 | `defineDynamic` / `defineHook` shapes, commands      | Yes           | Authored code                                                        |
 | Inbox, remote agent protocol 3, relays               | Additive only | Deployments talk during skew; versioned                              |
 | Session program, durable steps, private state        | No            | Only idle sessions cross deployments, through a versioned checkpoint |
+
+Because provider events lock at 1.0,
+[`instrumentation-session-events.md`](./instrumentation-session-events.md) proposes settling
+their final shape first: after reactions, providers would take the hook context, keyed by fact
+type, with no `ctx.state`.
 
 Within stream version 27, a minor release may add facts that only add information, optional
 fields, outcomes, kinds, displays and styles. Outcomes and kinds are closed in TypeScript and
