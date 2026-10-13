@@ -34,11 +34,14 @@ export default defineChannel({
       // The bot's own chat messages come back as chat events.
       if (!event || event.speaker === BOT_NAME) return new Response(null, { status: 204 });
 
-      const label = event.source === "chat" ? `${event.speaker} (in chat)` : event.speaker;
+      const line =
+        event.source === "join"
+          ? `${event.speaker} ${event.text}`
+          : `${event.speaker}${event.source === "chat" ? " (in chat)" : ""}: ${event.text}`;
       // Recall retries any non-2xx response every second, so acknowledge first.
       waitUntil(
         from(event.botId)
-          .send(`${label}: ${event.text}`, {
+          .send(line, {
             // Speaker names come from the meeting platform and prove nothing,
             // so the whole meeting is one principal. That also lets the queue
             // turn policy batch a burst of utterances into one turn.
@@ -58,7 +61,8 @@ export default defineChannel({
   events: {
     async "message.completed"(event, channel) {
       const botId = channel.continuation?.token;
-      if (event.finishReason === "tool-calls" || !event.message || !botId) return;
+      // Text before a tool call is the agent saying it's starting, so post it too.
+      if (!event.message || !botId) return;
       await sendChatMessage(botId, event.message);
     },
 

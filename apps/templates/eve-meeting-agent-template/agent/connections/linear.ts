@@ -12,4 +12,8 @@ export default defineMcpClientConnection({
   // Meeting sessions have no signed-in user, so the agent acts in Linear with
   // the connector's own credential.
   auth: connect({ connector: linearConnector, principalType: "app" }),
+  // Keep the model to issue work. The instructions name these tools.
+  tools: {
+    allow: ["save_issue", "get_issue", "list_issues", "list_users", "list_teams", "save_comment"],
+  },
 });

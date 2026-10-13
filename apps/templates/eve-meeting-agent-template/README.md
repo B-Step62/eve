@@ -1,6 +1,6 @@
 # eve Meeting Agent Template
 
-An [eve](https://eve.dev) agent that joins Zoom, Google Meet, and Microsoft Teams calls through a [Recall.ai](https://recall.ai) meeting bot. It listens to the live transcript and reads the meeting chat, and opens or updates Linear issues when someone asks, such as "eve, open a Linear ticket for this and assign Ben."
+An [eve](https://eve.dev) agent that joins Zoom, Google Meet, and Microsoft Teams calls through a [Recall.ai](https://recall.ai) meeting bot. It listens to the live transcript and reads the meeting chat, and opens or updates Linear issues when someone asks, such as "eve, open a Linear ticket for this and assign Bob."
 
 ## How it works
 
@@ -17,7 +17,8 @@ Meeting chat ◀── Recall send_chat_message ◀── message.completed ─�
 
 - **One meeting is one durable eve session**, addressed by the Recall bot ID, so "update that ticket" can refer to an issue opened earlier in the call.
 - **Recall does the meeting work.** It joins the call, transcribes it, and relays chat messages to `agent/channels/recall.ts` as webhooks. Everything is ordinary HTTP, so the agent runs on Vercel Functions with no long-lived connection.
-- **The agent chooses when to speak.** Every final utterance and chat message reaches the agent. It calls `no_reply` to stay quiet, and anything it does reply goes to the meeting chat.
+- **The agent chooses when to speak.** Every final utterance, chat message, and join reaches the agent. It calls `no_reply` to stay quiet. Anything it says goes to the meeting chat, including a short "On it" line as it starts on a request.
+- **It gets ready before the first ask.** The first join starts the session, and the agent spends that turn loading Linear's tools and teams. A first request can then be one `linear__save_issue` call.
 - **Linear runs as one app credential.** Meetings have no signed-in user, so `agent/connections/linear.ts` connects to [Linear's MCP server](https://linear.app/docs/mcp) with an app-scoped [Vercel Connect](https://vercel.com/docs/connect) connector. Issues it creates show the connector's Linear user as the creator.
 
 ## Set up
@@ -70,7 +71,7 @@ Expose the dev server with an HTTPS tunnel and set `RECALL_WEBHOOK_URL` to `http
 Join https://meet.google.com/abc-defg-hij
 ```
 
-Admit the bot when it asks to join. Then try "eve, open a Linear ticket for this and assign Ben", and later "eve, bump that ticket to urgent". Remove the bot from the call when you're done. The bot's name, `eve`, is `BOT_NAME` in `agent/lib/recall.ts`.
+Admit the bot when it asks to join. Then try "eve, open a Linear ticket for this and assign Bob", and later "eve, bump that ticket to urgent". Remove the bot from the call when you're done. The bot's name, `eve`, is `BOT_NAME` in `agent/lib/recall.ts`.
 
 ## Limits of this template
 

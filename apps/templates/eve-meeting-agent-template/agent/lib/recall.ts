@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 /** One final transcript utterance or meeting chat message, from a Recall real-time webhook. */
 export interface MeetingEvent {
   readonly botId: string;
-  readonly source: "speech" | "chat";
+  readonly source: "speech" | "chat" | "join";
   readonly speaker: string;
   readonly text: string;
 }
@@ -11,7 +11,12 @@ export interface MeetingEvent {
 export const BOT_NAME = "eve";
 export const RECALL_AUTHENTICATOR = "recall-webhook";
 
-const REALTIME_EVENTS = ["transcript.data", "participant_events.chat_message"];
+// Joins give the session an early turn to get ready before anyone asks.
+const REALTIME_EVENTS = [
+  "transcript.data",
+  "participant_events.chat_message",
+  "participant_events.join",
+];
 
 // Google Meet rejects chat messages over 500 characters, the lowest limit Recall documents.
 const MAX_CHAT_MESSAGE_CHARS = 500;
@@ -117,6 +122,9 @@ export function parseMeetingEvent(payload: unknown): MeetingEvent | null {
   } else if (payload.event === "participant_events.chat_message" && isRecord(data.data)) {
     source = "chat";
     text = typeof data.data.text === "string" ? data.data.text : undefined;
+  } else if (payload.event === "participant_events.join") {
+    source = "join";
+    text = "joined the meeting.";
   } else {
     return null;
   }
