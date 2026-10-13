@@ -109,6 +109,19 @@ describe("session create with reserved ids over HTTP", () => {
     });
   });
 
+  it("rejects a reserved session create without a delivery id", async () => {
+    const runtime = await httpAgent("session-create-no-delivery");
+    await runtime.run(async () => {
+      const sessionId = reserveSessionId();
+      const results = await Promise.all([
+        post("/eve/v1/session", { message: "Same", sessionId }),
+        post("/eve/v1/session", { message: "Same", sessionId }),
+      ]);
+      expect(results.map((result) => result.status)).toEqual([400, 400]);
+      expect(await runCreatedCount(sessionId)).toBe(0);
+    });
+  });
+
   it("rejects a create whose reserved session is recorded for another delivery", async () => {
     const runtime = await httpAgent("session-create-conflict");
     await runtime.run(async () => {

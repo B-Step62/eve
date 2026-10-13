@@ -64,6 +64,10 @@ describe("reserved channel identities", () => {
       expect((parseCreateBody({ message: "hello", sessionId }) as Response).status).toBe(400);
     },
   );
+  it("rejects a reserved session id without a delivery id", () => {
+    expect((parseCreateBody({ message: "hello", sessionId }) as Response).status).toBe(400);
+    expect((parseCreateBody({ sessionId }) as Response).status).toBe(400);
+  });
   it.each(["", "a b", "x".repeat(201), null, 12])(
     "rejects invalid delivery id %s",
     (deliveryId) => {

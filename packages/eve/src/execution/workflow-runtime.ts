@@ -121,10 +121,7 @@ export const workflowToolRunWorkflowReference = {
  * write failure. So its return proves neither that the run is recorded nor that
  * this caller's input created it; the recorded run decides both.
  */
-async function requireRecordedDelivery(
-  sessionId: string,
-  deliveryId: string | undefined,
-): Promise<void> {
+async function requireRecordedDelivery(sessionId: string, deliveryId: string): Promise<void> {
   let run;
   try {
     run = await (await getWorld()).runs.get(sessionId, { resolveData: "none" });
@@ -230,7 +227,10 @@ export function createWorkflowRuntime(config: {
         throw error;
       }
       if (input.sessionId !== undefined) {
-        await requireRecordedDelivery(input.sessionId, input.delivery?.deliveryId);
+        if (input.delivery === undefined) {
+          throw new Error("A reserved sessionId requires a delivery.");
+        }
+        await requireRecordedDelivery(input.sessionId, input.delivery.deliveryId);
       }
 
       let events: ReadableStream<MessageStreamEvent> | undefined;
