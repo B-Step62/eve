@@ -18,6 +18,8 @@ function input(source: string, overrides: Partial<ProgramStart["limits"]> = {}):
   };
 }
 function parked(step: ProgramStep) {
+  expect(step.timing!.startupMs).toBeGreaterThanOrEqual(0);
+  expect(step.timing!.runMs).toBeGreaterThanOrEqual(0);
   expect(step.status).toBe("parked");
   if (step.status !== "parked") throw new Error(JSON.stringify(step));
   return step;
@@ -26,6 +28,7 @@ function parked(step: ProgramStep) {
 describe("JavaScriptProgramRuntime (real QuickJS)", () => {
   it("returns JSON and captured logs", async () => {
     expect(await runtime.start(input('console.log("hello"); return { ok: true };'))).toEqual({
+      timing: { startupMs: expect.any(Number), runMs: expect.any(Number) },
       status: "completed",
       output: { ok: true },
       logs: ["hello"],
@@ -46,6 +49,10 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
       { index: 1, status: "completed" as const, output: "two" },
     ];
     const next = parked(await runtime.resume({ ...program, state: first.state, results }));
+    expect(first.timing!.startupMs).toBeGreaterThanOrEqual(0);
+    expect(first.timing!.runMs).toBeGreaterThanOrEqual(0);
+    expect(next.timing!.startupMs).toBe(0);
+    expect(next.timing!.runMs).toBeGreaterThanOrEqual(0);
     expect(next.calls).toEqual([{ index: 2, tool: "write", input: ["one", "two"] }]);
     expect(
       await runtime.resume({
@@ -54,6 +61,7 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
         results: [...results, { index: 2, status: "completed", output: "saved" }],
       }),
     ).toEqual({
+      timing: { startupMs: expect.any(Number), runMs: expect.any(Number) },
       status: "completed",
       output: "saved",
       logs: [],
@@ -79,7 +87,12 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
         state: next.state,
         results: [...results, { index: 1, status: "completed", output: "done" }],
       }),
-    ).toEqual({ status: "completed", output: "done", logs: [`prefix ${marker}`] });
+    ).toEqual({
+      timing: { startupMs: 0, runMs: expect.any(Number) },
+      status: "completed",
+      output: "done",
+      logs: [`prefix ${marker}`],
+    });
   });
 
   it("parks the full 32-call frontier without checkpoint overhead reducing the call cap", async () => {
@@ -111,6 +124,7 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
         results: [{ index: 0, status: "unknown", error: "worker crashed" }],
       }),
     ).toEqual({
+      timing: { startupMs: expect.any(Number), runMs: expect.any(Number) },
       status: "failed",
       errorClass: "runtime",
       logs: ["before"],
@@ -198,7 +212,10 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
     const result = await runtime.start(
       input('console.error("failure context"); throw new Error("broken");'),
     );
+    expect(result.timing!.startupMs).toBeGreaterThanOrEqual(0);
+    expect(result.timing!.runMs).toBeGreaterThanOrEqual(0);
     expect(result).toEqual({
+      timing: { startupMs: expect.any(Number), runMs: expect.any(Number) },
       status: "failed",
       error: "broken",
       errorClass: "runtime",

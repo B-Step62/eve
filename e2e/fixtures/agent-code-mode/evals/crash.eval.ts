@@ -9,6 +9,8 @@ export default defineEval({
       "CRASH: Use eve__execute to call count({}), then crash({}). Catch the crash error and return { before, unknown, counts: await tools.counters({}) }.",
     );
     done.expectOk();
+    done.messageIncludes('"interpreter":{"startupMs":');
+    done.messageIncludes('"runMs":');
     done.messageIncludes('"before":1');
     done.messageIncludes("side effect may or may not have happened");
     done.messageIncludes('"counts":{"count":1,"crash":1,"counters":1}');

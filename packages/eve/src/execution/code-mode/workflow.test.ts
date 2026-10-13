@@ -61,6 +61,7 @@ describe("code-mode durable driver", () => {
       status: "completed",
       output: [0, 1],
       logs: [],
+      interpreter: { startupMs: 0, runMs: 0 },
     });
     expect(started).toBe(2);
     for (let i = 0; i < 2; i++)
@@ -72,6 +73,57 @@ describe("code-mode durable driver", () => {
         { index: 0, status: "completed", output: 0 },
         { index: 1, status: "completed", output: 1 },
       ],
+    });
+  });
+
+  it("sums interpreter timing across every parked start and resume", async () => {
+    mocks.runProgramStep
+      .mockResolvedValueOnce({ ...first, timing: { startupMs: 10, runMs: 3 } })
+      .mockResolvedValueOnce({
+        ...first,
+        calls: [{ index: 2, tool: "write", input: {} }],
+        timing: { startupMs: 0, runMs: 5 },
+      })
+      .mockResolvedValueOnce({
+        status: "completed",
+        output: "done",
+        logs: [],
+        timing: { startupMs: 2, runMs: 7 },
+      });
+    const output = await executeProgramWorkflow(input, ctx);
+    expect(output).toEqual({
+      status: "completed",
+      output: "done",
+      logs: [],
+      interpreter: { startupMs: 12, runMs: 15 },
+    });
+  });
+
+  it("includes zero interpreter timing on the early missing-context failure", async () => {
+    expect(await executeProgramWorkflow({ source: "return 1;" }, ctx)).toEqual({
+      status: "failed",
+      errorClass: "runtime",
+      error: "Code-mode execution context is missing.",
+      logs: [],
+      interpreter: { startupMs: 0, runMs: 0 },
+    });
+    expect(mocks.runProgramStep).not.toHaveBeenCalled();
+  });
+
+  it("reports timing and errorClass on immediate runtime failure", async () => {
+    mocks.runProgramStep.mockResolvedValue({
+      status: "failed",
+      error: "bad syntax",
+      errorClass: "syntax",
+      logs: [],
+      timing: { startupMs: 4, runMs: 6 },
+    });
+    expect(await executeProgramWorkflow(input, ctx)).toEqual({
+      status: "failed",
+      error: "bad syntax",
+      errorClass: "syntax",
+      logs: [],
+      interpreter: { startupMs: 4, runMs: 6 },
     });
   });
 
@@ -124,10 +176,15 @@ describe("code-mode durable driver", () => {
     mocks.ask.mockImplementation(() => new Promise(() => {}));
     mocks.approveProgramCallStep.mockResolvedValue({ status: "required", key: "read" });
     mocks.runProgramStep
-      .mockResolvedValueOnce({ ...first, calls: [first.calls[0]] })
+      .mockResolvedValueOnce({
+        ...first,
+        calls: [first.calls[0]],
+        timing: { startupMs: 9, runMs: 2 },
+      })
       .mockResolvedValueOnce({
         status: "failed",
         error: "deadline",
+        timing: { startupMs: 0, runMs: 3 },
         errorClass: "deadline",
         logs: ["last park"],
       });
@@ -135,6 +192,7 @@ describe("code-mode durable driver", () => {
       status: "failed",
       errorClass: "deadline",
       logsMayBeTruncated: true,
+      interpreter: { startupMs: 9, runMs: 5 },
     });
     expect(mocks.runProgramStep.mock.calls[1]![1]).toMatchObject({ state: first.state });
     expect(mocks.dispatchProgramCallStep).not.toHaveBeenCalled();
@@ -153,6 +211,7 @@ describe("code-mode durable driver", () => {
       errorClass: "deadline",
       logs: ["last park"],
       logsMayBeTruncated: true,
+      interpreter: { startupMs: 0, runMs: 0 },
     });
   });
 });

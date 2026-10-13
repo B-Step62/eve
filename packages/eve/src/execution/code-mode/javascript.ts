@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { jsonSchema, type ToolSet } from "ai";
 import { toErrorMessage } from "#shared/errors.js";
@@ -41,6 +42,7 @@ interface LiveExecution {
   readonly calls: string[];
   readonly listeners: Set<() => void>;
   readonly timer: ReturnType<typeof setTimeout>;
+  readyAt?: number;
   ticket: number;
   issued: number;
   logs: readonly string[];
@@ -54,12 +56,14 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
   private readonly executions = new Map<string, LiveExecution>();
 
   async start(input: ProgramStart): Promise<ProgramStep> {
+    const started = performance.now();
     if (Date.now() >= input.limits.deadlineAt)
       return failure("Program deadline exceeded.", "deadline", []);
-    return this.wait(this.launch(input, []));
+    return this.timedWait(this.launch(input, []), started);
   }
 
   async resume(input: ProgramResume): Promise<ProgramStep> {
+    const started = performance.now();
     const state = input.state as unknown as State;
     const logs = Array.isArray(state?.logs) ? capLogs(state.logs) : [];
     if (Date.now() >= input.limits.deadlineAt) {
@@ -105,10 +109,10 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
         existing.pending.delete(index);
         call.resolve(result);
       }
-      return this.wait(existing);
+      return this.timedWait(existing, started, true);
     }
     // New process or stale checkpoint: replay interpreter work against recorded results.
-    return this.wait(this.launch(input, input.results, logs, state.calls));
+    return this.timedWait(this.launch(input, input.results, logs, state.calls), started);
   }
 
   /** Release parked interpreters when their owning process or test is shutting down. */
@@ -154,6 +158,14 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
       return { status: "failed", error: message };
     };
     const tools: ToolSet = {
+      ready: {
+        description: "Mark the interpreter ready before executing the guest program.",
+        inputSchema: jsonSchema({ type: "object" }),
+        execute: () => {
+          execution.readyAt ??= performance.now();
+          return null;
+        },
+      },
       call: {
         description: "Suspend one allowlisted program tool call.",
         inputSchema: jsonSchema({ type: "object" }),
@@ -205,14 +217,15 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
     void (async () => {
       try {
         const tool = await createWorkflowSandboxTool({
-          // At most one checkpoint per issued call, plus one limit-reporting call.
-          bridgeRequestLimit: 2 * (input.limits.maxTotalCalls + 1),
+          // One readiness bridge, then at most one checkpoint per issued call
+          // and one limit-reporting call.
+          bridgeRequestLimit: 2 * (input.limits.maxTotalCalls + 1) + 1,
           continuationSecurity: { signingKey: randomBytes(32).toString("base64url") },
           hostTools: tools,
           executionPolicy: {
             timeoutMs: Math.max(1, input.limits.deadlineAt - Date.now()),
             memoryLimitBytes: input.limits.memoryBytes,
-            maxBridgeRequests: 2 * (input.limits.maxTotalCalls + 1),
+            maxBridgeRequests: 2 * (input.limits.maxTotalCalls + 1) + 1,
             maxInFlightBridgeRequests: input.limits.maxInFlightCalls + 2,
             maxConsoleOutputBytes: LOG_BYTES,
           },
@@ -236,6 +249,20 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
       }
     })();
     return execution;
+  }
+
+  private async timedWait(
+    execution: LiveExecution,
+    started: number,
+    warm = false,
+  ): Promise<ProgramStep> {
+    const outcome = await this.wait(execution);
+    const ended = performance.now();
+    // The ready bridge runs inside QuickJS: tool factory creation alone does not
+    // include worker/context startup. Each resume measures only its active slice,
+    // never the parked interval spent waiting for host tools or approval.
+    const startupMs = warm ? 0 : Math.max(0, (execution.readyAt ?? ended) - started);
+    return { ...outcome, timing: { startupMs, runMs: Math.max(0, ended - started - startupMs) } };
   }
 
   private async wait(execution: LiveExecution): Promise<ProgramStep> {
@@ -300,7 +327,7 @@ function notify(execution: LiveExecution): void {
 function wrapSource(input: ProgramStart): string {
   // All mutable bookkeeping is lexical, outside the model-written function.
   // The bridge receives issue indices from the sandbox, not host completion order.
-  return `return await (async (__host) => {
+  return `await tools.ready({}); return await (async (__host) => {
     let __issued = 0, __inFlight = 0, __logSize = 0, __checkpointScheduled = false;
     const __checkpoint = () => {
       if (__checkpointScheduled) return;
@@ -364,7 +391,13 @@ function failure(
   errorClass: ProgramErrorClass,
   logs: readonly string[],
 ): FinishedStep {
-  return { status: "failed", error, errorClass, logs: capLogs(logs) };
+  return {
+    status: "failed",
+    error,
+    errorClass,
+    logs: capLogs(logs),
+    timing: { startupMs: 0, runMs: 0 },
+  };
 }
 
 /** Enforce the output cap outside generated code as well as inside it. */

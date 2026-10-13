@@ -57,19 +57,36 @@ export type ProgramErrorClass =
   | "memory"
   | "unknown-tool";
 
+/**
+ * Milliseconds measured by a runtime for this one start/resume call, not the
+ * whole program. startupMs is time until the interpreter is ready (zero on a
+ * warm/live-cache hit); runMs is the active guest execution slice, excluding
+ * time parked between calls waiting for host tools or approval.
+ */
+export interface ProgramTiming {
+  readonly startupMs: number;
+  readonly runMs: number;
+}
+
 export type ProgramStep =
   | {
+      /** Optional runtime measurements for this start/resume call. */
+      readonly timing?: ProgramTiming;
       readonly logs: readonly string[];
       readonly output: JsonValue;
       readonly status: "completed";
     }
   | {
+      /** Optional runtime measurements for this start/resume call. */
+      readonly timing?: ProgramTiming;
       readonly error: string;
       readonly errorClass: ProgramErrorClass;
       readonly logs: readonly string[];
       readonly status: "failed";
     }
   | {
+      /** Optional runtime measurements for this start/resume call. */
+      readonly timing?: ProgramTiming;
       /** Calls issued since the last step that have no result yet, in index order. */
       readonly calls: readonly ProgramCall[];
       readonly state: JsonValue;

@@ -4,7 +4,7 @@ import { parseJsonValue, type JsonValue } from "#shared/json.js";
 import { toErrorMessage } from "#shared/errors.js";
 import type { WorkflowToolContext } from "#tools/workflow-definition.js";
 import type { ExecuteInput } from "./tool.js";
-import type { ProgramCallResult, ProgramLanguage, ProgramStep } from "./runtime.js";
+import type { ProgramCallResult, ProgramLanguage, ProgramStep, ProgramTiming } from "./runtime.js";
 import {
   initializeProgramStep,
   runProgramStep,
@@ -25,6 +25,7 @@ export async function executeProgramWorkflow(
     return {
       status: "failed",
       error: "Code-mode execution context is missing.",
+      interpreter: { startupMs: 0, runMs: 0 },
       errorClass: "runtime",
       logs: [],
     };
@@ -34,6 +35,10 @@ export async function executeProgramWorkflow(
   const results: ProgramCallResult[] = [];
   const approvedKeys: string[] = [];
   let outcome = await runProgramStep(program.language, start);
+  const interpreter = {
+    startupMs: outcome.timing?.startupMs ?? 0,
+    runMs: outcome.timing?.runMs ?? 0,
+  };
   const deadline = sleep(new Date(initialized.limits.deadlineAt));
   while (outcome.status === "parked") {
     ctx.abortSignal.throwIfAborted();
@@ -112,17 +117,25 @@ export async function executeProgramWorkflow(
       });
       if (expired.status === "parked")
         throw new Error("Program deadline expired without terminating the runtime.");
-      return parseJsonValue(withFailureLogNotice(expired));
+      interpreter.startupMs += expired.timing?.startupMs ?? 0;
+      interpreter.runMs += expired.timing?.runMs ?? 0;
+      return parseJsonValue(withFailureLogNotice(expired, interpreter));
     }
     results.push(...settling);
     outcome = await runProgramStep(program.language, { ...start, state: outcome.state, results });
+    interpreter.startupMs += outcome.timing?.startupMs ?? 0;
+    interpreter.runMs += outcome.timing?.runMs ?? 0;
   }
-  return parseJsonValue(withFailureLogNotice(outcome));
+  return parseJsonValue(withFailureLogNotice(outcome, interpreter));
 }
 
-function withFailureLogNotice(outcome: Exclude<ProgramStep, { status: "parked" }>) {
+function withFailureLogNotice(
+  outcome: Exclude<ProgramStep, { status: "parked" }>,
+  interpreter: ProgramTiming,
+) {
+  const { timing: _timing, ...result } = outcome;
   return outcome.status === "failed" &&
     (outcome.errorClass === "deadline" || outcome.errorClass === "memory")
-    ? { ...outcome, logsMayBeTruncated: true }
-    : outcome;
+    ? { ...result, interpreter, logsMayBeTruncated: true }
+    : { ...result, interpreter };
 }

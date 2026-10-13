@@ -13,6 +13,8 @@ export default defineEval({
     });
     const done = await parked.session.respondAll("approve");
     done.expectOk();
+    done.messageIncludes('"interpreter":{"startupMs":');
+    done.messageIncludes('"runMs":');
     done.messageIncludes('"before":1');
     done.messageIncludes('"after":2');
     done.messageIncludes('"approved":"approved"');

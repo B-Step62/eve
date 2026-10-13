@@ -40,7 +40,7 @@ The v1 dispatcher supports ordinary authored and connection tools. Workflow-back
 
 A program may issue at most **32 concurrent calls** and **256 total calls**. The default whole-program deadline is **five minutes**, including approval waits. The model may supply `timeoutMs` to request a shorter deadline. The interpreter's memory limit is **64 MiB**.
 
-A successful tool result contains `status: "completed"`, the returned JSON `output`, and captured console `logs`. A failed result contains `status: "failed"`, `error`, `errorClass`, and `logs`. Logs are bounded to 16 KiB and 256 entries. Timeout and out-of-memory failures include `logsMayBeTruncated: true`: only logs captured up to the last parking boundary may survive abrupt interpreter termination.
+A successful tool result contains `status: "completed"`, the returned JSON `output`, and captured console `logs`. A failed result contains `status: "failed"`, `error`, `errorClass`, and `logs`. Every final result also includes `interpreter: { startupMs, runMs }`, cumulative interpreter startup and active guest execution time in milliseconds across all starts/resumes. Live-cache resumes have zero startup time; tool and approval waits between interpreter calls are excluded. Runtimes without timing support fall back to the duration of each interpreter step call, with zero startup time. Logs are bounded to 16 KiB and 256 entries. Timeout and out-of-memory failures include `logsMayBeTruncated: true`: only logs captured up to the last parking boundary may survive abrupt interpreter termination.
 
 ## Replay and unknown outcomes
 

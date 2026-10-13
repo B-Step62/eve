@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolSet } from "ai";
 const mocks = vi.hoisted(() => ({ createWorkflowSandboxTool: vi.fn() }));
@@ -41,6 +42,7 @@ beforeEach(() => {
   mocks.createWorkflowSandboxTool.mockImplementation(
     async ({ hostTools }: { hostTools: ToolSet }) => ({
       execute: async () => {
+        await invoke(hostTools, "ready", {});
         let output = 0;
         for (let index = 0; index < iterations; index++) {
           visits.push(index);
@@ -69,6 +71,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const runtime of runtimes.splice(0)) runtime.close();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("JavaScriptProgramRuntime live bridge", () => {
@@ -79,9 +82,9 @@ describe("JavaScriptProgramRuntime live bridge", () => {
         executionPolicy: expect.objectContaining({
           memoryLimitBytes: 123456,
           maxInFlightBridgeRequests: 34,
-          maxBridgeRequests: 514,
+          maxBridgeRequests: 515,
         }),
-        hostTools: { call: expect.anything(), park: expect.anything() },
+        hostTools: { call: expect.anything(), park: expect.anything(), ready: expect.anything() },
       }),
     );
   });
@@ -95,6 +98,10 @@ describe("JavaScriptProgramRuntime live bridge", () => {
         results: [{ index: 0, status: "completed", output: 41 }],
       }),
     );
+    expect(first.timing!.startupMs).toBeGreaterThanOrEqual(0);
+    expect(first.timing!.runMs).toBeGreaterThanOrEqual(0);
+    expect(second.timing!.startupMs).toBe(0);
+    expect(second.timing!.runMs).toBeGreaterThanOrEqual(0);
     expect(second.calls.map((call) => call.index)).toEqual([1]);
     expect(
       await runtime.resume({
@@ -109,6 +116,25 @@ describe("JavaScriptProgramRuntime live bridge", () => {
     expect(mocks.createWorkflowSandboxTool).toHaveBeenCalledTimes(1);
     expect(visits).toEqual([0, 1]);
     expect((runtime as unknown as { executions: Map<string, unknown> }).executions.size).toBe(0);
+  });
+
+  it("separates startup from execution and excludes idle time before a live resume", async () => {
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(110)
+      .mockReturnValueOnce(117)
+      .mockReturnValueOnce(500)
+      .mockReturnValueOnce(504);
+    const first = parked(await runtime.start(program));
+    expect(first.timing).toEqual({ startupMs: 10, runMs: 7 });
+    const next = parked(
+      await runtime.resume({
+        ...program,
+        state: first.state,
+        results: [{ index: 0, status: "completed", output: 41 }],
+      }),
+    );
+    expect(next.timing).toEqual({ startupMs: 0, runMs: 4 });
   });
 
   it("visits exactly 100 bridge calls, not 5,050, for 100 sequential resumes", async () => {

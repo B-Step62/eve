@@ -81,11 +81,22 @@ export async function runProgramStep(
   input: ProgramStart | ProgramResume,
 ): Promise<ProgramStep> {
   "use step";
+  const started = Date.now();
   try {
     const runtime = getProgramRuntime(language);
-    return "state" in input ? await runtime.resume(input) : await runtime.start(input);
+    const outcome = "state" in input ? await runtime.resume(input) : await runtime.start(input);
+    return {
+      ...outcome,
+      timing: outcome.timing ?? { startupMs: 0, runMs: Math.max(0, Date.now() - started) },
+    };
   } catch (error) {
-    return { status: "failed", error: toErrorMessage(error), errorClass: "runtime", logs: [] };
+    return {
+      status: "failed",
+      error: toErrorMessage(error),
+      errorClass: "runtime",
+      logs: [],
+      timing: { startupMs: 0, runMs: Math.max(0, Date.now() - started) },
+    };
   }
 }
 
