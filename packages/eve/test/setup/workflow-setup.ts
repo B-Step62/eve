@@ -18,6 +18,8 @@ import { WORKFLOW_TEST_AGENT_NAME } from "./workflow-global-setup.js";
 const packageRoot = resolvePackageRoot();
 const outDir = resolveWorkflowTestOutputDirectory(packageRoot);
 const poolId = process.env.VITEST_POOL_ID ?? "0";
+const activeHandlers = new Set<Promise<Response>>();
+let closing = false;
 installEveWorkflowQueueNamespace(WORKFLOW_TEST_AGENT_NAME);
 const world = createWorld({
   dataDir: join(resolveLocalWorkflowWorldDataDirectory(packageRoot), `vitest-${poolId}`),
@@ -37,19 +39,36 @@ world.registerHandler(
 setWorld(world);
 
 afterAll(async () => {
-  setWorld(undefined);
-  await world.close?.();
+  closing = true;
+  try {
+    await world.close?.();
+    // Direct queue handlers can still be hydrating streams when close returns.
+    await Promise.allSettled(activeHandlers);
+  } finally {
+    setWorld(undefined);
+  }
 });
 
 function createLazyHandler(bundlePath: string): (request: Request) => Promise<Response> {
   let handler: ((request: Request) => Promise<Response>) | undefined;
   let loading: Promise<(request: Request) => Promise<Response>> | undefined;
 
-  return async (request: Request) => {
+  async function handle(request: Request): Promise<Response> {
     loading ??= import(/* @vite-ignore */ pathToFileURL(bundlePath).href).then(
       (mod: { POST: (request: Request) => Promise<Response> }) => mod.POST,
     );
     handler ??= await loading;
     return await handler(request);
+  }
+
+  return async (request: Request) => {
+    if (closing) return new Response(null, { status: 503 });
+    const pending = handle(request);
+    activeHandlers.add(pending);
+    try {
+      return await pending;
+    } finally {
+      activeHandlers.delete(pending);
+    }
   };
 }
