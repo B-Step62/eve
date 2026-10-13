@@ -58,6 +58,12 @@ export interface TurnLike {
   status: string;
 }
 
+/** A turn in progress: `events` fills as the stream arrives, `result()` settles it. */
+export interface LiveTurnLike<T extends TurnLike> {
+  readonly events: readonly Event[];
+  result(): Promise<T>;
+}
+
 export function newRow(id: string, env: Record<string, string | undefined>): Row {
   return {
     id,
@@ -74,15 +80,17 @@ export function newRow(id: string, env: Record<string, string | undefined>): Row
 }
 
 /**
- * Sends the turn, collects child-session events into one list, and fills
- * `row` from whatever was observed. Never throws: a failure is returned as
- * `error` after the row is complete, so the caller can write the row first.
+ * Starts the turn, waits for it, collects child-session events into one list,
+ * and fills `row` from whatever was observed. If the turn times out or its
+ * stream fails, the events it streamed before that are still measured. Never
+ * throws: a failure is returned as `error` after the row is complete, so the
+ * caller can write the row first.
  */
 export async function measureRun<T extends TurnLike>(input: {
   row: Row;
   expected: string[];
   referenceOf: (name: string) => string;
-  send: () => Promise<T>;
+  start: () => Promise<LiveTurnLike<T>>;
   /** Appends the events of every session the turn opened to `events`. */
   collect: (turn: T, events: Event[]) => Promise<void>;
   now?: () => number;
@@ -91,10 +99,12 @@ export async function measureRun<T extends TurnLike>(input: {
   const now = input.now ?? (() => performance.now());
   const events: Event[] = [];
   const start = now();
+  let live: LiveTurnLike<T> | undefined;
   let turn: T | undefined;
   let error: unknown;
   try {
-    turn = await input.send();
+    live = await input.start();
+    turn = await live.result();
     row.latencyMs = now() - start;
     row.message = turn.message;
     events.push(...turn.events);
@@ -102,6 +112,7 @@ export async function measureRun<T extends TurnLike>(input: {
   } catch (caught) {
     error = caught;
     row.latencyMs ||= now() - start;
+    if (!turn && live) events.push(...live.events);
   }
   Object.assign(row, measure(events));
   const called = new Set(toolCalls(events).map((a) => a.toolName));

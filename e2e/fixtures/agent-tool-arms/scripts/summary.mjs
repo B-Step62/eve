@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export const TASKS = 10;
 
@@ -8,22 +9,38 @@ export function readRows(path) {
 }
 
 /**
- * Markdown table with one line per model, size and arm present in `rows`, in
- * first-seen order. `Runs` compares the rows recorded with `TASKS` per
- * repetition, so a run whose eval process died before writing shows up as a
- * shortfall.
+ * The configurations an execution asked for, saved as `matrix.json` beside its
+ * rows, so a later summary shows configurations that recorded nothing.
  */
-export function summarize(rows, repetitions) {
+export function readMatrix(rowsPath) {
+  return JSON.parse(readFileSync(join(dirname(rowsPath), "matrix.json"), "utf8"));
+}
+
+export function hasMatrix(rowsPath) {
+  return existsSync(join(dirname(rowsPath), "matrix.json"));
+}
+
+/**
+ * Markdown table with one line per model, size and arm in `matrix` (`{ models,
+ * sizes, arms, repetitions }`), then any configuration that has rows but isn't
+ * in it. `Runs` compares the rows recorded with `TASKS` per repetition, so a
+ * configuration whose eval process died before writing shows as 0/30.
+ */
+export function summarize(rows, matrix) {
   const lines = [
     "| Model | Size | Arm | Success | Runs | Mean input tokens | Cache read ratio | Mean model calls | Mean actions | Mean program attempts | Mean latency (s) | Error classes |",
     "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
   ];
-  const keys = [...new Set(rows.map((r) => JSON.stringify([r.model, r.size, r.arm])))];
-  for (const key of keys) {
+  const keys = [];
+  for (const model of matrix.models)
+    for (const size of matrix.sizes)
+      for (const arm of matrix.arms) keys.push(JSON.stringify([model, size, arm]));
+  for (const r of rows) keys.push(JSON.stringify([r.model, r.size, r.arm]));
+  for (const key of new Set(keys)) {
     const [model, size, arm] = JSON.parse(key);
     const r = rows.filter((r) => r.model === model && r.size === size && r.arm === arm);
     const sum = (k) => r.reduce((n, row) => n + (row[k] ?? 0), 0);
-    const mean = (k) => (sum(k) / r.length).toFixed(1);
+    const mean = (k) => (r.length ? (sum(k) / r.length).toFixed(1) : "-");
     const errors = {};
     for (const row of r)
       for (const c of [row.errorClass, ...(row.programErrorClasses ?? [])])
@@ -36,7 +53,7 @@ export function summarize(rows, repetitions) {
       ? `${((100 * sum("cacheReadTokens")) / sum("inputTokens")).toFixed(1)}%`
       : "-";
     lines.push(
-      `| ${model} | ${size} | ${arm} | ${r.filter((r) => r.success).length}/${r.length} | ${r.length}/${TASKS * repetitions} | ${mean("inputTokens")} | ${cache} | ${mean("modelCalls")} | ${mean("actions")} | ${mean("programAttempts")} | ${(sum("latencyMs") / r.length / 1000).toFixed(2)} | ${errorText} |`,
+      `| ${model} | ${size} | ${arm} | ${r.filter((r) => r.success).length}/${r.length} | ${r.length}/${TASKS * matrix.repetitions} | ${mean("inputTokens")} | ${cache} | ${mean("modelCalls")} | ${mean("actions")} | ${mean("programAttempts")} | ${r.length ? (sum("latencyMs") / r.length / 1000).toFixed(2) : "-"} | ${errorText} |`,
     );
   }
   return lines.join("\n") + "\n";

@@ -17,6 +17,16 @@ const turn = (events: Event[], message = "REF-a", status = "waiting") => ({
   message,
   status,
 });
+/** A live turn that settles to `settled`, or rejects after streaming `streamed`. */
+const live =
+  (settled: ReturnType<typeof turn> | Error, streamed: Event[] = []) =>
+  async () => ({
+    events: settled instanceof Error ? streamed : settled.events,
+    result: async () => {
+      if (settled instanceof Error) throw settled;
+      return settled;
+    },
+  });
 const clock = () => {
   let t = 0;
   return () => (t += 100);
@@ -30,7 +40,7 @@ test("a collection failure keeps the parent's costs and what the child streamed"
     expected: ["a"],
     referenceOf,
     now: clock(),
-    send: async () => turn([step(1234), call("a"), child]),
+    start: live(turn([step(1234), call("a"), child])),
     collect: async (_turn, events) => {
       events.push(step(50), call("b"));
       throw failure;
@@ -53,7 +63,7 @@ test("a timeout while collecting keeps the observed costs", async () => {
     row,
     expected: ["a"],
     referenceOf,
-    send: async () => turn([step(1234), call("a"), child]),
+    start: live(turn([step(1234), call("a"), child])),
     collect: async () => {
       throw timeout;
     },
@@ -63,24 +73,42 @@ test("a timeout while collecting keeps the observed costs", async () => {
   assert.equal(row.errorClass, "harness:TimeoutError");
 });
 
-test("a send that times out records a failed row with its latency", async () => {
+test("a turn that times out after a model step and a tool call keeps both", async () => {
   const row = newRow("t", {});
   const timeout = Object.assign(new Error("aborted"), { name: "TimeoutError" });
-  const { error, turn: sent } = await measureRun({
+  const { error, turn: settled } = await measureRun({
     row,
     expected: ["a"],
     referenceOf,
     now: clock(),
-    send: async () => {
-      throw timeout;
+    start: live(timeout, [step(1234), call("a")]),
+    collect: async () => {
+      throw new Error("not reached");
+    },
+  });
+  assert.equal(error, timeout);
+  assert.equal(settled, undefined);
+  assert.equal(row.inputTokens, 1234);
+  assert.equal(row.modelCalls, 1);
+  assert.equal(row.actions, 1);
+  assert.equal(row.errorClass, "harness:TimeoutError");
+  assert.equal(row.latencyMs, 100);
+});
+
+test("a turn that fails to start records a failed row with no costs", async () => {
+  const row = newRow("t", {});
+  const { error } = await measureRun({
+    row,
+    expected: ["a"],
+    referenceOf,
+    start: async () => {
+      throw new Error("rejected");
     },
     collect: async () => {},
   });
-  assert.equal(error, timeout);
-  assert.equal(sent, undefined);
-  assert.equal(row.errorClass, "harness:TimeoutError");
-  assert.equal(row.latencyMs, 100);
+  assert.equal((error as Error).message, "rejected");
   assert.equal(row.inputTokens, 0);
+  assert.equal(row.errorClass, "harness:Error");
 });
 
 test("a run that calls and quotes every expected tool succeeds", async () => {
@@ -89,7 +117,7 @@ test("a run that calls and quotes every expected tool succeeds", async () => {
     row,
     expected: ["a"],
     referenceOf,
-    send: async () => turn([step(10), call("eve__search"), call("a")]),
+    start: live(turn([step(10), call("eve__search"), call("a")])),
     collect: async () => {},
   });
   assert.equal(error, undefined);
@@ -108,7 +136,7 @@ test("failed turns, missing tools and missing references get their own class", a
       row,
       expected: ["a"],
       referenceOf,
-      send: async () => t,
+      start: live(t),
       collect: async () => {},
     });
     return row.errorClass;
@@ -132,7 +160,7 @@ test("program attempts, failures and interpreter time come from eve__execute res
     row,
     expected: ["a"],
     referenceOf,
-    send: async () =>
+    start: live(
       turn([
         call("eve__execute"),
         result("failed", { errorClass: "syntax", interpreter: { startupMs: 5, runMs: 1 } }),
@@ -140,6 +168,7 @@ test("program attempts, failures and interpreter time come from eve__execute res
         call("a"),
         result("completed", { interpreter: { startupMs: 2, runMs: 3 } }),
       ]),
+    ),
     collect: async () => {},
   });
   assert.equal(row.programAttempts, 2);
