@@ -1,30 +1,30 @@
 ---
 issue: "None (maintainer-requested research)"
-status: draft
-last_updated: "2026-10-11"
+status: draft; the waiting vocabulary is implemented on stack #4696
+last_updated: "2026-10-13"
 ---
 
 # Session core: the target and what 1.0 locks
 
-This doc describes where the session core should end up, and which parts of that have to be decided before 1.0. It builds on [`session-event-lifecycle.md`](./session-event-lifecycle.md), which defines the v27 facts, and [`session-changes-overview.md`](./session-changes-overview.md), which maps what landed. Code was read and prototyped on `proto/harness-core`, stacked on the reactions prototype [#4616](https://github.com/vercel/eve/pull/4616).
+This doc describes where the session core should end up, and which parts of that have to be decided before 1.0. It builds on [`session-event-lifecycle.md`](./session-event-lifecycle.md), which defines the v27 facts, and [`session-changes-overview.md`](./session-changes-overview.md), which maps what landed. Code was read and prototyped on `proto/harness-core`, stacked on the reactions prototype [#4616](https://github.com/vercel/eve/pull/4616). The stack has since taken the waiting vocabulary, response rows, and the lifecycle from the public view ([What landed](#what-landed)); the single scheduler is still the target.
 
 ## Summary
 
 - **The target is one scheduler that advances while it has work and otherwise waits for any input.** It decides from the public view and a small map of private payloads, with no pause kinds and no waiter per kind.
 - **Only the stream needs deciding before 1.0.** The session program, its durable steps, and its private state can change after 1.0, because only idle sessions cross deployments, through a versioned checkpoint with upgrades. What can't change cheaply is what readers depend on: the facts, the public tables and selectors, and hook and channel keys.
-- **The waiting vocabulary is the stream decision, and it's prototyped.** A wait on work isn't a fact. A wait on a person is: `turn.paused` lists the interactions, and the turn's open deliveries settle `awaiting-input`. `turn.resumed` and the turn row's `paused` status are gone. The step's publisher writes these facts as the step ends, from the tables; the step only says whether it stopped for a person.
+- **The waiting vocabulary is the stream decision, and it landed in PR 2 (#4567).** A wait on work isn't a fact. A wait on a person is: `turn.paused` lists the interactions, and the turn's open deliveries settle `awaiting-input`. `turn.resumed` and the turn row's `paused` status are gone. The step's publisher writes these facts as the step ends, from the tables; the step only says whether it stopped for a person.
 - **What 1.0 promises is the vocabulary, not a derivation.** The prototype first tried to make the wait exactly derivable from public facts. The evals showed that would put the scheduler's private distinctions on the stream, so the session decides when it has stopped, and the facts say who it waits on ([Who decides](#who-decides-that-the-session-stopped)).
-- **The prototype is smaller and behaves the same in the flows tested.** Production code is down about 1,150 lines net against #4616, and the human-in-the-loop fixtures pass as they did before ([What's prototyped](#whats-prototyped)).
+- **The prototype was smaller and behaved the same in the flows tested.** Production code was down about 1,150 lines net against #4616, and the human-in-the-loop fixtures passed as before. Most of it is now on the stack ([What landed](#what-landed)).
 
 ## What 1.0 locks
 
 | Surface                                                     | Locked after 1.0?       | Why                                                                                                                                                                                                                                       |
 | ----------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Facts and their meaning**                                 | Yes, the hardest        | Clients fold them, stored streams are read forever, and a replacement session seeds itself from its predecessor's stream (`transcriptReducer`, #4482)                                                                                     |
+| **Facts and their meaning**                                 | Yes, the hardest        | Clients fold them, and stored streams are read forever, including a retired session's, which its replacement names in `session.started.predecessor`                                                                                       |
 | **Public tables and selectors** (`eve/events`)              | Yes                     | Hooks, channels, and clients read them through `ctx.view`                                                                                                                                                                                 |
 | **Hook and channel event keys**                             | Yes                     | Authored code keys on them                                                                                                                                                                                                                |
 | **Inbox commands, the child protocol, the remote protocol** | Additive changes only   | Owners on different deployments talk during skew. The remote protocol is versioned. A child reports only `parked` or `terminal` and its result, and relays travel as interactions, so none of them encodes how a turn waits               |
-| **Idle checkpoint**                                         | No                      | Versioned, with an upgrade per version (`checkpoint-migrations.ts`). The prototype adds one, from version 16 to 17, for its own changes                                                                                                   |
+| **Idle checkpoint**                                         | No                      | Versioned, with an upgrade per version (`checkpoint-migrations.ts`). The stack keeps version 16 and refuses pre-v27 checkpoints, so the deployment that owns an old session finishes it                                                   |
 | **Session program, durable steps, private state**           | No                      | A session moves to another deployment only while idle ([`single-workflow-session-upgrades.md`](./single-workflow-session-upgrades.md)). A mid-turn session finishes on the deployment that owns it, so its program never runs on new code |
 | **Self-hosted Worlds**                                      | Not by the session core | Where a World doesn't replay each run on its own deployment, any eve version bump strands mid-turn sessions, whatever changed (#4479–#4482). A layout change adds nothing to that                                                         |
 
@@ -34,7 +34,7 @@ This corrects an earlier claim in the harness work that changing the durable lay
 
 ### Before and after
 
-| Before (v27)                                                                                    | After (prototype)                                                                          |
+| The first v27 PRs                                                                               | The stack                                                                                  |
 | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `turn.paused {awaiting: [{interactionId} \| {callId} \| {taskId}]}`, from each path that pauses | `turn.paused {awaiting: [{interactionId}]}`, only for a person, from each step's publisher |
 | `turn.resumed {cause}`, from each path that leaves a pause                                      | Gone. The turn's next `model.requested` or `delivery.consumed` shows it going on           |
@@ -56,7 +56,7 @@ A wait on work needs no fact, because no reader stops there: a turn waiting on a
 3. **Work:** running calls that tasks serve.
 4. **Otherwise `undefined`.**
 
-`idle`, `activity`, and the reader's `waiting` flag use it. It answers "what does this turn wait on?" for display. It isn't a promise that the session agrees at every line, or even at every step's end ([Who decides](#who-decides-that-the-session-stopped)).
+`waiting(view, {taskId} | {callId})` answers the same for a task or call: the person its work waits on. `idle`, `activity`, and the reader's `waiting` flag use it. It answers "what does this turn wait on?" for display. It isn't a promise that the session agrees at every line, or even at every step's end ([Who decides](#who-decides-that-the-session-stopped)).
 
 ### Who decides that the session stopped
 
@@ -92,11 +92,11 @@ The first version announced from each line, and the selector had fewer cases. Th
 | `sign-off-plan.cancel`, again                          | A step that only found the old wait announced it again                                                | Announce only what a step changed            |
 | `sign-off-plan.cancel`, again                          | A cancelled stretch's question stays open until its run withdraws it                                  | A question about an ended call holds nothing |
 
-A shadow check in the prototype logs every turn step whose decision disagrees with the selector. In the human-in-the-loop fixtures, the disagreements left are steps that pause with a call only requested, which the session body dispatches in the next durable step.
+A shadow check in the prototype logged every turn step whose decision disagreed with the selector. In the human-in-the-loop fixtures, the disagreements left were steps that pause with a call only requested, which the session body dispatches in the next durable step.
 
 ## The target
 
-Nothing in this section is prototyped beyond the selector and the one publisher that announces waits.
+Nothing in this section is built beyond the selector and the one publisher that announces waits.
 
 ```text
 loop:
@@ -110,41 +110,42 @@ loop:
 
 - **`runnable`** reads the public view and the private payloads: calls to dispatch, deferred approvals, task waits, answers to weigh. It's the scheduler's, so it can change after 1.0.
 - **Durable state:** the history, the public view, the counters, and a small map of private payloads: approval and runtime-call payloads, responder records, sign-in secrets, relay routes, grants, and reaction slots. No private record holds a status.
-- **One commit path:** every step publishes through one publisher, which folds the view and announces waits. The prototype already routes every publication through it.
+- **One commit path:** every step publishes through one publisher, which folds the view and announces waits. The stack already routes every publication through it (`announceWaiting` in `harness/session-machine/waiting.ts`).
 - **What goes:** the turn loop's pause kinds (person, tasks, calls) and their waiters, `DurableStepResult`'s actions, the steps that only publish, and the split between a turn step and the dispatch step that follows it.
 - **What stays separate:** handoff, finalization and the caller's notification, and the mid-generation steering abort, which can't wait for a step boundary.
 - **The machine cuts already on the stack** fit underneath: one executor for every call (#4549) and one record of running work (#4588). None of them changes a fact.
 
 **Batching.** `experimental.workflow.modelCallsPerStep` becomes the bound on one `advance`. It's experimental, so 1.0 doesn't lock it. Durable cost per turn is measured in [`turn-performance.md`](./turn-performance.md); fewer, larger steps should help, but nothing here is measured.
 
-## What's prototyped
+## What landed
 
-`proto/harness-core`, on #4616:
+`proto/harness-core` prototyped six changes on #4616. On the stack:
 
-| Commit                                   | What it deletes or changes                                                                                 |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Rules that park once                     | The stored approved-call list; approved calls run once their batch settles                                 |
-| Response rows, not candidates            | The candidate lifecycle and its coordinator: seven statuses, audit history, and a multipass loop           |
-| Each model response to history at once   | Suspended steps and the withheld transcript. The model isn't called while any call lacks a result          |
-| The lifecycle from the public view alone | The private lifecycle fold; only counters and whether output streamed stay beside the view                 |
-| Idle sessions across the change          | Checkpoint version 17, with the upgrade from 16                                                            |
-| Derived waiting, announced once per step | `turn.resumed`, waits on work as facts, the paused status, `hold`, and the step that published a task wait |
+| Prototype commit                         | On the stack?                                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Rules that park once                     | Yes: no stored approved-call list; approved calls run once their batch settles            |
+| Response rows, not candidates            | Yes, PR 5 (#4602)                                                                         |
+| Each model response to history at once   | No: suspended steps remain                                                                |
+| The lifecycle from the public view alone | Yes, PR 4 (#4591)                                                                         |
+| Idle sessions across the change          | Not needed: the stack keeps checkpoint version 16, and v27 refuses pre-v27 checkpoints    |
+| Derived waiting, announced once per step | Yes, PR 2 (#4567): `turn.resumed`, waits on work as facts, and the paused status are gone |
 
-- **Size:** production code `+2,094 / −3,237` lines against #4616, including the throwaway shadow check; tests `+2,476 / −4,346`, mostly the deleted candidate and coordinator tests; evals `+13 / −20`.
-- **Behavior:** unit suites pass. With the mock model, `agent-tools-hitl` passes 69 of 69, `agent-subagents-hitl` 8 of 8, and `agent-workflow-tools` 33 of 34; the failure, `webhook-deploy`, fails on #4616 too. Evals that asserted a wait on work as `turn.paused`, or `turn.resumed`, now assert the new vocabulary. The full mock matrix, 30 fixtures, matches #4616 fixture by fixture, including the four evals that fail there.
-- **Not done:** the scheduler itself, one executor, one registry, and a measured durable cost.
+One executor for every call (#4549) and one record of running work (#4588) also landed. The
+prototype's shadow check, which logged every turn step whose decision disagreed with the
+selector, didn't. The scheduler itself isn't built, and the durable cost per turn isn't
+measured.
 
 ## After 1.0
 
 Each of these changes only private state or the program, so it can land in a minor, with an idle checkpoint upgrade where it touches state:
 
 - the single scheduler, and deleting the pause kinds and waiters;
-- one executor for every call, and one registry and protocol for running work, under the remote protocol's versioning;
+- one protocol for owner messages and relays, under the remote protocol's versioning;
 - a session log from which state is derived ([Toward a session log](./session-event-lifecycle.md#toward-a-session-log));
 - batching and step sizes.
 
 ## Open questions
 
-1. **Should the selector's agreement be checked?** The shadow check could stay as a dev-only log, so a path that hides its work shows up.
+1. **Should the selector's agreement be checked?** The prototype's shadow check could come back as a dev-only log, so a path that hides its work shows up.
 2. **Forwarded approvals.** One forwarded to a child stays open until the child settles it. The selector treats an answered interaction as not waiting, which covers it, but `activity` has no "waiting on a child" kind.
 3. **Is `turn.paused` the right name** for a fact that now means only "waits on a person"?
