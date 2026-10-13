@@ -60,6 +60,6 @@ test("deprecated read-only config updates an already-defined gh tool and guidanc
   assert.ok(guidance && "content" in guidance);
   assert.match(guidance.content ?? "", /access "read"/u);
   assert.ok(skill);
-  assert.match(skill.description, /publication is unavailable/u);
+  assert.match(skill.description, /separately configured write tool/u);
   assert.doesNotMatch(skill.markdown, /gh pr create --draft/u);
 });

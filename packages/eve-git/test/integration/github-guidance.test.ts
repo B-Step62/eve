@@ -62,7 +62,9 @@ test("read-only config guides reads and prepares proposals without publication",
   assert.match(tool.description, /token is read-only/u);
   assert.match(tool.description, /Declare access "read"/u);
   assert.match(content, /access "read"/u);
-  assert.match(skill.description, /publication is unavailable/u);
+  assert.match(skill.description, /separately configured write tool/u);
   assert.doesNotMatch(skill.markdown, /gh pr create --draft/u);
-  assert.match(skill.markdown, /do not push/u);
+  assert.match(skill.markdown, /Do not push/u);
+  assert.match(content, /`gh` tool cannot publish/u);
+  assert.doesNotMatch(content, /Do not attempt to publish/u);
 });
