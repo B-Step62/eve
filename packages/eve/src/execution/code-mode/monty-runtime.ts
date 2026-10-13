@@ -96,8 +96,11 @@ export class MontyProgramRuntime implements ProgramRuntime {
     const resultsIdentity = JSON.stringify(results);
     const identity = JSON.stringify([input.source, input.toolNames, input.limits]);
     let execution = token ? this.live.get(token) : undefined;
+    const resultIndexes = new Set(results.map((result) => result.index));
     if (
       execution?.identity !== identity ||
+      (execution &&
+        [...execution.pendingIds.values()].some((index) => !resultIndexes.has(index))) ||
       (execution &&
         execution.resultsIdentity !==
           JSON.stringify(
