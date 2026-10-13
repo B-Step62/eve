@@ -44,6 +44,8 @@ A successful tool result contains `status: "completed"`, the returned JSON `outp
 
 ## Replay and unknown outcomes
 
-Completed calls are replayed from their recorded results, not dispatched again. Before dispatch, the driver durably records that the call started. If the worker crashes after a call starts but before its result is recorded, recovery reports an **unknown outcome** and does not repeat the call. The program receives an error explaining that the side effect **may or may not have happened**.
+While the worker stays alive, parked JavaScript programs retain their interpreter and resume without re-executing the prefix. These cached interpreters expire at the program deadline. After a worker restart, the program replays completed calls from their recorded results, not by dispatching them again. Replayed tool names and inputs must match the recorded calls; generating tool inputs from randomness or wall-clock time can cause recovery to fail safely.
+
+Before dispatch, the driver durably records that the call started. If the worker crashes after a call starts but before its result is recorded, recovery reports an **unknown outcome** and does not repeat the call. The program receives an error explaining that the side effect **may or may not have happened**.
 
 Do not automatically retry an unknown write. Inspect the external system or reconcile using a stable operation identifier before deciding whether another write is safe.

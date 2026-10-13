@@ -1,18 +1,11 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { jsonSchema, type ToolSet } from "ai";
 import { toErrorMessage } from "#shared/errors.js";
 import type { JsonValue } from "#shared/json.js";
-import {
-  continueWorkflowSandboxInterrupt,
-  createParkingHostTool,
-  createWorkflowSandboxTool,
-  getWorkflowSandboxPendingInterrupts,
-  unwrapWorkflowSandboxResult,
-  type WorkflowSandboxContinuationSecurity,
-  type WorkflowSandboxInterrupt,
-} from "#shared/workflow-sandbox.js";
+import { createWorkflowSandboxTool } from "#shared/workflow-sandbox.js";
 import type {
   ProgramCall,
+  ProgramCallResult,
   ProgramErrorClass,
   ProgramResume,
   ProgramRuntime,
@@ -21,167 +14,302 @@ import type {
 } from "./runtime.js";
 
 const LOG_BYTES = 16 * 1024;
-const INTERRUPT_KIND = "eve/code-mode/tool-call";
 interface BridgeCall extends ProgramCall {
   readonly logs: readonly string[];
   readonly limitExceeded?: boolean;
 }
 interface State {
-  readonly interrupt: WorkflowSandboxInterrupt;
-  readonly security: WorkflowSandboxContinuationSecurity;
+  readonly version: 2;
+  readonly runId: string;
+  readonly ticket: number;
+  readonly inputKey: string;
+  readonly calls: readonly string[];
+  readonly pending: readonly number[];
   readonly logs: readonly string[];
 }
+interface PendingCall {
+  readonly call: ProgramCall;
+  readonly resolve: (result: Resolution) => void;
+}
+type Resolution = { status: "completed"; output: JsonValue } | { status: "failed"; error: string };
+type FinishedStep = Exclude<ProgramStep, { status: "parked" }>;
+interface LiveExecution {
+  readonly runId: string;
+  readonly inputKey: string;
+  readonly abort: AbortController;
+  readonly pending: Map<number, PendingCall>;
+  readonly calls: string[];
+  readonly listeners: Set<() => void>;
+  readonly timer: ReturnType<typeof setTimeout>;
+  ticket: number;
+  issued: number;
+  logs: readonly string[];
+  frontier?: readonly ProgramCall[];
+  outcome?: FinishedStep;
+}
 
-/** QuickJS interpreter. Host tools only park; they never perform side effects. */
+/** Keep the vendor interpreter alive with unresolved host bridge promises. No tools run here. */
 export class JavaScriptProgramRuntime implements ProgramRuntime {
   readonly language = "js" as const;
+  private readonly executions = new Map<string, LiveExecution>();
 
-  start(input: ProgramStart): Promise<ProgramStep> {
-    return this.run(input);
-  }
-
-  resume(input: ProgramResume): Promise<ProgramStep> {
-    return this.run(input, input);
-  }
-
-  private async run(input: ProgramStart, resume?: ProgramResume): Promise<ProgramStep> {
-    const state = resume?.state as unknown as State | undefined;
-    let logs = state?.logs ?? [];
+  async start(input: ProgramStart): Promise<ProgramStep> {
     if (Date.now() >= input.limits.deadlineAt)
+      return failure("Program deadline exceeded.", "deadline", []);
+    return this.wait(this.launch(input, []));
+  }
+
+  async resume(input: ProgramResume): Promise<ProgramStep> {
+    const state = input.state as unknown as State;
+    const logs = Array.isArray(state?.logs) ? capLogs(state.logs) : [];
+    if (Date.now() >= input.limits.deadlineAt) {
+      if (state?.runId) this.stop(this.executions.get(state.runId));
       return failure("Program deadline exceeded.", "deadline", logs);
-    const security = state?.security ?? {
-      signingKey: randomBytes(32).toString("base64url"),
-      maxAgeMs: 365 * 24 * 60 * 60 * 1000,
+    }
+    if (
+      state?.version !== 2 ||
+      typeof state.runId !== "string" ||
+      !Number.isInteger(state.ticket) ||
+      !Array.isArray(state.calls) ||
+      !state.calls.every((call) => typeof call === "string") ||
+      !Array.isArray(state.pending) ||
+      !state.pending.every((index) => Number.isInteger(index) && index >= 0) ||
+      state.inputKey !== inputKey(input)
+    )
+      return failure("Invalid JavaScript program state.", "runtime", logs);
+    const recorded = new Map(input.results.map((result) => [result.index, result]));
+    if (
+      state.pending.some((index) => !recorded.has(index)) ||
+      state.calls.some((_call, index) => !recorded.has(index))
+    ) {
+      this.stop(this.executions.get(state.runId));
+      return failure("Missing recorded result for a program call.", "runtime", logs);
+    }
+    const existing = this.executions.get(state.runId);
+    if (
+      existing !== undefined &&
+      existing.ticket === state.ticket &&
+      existing.inputKey === state.inputKey
+    ) {
+      const pending = existing.frontier ?? [];
+      const resolutions = pending.map((call) => {
+        const result = recorded.get(call.index);
+        if (result === undefined) throw new Error(`Missing result for program call ${call.index}.`);
+        return { index: call.index, result: resolution(result) };
+      });
+      // Invalidate this checkpoint before resolving any guest promise.
+      existing.ticket++;
+      existing.frontier = undefined;
+      for (const { index, result } of resolutions) {
+        const call = existing.pending.get(index)!;
+        existing.pending.delete(index);
+        call.resolve(result);
+      }
+      return this.wait(existing);
+    }
+    // New process or stale checkpoint: replay interpreter work against recorded results.
+    return this.wait(this.launch(input, input.results, logs, state.calls));
+  }
+
+  /** Release parked interpreters when their owning process or test is shutting down. */
+  close(): void {
+    for (const execution of this.executions.values()) this.stop(execution);
+  }
+
+  private launch(
+    input: ProgramStart,
+    recorded: readonly ProgramCallResult[],
+    logs: readonly string[] = [],
+    expectedCalls: readonly string[] = [],
+  ): LiveExecution {
+    const runId = randomBytes(24).toString("base64url");
+    const abort = new AbortController();
+    const execution: LiveExecution = {
+      runId,
+      inputKey: inputKey(input),
+      abort,
+      pending: new Map(),
+      calls: [],
+      listeners: new Set(),
+      ticket: 0,
+      issued: 0,
+      logs,
+      timer: setTimeout(
+        () => {
+          execution.outcome = failure("Program deadline exceeded.", "deadline", execution.logs);
+          this.stop(execution);
+          notify(execution);
+        },
+        Math.min(2147483647, Math.max(1, input.limits.deadlineAt - Date.now())),
+      ),
     };
-    const options = {
-      bridgeRequestLimit: input.limits.maxTotalCalls + 1,
-      continuationSecurity: security,
-      executionPolicy: {
-        timeoutMs: Math.max(1, input.limits.deadlineAt - Date.now()),
-        memoryLimitBytes: input.limits.memoryBytes,
-        maxBridgeRequests: input.limits.maxTotalCalls + 1,
-        maxInFlightBridgeRequests: input.limits.maxInFlightCalls + 1,
-        maxConsoleOutputBytes: LOG_BYTES,
+    execution.timer.unref();
+    this.executions.set(runId, execution);
+    const results = new Map(recorded.map((result) => [result.index, result]));
+    const allowed = new Set(input.toolNames);
+    const reject = (message: string, errorClass: ProgramErrorClass): Resolution => {
+      execution.outcome = failure(message, errorClass, execution.logs);
+      this.stop(execution);
+      notify(execution);
+      return { status: "failed", error: message };
+    };
+    const tools: ToolSet = {
+      call: {
+        description: "Suspend one allowlisted program tool call.",
+        inputSchema: jsonSchema({ type: "object" }),
+        execute: (raw: unknown) => {
+          const call = raw as BridgeCall;
+          execution.logs = capLogs(call.logs ?? execution.logs);
+          if (!allowed.has(call.tool))
+            return reject(`Unknown program tool: ${call.tool}`, "unknown-tool");
+          if (
+            call.limitExceeded ||
+            call.index !== execution.issued++ ||
+            call.index >= input.limits.maxTotalCalls
+          )
+            return reject("Program call limit or issue-order violation.", "call-limit");
+          const digest = createHash("sha256")
+            .update(JSON.stringify([call.tool, call.input]))
+            .digest("hex");
+          if (expectedCalls[call.index] !== undefined && expectedCalls[call.index] !== digest)
+            return reject("Recorded program call differs during interpreter replay.", "runtime");
+          execution.calls.push(digest);
+          const recordedResult = results.get(call.index);
+          if (recordedResult !== undefined) return resolution(recordedResult);
+          if (execution.pending.size >= input.limits.maxInFlightCalls)
+            return reject("Program call limit exceeded.", "call-limit");
+          return new Promise<Resolution>((resolve) => {
+            execution.pending.set(call.index, {
+              call: { index: call.index, input: call.input, tool: call.tool },
+              resolve,
+            });
+          });
+        },
+      },
+      park: {
+        description: "Announce a side-effect-free interpreter checkpoint.",
+        inputSchema: jsonSchema({ type: "object" }),
+        execute: (raw: unknown) => {
+          execution.logs = capLogs((raw as { logs: string[] }).logs ?? execution.logs);
+          if (execution.pending.size > 0 && execution.outcome === undefined) {
+            execution.frontier = [...execution.pending.values()]
+              .map(({ call }) => call)
+              .sort((a, b) => a.index - b.index);
+            execution.ticket++;
+            notify(execution);
+          }
+          return null;
+        },
       },
     };
-    const tools = buildTools(input);
-    try {
-      let raw: unknown;
-      if (state === undefined) {
-        const tool = await createWorkflowSandboxTool({ ...options, hostTools: tools });
+    void (async () => {
+      try {
+        const tool = await createWorkflowSandboxTool({
+          // At most one checkpoint per issued call, plus one limit-reporting call.
+          bridgeRequestLimit: 2 * (input.limits.maxTotalCalls + 1),
+          continuationSecurity: { signingKey: randomBytes(32).toString("base64url") },
+          hostTools: tools,
+          executionPolicy: {
+            timeoutMs: Math.max(1, input.limits.deadlineAt - Date.now()),
+            memoryLimitBytes: input.limits.memoryBytes,
+            maxBridgeRequests: 2 * (input.limits.maxTotalCalls + 1),
+            maxInFlightBridgeRequests: input.limits.maxInFlightCalls + 2,
+            maxConsoleOutputBytes: LOG_BYTES,
+          },
+        });
         if (tool.execute === undefined) throw new Error("JavaScript sandbox has no executor.");
-        raw = await tool.execute(
+        const output = (await tool.execute(
           { js: wrapSource(input) } as never,
-          { toolCallId: "eve__execute" } as never,
+          { toolCallId: runId, abortSignal: abort.signal } as never,
+        )) as FinishedStep;
+        execution.outcome ??= { ...output, logs: capLogs(output.logs) };
+      } catch (error) {
+        const message = toErrorMessage(error);
+        execution.outcome ??= failure(
+          message,
+          Date.now() >= input.limits.deadlineAt ? "deadline" : classify(message),
+          execution.logs,
         );
-      } else {
-        let current = state.interrupt;
-        raw = current;
-        // Feed only the calls outstanding in this continuation, in issue order.
-        const pending = getWorkflowSandboxPendingInterrupts(current);
-        for (const original of pending) {
-          const call = readCall(original);
-          const result = resume!.results.find((result) => result.index === call.index);
-          if (result === undefined)
-            throw new Error(`Missing result for program call ${call.index}.`);
-          const resolution =
-            result.status === "completed"
-              ? { status: "completed", output: result.output }
-              : {
-                  status: "failed",
-                  error:
-                    result.status === "unknown"
-                      ? `Outcome unknown: the side effect may or may not have happened. ${result.error}`
-                      : result.error,
-                };
-          raw = await continueWorkflowSandboxInterrupt({
-            ...options,
-            interrupt: current,
-            resolution,
-            tools,
-          });
-          const next = await unwrapWorkflowSandboxResult(raw, security);
-          if (next.status === "completed") break;
-          const candidates = getWorkflowSandboxPendingInterrupts(next.interrupt);
-          if (candidates.length === 0)
-            throw new Error("Program continuation contains no pending calls.");
-          current = candidates[0]!;
-        }
+      } finally {
+        this.stop(execution);
+        notify(execution);
       }
-      const outcome = await unwrapWorkflowSandboxResult(raw, security);
-      if (Date.now() >= input.limits.deadlineAt)
-        return failure("Program deadline exceeded.", "deadline", logs);
-      if (outcome.status === "completed") {
-        const result = outcome.output as Exclude<ProgramStep, { status: "parked" }>;
-        return { ...result, logs: capLogs(result.logs) };
-      }
-      const pending = getWorkflowSandboxPendingInterrupts(outcome.interrupt);
-      const calls = pending.map(readCall).sort((a, b) => a.index - b.index);
-      logs = capLogs(calls.at(-1)?.logs ?? logs);
-      const resolvedCalls = resume?.results.length ?? 0;
-      if (calls.some((call, offset) => call.index !== resolvedCalls + offset)) {
-        return failure(
-          "Program call indices must be unique and follow issue order.",
-          "call-limit",
-          logs,
-        );
-      }
-      if (
-        calls.length > input.limits.maxInFlightCalls ||
-        calls.some(
-          (call) => call.limitExceeded === true || call.index >= input.limits.maxTotalCalls,
-        )
-      ) {
-        return failure("Program call limit exceeded.", "call-limit", logs);
-      }
-      return {
-        calls: calls.map(({ index, input, tool }) => ({ index, input, tool })),
-        state: { interrupt: pending[0]!, security, logs } as unknown as JsonValue,
-        status: "parked",
-      };
-    } catch (error) {
-      const message = toErrorMessage(error);
-      return failure(
-        message,
-        Date.now() >= input.limits.deadlineAt ? "deadline" : classify(message),
-        logs,
-      );
-    }
+    })();
+    return execution;
+  }
+
+  private async wait(execution: LiveExecution): Promise<ProgramStep> {
+    while (execution.outcome === undefined && execution.frontier === undefined)
+      await new Promise<void>((resolve) => execution.listeners.add(resolve));
+    if (execution.outcome !== undefined) return execution.outcome;
+    const state: State = {
+      version: 2,
+      runId: execution.runId,
+      ticket: execution.ticket,
+      inputKey: execution.inputKey,
+      calls: [...execution.calls],
+      pending: execution.frontier!.map((call) => call.index),
+      logs: execution.logs,
+    };
+    return { status: "parked", calls: execution.frontier!, state: state as unknown as JsonValue };
+  }
+
+  private stop(execution: LiveExecution | undefined): void {
+    if (execution === undefined) return;
+    clearTimeout(execution.timer);
+    this.executions.delete(execution.runId);
+    execution.outcome ??= failure("Program execution closed.", "runtime", execution.logs);
+    execution.abort.abort();
+    notify(execution);
+    for (const pending of execution.pending.values())
+      pending.resolve({ status: "failed", error: "Program execution closed." });
+    execution.pending.clear();
   }
 }
 
-function readCall(interrupt: WorkflowSandboxInterrupt): BridgeCall {
-  if (interrupt.payload.kind !== INTERRUPT_KIND) throw new Error("Invalid program call interrupt.");
-  return interrupt.input as BridgeCall;
+function inputKey(input: ProgramStart): string {
+  const { deadlineAt, memoryBytes, maxInFlightCalls, maxTotalCalls } = input.limits;
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        input.source,
+        [...input.toolNames].sort(),
+        deadlineAt,
+        memoryBytes,
+        maxInFlightCalls,
+        maxTotalCalls,
+      ]),
+    )
+    .digest("hex");
 }
-
-function buildTools(input: ProgramStart): ToolSet {
-  const allowed = new Set(input.toolNames);
-  return {
-    call: createParkingHostTool({
-      description: "Park one allowlisted program tool call.",
-      inputSchema: jsonSchema({ type: "object" }),
-      interrupt: (raw) => {
-        const call = raw as BridgeCall;
-        if (!allowed.has(call.tool)) throw new Error(`Unknown program tool: ${call.tool}`);
-        if (
-          !Number.isInteger(call.index) ||
-          call.index < 0 ||
-          call.index > input.limits.maxTotalCalls
-        ) {
-          throw new Error("Program call limit exceeded.");
-        }
-        return { kind: INTERRUPT_KIND };
-      },
-    }),
-  };
+function resolution(result: ProgramCallResult): Resolution {
+  return result.status === "completed"
+    ? { status: "completed", output: result.output }
+    : {
+        status: "failed",
+        error:
+          result.status === "unknown"
+            ? `Outcome unknown: the side effect may or may not have happened. ${result.error}`
+            : result.error,
+      };
 }
-
+function notify(execution: LiveExecution): void {
+  for (const resolve of execution.listeners) resolve();
+  execution.listeners.clear();
+}
 function wrapSource(input: ProgramStart): string {
   // All mutable bookkeeping is lexical, outside the model-written function.
   // The bridge receives issue indices from the sandbox, not host completion order.
   return `return await (async (__host) => {
-    let __issued = 0, __inFlight = 0, __logSize = 0;
+    let __issued = 0, __inFlight = 0, __logSize = 0, __checkpointScheduled = false;
+    const __checkpoint = () => {
+      if (__checkpointScheduled) return;
+      __checkpointScheduled = true;
+      Promise.resolve().then(() => {
+        __checkpointScheduled = false;
+        return __host.park({ logs: __logs });
+      }).catch(() => {});
+    };
     const __logs = [];
     const __console = Object.freeze(Object.fromEntries(["log", "info", "warn", "error", "debug"].map(name => [name, (...args) => {
       const text = args.map(value => typeof value === "string" ? value : JSON.stringify(value)).join(" ");
@@ -192,12 +320,17 @@ function wrapSource(input: ProgramStart): string {
     for (const name of ${JSON.stringify(input.toolNames)}) {
       __allowed[name] = async (input = null) => {
         const index = __issued++;
+        __checkpoint();
         if (index >= ${input.limits.maxTotalCalls} || __inFlight >= ${input.limits.maxInFlightCalls}) {
           await __host.call({ index, tool: name, input: null, logs: __logs, limitExceeded: true });
           throw new Error("Program call limit exceeded.");
         }
         __inFlight++;
-        try { return await __host.call({ index, tool: name, input, logs: __logs }); }
+        try {
+          const result = await __host.call({ index, tool: name, input, logs: __logs });
+          if (result.status !== "completed") throw new Error(result.error);
+          return result.output;
+        }
         finally { __inFlight--; }
       };
     }
@@ -230,7 +363,7 @@ function failure(
   error: string,
   errorClass: ProgramErrorClass,
   logs: readonly string[],
-): ProgramStep {
+): FinishedStep {
   return { status: "failed", error, errorClass, logs: capLogs(logs) };
 }
 

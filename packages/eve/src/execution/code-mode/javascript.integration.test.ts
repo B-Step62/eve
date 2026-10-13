@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { JavaScriptProgramRuntime } from "./javascript.js";
 import type { ProgramStart, ProgramStep } from "./runtime.js";
 
 const runtime = new JavaScriptProgramRuntime();
+afterEach(() => runtime.close());
 function input(source: string, overrides: Partial<ProgramStart["limits"]> = {}): ProgramStart {
   return {
     source,
@@ -63,6 +64,43 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
     );
   });
 
+  it("retains guest-local values and console history instead of rerunning the prefix on a cache hit", async () => {
+    const program = input(
+      'const marker = Math.random(); console.log("prefix", marker); await tools.read(marker); return await tools.write(marker);',
+    );
+    const first = parked(await runtime.start(program));
+    const marker = first.calls[0]!.input;
+    const results = [{ index: 0, status: "completed" as const, output: null }];
+    const next = parked(await runtime.resume({ ...program, state: first.state, results }));
+    expect(next.calls).toEqual([{ index: 1, tool: "write", input: marker }]);
+    expect(
+      await runtime.resume({
+        ...program,
+        state: next.state,
+        results: [...results, { index: 1, status: "completed", output: "done" }],
+      }),
+    ).toEqual({ status: "completed", output: "done", logs: [`prefix ${marker}`] });
+  });
+
+  it("parks the full 32-call frontier without checkpoint overhead reducing the call cap", async () => {
+    const program = input(
+      "return await Promise.all(Array.from({ length: 32 }, (_, n) => tools.read({ n })));",
+    );
+    const first = parked(await runtime.start(program));
+    expect(first.calls).toHaveLength(32);
+    expect(
+      await runtime.resume({
+        ...program,
+        state: first.state,
+        results: first.calls.map((call) => ({
+          index: call.index,
+          status: "completed" as const,
+          output: call.index,
+        })),
+      }),
+    ).toMatchObject({ status: "completed", output: Array.from({ length: 32 }, (_, n) => n) });
+  });
+
   it("reports unknown outcomes without asking the host to call again", async () => {
     const program = input('console.log("before"); await tools.write({ value: 1 }); return true;');
     const first = parked(await runtime.start(program));
@@ -78,6 +116,37 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
       logs: ["before"],
       error: expect.stringContaining("side effect may or may not have happened"),
     });
+  });
+
+  it("reconstructs a lost interpreter from recorded results without reissuing completed calls", async () => {
+    const program = input(
+      "const first = await tools.read({ n: 1 }); const second = await tools.write(first); return second;",
+    );
+    const first = parked(await runtime.start(program));
+    runtime.close();
+    const restarted = new JavaScriptProgramRuntime();
+    try {
+      const next = parked(
+        await restarted.resume({
+          ...program,
+          state: JSON.parse(JSON.stringify(first.state)),
+          results: [{ index: 0, status: "completed", output: "recorded" }],
+        }),
+      );
+      expect(next.calls).toEqual([{ index: 1, tool: "write", input: "recorded" }]);
+      expect(
+        await restarted.resume({
+          ...program,
+          state: next.state,
+          results: [
+            { index: 0, status: "completed", output: "recorded" },
+            { index: 1, status: "completed", output: "done" },
+          ],
+        }),
+      ).toMatchObject({ status: "completed", output: "done" });
+    } finally {
+      restarted.close();
+    }
   });
 
   it("enforces total and in-flight call caps", async () => {
@@ -103,7 +172,7 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
 
   it("does not allow raw bridge access to reuse a recorded call index", async () => {
     const program = input(
-      'await __host.call({ index: 0, tool: "read", input: null, logs: [] }); return await __host.call({ index: 0, tool: "read", input: null, logs: [] });',
+      'await tools.read(null); return await __host.call({ index: 0, tool: "read", input: null, logs: [] });',
     );
     const first = parked(await runtime.start(program));
     expect(
