@@ -1,20 +1,19 @@
 import { defineChannel, POST } from "eve/channels";
 
-import { meetingAuth } from "../lib/meeting.js";
-import { botName, parseMeetingEvent, sendChatMessage, verifyRecallWebhook } from "../lib/recall.js";
+import {
+  BOT_NAME,
+  RECALL_AUTHENTICATOR,
+  parseMeetingEvent,
+  sendChatMessage,
+  verifyRecallWebhook,
+} from "../lib/recall.js";
 
 const MAX_WEBHOOK_BYTES = 256 * 1024;
 
-interface RecallChannelState {
-  botId: string | null;
-}
-
-export default defineChannel<RecallChannelState, { state: RecallChannelState }>({
+export default defineChannel({
   // Utterances arrive every few seconds. Steering would keep restarting the
   // model, so let each turn finish and batch whatever arrived meanwhile.
   turnPolicy: "queue",
-  state: { botId: null },
-  context: (state) => ({ state }),
 
   routes: [
     POST("/recall/webhook", async (request, { from, waitUntil }) => {
@@ -31,33 +30,24 @@ export default defineChannel<RecallChannelState, { state: RecallChannelState }>(
         return new Response("unauthorized", { status: 401 });
       }
 
-      let payload: unknown;
-      try {
-        payload = JSON.parse(body);
-      } catch {
-        return new Response("invalid JSON", { status: 400 });
-      }
-
-      const event = parseMeetingEvent(payload);
+      const event = parseMeetingEvent(JSON.parse(body));
       // The bot's own chat messages come back as chat events.
-      if (!event || event.speaker === botName()) return new Response(null, { status: 204 });
+      if (!event || event.speaker === BOT_NAME) return new Response(null, { status: 204 });
 
-      // Speech is labeled with its speaker so a spoken "approve" never matches
-      // an open prompt's option. A chat message goes through as typed, so
-      // replying "1" in chat answers the prompt the bot posted.
-      const message = event.source === "speech" ? `${event.speaker}: ${event.text}` : event.text;
-      const context =
-        event.source === "speech"
-          ? `${event.speaker} said this out loud in the meeting.`
-          : `${event.speaker} wrote this in the meeting chat.`;
-
+      const label = event.source === "chat" ? `${event.speaker} (in chat)` : event.speaker;
       // Recall retries any non-2xx response every second, so acknowledge first.
       waitUntil(
         from(event.botId)
-          .send(message, {
-            auth: meetingAuth(event.botId),
-            context: [context],
-            state: { botId: event.botId },
+          .send(`${label}: ${event.text}`, {
+            // Speaker names come from the meeting platform and prove nothing,
+            // so the whole meeting is one principal. That also lets the queue
+            // turn policy batch a burst of utterances into one turn.
+            auth: {
+              attributes: {},
+              authenticator: RECALL_AUTHENTICATOR,
+              principalId: `recall:bot:${event.botId}`,
+              principalType: "service",
+            },
           })
           .catch((error: unknown) => console.error("Recall delivery failed", error)),
       );
@@ -67,28 +57,15 @@ export default defineChannel<RecallChannelState, { state: RecallChannelState }>(
 
   events: {
     async "message.completed"(event, channel) {
-      if (event.finishReason === "tool-calls" || !event.message || !channel.state.botId) return;
-      await sendChatMessage(channel.state.botId, event.message);
-    },
-
-    // Meeting chat has no buttons, so post the first request with numbered
-    // options; eve answers it with the next chat reply that names one.
-    async "input.requested"(event, channel) {
-      const request = event.requests[0];
-      if (!request || !channel.state.botId) return;
-      const options = (request.options ?? []).map(
-        (option, index) => `${index + 1}. ${option.label}`,
-      );
-      const instruction = options.length > 0 ? "Reply in chat with a number." : "Reply in chat.";
-      await sendChatMessage(
-        channel.state.botId,
-        [request.prompt, ...options, instruction].join("\n"),
-      );
+      const botId = channel.continuation?.token;
+      if (event.finishReason === "tool-calls" || !event.message || !botId) return;
+      await sendChatMessage(botId, event.message);
     },
 
     async "turn.failed"(event, channel) {
-      if (event.terminal || !channel.state.botId) return;
-      await sendChatMessage(channel.state.botId, "Sorry, I hit an error. Please ask again.");
+      const botId = channel.continuation?.token;
+      if (event.terminal || !botId) return;
+      await sendChatMessage(botId, "Sorry, I hit an error. Please ask again.");
     },
   },
 });

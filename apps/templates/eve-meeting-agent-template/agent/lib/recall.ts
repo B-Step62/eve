@@ -8,30 +8,28 @@ export interface MeetingEvent {
   readonly text: string;
 }
 
-export const REALTIME_EVENTS = ["transcript.data", "participant_events.chat_message"] as const;
+export const BOT_NAME = "eve";
+export const RECALL_AUTHENTICATOR = "recall-webhook";
+
+const REALTIME_EVENTS = ["transcript.data", "participant_events.chat_message"];
 
 // Google Meet rejects chat messages over 500 characters, the lowest limit Recall documents.
 const MAX_CHAT_MESSAGE_CHARS = 500;
 const SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
 
-export function botName(): string {
-  return process.env.RECALL_BOT_NAME?.trim() || "eve";
-}
-
 export function createBot(input: { readonly meetingUrl: string; readonly webhookUrl: string }) {
   return recallRequest<{ readonly id: string }>("/bot/", {
-    bot_name: botName(),
+    bot_name: BOT_NAME,
     chat: {
       on_bot_join: {
         send_to: "everyone",
-        message: `Hi, I'm ${botName()}. Say my name or message me here to open or update a Linear issue.`,
+        message: `Hi, I'm ${BOT_NAME}. Say my name or message me here to open or update a Linear issue.`,
       },
     },
     meeting_url: input.meetingUrl,
     recording_config: {
       transcript: {
         provider: { recallai_streaming: { language_code: "en", mode: "prioritize_low_latency" } },
-        diarization: { use_separate_streams_when_available: true },
       },
       realtime_endpoints: [{ type: "webhook", url: input.webhookUrl, events: REALTIME_EVENTS }],
     },
@@ -46,17 +44,10 @@ export async function sendChatMessage(botId: string, message: string): Promise<v
   }
 }
 
-export async function leaveCall(botId: string): Promise<void> {
-  await recallRequest(`/bot/${encodeURIComponent(botId)}/leave_call/`, {});
-}
-
 async function recallRequest<T = unknown>(path: string, body: unknown): Promise<T> {
   const apiKey = process.env.RECALL_API_KEY;
   if (!apiKey) throw new Error("RECALL_API_KEY is not set.");
-  const region = process.env.RECALL_REGION?.trim() || "us-east-1";
-  if (!/^[a-z]{2}(?:-[a-z]+)+-\d$/.test(region)) {
-    throw new Error(`RECALL_REGION "${region}" is not a Recall region such as us-east-1.`);
-  }
+  const region = process.env.RECALL_REGION || "us-east-1";
 
   const response = await fetch(`https://${region}.recall.ai/api/v1${path}`, {
     method: "POST",

@@ -2,9 +2,6 @@
   "name": "eve-meeting-agent-template",
   "version": "0.0.0",
   "type": "module",
-  "imports": {
-    "#*": "./agent/*"
-  },
   "scripts": {
     "build": "eve build",
     "dev": "eve dev",

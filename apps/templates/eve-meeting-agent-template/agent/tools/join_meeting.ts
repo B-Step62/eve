@@ -1,8 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-import { meetingBotId } from "../lib/meeting.js";
-import { createBot } from "../lib/recall.js";
+import { createBot, RECALL_AUTHENTICATOR } from "../lib/recall.js";
 
 export default defineTool({
   description:
@@ -11,7 +10,8 @@ export default defineTool({
     meetingUrl: z.url({ protocol: /^https$/ }).describe("The meeting's join link."),
   }),
   async execute({ meetingUrl }, ctx) {
-    if (meetingBotId(ctx.session.auth)) {
+    // Keep people in one meeting from sending the bot to others.
+    if (ctx.session.auth.initiator?.authenticator === RECALL_AUTHENTICATOR) {
       throw new Error("Join other meetings from outside a meeting.");
     }
     const bot = await createBot({ meetingUrl, webhookUrl: webhookUrl() });
