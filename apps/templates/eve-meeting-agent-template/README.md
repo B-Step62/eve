@@ -5,7 +5,7 @@ An [eve](https://eve.dev) agent that joins Zoom, Google Meet, and Microsoft Team
 ## Architecture
 
 ```text
-join_meeting → Recall bot → transcript + chat webhooks → eve session → Linear MCP → meeting chat
+Recall bot → transcript + chat webhooks → eve session → Linear MCP → meeting chat
 ```
 
 Recall joins the call, transcribes it, and posts each final utterance, chat message, and join to a custom [channel](https://eve.dev/docs/channels/custom). Each bot gets one durable session, so "update that ticket" can refer to an issue opened earlier in the call. The agent hears everything and calls `no_reply` unless someone addresses it. On the first join it loads Linear's tools, teams, and users, so a first request is usually one `linear__save_issue` call.
@@ -13,7 +13,8 @@ Recall joins the call, transcribes it, and posts each final utterance, chat mess
 The main pieces are:
 
 - `agent/channels/recall.ts`: verifies Recall webhooks and posts replies to the meeting chat
-- `agent/tools/join_meeting.ts`: sends a bot to a meeting
+- `agent/lib/recall.ts`: the bot config Recall needs, and webhook parsing
+- `agent/tools/join_meeting.ts`: sends a bot to a meeting on request, for testing
 - `agent/connections/linear.ts`: [Linear's MCP server](https://linear.app/docs/mcp) through an app-scoped [Vercel Connect](https://vercel.com/docs/connect) connector
 - `agent/instructions.md`: when to speak and how to work with Linear
 
@@ -41,10 +42,20 @@ RECALL_WEBHOOK_URL=https://...     # only needed for previews or local developme
 
 ```bash
 vercel deploy --prod
-pnpm exec eve remote connect --url https://<your-project>.vercel.app
 ```
 
-In the terminal UI, ask the agent to `Join https://meet.google.com/abc-defg-hij`, then admit the bot. Recall reaches `/recall/webhook` at the production URL. If Deployment Protection covers production, run `vercel project protection enable --protection-bypass` and redeploy; `join_meeting` adds the bypass secret to the webhook URL.
+Recall posts to `/recall/webhook` at the production URL. If Deployment Protection covers production, run `vercel project protection enable --protection-bypass`, redeploy, and append `?x-vercel-protection-bypass=<secret>` to webhook URLs you configure in Recall.
+
+## Join meetings
+
+Use Recall's [calendar integration](https://docs.recall.ai/docs/calendar-integration) so the bot joins meetings automatically, such as every meeting its calendar is invited to. Configure those bots like `createBot` in `agent/lib/recall.ts`: name the bot `eve`, use `recallai_streaming` transcription, and add a real-time webhook endpoint at `https://<your-project>.vercel.app/recall/webhook/` for `transcript.data`, `participant_events.chat_message`, and `participant_events.join`.
+
+To test without a calendar, open the terminal UI against the deployment and ask the agent to join a meeting, then admit the bot:
+
+```bash
+pnpm exec eve remote connect --url https://<your-project>.vercel.app
+# > Join https://meet.google.com/abc-defg-hij
+```
 
 ## Run locally
 
