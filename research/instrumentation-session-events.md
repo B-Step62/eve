@@ -8,13 +8,12 @@ last_updated: "2026-10-13"
 
 Three pieces of in-flight work change eve's instrumentation:
 
-- **The tracing library (main).** `@eve/tracing` (#4158 plan, #4160 library, #4460 file moves,
-  #4164 integration, #4718 schema-4 names; #4720 is open) owns span layout, capture and durable
+- **The tracing library (main).** `@eve/tracing` owns span layout, capture and durable
   recovery. eve's adapter, `tracing/eve/*`, turns instrumentation events into library operations.
   The provider API, `defineInstrumentation` and the events in `instrumentation/lifecycle.ts`, is
   unchanged on main.
-- **v27 (the stack).** PR 10 (#4695) gives providers the stream's names for what the stream
-  records, with each ending carrying its outcome. PR 2 (#4567) rebuilds the events from committed
+- **v27 (the stack).** gives providers the stream's names for what the stream
+  records, with each ending carrying its outcome. It rebuilds the events from committed
   facts and the tables after them.
 - **Reactions (#4616).** Hooks observe the session through one context:
   `(fact, { view, position, occurrence })`, plus `select` with `run` for derived state.
@@ -57,7 +56,7 @@ its span names don't change.
 ### Proposed: providers observe like hooks (after #4616)
 
 Hooks, channel `events` and instrumentation all key handlers by event type. The proposal gives
-instrumentation the hook context too: fact handlers receive the literal fact, and `select` with
+instrumentation the hook context as well: fact handlers receive the literal fact, and `select` with
 `run` covers derived state. [Examples from the guide](#examples-from-the-guide) shows four of
 the published examples rewritten.
 
@@ -139,9 +138,12 @@ export default defineInstrumentation({
 });
 ```
 
-One handler replaces two, and the `undefined` guard goes. Both times come from the lines that
-introduced and ended the call, so the duration is the same in whichever process the handler
-runs. As before, it includes time spent waiting for an approval.
+In the previous code, the instrumentation provider needed to manually track state on event
+open, and then reach into that state on close to log the final event.
+
+In the new code, the instrumentation provider has access to the session view, which already
+has rich information from the unified session fold, meaning it does not need to track state
+itself.
 
 ### Send a redacted audit record
 
