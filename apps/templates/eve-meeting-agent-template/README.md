@@ -18,7 +18,7 @@ Meeting chat ◀── Recall send_chat_message ◀── message.completed ─�
 - **One meeting is one durable eve session**, addressed by the Recall bot ID, so "update that ticket" can refer to an issue opened earlier in the call.
 - **Recall does the meeting work.** It joins the call, transcribes it, and relays chat messages to `agent/channels/recall.ts` as webhooks. Everything is ordinary HTTP, so the agent runs on Vercel Functions with no long-lived connection.
 - **The agent chooses when to speak.** Every final utterance, chat message, and join reaches the agent. It calls `no_reply` to stay quiet. Anything it says goes to the meeting chat, including a short "On it" line as it starts on a request.
-- **It gets ready before the first ask.** The first join starts the session, and the agent spends that turn loading Linear's tools and teams. A first request can then be one `linear__save_issue` call.
+- **It gets ready before the first ask.** The first join starts the session, and the agent spends that turn loading Linear's tools, teams, and users. A first request can then be one `linear__save_issue` call.
 - **Linear runs as one app credential.** Meetings have no signed-in user, so `agent/connections/linear.ts` connects to [Linear's MCP server](https://linear.app/docs/mcp) with an app-scoped [Vercel Connect](https://vercel.com/docs/connect) connector. Issues it creates show the connector's Linear user as the creator.
 
 ## Set up
