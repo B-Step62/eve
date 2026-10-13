@@ -38,9 +38,9 @@ the areas you're reviewing.
 - **The two depend on each other.** The reactions runner reads the v27 view. Until reactions
   lands, v27 carries an adapter that maps facts back to the v26 event keys today's resolvers
   expect, and reactions deletes it.
-- **About 3,700 fewer production lines than main.** v27 is −620 against main: its contract, fold
+- **About 3,700 fewer production lines than main.** v27 is −634 against main: its contract, fold
   and writer cost less than the old protocol, the readers' own copies and the channels' parallel
-  card model. Reactions is −3,112 on top. Without Rui's work under and inside the stack (+263),
+  card model. Reactions is −3,059 on top. Without Rui's work under and inside the stack (+263),
   our own changes are about −4,000.
 - **What grew did so on purpose.** Entities that used to be implicit now have facts someone
   writes (compaction runs, deliveries, attempts). There's also a dev-time checker, and
@@ -51,18 +51,19 @@ the areas you're reviewing.
 |                                                          | Production lines |
 | -------------------------------------------------------- | ---------------: |
 | Rui's #4566 and #4522, under the stack (`v27/hitl-base`) |             +163 |
-| Prep PRs #4532–#4588                                     |             −269 |
-| v27 stack, PRs 1–10                                      |             −514 |
+| Prep PRs #4532–#4588                                     |             −266 |
+| v27 stack, PRs 1–10                                      |             −531 |
 | … of which Rui's #4604, carried in PR 2                  |             +100 |
-| **v27 against main**                                     |         **−620** |
-| Reactions (#4616)                                        |           −3,112 |
-| **Both against main**                                    |       **−3,732** |
+| **v27 against main**                                     |         **−634** |
+| Reactions (#4616)                                        |           −3,059 |
+| **Both against main**                                    |       **−3,693** |
 
 Production means `packages/*/src` without tests and without generated files (the web scaffold
 template and extension contracts). Everything is measured on the pushed branches: main
-`9559de83b`, the base `v27/hitl-base` (`0606084ae`), the prep tip `e0b5030fe`, PR 10's head
-`7ef3e507e` and #4616's head `ce473e5ff`. Reactions now sits on the stack, so the combined figure
-is exact. The reactions doc's −3,143 and this doc's earlier −3,127 are from before the restack.
+`9559de83b`, the base `v27/hitl-base` (`0606084ae`), the prep tip `61ffbd129`, PR 10's head
+`b4dc0715a` and #4616's head `b01914f26`. Reactions now sits on the stack, so the combined figure
+is exact. The reactions doc's −3,143 and this doc's earlier −3,127 and −3,112 are from before the restack and
+the review fixes.
 
 ![Production lines by area: what v27 and reactions remove, what each writes, and the net each saves](./assets/session-changes-sankey.svg)
 
@@ -70,7 +71,7 @@ The sankey uses net lines per area. The left side (red) is what went away, the m
 step that removed it, and the right side is what that step wrote (blue) and its net saving
 (green). Both panels share one scale. `assets/session-changes-sankey.py` draws it from the
 figures in the tables below. v27 now removes more than it adds:
-514 lines net, with the prep PRs' −269 under it. Reactions removes 3,112 more than it adds.
+531 lines net, with the prep PRs' −266 under it. Reactions removes 3,059 more than it adds.
 
 <details>
 <summary>v27 by area, against the stack's base</summary>
@@ -81,22 +82,22 @@ figures in the tables below. v27 now removes more than it adds:
 | Read model: fold, tables, tree, selectors, reader                                                         |   +1,999 |
 | Writer and session machine: transitions, cascade, publisher, fact helpers (`harness/facts.ts`)            |   +1,169 |
 | Event checker (dev only)                                                                                  |     +331 |
-| Dynamic adapter, deleted by reactions                                                                     |     +211 |
-| Compaction as a run, turn step, tool loop, `MessageContent`, tasks, evals, other                          |     +351 |
+| Dynamic adapter, deleted by reactions                                                                     |     +212 |
+| Compaction as a run, turn step, tool loop, `MessageContent`, tasks, evals, other                          |     +366 |
 | Old v26 protocol: `message.ts`, 38 `create…Event` builders, `session-projection.ts`, `message-version.ts` |   −2,832 |
-| Clients: message, conversation and transcript reducers, tool-part state                                   |   −1,578 |
+| Clients: message, conversation and transcript reducers, tool-part state                                   |   −1,558 |
 | HITL: candidates, coordinator, relays, hitl-proxy                                                         |   −1,099 |
-| Instrumentation's private per-call and per-request maps                                                   |     −339 |
-| Channels: the task-card model, per-channel handlers, sign-in and failure copies                           |     −220 |
-| `turn-tag-state.ts` usage tallies                                                                         |     −197 |
-| Compatibility: checkpoint migrations, legacy remote protocol                                              |     −135 |
-| **Total**                                                                                                 | **−514** |
+| Instrumentation's private maps, per-ending events and the OTel provider's stored terminal                 |     −380 |
+| Channels: the task-card model, per-channel handlers, sign-in and failure copies                           |     −206 |
+| Usage: `turn-tag-state.ts` tallies and a duplicate delta                                                  |     −214 |
+| Compatibility: checkpoint migrations, legacy remote protocol                                              |     −144 |
+| **Total**                                                                                                 | **−531** |
 
-Channels moved to the deleting side since the last count. Shared sign-in, failure notices and text
+Channels are on the deleting side. Shared sign-in, failure notices and text
 limits had cost +291. Then one surface took over the common handlers for five channels (about
 −124), and the task card became the turn's call rows (−224), so the parallel card model is gone.
 
-Per area, file by file: `/tmp/cats.py` over `git diff e0b5030fe 7ef3e507e`. The longer account
+Per area, file by file: `/tmp/cats.py` over `git diff 61ffbd129 b4dc0715a`. The longer account
 in `~/harness-core-loc.md` is from the earlier base `695221a1d` (stack −535 there), before the
 restack onto current main and Round 4.
 
@@ -105,8 +106,8 @@ restack onto current main and Round 4.
 <details>
 <summary>Tests</summary>
 
-Against main, v27 deletes 124 test files and adds 34. In lines, that's +7,715 / −94,821, net
-−87,106. Regex-counted cases drop from about 9,630 to 7,711, about 20% fewer. Most of the deleted
+Against main, v27 deletes 124 test files and adds 38. In lines, that's +7,874 / −94,829, net
+−86,955. Regex-counted cases drop from about 9,850 to 7,890, about 20% fewer. Most of the deleted
 lines are v26-shaped suites removed wholesale (`tool-loop.test.ts`, `slackChannel.test.ts`,
 `terminal-renderer.test.ts`, …). That's lost coverage, not simplification. The deletion was
 deliberate: the suites fought the churn while the model was settling. `~/event-model-test-debt.md`
@@ -121,9 +122,10 @@ Coverage came back in three forms:
 - The mock eval matrix: 14 evals covering approval, budget, relay, cancel, compaction, remote
   approval, sign-in, images, billing and MCP.
 
-At PR 10's head, the unit suite is 776 files, 7,371 passed and 1 skipped. Reactions deletes
-another +2,279 / −6,516 test lines, mostly for the lifecycles and transforms it deletes. That
-brings cases to about 7,590, and its unit suite is 765 files, 7,242 passed.
+At PR 10's head, the unit suite is 799 files, 7,532 passed and 1 skipped; one header test fails
+only because the environment sets `VERCEL_OIDC_TOKEN`. Reactions deletes another +2,338 / −6,557
+test lines, mostly for the lifecycles and transforms it deletes. That brings cases to about 7,770,
+and its unit suite is 787 files, 7,404 passed.
 
 </details>
 
@@ -251,7 +253,7 @@ The special cases are gone because the facts settle them. A task's call settles 
 does, an abandoned attempt's calls close `abandoned`, and an approval is an interaction whose
 `subject` is the call. The same change deletes `message-reducer` with its types and primitives,
 `tool-part-state`, `conversation-reducer`, `transcript-reducer`, `message-action-parts` and
-`tool-call-state`. That's −1,578 lines net in clients.
+`tool-call-state`. That's −1,558 lines net in clients.
 
 <details>
 <summary>The writer closes what an ending leaves open</summary>
@@ -308,7 +310,7 @@ export function cascade(view: SessionView, events: readonly SessionEvent[]): Ses
 
 - `closure.ts` is gone, and `sessionEndedFacts` no longer closes turns.
 - A settled interaction's other answers close through the cascade.
-- About 100 hand-built scopes are gone, because `stamped` derives them.
+- About 120 lines that built scopes by hand are gone, because `stamped` derives them.
 - The dispatcher's synthetic failures are gone.
 - A failed session cancels its open turn and owns the error itself.
 
@@ -438,7 +440,7 @@ On the stack:
   line's fact handlers, with `{ facts, position }`. A channel that renders state from the view
   needs one callback per line, not per fact.
 
-PR 7 is −487 lines, including +45 for control kinds, +17 for `closedAt` and +84 for selectors.
+PR 7 is −476 lines, including +45 for control kinds, +17 for `closedAt` and +84 for selectors.
 
 </details>
 
@@ -468,7 +470,7 @@ round up (`Math.ceil` of UTF-8 bytes / 4), because they reach an integer field o
   `publishInputResolutions` are deleted. Model attempts are facts (`model.started` per attempt,
   `model.retried`), so instrumentation doesn't keep its own record of them.
 - **One vocabulary (PR 10).** Providers used to hear endings under names of their own, one event
-  per ending: `session.completed`/`failed`/`waiting`, `turn.completed`/`cancelled`/`failed`,
+  per ending: `session.completed`/`failed`, `turn.completed`/`cancelled`/`failed`,
   `tool.call.started`/`completed`/`failed` and `input.requested`/`resolved`. Now they hear the
   stream's names, and each ending is one event with the fact's outcome:
 
@@ -514,7 +516,7 @@ export type ChangePointEvent =
   | CompactionCompletedPoint;
 ```
 
-This is about +211 lines in the stack (`change-points.ts` is 133 lines, plus `participants.ts`'
+This is about +212 lines in the stack (`change-points.ts` is 133 lines, plus `participants.ts`'
 v27 changes), and about 40 more in `turn-step.ts`. It exists only so v27 can land before
 reactions.
 
@@ -914,12 +916,12 @@ More pairs, and the behavior changes they come with, are in
 | Per-kind lifecycles: tools, memory, skills, subagents, connections, instructions, model, hooks |     −2,253 |
 | Durable callbacks and schemas, tool rebuilding, tool metadata, `resolve-dynamic-*`             |     −1,266 |
 | Closure transforms: dynamic tools, their AST references, remote agents                         |     −1,045 |
-| Participants and change points, including v27's adapter                                        |       −462 |
+| Participants and change points, including v27's adapter                                        |       −463 |
 | Memory state                                                                                   |       −297 |
-| Other: context keys, memory tools, hook registry, history views, turn step, compaction recall  |       −647 |
-| **Added:** runner, state, intents and eight kinds                                              |     +2,625 |
+| Other: context keys, memory tools, hook registry, history views, turn step, compaction recall  |       −640 |
+| **Added:** runner, state, intents and eight kinds                                              |     +2,672 |
 | **Added:** definitions (`select`, `record`, `render`, commands)                                |       +233 |
-| **Net**                                                                                        | **−3,112** |
+| **Net**                                                                                        | **−3,059** |
 
 - **Eight lifecycles did one job eight times.** Each decided when to run, where to keep its
   result, how a later result replaced an earlier one, and how to recover. One runner does it
@@ -935,7 +937,9 @@ More pairs, and the behavior changes they come with, are in
   occurrence identity added about 340 lines. Recall that keeps its place in the prompt cache
   added about 220 more, and it lives outside the history, ahead of the turn's input. A check
   that held approved calls to the record they were offered with was added and then removed
-  (about −90): an approved call runs its tool as the session holds it.
+  (about −90): an approved call runs its tool as the session holds it. Review fixes added about 50:
+  reactions run one commit at a time, slots of removed reactions are dropped, and skill files
+  follow the manifest's owner.
 
 ## How the two fit
 
@@ -1063,19 +1067,19 @@ gitGraph
 | #4543                                                 | Every run stops the same way                                                                                                                                                                                |        +38 |
 | #4545                                                 | A turn pauses on one record with one waiter                                                                                                                                                                 |         −5 |
 | #4549                                                 | Every local call runs through one executor                                                                                                                                                                  |       −286 |
-| #4588                                                 | A session's running work is one record                                                                                                                                                                      |        +82 |
+| #4588                                                 | A session's running work is one record                                                                                                                                                                      |        +85 |
 | 1 · [#4564](https://github.com/vercel/eve/pull/4564)  | v27 protocol: contract, fold, tree, selectors, checker. Additive                                                                                                                                            |     +4,124 |
-| 2 · [#4567](https://github.com/vercel/eve/pull/4567)  | Sessions, clients, channels, evals and instrumentation write and read v27; old protocol deleted. Also: retention, schema conformance, terminal readers, the blocking-run fix, token estimates, #4604 (+100) |     −1,941 |
+| 2 · [#4567](https://github.com/vercel/eve/pull/4567)  | Sessions, clients, channels, evals and instrumentation write and read v27; old protocol deleted. Also: retention, schema conformance, terminal readers, the blocking-run fix, token estimates, #4604 (+100) |     −1,943 |
 | 3 · [#4574](https://github.com/vercel/eve/pull/4574)  | Docs, upgrade guide and changesets                                                                                                                                                                          |          0 |
 | 4 · [#4591](https://github.com/vercel/eve/pull/4591)  | Lifecycle only in the public view                                                                                                                                                                           |       −116 |
 | 5 · [#4602](https://github.com/vercel/eve/pull/4602)  | HITL on response rows; answers carry their response; public `StepInput` split                                                                                                                               |     −1,061 |
-| 6 · [#4691](https://github.com/vercel/eve/pull/4691)  | `MessageContent` inputs                                                                                                                                                                                     |        +15 |
-| 7 · [#4692](https://github.com/vercel/eve/pull/4692)  | Channels: failure notices, text limits, one sign-in flow, one surface, task cards from rows, control kinds, `closedAt`, call selectors, `committed`                                                         |       −487 |
+| 6 · [#4691](https://github.com/vercel/eve/pull/4691)  | `MessageContent` inputs                                                                                                                                                                                     |        +38 |
+| 7 · [#4692](https://github.com/vercel/eve/pull/4692)  | Channels: failure notices, text limits, one sign-in flow, one surface, task cards from rows, control kinds, `closedAt`, call selectors, `committed`                                                         |       −476 |
 | 8 · [#4693](https://github.com/vercel/eve/pull/4693)  | Writer scopes and cascade, compaction's run facts, the tool loop's named stages                                                                                                                             |       −134 |
-| 9 · [#4694](https://github.com/vercel/eve/pull/4694)  | Legacy readers gone, usage facts, facts built one way, dead code, guard fixes, HITL records retire with rows                                                                                                |       −817 |
-| 10 · [#4695](https://github.com/vercel/eve/pull/4695) | Instrumentation vocabulary, inline file sizes (#4635), extension epochs                                                                                                                                     |        −97 |
-|                                                       | **v27 against main**                                                                                                                                                                                        |   **−620** |
-| [#4616](https://github.com/vercel/eve/pull/4616)      | Reactions, one commit                                                                                                                                                                                       |     −3,112 |
+| 9 · [#4694](https://github.com/vercel/eve/pull/4694)  | Legacy readers gone, usage facts, facts built one way, dead code, guard fixes, HITL records retire with rows                                                                                                |       −825 |
+| 10 · [#4695](https://github.com/vercel/eve/pull/4695) | Instrumentation vocabulary, inline file sizes (#4635), extension epochs                                                                                                                                     |       −138 |
+|                                                       | **v27 against main**                                                                                                                                                                                        |   **−634** |
+| [#4616](https://github.com/vercel/eve/pull/4616)      | Reactions, one commit                                                                                                                                                                                       |     −3,059 |
 
 All 16 PRs form GitHub stack #4696 on `v27/hitl-base`. Rui's #4522 hasn't been rebased onto the
 squashed #4566, so the base cherry-picks its two commits. When Rui's PRs land, #4532 moves to
@@ -1087,7 +1091,8 @@ PRs it belongs to. Controls, `closedAt` and the call selectors are in PR 7 rathe
 2, because the task cards depend on them. The guard fixes are in PR 9, because they edit code
 that PR 9 introduces.
 
-PR 3 carries the v27 changesets. PRs 6–10 don't have their own yet. Extension contracts are
+Each PR carries changesets only for what a user would notice, one change per file; internal PRs
+have none, and PR 3 holds the core v27 notes. Extension contracts are
 regenerated once, at PR 10, so earlier PRs that change APIs can fail the epoch guard on their
 own.
 
@@ -1100,15 +1105,15 @@ own.
   generated files (`setup/scaffold/create/web-template.ts`, extension contracts), from
   `git diff --numstat -M` (`/tmp/buckets.py`).
 - "Main" is `9559de83b`. The base is `v27/hitl-base` (`0606084ae`), the prep tip is
-  `e0b5030fe`, and PR 10's head is `7ef3e507e`. Each PR's figure is its own head against the
+  `61ffbd129`, and PR 10's head is `b4dc0715a`. Each PR's figure is its own head against the
   previous PR's head.
 - Areas follow `~/harness-core-loc.md`'s classification (`/tmp/cats.py`), with `harness/facts.ts`
   counted under the writer.
-- Reactions is `7ef3e507e` → #4616's head `ce473e5ff`, bucketed file by file (`/tmp/rxcats.py`).
+- Reactions is `b4dc0715a` → #4616's head `b01914f26`, bucketed file by file (`/tmp/rxcats.py`).
 - Rui's #4604 (+100) is inside PR 2 and counted there. It's #4604's growth, not ours, and so
   is #4566 + #4522's +163.
-- Outside production code, main → PR 10 is +554 docs, −659 apps, +229 e2e and +224 generated.
-  Reactions adds +21 docs, +291 e2e and +210 generated.
+- Outside production code, main → PR 10 is +530 docs, −659 apps, +229 e2e and +224 generated.
+  Reactions adds +57 docs, +291 e2e and +210 generated.
 - Test cases are regex counts of `it(`/`test(` in `packages/**/*.test.ts(x)`, not runtime
   accounting.
 
