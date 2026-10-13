@@ -6,7 +6,8 @@ import { inlineTool } from "#internal/testing/catalog-fixtures.js";
 import { dynamicToolAnnouncements } from "./dynamic-tools.js";
 
 const KEY = "dynamic-tools";
-const LEAD = "New tools were added to your catalog. Call them with eve__tool({ name, input }).";
+const hint = (...names: string[]) =>
+  `New in your catalog: ${names.join(", ")}. Search an exact name with eve__search for its description and signature.`;
 
 const tool = (name: string, description = `${name} description`) =>
   inlineTool(name, { deferred: true, description });
@@ -23,7 +24,6 @@ function announce(state: CatalogState, announced?: Readonly<Record<string, strin
   return dynamicToolAnnouncements(
     {
       deferred: new Map([...(state.staticDeferred ?? []), ...dynamic].map((t) => [t.name, t])),
-      describe: (definition) => definition.description,
       dynamic: new Set([...dynamic, ...direct].map(({ name }) => name)),
     },
     announced,
@@ -50,7 +50,7 @@ describe("dynamicToolAnnouncements", () => {
     expect(announce({ dynamic: [tool("a")] })[KEY]!.value).toBe('["a"]');
   });
 
-  it("names each dynamic deferred tool added after the baseline, with its description", () => {
+  it("names each dynamic deferred tool added after the baseline, without its description", () => {
     expect(
       appended(
         {},
@@ -58,7 +58,7 @@ describe("dynamicToolAnnouncements", () => {
           dynamic: [tool("tenant__sync", "Sync the tenant."), tool("export_report", "Export it.")],
         },
       ),
-    ).toBe([LEAD, "- export_report: Export it.", "- tenant__sync: Sync the tenant."].join("\n"));
+    ).toBe(hint("export_report", "tenant__sync"));
   });
 
   it("never names static deferred tools or dynamic tools that aren't deferred", () => {
@@ -70,7 +70,7 @@ describe("dynamicToolAnnouncements", () => {
         { staticDeferred: [tool("refund_invoice")] },
         { dynamic: [tool("tenant__sync")], staticDeferred: [tool("refund_invoice")] },
       ),
-    ).toBe(`${LEAD}\n- tenant__sync: tenant__sync description`);
+    ).toBe(hint("tenant__sync"));
   });
 
   it("appends nothing when the set is unchanged", () => {
@@ -80,9 +80,7 @@ describe("dynamicToolAnnouncements", () => {
   });
 
   it("appends only the tool that is new", () => {
-    expect(appended({ dynamic: [tool("a")] }, { dynamic: [tool("a"), tool("b")] })).toBe(
-      `${LEAD}\n- b: b description`,
-    );
+    expect(appended({ dynamic: [tool("a")] }, { dynamic: [tool("a"), tool("b")] })).toBe(hint("b"));
   });
 
   it("appends nothing when a tool is removed or returns", () => {
@@ -96,20 +94,17 @@ describe("dynamicToolAnnouncements", () => {
     expect(announce(both, { [KEY]: recorded })[KEY]!.value).toBe(recorded);
   });
 
-  it("lists 20 tools, then how many more and how to find them", () => {
-    const many = Array.from({ length: 25 }, (_, index) =>
-      tool(`tool_${String(index + 1).padStart(2, "0")}`),
+  it("names 20 tools, then how many more", () => {
+    const names = Array.from(
+      { length: 25 },
+      (_, index) => `tool_${String(index + 1).padStart(2, "0")}`,
     );
+    const many = names.map((name) => tool(name));
 
-    const lines = appended({}, { dynamic: many })!.split("\n");
-
-    expect(lines).toHaveLength(22);
-    expect(lines[1]).toBe("- tool_01: tool_01 description");
-    expect(lines[20]).toBe("- tool_20: tool_20 description");
-    expect(lines[21]).toBe("- and 5 more; find them with eve__search.");
+    expect(appended({}, { dynamic: many })).toBe(hint(...names.slice(0, 20), "and 5 more"));
     // The unlisted ones count as announced, so a later addition names only itself.
     expect(appended({ dynamic: many }, { dynamic: [...many, tool("tool_26")] })).toBe(
-      `${LEAD}\n- tool_26: tool_26 description`,
+      hint("tool_26"),
     );
   });
 
@@ -117,7 +112,7 @@ describe("dynamicToolAnnouncements", () => {
     const current = announce({ dynamic: [tool("a")] }, { [KEY]: "x" })[KEY]!;
 
     expect(current.value).toBe('["a"]');
-    expect(current.render("x")).toBe(`${LEAD}\n- a: a description`);
+    expect(current.render("x")).toBe(hint("a"));
     // A reordered list still knows every name, so nothing is new.
     expect(
       announce({ dynamic: [tool("a"), tool("b")] }, { [KEY]: '["b","a"]' })[KEY]!.render(

@@ -807,15 +807,17 @@ One announcement under the key `catalog` replaces the connection listing.
   namespace, or without one, appends nothing to the listing.
 - **Dynamic additions.** A second announcement, under the key
   `dynamic-tools`, names the deferred tools and agents a dynamic resolver
-  adds mid-session, as `- name: description` lines under one lead line
-  saying to call them with `eve__tool`. The session's first step records a
+  adds mid-session, by name only, in one line that points to an exact-name
+  `eve__search` for the description and signature. Descriptions are left
+  out because their length is up to the author (a subagent's can run to
+  hundreds of tokens), and the model can't call an entry without searching
+  for its signature anyway. The session's first step records a
   silent baseline (an announcement's `render` may return `undefined` to
   record its value without a message), so entries present from the start
   stay unnamed like static deferred entries; compaction makes the next step
   a silent baseline again. The recorded value is the sorted set of every
   name seen so far, so removing an entry appends nothing and a returning
-  entry isn't repeated. It names at most 20 per message, then a count and a
-  pointer to `eve__search`.
+  entry isn't repeated. It names at most 20 per message, then a count.
 - **After compaction,** the next step appends a fresh listing baseline.
 - **Empty catalog,** no message.
 

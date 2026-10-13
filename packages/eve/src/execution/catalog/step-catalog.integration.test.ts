@@ -159,7 +159,7 @@ function catalogMessages(request: LanguageModelV4CallOptions): string[] {
     .filter((entry) => entry.includes(LISTING_MARKER) || entry.startsWith("The catalog changed"));
 }
 
-const DYNAMIC_TOOLS_MARKER = "New tools were added to your catalog.";
+const DYNAMIC_TOOLS_MARKER = "New in your catalog: ";
 
 /** The hints naming deferred entries a dynamic resolver added, in order. */
 function dynamicToolMessages(request: LanguageModelV4CallOptions): string[] {
@@ -557,7 +557,10 @@ describe("step catalog in the harness (real AI SDK)", () => {
     });
     expect(approvedStep.prompt.at(-1)).toEqual({
       content: [
-        { text: expect.stringContaining("- tenant__sync: Sync the tenant."), type: "text" },
+        {
+          text: "New in your catalog: tenant__sync. Search an exact name with eve__search for its description and signature.",
+          type: "text",
+        },
       ],
       role: "user",
     });
@@ -584,15 +587,15 @@ describe("step catalog in the harness (real AI SDK)", () => {
     );
     expect(announcedAt).toEqual([approvalStep, connectionStep, changedStep]);
 
-    // Each dynamic deferred entry is named once, with its description, when it
-    // first appears; static deferred entries never are.
+    // Each dynamic deferred entry is named once, without its description, when
+    // it first appears; static deferred entries never are.
     const hintsFor = (index: number) => dynamicToolMessages(requests[index]!);
     const hintedAt = requests.flatMap((_request, index) =>
       index > 0 && hintsFor(index).length > hintsFor(index - 1).length ? [index] : [],
     );
     expect(hintedAt).toEqual([approvalStep, changedStep]);
-    expect(hintsFor(changedStep).at(-1)).toMatch(
-      /^New tools were added to your catalog\. Call them with eve__tool\(\{ name, input \}\)\.\n- plan_advisor: Answer questions about the tenant's plan\. [^\n]*$/u,
+    expect(hintsFor(changedStep).at(-1)).toBe(
+      "New in your catalog: plan_advisor. Search an exact name with eve__search for its description and signature.",
     );
     for (const hint of hintsFor(compactionStep - 1)) expect(hint).not.toContain("refund_invoice");
 
