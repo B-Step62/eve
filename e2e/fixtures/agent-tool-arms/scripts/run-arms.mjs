@@ -14,7 +14,9 @@ const models = (
 const arms = (process.env.EVE_ARMS_MODES ?? "direct,deferred,subagents").split(",");
 const TASKS = 10;
 const sizes = (process.env.EVE_ARMS_SIZES ?? "moderate,large").split(",");
-for (let repetition = 1; repetition <= repetitions; repetition++) {
+// `--summary` rebuilds summary.md from the existing rows without running evals.
+const summaryOnly = process.argv.includes("--summary");
+for (let repetition = 1; !summaryOnly && repetition <= repetitions; repetition++) {
   for (const model of models)
     for (const size of sizes)
       for (const arm of arms) {
