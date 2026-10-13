@@ -139,12 +139,21 @@ describe("session create with reserved ids over HTTP", () => {
       // Resolves when the queued start records the run (`run_started` carries
       // the queued input and creates the missing run).
       const { promise: recorded, resolve: markRecorded } = Promise.withResolvers<void>();
-      world.events.create = (async (runId, event, params) => {
+      world.events.create = (async (
+        runId: string,
+        event: { eventType: string },
+        params?: unknown,
+      ) => {
         if (event.eventType === "run_created" && throttled === 0) {
           throttled += 1;
           throw new ThrottleError("run_created throttled");
         }
-        const result = await originalCreate.call(world.events, runId, event, params);
+        const result = await originalCreate.call(
+          world.events,
+          runId,
+          event as never,
+          params as never,
+        );
         if (runId === sessionId && event.eventType === "run_started") markRecorded();
         return result;
       }) as typeof originalCreate;

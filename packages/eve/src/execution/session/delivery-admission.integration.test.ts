@@ -1,4 +1,4 @@
-import type { MessageStreamEvent } from "#channel/types.js";
+import type { MessageStreamEvent } from "#protocol/message.js";
 import { describe, expect, it } from "vitest";
 import { start } from "#internal/workflow/runtime.js";
 import { captureTurnEvents } from "#internal/testing/events.js";

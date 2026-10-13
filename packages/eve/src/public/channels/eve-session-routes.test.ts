@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  SessionDeliveryConflictError,
+  SessionNotRecordedError,
+} from "#execution/runtime-errors.js";
 import { REMOTE_AGENT_PROTOCOL_VERSION } from "#protocol/remote-agent-protocol.js";
 
 import type { RouteHandlerArgs } from "#channel/routes.js";
@@ -545,37 +549,48 @@ describe("eve ID-addressed session routes", () => {
 });
 
 describe("reserved session create responses", () => {
-  it.each([false, true])("returns reserved ids and status (existing %s)", async (existing) => {
-    const sessionId = "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    const createSession = vi
-      .fn()
-      .mockResolvedValue({
-        events: new ReadableStream(),
-        sessionId,
-        deliveryId: "dlv_original",
-        existing,
-      });
-    const args = attachRouteSessionCreator(createArgs(), createSession);
-    const response = await route("POST", "/eve/v1/session")(
+  function createReserved(createSession: Parameters<typeof attachRouteSessionCreator>[1]) {
+    return route("POST", "/eve/v1/session")(
       new Request("https://eve.test/eve/v1/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: "hello", sessionId, deliveryId: "dlv_request" }),
+        body: JSON.stringify({
+          message: "hello",
+          sessionId: "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          deliveryId: "dlv_request",
+        }),
       }),
-      args,
+      attachRouteSessionCreator(createArgs(), createSession),
     );
-    expect(response.status).toBe(existing ? 200 : 202);
+  }
+
+  it("returns the reserved ids", async () => {
+    const sessionId = "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const createSession = vi
+      .fn()
+      .mockResolvedValue({ events: new ReadableStream(), sessionId, deliveryId: "dlv_request" });
+    const response = await createReserved(createSession);
+    expect(response.status).toBe(202);
     expect(await response.json()).toEqual({
       ok: true,
       sessionId,
       status: "accepted",
-      deliveryId: "dlv_original",
-      ...(existing ? { existing: true } : {}),
+      deliveryId: "dlv_request",
     });
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId, deliveryId: "dlv_request" }),
     );
   });
+
+  it.each([
+    [new SessionDeliveryConflictError("wrun_A"), 409, "session_exists"],
+    [new SessionNotRecordedError("wrun_A"), 503, "session_not_recorded"],
+  ] as const)("does not acknowledge an unaccepted create (%s)", async (error, status, code) => {
+    const response = await createReserved(vi.fn().mockRejectedValue(error));
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ ok: false, code });
+  });
+
   it("passes followup delivery identity to the session", async () => {
     const session = createFixedSession();
     const response = await route("POST", "/eve/v1/session/:sessionId")(

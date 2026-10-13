@@ -70,6 +70,7 @@ export class SessionInputQueue {
     for (const id of ids) this.admittedDeliveryIds.add(id);
   }
 
+  /** True when the delivery carries a payload this session has not admitted yet. */
   hasUnadmitted(delivery: DeliverHookPayload): boolean {
     return delivery.payloads.some((_, index) => {
       const id = deliveryMetadataAt(delivery, index)?.deliveryId;
