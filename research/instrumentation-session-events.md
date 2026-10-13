@@ -58,7 +58,7 @@ Step attempt, model call, memory and channel delivery events keep their names. `
 `idempotencyKey` and a payload type per event stay. OpenTelemetry trace schema 4 and its span
 names don't change.
 
-### Proposed: endings that stand alone
+### Proposal
 
 Today an ending carries only what changed: `call.settled` has the outcome, output, error and
 usage, but not the tool's name, kind or start time. A provider that needs them stores them in
@@ -133,49 +133,6 @@ In the previous code, the provider tracks state when the call starts and reaches
 when the call ends. In the new code, the ending already carries what the start knew, read from
 the session's rows, so the provider tracks nothing itself. `startedAtMs` is when the call was
 requested, so the duration still includes time spent waiting for an approval.
-
-### Time an approval
-
-The guide has no example for this one. It's the same pattern, and a common thing to measure.
-
-Before:
-
-```ts title="agent/instrumentation/approvals.ts"
-export default defineInstrumentation({
-  events: {
-    "interaction.opened": (event, ctx) => {
-      if (event.kind !== "approval") return;
-      ctx.state.set({ tool: event.call?.name, openedAt: Date.now() });
-    },
-    "interaction.settled": (event, ctx) => {
-      const opened = ctx.state.get() as { tool?: string; openedAt: number } | undefined;
-      if (opened === undefined) return;
-      metrics.histogram("eve.approval_ms", Date.now() - opened.openedAt, {
-        tool: opened.tool,
-        outcome: event.outcome,
-      });
-    },
-  },
-});
-```
-
-After:
-
-```ts title="agent/instrumentation/approvals.ts"
-export default defineInstrumentation({
-  events: {
-    "interaction.settled": (event) => {
-      if (event.kind !== "approval") return;
-      metrics.histogram("eve.approval_ms", Date.now() - event.startedAtMs, {
-        tool: event.call?.name,
-        outcome: event.outcome,
-      });
-    },
-  },
-});
-```
-
-`metrics` stands for any metrics client.
 
 ### Unchanged examples
 
