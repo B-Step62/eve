@@ -194,6 +194,7 @@ flowchart TB
     FO --> N5["evals: run facts from rows"]
     FO --> N6["channels: surface.ts, task cards from call rows"]
   end
+  main ~~~ v27
 ```
 
 ### Framework examples
@@ -678,6 +679,7 @@ flowchart TB
     SL --> K["kinds/: tool, skill, model, instructions, connection, subagent, memory, hook"]
     K --> OUT["model request: tools, model, instructions; commands: cancel, compact"]
   end
+  main ~~~ rx
 ```
 
 ### Framework examples
