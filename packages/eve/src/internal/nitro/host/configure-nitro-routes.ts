@@ -256,9 +256,22 @@ function registerApplicationRoutes(
   nitro: Nitro,
   artifactsConfig: NitroArtifactsConfig,
   registry: ApplicationRouteRegistry,
+  agentName: string,
 ): void {
   for (const route of registry.routes) {
     switch (route.kind) {
+      case "deployment-promotion": {
+        addHostVirtualHandler(nitro, {
+          args: JSON.stringify({ agentName }),
+          handlerExport: "handleDeploymentPromotionRequest",
+          method: route.method,
+          modulePath: resolvePackageSourceFilePath(
+            "src/internal/nitro/routes/deployment-promotion.ts",
+          ),
+          route: route.path,
+        });
+        break;
+      }
       case "channel":
       case "channel-preflight": {
         registerChannelVirtualHandlers(nitro, {
@@ -370,7 +383,12 @@ export async function configureDevelopmentNitroRoutes(
     configuredWorld: preparedHost.compileResult.manifest.config.experimental?.workflow?.world,
   });
   const routeRegistry = createApplicationRouteRegistry(preparedHost, { development: true });
-  registerApplicationRoutes(nitro, artifactsConfig, routeRegistry);
+  registerApplicationRoutes(
+    nitro,
+    artifactsConfig,
+    routeRegistry,
+    preparedHost.compileResult.manifest.config.name,
+  );
 
   const workflowBundlePath = join(workflowBuildDirectory, "workflows.mjs");
   const directHandlers: WorkflowDirectHandlerEntry[] = [];
@@ -420,7 +438,12 @@ export async function configureProductionNitroRoutes(
 
   const routeRegistry = createApplicationRouteRegistry(preparedHost);
   const artifactsConfig = createProductionNitroArtifactsConfig(preparedHost.appRoot);
-  registerApplicationRoutes(nitro, artifactsConfig, routeRegistry);
+  registerApplicationRoutes(
+    nitro,
+    artifactsConfig,
+    routeRegistry,
+    preparedHost.compileResult.manifest.config.name,
+  );
   if (
     isVercelBuildEnvironment() &&
     hasVercelScheduleCollections(preparedHost.compileResult.manifest)

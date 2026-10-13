@@ -25,6 +25,12 @@ export interface InitialWorkflowEntryInput {
 /** Why a previous owner started a successor, and what the successor does first. */
 export type SessionHandoffStart =
   | {
+      readonly reason: "deployment-promotion";
+      readonly delivery?: undefined;
+      /** Promotion alone must not extend an unused session's lifetime. */
+      readonly sessionTimeoutDeadline?: Date;
+    }
+  | {
       /** The one delivery that triggered a deployment handoff; processed before any later arrival. */
       readonly delivery: DeliverHookPayload;
       readonly reason?: undefined;

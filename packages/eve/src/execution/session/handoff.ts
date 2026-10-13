@@ -17,6 +17,7 @@ import {
 } from "#execution/session/handoff-steps.js";
 import type { AgentWorkflowRetentionDefinition } from "#shared/agent-definition.js";
 import { isObject } from "#shared/guards.js";
+import { isPromotedDeploymentCurrentStep } from "#execution/deployment-promotion-steps.js";
 
 /**
  * Cross-deployment checkpoint contract. The successor may run a different eve
@@ -76,6 +77,7 @@ type SessionTransferOutcome =
   | { readonly kind: "retained"; readonly reason: SessionRetainedReason };
 
 type SessionRetainedReason =
+  | "superseded-promotion"
   | "same-deployment"
   | "missing-deployment"
   | "not-idle"
@@ -161,6 +163,24 @@ export class SessionHandoff {
     if (this.incompatibleTargetDeploymentIds.has(deploymentId))
       return { kind: "retained", reason: "known-incompatible" };
     return await this.transfer(state, deploymentId, { ...compaction, reason: "compaction" });
+  }
+
+  /** Moves an idle owner before a message arrives, using the existing ownership protocol. */
+  async tryPromotionTransfer(
+    state: SessionTransferState,
+    targetDeploymentId: string,
+    options: { readonly sessionTimeoutDeadline?: Date },
+  ): Promise<SessionTransferOutcome> {
+    if (targetDeploymentId === this.input.deploymentId)
+      return { kind: "retained", reason: "same-deployment" };
+    if (this.incompatibleTargetDeploymentIds.has(targetDeploymentId))
+      return { kind: "retained", reason: "known-incompatible" };
+    if (!(await isPromotedDeploymentCurrentStep({ targetDeploymentId })))
+      return { kind: "retained", reason: "superseded-promotion" };
+    return await this.transfer(state, targetDeploymentId, {
+      ...options,
+      reason: "deployment-promotion",
+    });
   }
 
   private async transfer(

@@ -121,6 +121,28 @@ Deploy the linked project to production from its root:
 eve deploy
 ```
 
+For a single-agent project, `eve deploy` registers one project-scoped
+`deployment.promoted` webhook using the existing Vercel CLI login. Repeated
+deploys reuse it. Its signing configuration is stored in the encrypted production
+variable `EVE_DEPLOYMENT_WEBHOOK_CONFIG`; preserve that variable when changing
+project environment settings. Protected projects use a dedicated automation
+bypass for this signed endpoint.
+
+After promotion, eve notifies sessions active in the previous 30 minutes. An idle
+owner transfers through the existing handoff protocol before its next message;
+an active turn finishes first. Prewarmed sessions qualify before their first
+message. The public session ID, response stream, conversation history, and
+expiry deadline remain stable. Message-triggered handoff still handles races,
+older runs without promotion support, and sessions outside the activity window.
+The promoted production alias is checked again before transfer, including after
+rollbacks; a newer ready build alone does not trigger a move.
+
+The feature begins with sessions created on a deployment containing this
+version. The first deployment of a new project creates its production alias;
+`eve deploy` then configures the webhook and deploys again to load its signing
+configuration. Git-triggered deployments reuse the webhook after this setup.
+Multi-agent workspace fan-out is not configured by this promotion endpoint yet.
+
 `eve deploy` installs dependencies, runs `vercel deploy --prod --logs` to show build logs, and pulls the project environment after deployment. You can also push to a Git-connected Vercel project. Hosted Vercel builds set `VERCEL`, so `eve build` writes the deployment bundle under `.vercel/output`.
 
 When `eve deploy` creates a new Vercel project, it configures trace sampling so traces appear in Agent Runs automatically. See [Agent Runs](../../observability/agent-runs) for details. Pass `--no-trace-sampling` to skip this setting.

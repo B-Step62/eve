@@ -53,6 +53,17 @@ export type SessionInputSelection =
 export class SessionInputQueue {
   private readonly entries: QueuedSessionInput[] = [];
   private nextSequence = 0;
+  private promotionTarget: string | undefined;
+
+  requestDeploymentHandoff(deploymentId: string): void {
+    this.promotionTarget = deploymentId;
+  }
+
+  takeDeploymentHandoff(): string | undefined {
+    const target = this.promotionTarget;
+    this.promotionTarget = undefined;
+    return target;
+  }
 
   get pendingCount(): number {
     return this.entries.length;

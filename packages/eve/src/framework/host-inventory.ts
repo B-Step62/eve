@@ -1,5 +1,6 @@
 import {
   EVE_DEV_DISPATCH_SCHEDULE_ROUTE_PATTERN,
+  EVE_DEPLOYMENT_PROMOTION_ROUTE_PATH,
   EVE_DEV_RUNTIME_ARTIFACTS_REBUILD_ROUTE_PATH,
   EVE_DEV_RUNTIME_ARTIFACTS_RESUME_ROUTE_PATH,
   EVE_DEV_RUNTIME_ARTIFACTS_ROUTE_PATH,
@@ -15,13 +16,14 @@ import {
 type HostHttpMethod = "ALL" | "GET" | "POST";
 
 interface HostHttpRegistration {
-  readonly capability: "workflow" | "development" | "schedule";
+  readonly capability: "workflow" | "development" | "schedule" | "deployment";
   readonly method: HostHttpMethod;
   readonly path: string;
   readonly reservationOnly?: boolean;
 }
 
 export const HOST_HTTP_INVENTORY: readonly HostHttpRegistration[] = Object.freeze([
+  { capability: "deployment", method: "ALL", path: EVE_DEPLOYMENT_PROMOTION_ROUTE_PATH },
   { capability: "workflow", method: "ALL", path: EVE_WORKFLOW_FLOW_ROUTE_PATH },
   { capability: "development", method: "GET", path: EVE_DEV_RUNTIME_ARTIFACTS_ROUTE_PATH },
   {

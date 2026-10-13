@@ -30,6 +30,10 @@ export async function admitSessionInboxPayload(
   },
 ): Promise<SessionAdmission> {
   if (value.kind === "session-failure") throw new Error(value.error);
+  if (value.kind === "deployment-promotion") {
+    input.queue.requestDeploymentHandoff(value.targetDeploymentId);
+    return { kind: "consumed" };
+  }
   if (value.kind === "runtime-action-result")
     return { kind: "runtime-action-result", payload: value };
   if (isWorkflowMessage(value)) return { kind: "workflow", message: value };

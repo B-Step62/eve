@@ -227,17 +227,46 @@ async function runSessionLoop(
     sessionId: boot.sessionId,
   });
   const sessionTimeout = boot.sessionTimeoutControl;
+  let pendingPromotion: string | undefined;
+
+  const tryPromotionHandoff = async (): Promise<SessionLoopOutcome | undefined> => {
+    if (
+      pendingPromotion === undefined ||
+      progress.caller !== undefined ||
+      workingTasks(sessionTaskTable(cursor)).length > 0 ||
+      queue.pendingCount > 0 ||
+      inbox.hasPending()
+    )
+      return undefined;
+    const transfer = await handoff.tryPromotionTransfer(transferState(), pendingPromotion, {
+      sessionTimeoutDeadline: await sessionTimeout?.getDeadline(),
+    });
+    if (transfer.kind === "transferred") return transfer;
+    if (transfer.reason !== "not-idle" && transfer.reason !== "accepted-during-release")
+      pendingPromotion = undefined;
+    return undefined;
+  };
 
   const nextParkedActivity = async (): Promise<
-    Exclude<NextTurnInstruction, { kind: "workflow" | "cancel-working-tasks" }>
+    | Exclude<
+        NextTurnInstruction,
+        { kind: "workflow" | "cancel-working-tasks" | "deployment-promotion" }
+      >
+    | SessionLoopOutcome
   > => {
     while (true) {
+      const transferred = await tryPromotionHandoff();
+      if (transferred !== undefined) return transferred;
       const next = await nextTurnDelivery({
         cursor,
         hasWorkingTasks: () => workingTasks(sessionTaskTable(cursor)).length > 0,
         inbox,
         queue,
       });
+      if (next.kind === "deployment-promotion") {
+        pendingPromotion = next.targetDeploymentId;
+        continue;
+      }
       if (next.kind === "workflow") {
         await execution.handleWorkflowMessage(next.message);
         continue;
@@ -309,6 +338,9 @@ async function runSessionLoop(
     while (true) {
       const next = await nextParkedActivity();
       switch (next.kind) {
+        case "transferred":
+        case "terminal":
+          return next;
         case "expired":
         case "reset":
         case "closed":
@@ -380,6 +412,9 @@ async function runSessionLoop(
       const next = await nextParkedActivity();
 
       switch (next.kind) {
+        case "transferred":
+        case "terminal":
+          return next;
         case "expired":
         case "reset":
         case "closed":

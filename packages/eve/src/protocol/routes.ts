@@ -4,6 +4,9 @@
  */
 export const EVE_ROUTE_PREFIX = "/eve/v1";
 
+/** Signed project-scoped Vercel promotion events, independent of channel authentication. */
+export const EVE_DEPLOYMENT_PROMOTION_ROUTE_PATH = `${EVE_ROUTE_PREFIX}/deployment/promoted`;
+
 /** Reservation pattern for the production cron bridge's unguessable token. */
 export const EVE_PRODUCTION_CRON_ROUTE_PATTERN = `${EVE_ROUTE_PREFIX}/cron/:token`;
 

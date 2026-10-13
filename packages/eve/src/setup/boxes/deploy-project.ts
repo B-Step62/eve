@@ -6,6 +6,7 @@ import {
   runPackageManagerInstall,
 } from "#setup/primitives/pm/run.js";
 import { runVercel } from "#setup/primitives/run-vercel.js";
+import { ensureDeploymentWebhook } from "#setup/deployment-webhook.js";
 
 import {
   detectDeployment,
@@ -25,6 +26,7 @@ const VERCEL_DEPLOY_ENV: Readonly<Record<string, string>> = {
 
 /** Injected for tests; defaults to the real subprocess primitives. */
 export interface DeployProjectDeps {
+  ensureDeploymentWebhook: typeof ensureDeploymentWebhook;
   runVercel: typeof runVercel;
   detectPackageManager: typeof detectPackageManager;
   runPackageManagerInstall: typeof runPackageManagerInstall;
@@ -93,6 +95,7 @@ export function deployProject(
 ): SetupBox<SetupState, DeployProjectInput, DeployProjectPayload> {
   const deps = options.deps ?? {
     runVercel,
+    ensureDeploymentWebhook,
     detectPackageManager,
     runPackageManagerInstall,
     detectDeployment,
@@ -181,6 +184,9 @@ export function deployProject(
         "--logs",
         ...(input.headless ? ["--non-interactive"] : []),
       ];
+      const webhook = await withPhase(log, "Configuring the project promotion webhook...", () =>
+        deps.ensureDeploymentWebhook(projectPath, { signal }),
+      );
       const success = await withPhase(log, "Deploying the agent to Vercel production...", () =>
         deps.runVercel(deployArgs, {
           cwd: projectPath,
@@ -201,6 +207,26 @@ export function deployProject(
         throw new Error(
           "Deployment failed. Check the build logs above, or run `vercel inspect <deployment-url> --logs` from this project.",
         );
+      }
+
+      if (webhook === "awaiting-first-deployment") {
+        // The first deployment supplies the verified alias. The second picks up its signing config.
+        if ((await deps.ensureDeploymentWebhook(projectPath, { signal })) !== "configured")
+          throw new Error(
+            "Initial deployment succeeded, but its production alias is not available. Retry `eve deploy` once promotion completes.",
+          );
+        if (
+          !(await deps.runVercel(deployArgs, {
+            cwd: projectPath,
+            extraEnv: VERCEL_DEPLOY_ENV,
+            nonInteractive: input.headless,
+            onOutput,
+            signal,
+          }))
+        )
+          throw new Error(
+            "Initial deployment succeeded, but deploying the promotion webhook configuration failed. Retry `eve deploy`.",
+          );
       }
 
       const pulledEnvironment = await withPhase(

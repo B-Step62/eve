@@ -1,4 +1,5 @@
 import { validateToolStubTargets } from "#tool-stubs/validate-targets.js";
+import { EVE_PROACTIVE_HANDOFF_ATTRIBUTE } from "#execution/deployment-promotion-protocol.js";
 import { context, trace } from "#compiled/@opentelemetry/api/index.js";
 import {
   EntityConflictError,
@@ -194,6 +195,7 @@ export function createWorkflowRuntime(config: {
           });
     const attributes = {
       ...sessionAttributes,
+      [EVE_PROACTIVE_HANDOFF_ATTRIBUTE]: process.env.WORKFLOW_QUEUE_NAMESPACE ?? "eve",
       ...(input.externalInvocation === undefined
         ? {}
         : buildInvocationAttributes(input.externalInvocation)),
@@ -322,14 +324,13 @@ export async function startSessionOwnerStep(input: SessionOwnerStartInput): Prom
   // queue guard runs before it boots. Single-build Worlds share this version;
   // deployment-affine Worlds bypass the guard and the successor records its
   // own version at boot.
-  await startWorkflowOnDeployment(
-    workflowEntryReference,
-    [workflowInput],
-    targetDeploymentId,
-    checkpoint.retention === undefined
-      ? undefined
-      : { experimental_retention: checkpoint.retention },
-  );
+  await startWorkflowOnDeployment(workflowEntryReference, [workflowInput], targetDeploymentId, {
+    attributes: {
+      "$eve.session": anchorRunId,
+      [EVE_PROACTIVE_HANDOFF_ATTRIBUTE]: process.env.WORKFLOW_QUEUE_NAMESPACE ?? "eve",
+    },
+    experimental_retention: checkpoint.retention,
+  });
 }
 
 async function dispatchWorkflowCommand<TCommand extends SessionCommand>(

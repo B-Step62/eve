@@ -4,6 +4,7 @@ import type { ChannelRouteMethod } from "#public/definitions/channel.js";
 import {
   EVE_DEV_DISPATCH_SCHEDULE_ROUTE_PATTERN,
   EVE_DEV_RUNTIME_ARTIFACTS_ROUTE_PATH,
+  EVE_DEPLOYMENT_PROMOTION_ROUTE_PATH,
 } from "#protocol/routes.js";
 import { EVE_WORKFLOW_FLOW_ROUTE_PATH } from "#internal/workflow-bundle/eve-service-route-output.js";
 
@@ -28,6 +29,11 @@ export interface ApplicationChannelPreflightRoute {
 }
 
 export type ApplicationRouteRegistration =
+  | {
+      readonly kind: "deployment-promotion";
+      readonly method: "GET" | "POST";
+      readonly path: string;
+    }
   | ApplicationChannelPreflightRoute
   | ApplicationChannelRoute
   | {
@@ -84,6 +90,10 @@ export function createApplicationRouteRegistry(
     })),
   ];
   const routes: ApplicationRouteRegistration[] = [...channelRoutes];
+  routes.push(
+    { kind: "deployment-promotion", method: "POST", path: EVE_DEPLOYMENT_PROMOTION_ROUTE_PATH },
+    { kind: "deployment-promotion", method: "GET", path: EVE_DEPLOYMENT_PROMOTION_ROUTE_PATH },
+  );
 
   if (options.development === true) {
     routes.push(

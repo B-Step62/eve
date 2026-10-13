@@ -36,6 +36,9 @@ function createDeps() {
     ),
     detectDeployment: vi.fn<DeployProjectDeps["detectDeployment"]>(async () => DEPLOYED),
     syncHostFrameworkPreset: vi.fn<DeployProjectDeps["syncHostFrameworkPreset"]>(async () => {}),
+    ensureDeploymentWebhook: vi.fn<DeployProjectDeps["ensureDeploymentWebhook"]>(
+      async () => "configured",
+    ),
   };
 }
 
@@ -69,6 +72,23 @@ function pendingState(): SetupState {
 }
 
 describe("deployProject box", () => {
+  it("bootstraps a webhook after the first deployment provides an alias", async () => {
+    const deps = createDeps();
+    deps.ensureDeploymentWebhook.mockResolvedValueOnce("awaiting-first-deployment");
+    await runHeadless([headlessBox({ deps })], pendingState(), silentSink);
+    expect(deps.runVercel.mock.calls.filter(([args]) => args[0] === "deploy")).toHaveLength(2);
+    expect(deps.ensureDeploymentWebhook).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops bootstrap if the first deployment still has no production alias", async () => {
+    const deps = createDeps();
+    deps.ensureDeploymentWebhook.mockResolvedValue("awaiting-first-deployment");
+    await expect(runHeadless([headlessBox({ deps })], pendingState(), silentSink)).rejects.toThrow(
+      "production alias is not available",
+    );
+    expect(deps.runVercel.mock.calls.filter(([args]) => args[0] === "deploy")).toHaveLength(1);
+  });
+
   it("installs with the detected project package manager", async () => {
     const deps = createDeps();
     deps.detectPackageManager.mockResolvedValue({

@@ -1,6 +1,7 @@
 import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
 import { createHook, getWorkflowMetadata, type Hook } from "#compiled/@workflow/core/index.js";
 import { releaseSessionHooksStep } from "#execution/session-inbox/release-step.js";
+import type { DeploymentPromotionPayload } from "#execution/deployment-promotion-protocol.js";
 
 import type { DeliverPayload, HookPayload, SessionCommand } from "#channel/types.js";
 import { claimHookOwnership, disposeHook } from "#execution/hook-ownership.js";
@@ -23,6 +24,7 @@ export interface SessionFailurePayload {
 }
 
 export type SessionInboxPayload =
+  | DeploymentPromotionPayload
   | SessionFailurePayload
   | HookPayload
   | SessionCommand

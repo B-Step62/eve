@@ -286,7 +286,7 @@ async function bootHandoffOwner(
     await stopUntrackedChildSessionsStep({ runIds: childRunIdsToStop, sessionId });
   }
   const deadline =
-    input.reason === "compaction"
+    input.reason === "compaction" || input.reason === "deployment-promotion"
       ? input.sessionTimeoutDeadline
       : sessionTimeoutDeadline(checkpoint.sessionTimeoutMs, Date.now());
   const timeoutControl =
@@ -307,7 +307,7 @@ async function bootHandoffOwner(
       sessionState: checkpoint.sessionState,
       sessionTimeoutControl: timeoutControl,
       sessionTimeoutMs: checkpoint.sessionTimeoutMs,
-      // A deployment handoff renews the configured lifetime; compaction keeps the deadline.
+      // A message-triggered handoff renews lifetime; background transfers keep the deadline.
       sessionTimeoutDeadline: deadline,
       sessionWritable: input.sessionWritable,
     },
