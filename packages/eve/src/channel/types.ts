@@ -439,6 +439,9 @@ export interface SessionCapabilities {
  * subagent tool wrapper).
  */
 export interface RunInput {
+  /** Caller-reserved durable workflow identity. */
+  readonly sessionId?: string;
+  readonly deliveryId?: string;
   /**
    * @internal Set by the server after it authorizes tool stubs.
    * Local subagents match rules qualified by their full path, such as researcher/list_tasks.
@@ -583,6 +586,8 @@ export type RunResult =
  * Carries the identifiers needed for stream endpoints.
  */
 export interface RunHandle {
+  readonly deliveryId?: string;
+  readonly existing?: boolean;
   readonly events: ReadableStream<MessageStreamEvent>;
   /**
    * Runtime-owned identifier for this session. Stream and inspection APIs
