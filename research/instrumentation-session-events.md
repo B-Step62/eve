@@ -82,7 +82,7 @@ start time in `ctx.state`, and `call.settled` reads them back. The call row alre
 
 What changes for authors:
 
-| Today                                                                     | Proposed                                                                                    |
+| Stack today                                                               | Proposed                                                                                    |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | A payload type per event (`event.toolName`, `event.outcome`)              | The fact itself (`event.data.capability.name`, `event.data.outcome`), as hooks receive it   |
 | `ctx.state` to carry data from a start to its end                         | `ctx.view`: the row holds the start time, input, kind and outcome                           |
@@ -96,8 +96,8 @@ These stay live events, using one convention, `started` and then `settled` with 
 - **Model calls and step attempts.** The `model.started` and `model.settled` facts cover timing
   and outcome. The prompt and instructions aren't recorded, so a live event still carries model
   input.
-- **Memory operations and channel deliveries.** A delivery's ending already carries an
-  `outcome`, so its three ending names repeat that field.
+- **Memory operations and channel deliveries.** Neither has facts. A delivery's ending already
+  carries an `outcome`, so folding its three ending names into one loses nothing.
 
 What stays different from hooks: an instrumentation handler is failure-isolated, its return value
 is ignored, it never cancels a turn, it runs after the commit without blocking it, and
@@ -160,9 +160,9 @@ These follow from the design and haven't been measured:
    rows with content only on facts.
 2. Whether to record model input as facts, or keep `model.call.started` as a live event.
 3. Where the turn span ends. The options are an adapter `select`, or the library recording an
-   outcome without ending the turn. The library's design doc lists the second as an open
-   question
-   ([Open questions](https://github.com/vercel/eve/blob/main/research/agent-tracing-library.md#open-questions)).
+   outcome without ending the turn. The library's
+   [design doc](https://github.com/vercel/eve/blob/main/research/agent-tracing-library.md#open-questions)
+   lists the second as an open question.
 4. Whether trace backends should implement the library's `AgentTelemetry` instead of consuming
    provider events. That depends on publishing `@eve/tracing`, which is private.
 

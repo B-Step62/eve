@@ -10,12 +10,14 @@ This is a map of the session work landing before 1.0. It contains the v27 event
 model and the cleanup built on it (six prep PRs, then PRs 1–10, as GitHub stack #4696 from
 [#4532](https://github.com/vercel/eve/pull/4532)), then reactions
 ([#4616](https://github.com/vercel/eve/pull/4616)), one commit on top of PR 10. The design docs
-have additional detail: [`session-event-lifecycle.md`](./session-event-lifecycle.md) (the facts),
-[`session-event-tree.md`](./session-event-tree.md) (ownership and closing),
-[`session-core-target.md`](./session-core-target.md) (waiting, and what 1.0 locks),
-[`session-reactions.md`](./session-reactions.md) (dynamic values and hooks), and
-[`instrumentation-session-events.md`](./instrumentation-session-events.md) (instrumentation
-alongside main's tracing library and reactions).
+have more detail:
+
+- [`session-event-lifecycle.md`](./session-event-lifecycle.md): the facts.
+- [`session-event-tree.md`](./session-event-tree.md): ownership and closing.
+- [`session-core-target.md`](./session-core-target.md): waiting, and what 1.0 locks.
+- [`session-reactions.md`](./session-reactions.md): dynamic values and hooks.
+- [`instrumentation-session-events.md`](./instrumentation-session-events.md): instrumentation
+  alongside main's tracing library and reactions.
 
 ## Summary
 
@@ -23,9 +25,9 @@ alongside main's tracing library and reactions).
   instrumentation, usage tallies, channel task cards, evals and the server projection each
   rebuilt lifecycles from loosely typed events. On the stack they read rows and selectors from
   one fold. On the write side, the writer closes and scopes facts in one place, so transitions no
-  longer do it by hand. This is enabled by a more formal model of events that tracks all necessary
-  information in a uniform way. Previously, many facts were completely missing and others were
-  modeled inconsistently, which made it impossible to write simple folds over them.
+  longer do it by hand. This works because every lifecycle is now recorded the same way. On main,
+  many facts were missing and others were modeled inconsistently, so no simple fold over them was
+  possible.
 - **Reactions: one runner replaces eight lifecycles and a compiler pass.** Each dynamic kind had
   its own events, precedence rules, failure behavior and recovery. Tools survived cold starts
   through a pass that parsed authored source and snapshotted closures. With reactions, every kind
@@ -33,8 +35,7 @@ alongside main's tracing library and reactions).
   it.
 - **The two depend on each other.** The reactions runner reads the v27 view. Until reactions
   lands, v27 carries an adapter that maps facts back to the v26 event keys today's resolvers
-  expect. This means that the v27 changes can land without a breaking change to defineDynamic
-  and friends.
+  expect, so v27 can land without breaking `defineDynamic` and the other dynamic definitions.
 
 ## The numbers
 
@@ -70,9 +71,9 @@ alongside main's tracing library and reactions).
 | Compatibility: checkpoint migrations, legacy remote protocol                                              |     −144 |
 | **Total**                                                                                                 | **−531** |
 
-Channels are on the deleting side. Shared sign-in, failure notices and text
-limits had cost +291. Then one surface took over the common handlers for five channels (about
-−124), and the task card became the turn's call rows (−224), so the parallel card model is gone.
+Channels come out net negative. Shared sign-in, failure notices and text limits cost +291. One
+surface then took over the common handlers for five channels (about −124), and the task card
+became the turn's call rows (−224), which removed the parallel card model.
 
 </details>
 
@@ -366,7 +367,7 @@ On the stack:
   }
   ```
 
-  A new card starts once every earlier task closed before the new one was introduced. Slack's
+  A new card starts when a task is introduced after every earlier task has closed. Slack's
   stored state shrinks to `{ ts?, fingerprint?, since? }`.
 
 - **Shared selectors** say where a call stands and how it reads: `callState`, `callLabel`,
@@ -410,9 +411,7 @@ round up (`Math.ceil` of UTF-8 bytes / 4), because they reach an integer field o
 - **One vocabulary (PR 10).** Providers used to hear endings under names of their own, one event
   per ending: `session.completed`/`failed`/`waiting`, `turn.completed`/`cancelled`/`failed`,
   `tool.call.started`/`completed`/`failed` and `input.requested`/`resolved`. Now they hear the
-  stream's names, and each ending is one event with the fact's outcome. `session.waiting` goes
-  with no replacement, because waiting isn't an event in v27; the OTel provider ends a turn's span
-  at its `turn.settled` rather than at the next session transition:
+  stream's names, and each ending is one event with the fact's outcome:
 
   | Event                                       | Outcome                              |
   | ------------------------------------------- | ------------------------------------ |
@@ -421,10 +420,12 @@ round up (`Math.ceil` of UTF-8 bytes / 4), because they reach an integer field o
   | `call.requested`, `call.settled`            | `CallOutcome`                        |
   | `interaction.opened`, `interaction.settled` | the interaction's outcome            |
 
-  A direct `invokeTool` emits the same call pair. Live model, attempt, memory and channel names
-  stay. OTel trace schema 4 and its span names don't change, and span trees were diffed against
-  the previous build for five evals. Braintrust 3.29 still reads the old names, so it needs a
-  coordinated release.
+  `session.waiting` goes with no replacement, because waiting isn't an event in v27, so the OTel
+  provider ends a turn's span at its `turn.settled` instead of the next session transition. A
+  direct `invokeTool` emits the same call pair. Live model, attempt, memory and channel names stay.
+  OTel trace schema 4 and its span names don't change, and span trees were diffed against the
+  previous build for five evals. Main's new tracing adapter still uses the old names;
+  [`instrumentation-session-events.md`](./instrumentation-session-events.md) covers the port.
 
 - **Usage**: `turn-tag-state.ts` (342 lines) kept session and turn totals privately, beside the
   `usage.recorded` facts the fold already totals. `session-usage.ts` (173 lines) reads the view.
@@ -872,13 +873,15 @@ More pairs, and the behavior changes they come with, are in
   value is whatever its selection says.
 - **The view was already paid for.** The runner reads the v27 view clients use. On v26 events,
   that view would have had to be built too.
-- **Some of it came back:** rendering remote credentials, failing turns for hooks and values, and
-  occurrence identity added about 340 lines. Recall that keeps its place in the prompt cache
-  added about 220 more, and it lives outside the history, ahead of the turn's input. A check
-  that held approved calls to the record they were offered with was added and then removed
-  (about −90): an approved call runs its tool as the session holds it. Review fixes added about 50:
-  reactions run one commit at a time, slots of removed reactions are dropped, and skill files
-  follow the manifest's owner.
+- **Some of it came back:**
+  - About 340 lines for rendering remote credentials, failing turns for hooks and values, and
+    occurrence identity.
+  - About 220 for recall that keeps its place in the prompt cache. It lives outside the history,
+    ahead of the turn's input.
+  - About −90 from removing a check that held approved calls to the record they were offered
+    with. An approved call runs its tool as the session holds it.
+  - About 50 from review fixes: reactions run one commit at a time, slots of removed reactions
+    are dropped, and skill files follow the manifest's owner.
 
 ## How the two fit
 
@@ -896,9 +899,8 @@ flowchart LR
   the adapter, and the upgrade guide says so ("`defineDynamic` resolvers: Nothing in this
   release").
 - Reactions is the last change of the break. It touches the authoring API and needs nothing else
-  from the stack. It's now one commit (43 squashed) on top of PR 10, and a typecheck, the
-  reactions, HITL and step units, the reactions integration suites, the hooks scenario and the
-  full unit suite pass there.
+  from the stack. It's one commit (43 squashed) on top of PR 10. A typecheck, the full unit
+  suite, the reactions integration suites and the hooks scenario pass there.
 - The rebase onto the stack had 38 conflicting paths. Most resolved toward one side; four
   needed design decisions:
   - The tool loop's named stages decide where reactions run. A hook's turn failure is checked
@@ -962,8 +964,8 @@ come after 1.0.
 - Channels: `TaskCardView` and its task, action, blocker and status types are gone; a card is
   `TaskCard` over call rows. `committed` is new and optional.
 - Instrumentation providers: `session.ended`, `turn.settled`, `call.requested`/`call.settled`
-  and `interaction.opened`/`interaction.settled` replace the per-ending names. Braintrust needs a
-  coordinated release.
+  and `interaction.opened`/`interaction.settled` replace the per-ending names, and
+  `session.waiting` is removed.
 - Extensions: `channel`, `schedule` and `hook` drop their earlier epochs, so extensions that
   provide them are rebuilt. `tool`, `connection`, `subagent` and the dynamic capabilities keep
   theirs.
@@ -1030,15 +1032,14 @@ squashed #4566, so the base cherry-picks its two commits. When Rui's PRs land, #
 `main`. Every commit is signed and signed off, and every PR's head typechecks.
 
 PRs 1–3 replace the five earlier v27 PRs (contract, conversation, work, authoring, clients)
-rather than follow them, and PR 2 is one commit. The Round 4 work at the old tip moved into the
-PRs it belongs to. Controls, `closedAt` and the call selectors are in PR 7 rather than PR 1 or
+rather than follow them, and PR 2 is one commit. Work that sat at the old stack's tip moved into
+the PRs it belongs to. Controls, `closedAt` and the call selectors are in PR 7 rather than PR 1 or
 2, because the task cards depend on them. The guard fixes are in PR 9, because they edit code
 that PR 9 introduces.
 
-Each PR carries changesets only for what a user would notice, one change per file; internal PRs
-have none, and PR 3 holds the core v27 notes. Extension contracts are
-regenerated once, at PR 10, so earlier PRs that change APIs can fail the epoch guard on their
-own.
+Each PR carries changesets only for what a user would notice, one change per file. Internal PRs
+have none, and PR 3 holds the core v27 notes. Extension contracts are regenerated once, at PR 10,
+so earlier PRs that change APIs can fail the epoch guard on their own.
 
 </details>
 
