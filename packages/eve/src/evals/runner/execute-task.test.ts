@@ -151,16 +151,14 @@ describe("executeTask", () => {
       },
     ]);
     vi.spyOn(globalThis, "fetch").mockImplementation(server.fetch);
-    let message: string | undefined;
     const outcome = await executeTask({
       client: new Client({ host: target.url }),
       target,
       evaluation: createTestEval(async (t) => {
-        message = (await t.send("Summarize the thread")).message;
+        expect((await t.send("Summarize the thread")).message).toBe("The requested answer.");
       }),
     });
     expect(outcome.error).toBeUndefined();
-    expect(message).toBe("The requested answer.");
     expect(outcome.result.finalMessage).toBe("The requested answer.");
   });
 

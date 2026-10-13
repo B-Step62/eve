@@ -488,11 +488,7 @@ describe("WorkflowAgentInvocationExecution", () => {
     getReadable.mockReturnValue(
       eventStream([
         messageCompletedEvent("The requested answer."),
-        {
-          data: { on: "tasks", sequence: 0, turnId: "turn_1" },
-          meta: { at: "2026-07-20T00:00:01.000Z", id: "event_turn_waiting" },
-          type: "turn.waiting",
-        } as HandleMessageStreamEvent,
+        turnWaitingOnTasksEvent("turn_1"),
         ...turnSettledEvents("turn_1"),
       ]),
     );
@@ -500,6 +496,22 @@ describe("WorkflowAgentInvocationExecution", () => {
     await expect(
       execution().read({ auth, invocationId: "wrun_invocation" }),
     ).resolves.toMatchObject({ result: "The requested answer.", status: "completed" });
+  });
+
+  it("completes with the reply written after a task wait in place of the one before it", async () => {
+    runsGet.mockResolvedValue(run({ status: "running" }));
+    getReadable.mockReturnValue(
+      eventStream([
+        messageCompletedEvent("Checking with the team."),
+        turnWaitingOnTasksEvent("turn_1"),
+        messageCompletedEvent("The team confirmed it."),
+        ...turnSettledEvents("turn_1"),
+      ]),
+    );
+
+    await expect(
+      execution().read({ auth, invocationId: "wrun_invocation" }),
+    ).resolves.toMatchObject({ result: "The team confirmed it.", status: "completed" });
   });
 
   it("decodes a final persisted event without a trailing newline", async () => {
@@ -739,6 +751,14 @@ function messageCompletedEvent(
     data: { finishReason, message, sequence: 0, stepIndex: 0, turnId: "turn_1" },
     meta: { at: "2026-07-20T00:00:00.000Z", id: "event_message" },
     type: "message.completed",
+  };
+}
+
+function turnWaitingOnTasksEvent(turnId: string): HandleMessageStreamEvent {
+  return {
+    data: { on: "tasks", sequence: 0, turnId },
+    meta: { at: "2026-07-20T00:00:01.000Z", id: "event_turn_waiting" },
+    type: "turn.waiting",
   };
 }
 

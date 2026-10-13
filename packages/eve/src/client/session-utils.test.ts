@@ -168,7 +168,6 @@ describe("summarizeTurnEvents across a task wait", () => {
 
   it("keeps the reply written before the wait when the resumed turn writes none", () => {
     const events = [
-      { type: "turn.started", data: { sequence: 1, turnId: "turn_1" } },
       {
         type: "message.completed",
         data: { ...eventData, finishReason: "stop", message: "The requested answer." },
@@ -177,13 +176,10 @@ describe("summarizeTurnEvents across a task wait", () => {
       ...turnEnd,
     ] satisfies UnstampedMessageStreamEvent[];
 
-    expect(summarizeTurnEvents(events)).toMatchObject({
-      message: "The requested answer.",
-      status: "waiting",
-    });
+    expect(summarizeTurnEvents(events).message).toBe("The requested answer.");
   });
 
-  it("reports the reply written after the wait", () => {
+  it("replaces the reply written before the wait with the one written after it", () => {
     const events = [
       {
         type: "message.completed",
@@ -200,7 +196,7 @@ describe("summarizeTurnEvents across a task wait", () => {
     expect(summarizeTurnEvents(events).message).toBe("The team confirmed it.");
   });
 
-  it("reports no message when the turn only narrated tool calls", () => {
+  it("does not report tool-call narration written before the wait as the reply", () => {
     const events = [
       {
         type: "message.completed",
@@ -211,6 +207,26 @@ describe("summarizeTurnEvents across a task wait", () => {
     ] satisfies UnstampedMessageStreamEvent[];
 
     expect(summarizeTurnEvents(events).message).toBeUndefined();
+  });
+});
+
+describe("summarizeTurnEvents at a question wait", () => {
+  it("reports the reply written before the question", () => {
+    const events = [
+      {
+        type: "message.completed",
+        data: { ...eventData, finishReason: "stop", message: "I need the region first." },
+      },
+      {
+        type: "turn.waiting",
+        data: { on: "input", sequence: 1, turnId: "turn_1" },
+      },
+    ] satisfies UnstampedMessageStreamEvent[];
+
+    expect(summarizeTurnEvents(events)).toMatchObject({
+      message: "I need the region first.",
+      status: "waiting",
+    });
   });
 });
 

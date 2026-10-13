@@ -165,9 +165,9 @@ reports each wait with the new `turn.waiting` event, which carries the open turn
 
 The TypeScript client's `send(...).result()` reads past `turn.waiting` and returns the last reply a
 held turn completed: a reply written after the wait replaces the text written before it, and the
-text written before the wait stands when the resumed turn writes nothing more. It stops at `turn.waiting` only while a
-question is pending, and returns `status: "waiting"` with that question; `respond()` then reads the
-same turn to its end. A custom client that ends a response at `turn.completed` or
+text written before the wait stands when the resumed turn writes nothing more. It stops at
+`turn.waiting` only while a question is pending, and returns `status: "waiting"` with that
+question; `respond()` then reads the same turn to its end. A custom client that ends a response at `turn.completed` or
 `session.waiting` mid-turn, or that shows the first completed message as the reply, should follow
 the same rule. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
 

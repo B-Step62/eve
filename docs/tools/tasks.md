@@ -233,9 +233,10 @@ continues once the person answers or signs in.
 In every session, `turn.completed` comes only when the turn really ends. The TypeScript client's
 `send(...).result()` and the MCP channel's `agent_get` read past `turn.waiting` and report the
 last reply the turn completed. A reply written after the wait replaces the text written before it;
-when the resumed turn writes nothing more, the text written before the wait stands. `result()` stops at `turn.waiting` only
-while a question is pending or the turn waits on a sign-in or approval, and returns
-`status: "waiting"`; `respond()` then reads the same turn to its end. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
+when the resumed turn writes nothing more, the text written before the wait stands. `result()`
+stops at `turn.waiting` only while a question is pending or the turn waits on a sign-in or
+approval, and returns `status: "waiting"`; `respond()` then reads the same turn to its end. See
+[Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
 Channels such as [Slack](/docs/channels/slack) post a root session's text before the wait as an
 ordinary reply, then post the reply after the results as another message. Slack also shows each
 turn's tasks in a live [task card](/docs/channels/slack#task-card).

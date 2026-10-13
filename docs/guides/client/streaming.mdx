@@ -63,7 +63,8 @@ This consumes the stream until the current turn boundary:
 A `turn.waiting` with `on: "tasks"` is informational: the turn stays open, and
 `result()` keeps reading to its final reply. When a call the turn
 runs asks a question, such as a workflow tool's `ctx.ask()`, `result()` returns
-`status: "waiting"` with the question in `inputRequests`. Answer it with
+`status: "waiting"` with the question in `inputRequests` and any reply written
+before it in `message`. Answer it with
 `respond()`, which keeps reading the same turn. A question stays pending until
 its `input.resolved`, which the session you answer on also emits for a
 subagent's or workflow tool's question.
