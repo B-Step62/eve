@@ -18,7 +18,11 @@ import {
 } from "#internal/invocation/metadata.js";
 import type { RouteSessionCreator } from "#internal/nitro/routes/channel-route-context.js";
 import { getRun, getWorld } from "#internal/workflow/runtime.js";
-import type { HandleMessageStreamEvent, InputResolution } from "#protocol/message.js";
+import {
+  type HandleMessageStreamEvent,
+  type InputResolution,
+  isReplyMessageCompleted,
+} from "#protocol/message.js";
 import { type InputRequest, type InputResponse, parseInputResponses } from "#shared/input.js";
 import type { JsonValue } from "#shared/json.js";
 import { parseJsonValue } from "#shared/json.js";
@@ -357,10 +361,7 @@ function projectInvocation(
         settled = undefined;
         break;
       case "message.completed":
-        // Only tool-call narration continues the turn; any other finish is the reply.
-        if (event.data.finishReason !== "tool-calls") {
-          result = safeJson(event.data.message);
-        }
+        if (isReplyMessageCompleted(event)) result = safeJson(event.data.message);
         break;
       case "turn.completed":
         settled = "completed";

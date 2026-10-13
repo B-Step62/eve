@@ -65,7 +65,8 @@ A `turn.waiting` with `on: "tasks"` is informational: the turn stays open, and
 runs asks a question, such as a workflow tool's `ctx.ask()`, `result()` returns
 `status: "waiting"` with the question in `inputRequests` and any reply written
 before it in `message`. Answer it with
-`respond()`, which keeps reading the same turn. A question stays pending until
+`respond()`, which keeps reading the same turn; its `message` holds only a reply
+written after the answer. A question stays pending until
 its `input.resolved`, which the session you answer on also emits for a
 subagent's or workflow tool's question.
 

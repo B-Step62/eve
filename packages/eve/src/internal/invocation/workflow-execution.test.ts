@@ -514,6 +514,28 @@ describe("WorkflowAgentInvocationExecution", () => {
     ).resolves.toMatchObject({ result: "The team confirmed it.", status: "completed" });
   });
 
+  it("completes without a result when the turn after an answered one stays silent", async () => {
+    runsGet.mockResolvedValue(run({ status: "running" }));
+    getReadable.mockReturnValue(
+      eventStream([
+        messageCompletedEvent("The requested answer."),
+        ...turnSettledEvents("turn_1"),
+        {
+          type: "turn.started",
+          data: { sequence: 1, turnId: "turn_2" },
+          meta: { at: "2026-07-20T00:00:03.000Z", id: "event_turn_2" },
+        } satisfies HandleMessageStreamEvent,
+        turnWaitingOnTasksEvent("turn_2"),
+        ...turnSettledEvents("turn_2"),
+      ]),
+    );
+
+    const invocation = await execution().read({ auth, invocationId: "wrun_invocation" });
+
+    expect(invocation).toMatchObject({ status: "completed" });
+    expect(invocation?.status === "completed" ? invocation.result : undefined).toBeUndefined();
+  });
+
   it("decodes a final persisted event without a trailing newline", async () => {
     runsGet.mockResolvedValue(run({ status: "running" }));
     getReadable.mockReturnValue(

@@ -162,6 +162,39 @@ describe("executeTask", () => {
     expect(outcome.result.finalMessage).toBe("The requested answer.");
   });
 
+  it("reports no message for a silent turn after an answered one", async () => {
+    const server = createScriptedServer([
+      {
+        sessionId: "session_1",
+        events: [
+          turnStarted("turn_0"),
+          messageCompleted("The requested answer.", "turn_0"),
+          sessionWaiting(),
+        ],
+      },
+      {
+        sessionId: "session_1",
+        events: [
+          turnStarted("turn_1"),
+          turnWaitingOnTasks("turn_1"),
+          turnCompleted("turn_1"),
+          sessionWaiting(),
+        ],
+      },
+    ]);
+    vi.spyOn(globalThis, "fetch").mockImplementation(server.fetch);
+    const outcome = await executeTask({
+      client: new Client({ host: target.url }),
+      target,
+      evaluation: createTestEval(async (t) => {
+        const first = await t.send("Summarize the thread");
+        expect((await first.session.send("Thanks")).message).toBeUndefined();
+      }),
+    });
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.result.finalMessage).toBeNull();
+  });
+
   it("creates independent sessions concurrently and does not expose failed creations", async () => {
     const failed = new Error("Create failed");
     let count = 0;

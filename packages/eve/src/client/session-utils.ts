@@ -1,10 +1,13 @@
 import type {
   AuthorizationRequiredStreamEvent,
-  MessageCompletedStreamEvent,
   TurnFailureStreamEvent,
   UnstampedMessageStreamEvent,
 } from "#protocol/message.js";
-import { isCurrentTurnBoundaryEvent, isTurnFailureEvent } from "#protocol/message.js";
+import {
+  isCurrentTurnBoundaryEvent,
+  isReplyMessageCompleted,
+  isTurnFailureEvent,
+} from "#protocol/message.js";
 import {
   foldSession,
   initialSessionProjection,
@@ -44,7 +47,7 @@ export function summarizeTurnEvents(
   for (const event of events) {
     if (segment.observe(event)) boundary = event;
     if (isTurnFailureEvent(event)) failure = event;
-    if (isFinalMessageCompleted(event)) message = event.data.message ?? undefined;
+    if (isReplyMessageCompleted(event)) message = event.data.message ?? undefined;
   }
 
   return {
@@ -129,12 +132,6 @@ export class TurnSegment {
       requests: openInputs(this.#projection).length > 0,
     });
   }
-}
-
-function isFinalMessageCompleted(
-  event: UnstampedMessageStreamEvent,
-): event is MessageCompletedStreamEvent {
-  return event.type === "message.completed" && event.data.finishReason !== "tool-calls";
 }
 
 export function authorizationKey(data: {
