@@ -436,7 +436,7 @@ async function startSuccessor(
     await stopUntrackedChildSessionsStep({ runIds: childRunIdsToStop, sessionId });
   }
   const deadline =
-    input.reason === "compaction"
+    input.reason === "compaction" || input.reason === "prewarm"
       ? input.sessionTimeoutDeadline
       : sessionTimeoutDeadline(checkpoint.sessionTimeoutMs, Date.now());
   const timeoutControl =

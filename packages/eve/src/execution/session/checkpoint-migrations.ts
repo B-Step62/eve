@@ -110,6 +110,9 @@ const CHECKPOINT_UPGRADES: Readonly<
       sessionState: { ...sessionState, snapshot: { ...snapshot, session: { ...session, state } } },
     };
   },
+  // Version 16 prevents older targets from renewing expiry for preparation handoffs.
+  // The state is unchanged; the startup contract adds an idle reason.
+  15: (checkpoint) => checkpoint,
 };
 
 /**
