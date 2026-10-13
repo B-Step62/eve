@@ -118,6 +118,14 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
       const pending = getWorkflowSandboxPendingInterrupts(outcome.interrupt);
       const calls = pending.map(readCall).sort((a, b) => a.index - b.index);
       logs = capLogs(calls.at(-1)?.logs ?? logs);
+      const resolvedCalls = resume?.results.length ?? 0;
+      if (calls.some((call, offset) => call.index !== resolvedCalls + offset)) {
+        return failure(
+          "Program call indices must be unique and follow issue order.",
+          "call-limit",
+          logs,
+        );
+      }
       if (
         calls.length > input.limits.maxInFlightCalls ||
         calls.some(

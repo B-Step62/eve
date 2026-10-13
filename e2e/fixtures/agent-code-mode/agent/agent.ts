@@ -11,8 +11,9 @@ export default defineAgent({
           {
             name: "eve__execute",
             input: {
-              source:
-                "const before = await tools.count({}); const approved = await tools.gated({}); const after = await tools.count({}); return { before, approved, after };",
+              source: request.lastUserMessage?.includes("CRASH")
+                ? "const before = await tools.count({}); let unknown; try { await tools.crash({}); } catch (error) { unknown = error.message; } return { before, unknown, counts: await tools.counters({}) };"
+                : "const before = await tools.count({}); const approved = await tools.gated({}); const after = await tools.count({}); return { before, approved, after, counts: await tools.counters({}) };",
             },
           },
         ],

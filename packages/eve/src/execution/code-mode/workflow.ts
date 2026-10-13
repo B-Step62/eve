@@ -37,7 +37,7 @@ export async function executeProgramWorkflow(
   const deadline = sleep(new Date(initialized.limits.deadlineAt));
   while (outcome.status === "parked") {
     ctx.abortSignal.throwIfAborted();
-    const settling = await Promise.all(
+    const batch = Promise.all(
       outcome.calls.map(async (call): Promise<ProgramCallResult> => {
         const callId = `${ctx.callId}:program:${call.index}`;
         try {
@@ -103,6 +103,17 @@ export async function executeProgramWorkflow(
         }
       }),
     );
+    const settling = await Promise.race([batch, deadline.then(() => undefined)]);
+    if (settling === undefined) {
+      const expired = await runProgramStep(program.language, {
+        ...start,
+        state: outcome.state,
+        results,
+      });
+      if (expired.status === "parked")
+        throw new Error("Program deadline expired without terminating the runtime.");
+      return parseJsonValue(withFailureLogNotice(expired));
+    }
     results.push(...settling);
     outcome = await runProgramStep(program.language, { ...start, state: outcome.state, results });
   }

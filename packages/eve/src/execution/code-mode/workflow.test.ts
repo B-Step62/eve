@@ -6,10 +6,11 @@ const mocks = vi.hoisted(() => ({
   recordProgramCallStartedStep: vi.fn(),
   dispatchProgramCallStep: vi.fn(),
   ask: vi.fn(),
+  sleep: vi.fn(),
 }));
 vi.mock("./program-step.js", () => mocks);
 vi.mock("#execution/tools/workflow/ask.js", () => ({ ask: mocks.ask }));
-vi.mock("#compiled/@workflow/core/index.js", () => ({ sleep: () => new Promise(() => {}) }));
+vi.mock("#compiled/@workflow/core/index.js", () => ({ sleep: mocks.sleep }));
 import { executeProgramWorkflow } from "./workflow.js";
 const ctx = { callId: "execute", abortSignal: new AbortController().signal } as never;
 const input = { source: "return 1;", language: "js", context: {} } as never;
@@ -25,6 +26,7 @@ const first = {
 describe("code-mode durable driver", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.sleep.mockImplementation(() => new Promise(() => {}));
     mocks.initializeProgramStep.mockResolvedValue({
       limits: { deadlineAt: Date.now() + 300000 },
       toolNames: ["read", "write"],
@@ -115,6 +117,27 @@ describe("code-mode durable driver", () => {
     expect(mocks.runProgramStep.mock.calls[1]![1]).toMatchObject({
       results: [{ index: 0, status: "unknown" }],
     });
+  });
+
+  it("terminates at the deadline while an approval is still pending", async () => {
+    mocks.sleep.mockResolvedValue(undefined);
+    mocks.ask.mockImplementation(() => new Promise(() => {}));
+    mocks.approveProgramCallStep.mockResolvedValue({ status: "required", key: "read" });
+    mocks.runProgramStep
+      .mockResolvedValueOnce({ ...first, calls: [first.calls[0]] })
+      .mockResolvedValueOnce({
+        status: "failed",
+        error: "deadline",
+        errorClass: "deadline",
+        logs: ["last park"],
+      });
+    expect(await executeProgramWorkflow(input, ctx)).toMatchObject({
+      status: "failed",
+      errorClass: "deadline",
+      logsMayBeTruncated: true,
+    });
+    expect(mocks.runProgramStep.mock.calls[1]![1]).toMatchObject({ state: first.state });
+    expect(mocks.dispatchProgramCallStep).not.toHaveBeenCalled();
   });
 
   it("preserves failure logs and identifies truncation after interpreter termination", async () => {

@@ -16,6 +16,7 @@ export default defineEval({
     done.messageIncludes('"before":1');
     done.messageIncludes('"after":2');
     done.messageIncludes('"approved":"approved"');
+    done.messageIncludes('"counts":{"count":2,"gated":1,"counters":1}');
     t.succeeded();
   },
 });

@@ -101,6 +101,20 @@ describe("JavaScriptProgramRuntime (real QuickJS)", () => {
     ).toMatchObject({ status: "failed", errorClass: "call-limit" });
   });
 
+  it("does not allow raw bridge access to reuse a recorded call index", async () => {
+    const program = input(
+      'await __host.call({ index: 0, tool: "read", input: null, logs: [] }); return await __host.call({ index: 0, tool: "read", input: null, logs: [] });',
+    );
+    const first = parked(await runtime.start(program));
+    expect(
+      await runtime.resume({
+        ...program,
+        state: first.state,
+        results: [{ index: 0, status: "completed", output: null }],
+      }),
+    ).toMatchObject({ status: "failed", errorClass: "call-limit" });
+  });
+
   it("enforces a hard deadline even for a busy loop", async () => {
     expect(
       await runtime.start(input("for (;;) {}", { deadlineAt: Date.now() + 100 })),
