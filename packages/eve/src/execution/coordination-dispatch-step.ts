@@ -77,7 +77,19 @@ async function dispatchCoordination(
       owner: input.workflowToolRunOwner,
       parentSession: prepared.parentSession,
       session,
-      task,
+      task:
+        task.toolName !== "eve__execute"
+          ? task
+          : {
+              ...task,
+              executeInput: {
+                ...((task.executeInput ?? task.input) as import("#shared/json.js").JsonObject),
+                context: {
+                  serializedContext: prepared.serializedContext,
+                  sessionState: createDurableSessionState({ session }),
+                } as unknown as import("#shared/json.js").JsonValue,
+              },
+            },
     })),
     readTaskTable(session.state),
   );

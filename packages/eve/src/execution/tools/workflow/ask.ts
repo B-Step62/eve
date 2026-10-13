@@ -174,6 +174,7 @@ export function ask(
   ctx: Pick<ToolContext, "abortSignal">,
   request: ToolInputRequest,
   options: ToolInputRequestOptions = {},
+  approval?: import("#shared/input.js").InputRequest["action"],
 ): Promise<ToolInputResponse> {
   const context = readWorkflowToolRunContext(ctx, "ask");
   // A caller that can't reach a person resolves `ctx.ask()` as `unavailable`.
@@ -192,7 +193,7 @@ export function ask(
       kind: "request",
       from,
       replyTo,
-      request: { control, kind: "ask", request },
+      request: { control, kind: "ask", request, ...(approval === undefined ? {} : { approval }) },
     });
     // The withdrawal must not overtake the request it withdraws.
     return () => sent.then(() => owner.send({ control, from, kind: "withdraw", replyTo }));

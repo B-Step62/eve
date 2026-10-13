@@ -1,0 +1,117 @@
+import { sleep } from "#compiled/@workflow/core/index.js";
+import { ask } from "#execution/tools/workflow/ask.js";
+import { parseJsonValue, type JsonValue } from "#shared/json.js";
+import { toErrorMessage } from "#shared/errors.js";
+import type { WorkflowToolContext } from "#tools/workflow-definition.js";
+import type { ExecuteInput } from "./tool.js";
+import type { ProgramCallResult, ProgramLanguage, ProgramStep } from "./runtime.js";
+import {
+  initializeProgramStep,
+  runProgramStep,
+  approveProgramCallStep,
+  recordProgramCallStartedStep,
+  dispatchProgramCallStep,
+  type ProgramContext,
+} from "./program-step.js";
+
+/** Durable driver; interpreters only park, and each tool gets a separate durable step. */
+export async function executeProgramWorkflow(
+  input: ExecuteInput,
+  ctx: WorkflowToolContext,
+): Promise<JsonValue> {
+  "use workflow";
+  const program = input as ExecuteInput & { language: ProgramLanguage; context: ProgramContext };
+  if (program.context === undefined)
+    return {
+      status: "failed",
+      error: "Code-mode execution context is missing.",
+      errorClass: "runtime",
+      logs: [],
+    };
+  const timeoutMs = Math.min(300000, Math.max(1, input.timeoutMs ?? 300000));
+  const initialized = await initializeProgramStep(program.context, timeoutMs);
+  const start = { ...initialized, source: program.source };
+  const results: ProgramCallResult[] = [];
+  const approvedKeys: string[] = [];
+  let outcome = await runProgramStep(program.language, start);
+  const deadline = sleep(new Date(initialized.limits.deadlineAt));
+  while (outcome.status === "parked") {
+    ctx.abortSignal.throwIfAborted();
+    const settling = await Promise.all(
+      outcome.calls.map(async (call): Promise<ProgramCallResult> => {
+        const callId = `${ctx.callId}:program:${call.index}`;
+        try {
+          const approval = await approveProgramCallStep(
+            program.context,
+            call,
+            callId,
+            approvedKeys,
+          );
+          if (approval.status === "denied")
+            return { index: call.index, status: "failed", error: approval.error };
+          if (approval.status === "required") {
+            const answer = await Promise.race([
+              ask(
+                ctx,
+                {
+                  prompt: `Approve ${call.tool}?`,
+                  allowFreeform: false,
+                  display: "confirmation",
+                  options: [
+                    { id: "approve", label: "Approve" },
+                    { id: "cancel", label: "Cancel" },
+                  ],
+                },
+                {},
+                {
+                  kind: "tool-call",
+                  callId,
+                  toolName: call.tool,
+                  input: call.input as Record<string, JsonValue>,
+                },
+              ),
+              deadline.then(() => ({ status: "deadline" as const })),
+            ]);
+            if (answer.status === "deadline")
+              return {
+                index: call.index,
+                status: "failed",
+                error: "Program deadline exceeded while waiting for approval.",
+              };
+            if (answer.status !== "answered" || answer.optionId !== "approve")
+              return {
+                index: call.index,
+                status: "failed",
+                error: `The user did not approve ${call.tool}.`,
+              };
+          }
+          approvedKeys.push(approval.key);
+          const marker = await recordProgramCallStartedStep(callId);
+          const dispatched = await dispatchProgramCallStep(
+            ctx,
+            program.context,
+            call,
+            marker,
+            approvedKeys,
+          );
+          if (!("status" in dispatched))
+            throw new Error("Tool authorization was not resumed through its workflow step.");
+          return dispatched;
+        } catch (error) {
+          ctx.abortSignal.throwIfAborted();
+          return { index: call.index, status: "failed", error: toErrorMessage(error) };
+        }
+      }),
+    );
+    results.push(...settling);
+    outcome = await runProgramStep(program.language, { ...start, state: outcome.state, results });
+  }
+  return parseJsonValue(withFailureLogNotice(outcome));
+}
+
+function withFailureLogNotice(outcome: Exclude<ProgramStep, { status: "parked" }>) {
+  return outcome.status === "failed" &&
+    (outcome.errorClass === "deadline" || outcome.errorClass === "memory")
+    ? { ...outcome, logsMayBeTruncated: true }
+    : outcome;
+}
