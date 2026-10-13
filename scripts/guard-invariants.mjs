@@ -125,16 +125,22 @@
  *             so telemetry ownership survives renamed and namespaced tools.
  *   rule 50 — The human-in-the-loop lifecycle in `harness/hitl/` is
  *             reached only through its `index.ts`, its request vocabulary
- *             (`approval-prompt`, `budget-request`), so replacing it changes one
- *             seam.
+ *             (`approval-prompt`, `budget-request`, `relays`, `sign-ins`) and
+ *             read surface via index.ts or the Workflow-safe view.ts.
+ *             Only commit.ts and checkpoint-migrations.ts import requests.ts
+ *             for saving and legacy upgrades.
  *   rule 51 — Only the session machine (`harness/session-machine/`) and the
  *             human-in-the-loop lifecycle it delegates to
  *             (`harness/hitl/`) build lifecycle events and read the
- *             machine's private state. Every change to a turn, request,
- *             sign-in, task, or call outcome is a transition that returns its
- *             events, so nothing changes without readers hearing it. The model
- *             step's streamed content (its calls and their inline results) is
- *             built where it streams.
+ *             machine's private state. The guard checks only those imports;
+ *             it does not prove every state change emits events (approval
+ *             candidates are still written directly, and `matchSignIns`
+ *             emits none). The model step's streamed content (its calls and
+ *             their inline results) is built where it streams.
+ *   rule 52 — The tracing library in `packages/tracing/src/` imports only
+ *             itself and external packages. eve reaches it only through the
+ *             vendored root, delegation, otel, and ai-sdk entrypoints under
+ *             `#compiled/@eve/tracing/`, never the workspace package itself.
  *
  * Baselines for rules with pre-existing violations live in
  * `guard-invariants-baseline.json`. Counts and allowlists in that file
@@ -256,6 +262,7 @@ function isTsLike(relPath) {
  *   rule48: Violation[];
  *   rule50: Violation[];
  *   rule51: Violation[];
+ *   rule52: Violation[];
  *   symlinks: string[];
  * }} state
  */
@@ -291,6 +298,50 @@ async function scanRepo(state) {
     checkRule48(posix, lines, state.rule48);
     checkRule50(posix, lines, state.rule50);
     checkRule51(posix, lines, state.rule51);
+    if (posix.startsWith("packages/tracing/src/")) {
+      for (const [index, line] of lines.entries()) {
+        const imports = [...line.matchAll(/(?:from\s+|import\s*\()(["'])([^"']+)\1/g)];
+        for (const match of imports) {
+          const specifier = match[2];
+          const escapes =
+            specifier.startsWith("#") ||
+            (specifier.startsWith(".") &&
+              !toPosix(relative(REPO_ROOT, resolve(dirname(absPath), specifier))).startsWith(
+                "packages/tracing/src/",
+              ));
+          if (escapes)
+            state.rule52.push({
+              rule: 52,
+              file: posix,
+              line: index + 1,
+              message:
+                "Tracing library imports must stay inside the library or use an external package. Host integration belongs in the host.",
+            });
+        }
+      }
+    }
+    if (posix.startsWith("packages/eve/")) {
+      lines.forEach((line, index) => {
+        const privateImport =
+          /['"]#compiled\/@eve\/tracing\/(?!(?:index|delegation|otel|ai-sdk)\.js['"])/.test(line) ||
+          /(?:from\s+|import\s*\()['"]@eve\/tracing(?:\/[^'"]*)?['"]/.test(line) ||
+          [...line.matchAll(/(?:from\s+|import\s*\()(["'])([^"']+)\1/g)].some(
+            (match) =>
+              match[2].startsWith(".") &&
+              toPosix(relative(REPO_ROOT, resolve(dirname(absPath), match[2]))).startsWith(
+                "packages/tracing/",
+              ),
+          );
+        if (privateImport)
+          state.rule52.push({
+            rule: 52,
+            file: posix,
+            line: index + 1,
+            message:
+              "Import the tracing library from #compiled/@eve/tracing/{index,delegation,otel,ai-sdk}.js, not the workspace package or its private modules.",
+          });
+      });
+    }
   }
 }
 
@@ -501,7 +552,7 @@ function checkRule47(posix, lines, violations) {
 
 const HUMAN_INPUT_DIR = "packages/eve/src/harness/hitl/";
 const HUMAN_INPUT_PRIVATE_IMPORT_RE =
-  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approval-prompt|budget-request)\.js["'])/;
+  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|view|approval-prompt|budget-request|relays|sign-ins)\.js["'])/;
 
 /** @param {string} posix @param {string[]} lines @param {Violation[]} violations */
 function checkRule50(posix, lines, violations) {
@@ -514,12 +565,18 @@ function checkRule50(posix, lines, violations) {
     return;
   lines.forEach((line, idx) => {
     if (!HUMAN_INPUT_PRIVATE_IMPORT_RE.test(line)) return;
+    if (
+      /["']#harness\/hitl\/requests\.js["']/.test(line) &&
+      (posix === "packages/eve/src/harness/session-machine/commit.ts" ||
+        posix === "packages/eve/src/execution/session/checkpoint-migrations.ts")
+    )
+      return;
     violations.push({
       rule: 50,
       file: posix,
       line: idx + 1,
       message:
-        "imports the human-in-the-loop lifecycle's internals. Reach it through `#harness/hitl/index.js`, the one seam the rest of eve meets it at.",
+        "imports the human-in-the-loop lifecycle's internals. Reach it through `#harness/hitl/index.js`, or use the read-only `#harness/hitl/view.js` from workflow bodies.",
     });
   });
 }
@@ -1697,6 +1754,7 @@ async function main() {
     rule48: /** @type {Violation[]} */ ([]),
     rule50: /** @type {Violation[]} */ ([]),
     rule51: /** @type {Violation[]} */ ([]),
+    rule52: /** @type {Violation[]} */ ([]),
     symlinks: /** @type {string[]} */ ([]),
   };
 
@@ -1814,6 +1872,7 @@ async function main() {
   violations.push(...(await checkFrameworkActionIdentity()));
   violations.push(...state.rule50);
   violations.push(...state.rule51);
+  violations.push(...state.rule52);
 
   if (violations.length === 0) {
     process.stdout.write("[eve:guard:invariants] ok — all mechanical lints passed.\n");
