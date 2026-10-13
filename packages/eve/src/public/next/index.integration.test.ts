@@ -220,7 +220,7 @@ describe("withEve Vercel config", () => {
     expect(rewrites).toBeUndefined();
   });
 
-  it("preserves an already configured Build Output eve service and inserts its route", async () => {
+  it("keeps a configured Build Output eve service and drops routes eve does not own", async () => {
     const appRoot = await createTempAppRoot();
     process.chdir(appRoot);
     vi.stubEnv("NODE_ENV", "production");
@@ -235,6 +235,7 @@ describe("withEve Vercel config", () => {
           version: 3,
           routes: [
             { handle: "filesystem" },
+            { dest: "/about.rsc", has: [{ key: "rsc", type: "header" }], src: "^/about$" },
             {
               destination: {
                 service: "agent",
@@ -269,7 +270,6 @@ describe("withEve Vercel config", () => {
           },
           src: "^/eve/v1/(.*)$",
         },
-        { handle: "filesystem" },
       ],
       services: {
         agent: {
@@ -587,7 +587,6 @@ describe("withEve Vercel config", () => {
           },
           src: "^/eve/support/v1/(.*)$",
         },
-        { handle: "filesystem" },
       ],
       services: {
         "eve-billing": {

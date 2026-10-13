@@ -155,6 +155,9 @@ export async function ensureEveVercelOutputConfig(input: {
     };
   }
 
+  // `vercel build` appends these routes to the routes Next.js emits, so carrying
+  // forward routes eve does not own (Next.js output from this or an earlier
+  // build) would duplicate them in the deployed route table.
   const assembled = assembleEveVercelServices({
     agents: input.agents.map((agent) => ({
       agent,
@@ -163,7 +166,6 @@ export async function ensureEveVercelOutputConfig(input: {
         projectRoot: input.nextRoot,
       },
     })),
-    routes: existingConfig.routes,
     services: existingServices,
   });
   await Promise.all(assembled.rootDirectories.map((root) => mkdir(root, { recursive: true })));
