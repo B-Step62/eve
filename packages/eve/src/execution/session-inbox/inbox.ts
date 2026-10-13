@@ -255,6 +255,7 @@ export function createSessionInbox(sessionId: string): SessionInboxHandle {
 
 export function isWorkflowMessage(value: SessionInboxPayload): value is WorkflowToolRunMessage {
   return (
+    value.kind === "sandbox-request" ||
     value.kind === "agent-started" ||
     value.kind === "started" ||
     value.kind === "report" ||
