@@ -136,4 +136,38 @@ describe("Monty recorded-call replay", () => {
       }),
     ).toContain('"a-b": Required[str]');
   });
+  it("review: replaying an older durable checkpoint must expose its next unresolved call", async () => {
+    const program = input('first = await echo({"x": 1})\nawait echo(first)');
+    const first = await runtime.start(program);
+    if (first.status !== "parked") throw new Error("expected park");
+    const checkpoint = {
+      ...program,
+      state: first.state,
+      results: [{ index: 0, status: "completed" as const, output: 2 }],
+    };
+    const next = await runtime.resume(checkpoint);
+    expect(next).toMatchObject({ status: "parked", calls: [{ index: 1, input: 2 }] });
+    const replay = await runtime.resume(checkpoint);
+    expect(replay).toMatchObject({ status: "parked", calls: [{ index: 1, input: 2 }] });
+  });
+  it("review: print logs must be bounded outside guest memory", async () => {
+    const result = await runtime.start(input('for i in range(1000):\n    print("x" * 1024)\n42'));
+    expect(result.status).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.logs.join("").length).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("retains bounded UTF-8 logs on failure", async () => {
+    const result = await runtime.start(
+      input(
+        'for i in range(1000):\n    print("😀" * 1024)\nraise ValueError("failure after printing")',
+      ),
+    );
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") return;
+    expect(result.logs.length).toBeGreaterThan(0);
+    expect(result.logs.length).toBeLessThanOrEqual(256);
+    expect(Buffer.byteLength(result.logs.join(""))).toBeLessThanOrEqual(16 * 1024);
+    expect(result.error).toContain("failure after printing");
+  });
 });

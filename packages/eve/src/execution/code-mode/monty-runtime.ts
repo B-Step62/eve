@@ -1,14 +1,7 @@
 import { performance } from "node:perf_hooks";
+import { collectPythonLogs } from "./python-logs.js";
 import { randomUUID } from "node:crypto";
-import {
-  Monty,
-  MontyComplete,
-  NameLookupSnapshot,
-  FunctionSnapshot,
-  FutureSnapshot,
-  type Snapshot,
-  type MontySession,
-} from "@pydantic/monty/wasm";
+import type { Monty, MontySession, Snapshot } from "@pydantic/monty/wasm";
 import type { JsonValue } from "#shared/json.js";
 import type {
   ProgramRuntime,
@@ -32,6 +25,7 @@ interface LiveExecution {
   pendingIds: Map<number, number>;
   identity: string;
   timer: ReturnType<typeof setTimeout>;
+  resultsIdentity: string;
 }
 export class MontyProgramRuntime implements ProgramRuntime {
   private pool: Promise<Monty> | undefined;
@@ -65,8 +59,21 @@ export class MontyProgramRuntime implements ProgramRuntime {
     token?: string,
   ): Promise<ProgramStep> {
     const timing = { startupMs: 0, runMs: 0 };
-    const step = await this.runMeasured(input, results, token, timing);
-    return { ...step, timing };
+    try {
+      const step = await this.runMeasured(input, results, token, timing);
+      return { ...step, timing };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        status: "failed",
+        errorClass: "runtime",
+        error: message.includes("@pydantic/monty")
+          ? "Python code mode requires the optional @pydantic/monty dependency. Install it in your app."
+          : message,
+        logs: [],
+        timing,
+      };
+    }
   }
 
   private async runMeasured(
@@ -84,9 +91,20 @@ export class MontyProgramRuntime implements ProgramRuntime {
       }
     }
     const startupStarted = performance.now();
+    const { Monty, MontyComplete, NameLookupSnapshot, FunctionSnapshot, FutureSnapshot } =
+      await import("@pydantic/monty/wasm");
+    const resultsIdentity = JSON.stringify(results);
     const identity = JSON.stringify([input.source, input.toolNames, input.limits]);
     let execution = token ? this.live.get(token) : undefined;
-    if (execution?.identity !== identity) execution = undefined;
+    if (
+      execution?.identity !== identity ||
+      (execution &&
+        execution.resultsIdentity !==
+          JSON.stringify(
+            results.filter((result) => result.index < Math.min(...execution!.pendingIds.values())),
+          ))
+    )
+      execution = undefined;
     if (execution && token) this.live.delete(token);
     const logs: string[] = execution?.logs ?? [];
     const pending: ProgramCall[] = [];
@@ -128,7 +146,7 @@ export class MontyProgramRuntime implements ProgramRuntime {
         execution?.snapshot ??
         (await drive(() =>
           session!.feedStart(input.source, {
-            printCallback: (_stream, text) => logs.push(text),
+            printCallback: (_stream, text) => collectPythonLogs(logs, text),
           }),
         ));
       while (!(snapshot instanceof MontyComplete)) {
@@ -214,19 +232,27 @@ export class MontyProgramRuntime implements ProgramRuntime {
               continue;
             }
           }
-          const key = token ?? randomUUID();
-          const timer =
-            execution?.timer ??
-            setTimeout(
-              () => {
-                const expired = this.live.get(key);
-                this.live.delete(key);
-                void expired?.session.close();
-              },
-              Math.max(1, input.limits.deadlineAt - Date.now()),
-            );
+          const key = randomUUID();
+          if (execution) clearTimeout(execution.timer);
+          const timer = setTimeout(
+            () => {
+              const expired = this.live.get(key);
+              this.live.delete(key);
+              void expired?.session.close();
+            },
+            Math.max(1, input.limits.deadlineAt - Date.now()),
+          );
           timer.unref();
-          this.live.set(key, { session, snapshot, index, logs, pendingIds, identity, timer });
+          this.live.set(key, {
+            session,
+            snapshot,
+            index,
+            logs,
+            pendingIds,
+            identity,
+            timer,
+            resultsIdentity,
+          });
           parked = true;
           return { status: "parked", calls: pending, state: key };
         }

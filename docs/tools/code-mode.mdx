@@ -17,7 +17,7 @@ export default defineAgent({
 });
 ```
 
-`codeMode: true` selects JavaScript. You can also write `codeMode: { language: "js" }`. Select `codeMode: { language: "py" }` for Python, executed with Monty's WASM sandbox. Search returns Python signatures for Python agents.
+`codeMode: true` selects JavaScript. You can also write `codeMode: { language: "js" }`. Python is opt-in: install `@pydantic/monty` in your app, then select `codeMode: { language: "py" }` for Python, executed with Monty's WASM sandbox. JavaScript-only installations do not install or load Monty. Search returns Python signatures for Python agents.
 
 ## Execute a program
 
