@@ -65,11 +65,18 @@ export class SessionInputQueue {
     for (const id of ids) this.admittedDeliveryIds.add(id);
   }
 
+  hasUnadmitted(delivery: DeliverHookPayload): boolean {
+    return delivery.payloads.some((_, index) => {
+      const id = deliveryMetadataAt(delivery, index)?.deliveryId;
+      return id === undefined || !this.admittedDeliveryIds.has(id);
+    });
+  }
+
   enqueueDelivery(delivery: DeliverHookPayload): DeliveryAdmission | undefined {
     const payloads: DeliverPayload[] = [];
     const deliveryMetadata: NonNullable<DeliverHookPayload["deliveryMetadata"]>[number][] = [];
     for (const [index, payload] of delivery.payloads.entries()) {
-      const metadata = delivery.deliveryMetadata?.find((entry) => entry.payloadIndex === index);
+      const metadata = deliveryMetadataAt(delivery, index);
       const id = metadata?.deliveryId;
       if (id !== undefined && this.admittedDeliveryIds.has(id)) continue;
       if (id !== undefined) this.admittedDeliveryIds.add(id);
@@ -272,4 +279,8 @@ function combine(entries: readonly DeliveryAdmission[]): DeliverHookPayload {
 function authorizationAttemptId(payload: DeliverPayload): string | undefined {
   const callback = payload["authorizationCallback"] as { readonly attemptId?: unknown } | undefined;
   return typeof callback?.attemptId === "string" ? callback.attemptId : undefined;
+}
+
+function deliveryMetadataAt(delivery: DeliverHookPayload, index: number) {
+  return delivery.deliveryMetadata?.find((entry) => entry.payloadIndex === index);
 }

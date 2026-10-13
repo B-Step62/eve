@@ -15,6 +15,18 @@ const delivery = (...ids: string[]): DeliverHookPayload => ({
 });
 
 describe("delivery id admission", () => {
+  it("reports only unadmitted payloads, including mixed and id-less batches", () => {
+    const queue = new SessionInputQueue();
+    expect(queue.hasUnadmitted(delivery("A"))).toBe(true);
+    queue.enqueueDelivery(delivery("A"));
+    queue.takeNext();
+    expect(queue.hasUnadmitted(delivery("A"))).toBe(false);
+    expect(queue.hasUnadmitted(delivery("A", "B"))).toBe(true);
+    expect(queue.hasUnadmitted({ kind: "deliver", payloads: [{ message: "no id" }] })).toBe(true);
+    expect(queue.hasUnadmitted(delivery())).toBe(false);
+    queue.markAdmitted(["B"]);
+    expect(queue.hasUnadmitted(delivery("A", "B"))).toBe(false);
+  });
   it("admits overlapping repeated delivery ids only once, even after selection", async () => {
     const queue = new SessionInputQueue();
     expect((await admitSessionInboxPayload(delivery("A"), { queue })).kind).toBe("delivery");
