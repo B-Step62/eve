@@ -4,6 +4,7 @@ import type { FrameworkContextProvider } from "#context/provider.js";
 import { connectionProvider } from "#context/providers/connection.js";
 import { sandboxProvider } from "#context/providers/sandbox.js";
 import { sessionProvider } from "#context/providers/session.js";
+import { prepareInheritedSandbox } from "#execution/sandbox/prepare-inheritance.js";
 import { toolStubProvider } from "#context/providers/tool-stubs.js";
 
 /**
@@ -98,6 +99,7 @@ export async function runStep(
 ): Promise<StepResult> {
   const scoped = await withContextScope(ctx, harnessSession, async (enriched) => {
     const result = await callback(enriched);
+    await prepareInheritedSandbox(ctx, result.session);
     return { result, session: result.session };
   });
   return { ...scoped.result, session: scoped.session };

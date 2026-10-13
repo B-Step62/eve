@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { shutdownActiveSandboxHandles } from "#execution/sandbox/active-handles.js";
-import { ContextContainer, contextStorage } from "#context/container.js";
-import { SessionKey } from "#context/keys.js";
+import { ContextContainer, contextStorage, loadContext } from "#context/container.js";
+import { AuthKey, SandboxKey, SessionIdKey, SessionKey } from "#context/keys.js";
+import { runStep } from "#context/run-step.js";
+import { deserializeContext, serializeContext } from "#context/serialize.js";
+import { withParkedStep } from "#internal/testing/session-machine.js";
+import { defineState } from "#public/definitions/state.js";
+import { BundleKey, type CompiledBundle } from "#runtime/sessions/runtime-context-keys.js";
+import type { HarnessSession } from "#harness/types.js";
 import { readDurableSession } from "#execution/durable-session-store.js";
 import { importConversation, readLegacySnapshot } from "#execution/legacy-session/snapshot.js";
 import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
@@ -367,4 +373,86 @@ describe("ensureSandboxAccess", () => {
     expect(onSessionEnd).not.toHaveBeenCalled();
     expect(value.create).not.toHaveBeenCalled();
   });
+});
+
+describe("inheriting child dispatch", () => {
+  it.each(["agent", "worker"])(
+    "initializes the owner's selector before %s receives its sandbox snapshot",
+    async (toolName) => {
+      const creator = defineState(`sandbox-creator-${toolName}`, () => "");
+      const auth = {
+        attributes: {},
+        authenticator: "test",
+        principalId: "delegating-user",
+        principalType: "user",
+      };
+      const setup = vi.fn(() => {
+        const session = loadContext().require(SessionKey);
+        expect(session.sessionId).toBe("root-owner");
+        expect(session.auth.current).toEqual(auth);
+        creator.update(() => session.auth.current?.principalId ?? "");
+      });
+      const value = fixture(setup);
+      const childRegistry = inheritingChildRegistry(value.registry);
+      const bundle = {
+        compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+        graph: {
+          root: { nodeId: "__root__", sandboxRegistry: value.registry },
+          nodesByNodeId: new Map([["worker", { sandboxRegistry: childRegistry }]]),
+        },
+        subagentRegistry: {
+          subagentsByName: new Map([["worker", { definition: { nodeId: "worker" } }]]),
+        },
+      } as unknown as CompiledBundle;
+      const ctx = new ContextContainer();
+      ctx.set(BundleKey, bundle);
+      ctx.set(AuthKey, auth);
+      ctx.set(SessionIdKey, "root-owner");
+      const session: HarnessSession = {
+        agent: { modelReference: { id: "test" }, system: "", tools: [] },
+        compaction: { recentWindowSize: 10, threshold: 100_000 },
+        continuationToken: "root-token",
+        history: [],
+        sessionId: "root-owner",
+      };
+      const result = await runStep(ctx, session, async (parent) => ({
+        next: null,
+        session: withParkedStep(parent, {
+          tasks: ["first", "second"].map((callId) => ({
+            callId,
+            entry: { entryPoint: "serve", taskId: callId },
+            input: { message: "work" },
+            kind: "workflow-task",
+            toolName,
+            workflowId: "agent-workflow",
+          })),
+        }),
+      }));
+      expect(setup).toHaveBeenCalledOnce();
+      expect(value.start).toHaveBeenCalledOnce();
+      expect(result.session.sandboxState?.session?.providerName).toBe("test");
+      await contextStorage.run(ctx, async () => expect(creator.get()).toBe(auth.principalId));
+
+      // The child consumes the same persisted snapshot that buildSubagentRunInput forwards.
+      await Promise.all([
+        open(childRegistry, "root-owner", result.session.sandboxState, "worker"),
+        open(childRegistry, "root-owner", result.session.sandboxState, "worker"),
+      ]);
+      expect(setup).toHaveBeenCalledOnce();
+      expect(value.start).toHaveBeenCalledOnce();
+
+      // Rehydrate durable authored state without invoking the fixture's bundle loader.
+      const serialized = serializeContext(ctx);
+      delete serialized[BundleKey.name];
+      const resumed = await deserializeContext(serialized);
+      resumed.set(BundleKey, bundle);
+      await runStep(resumed, result.session, async (parent) => {
+        expect(creator.get()).toBe(auth.principalId);
+        await loadContext().require(SandboxKey).get();
+        return { next: null, session: parent };
+      });
+      expect(setup).toHaveBeenCalledOnce();
+      expect(value.start).toHaveBeenCalledOnce();
+    },
+  );
 });
