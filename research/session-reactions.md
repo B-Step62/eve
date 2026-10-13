@@ -1020,7 +1020,6 @@ Two caveats. The runner reads the v27 public view, which exists for clients anyw
 - **A simple async resolver becomes two functions:** a data-fetching `record` and a `render` that constructs from it.
 - **First-value snapshots are indirect.** "The parent's model when the session started" isn't a function of the current view; it takes a hook that latches it into session state. A `once` value that captured the first caller captures whoever is current after a deployment change.
 - **A caught failure sticks.** A value that catches an error and returns `null` keeps that `null` until its selection changes.
-- **Records are carried by every step.** A large record costs on every step of the session, not once. The 1 MB cap bounds it, but authors still have to choose what to record.
 
 ## Scope
 
