@@ -404,9 +404,11 @@ round up (`Math.ceil` of UTF-8 bytes / 4), because they reach an integer field o
   `publishInputResolutions` are deleted. Model attempts are facts (`model.started` per attempt,
   `model.retried`), so instrumentation doesn't keep its own record of them.
 - **One vocabulary (PR 10).** Providers used to hear endings under names of their own, one event
-  per ending: `session.completed`/`failed`, `turn.completed`/`cancelled`/`failed`,
+  per ending: `session.completed`/`failed`/`waiting`, `turn.completed`/`cancelled`/`failed`,
   `tool.call.started`/`completed`/`failed` and `input.requested`/`resolved`. Now they hear the
-  stream's names, and each ending is one event with the fact's outcome:
+  stream's names, and each ending is one event with the fact's outcome. `session.waiting` goes
+  with no replacement, because waiting isn't an event in v27; the OTel provider ends a turn's span
+  at its `turn.settled` rather than at the next session transition:
 
   | Event                                       | Outcome                              |
   | ------------------------------------------- | ------------------------------------ |
@@ -1038,11 +1040,11 @@ own.
   generated files (`setup/scaffold/create/web-template.ts`, extension contracts), from
   `git diff --numstat -M` (`/tmp/buckets.py`).
 - "Main" is `9559de83b`. The base is `v27/hitl-base` (`0606084ae`), the prep tip is
-  `61ffbd129`, and PR 10's head is `b4dc0715a`. Each PR's figure is its own head against the
+  `61ffbd129`, and PR 10's head is `9cd9eeff5`. Each PR's figure is its own head against the
   previous PR's head.
 - Areas follow `~/harness-core-loc.md`'s classification (`/tmp/cats.py`), with `harness/facts.ts`
   counted under the writer.
-- Reactions is `b4dc0715a` → #4616's head `b01914f26`, bucketed file by file (`/tmp/rxcats.py`).
+- Reactions is `9cd9eeff5` → #4616's head `1f31eb64a`, bucketed file by file (`/tmp/rxcats.py`).
 - Rui's #4604 (+100) is inside PR 2 and counted there. It's #4604's growth, not ours, and so
   is #4566 + #4522's +163.
 - Outside production code, main → PR 10 is +530 docs, −659 apps, +229 e2e and +224 generated.
