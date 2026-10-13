@@ -25,6 +25,17 @@ async function createTempAppRoot(): Promise<string> {
   return await mkdtemp(join(tmpdir(), "eve-next-config-"));
 }
 
+async function createAgentRoots(appRoot: string, roots: readonly string[]): Promise<void> {
+  for (const root of roots) {
+    await mkdir(join(appRoot, root), { recursive: true });
+    await writeFile(
+      join(appRoot, root, "package.json"),
+      `${JSON.stringify({ dependencies: { eve: "*" } })}\n`,
+    );
+    await writeFile(join(appRoot, root, "instructions.md"), "Help.\n");
+  }
+}
+
 async function readJsonFile(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8")) as unknown;
 }
@@ -430,6 +441,7 @@ describe("withEve Vercel config", () => {
   it("writes one Build Output service and route for each named agent", async () => {
     const appRoot = await createTempAppRoot();
     process.chdir(appRoot);
+    await createAgentRoots(appRoot, ["agents/billing", "agents/support"]);
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VERCEL", "1");
     vi.stubEnv("VERCEL_URL", "preview.example.com");
@@ -516,9 +528,27 @@ describe("withEve Vercel config", () => {
     expect(rewrites).toBeUndefined();
   });
 
+  it("rejects a named agent root that eve resolves to a parent app", async () => {
+    const appRoot = await createTempAppRoot();
+    process.chdir(appRoot);
+    await writeFile(
+      join(appRoot, "package.json"),
+      `${JSON.stringify({ dependencies: { eve: "*" } })}\n`,
+    );
+    await mkdir(join(appRoot, "agent"), { recursive: true });
+    await writeFile(join(appRoot, "agent", "instructions.md"), "Root agent.\n");
+    await mkdir(join(appRoot, "eve-alpha", "agent"), { recursive: true });
+    await writeFile(join(appRoot, "eve-alpha", "agent", "instructions.md"), "Alpha.\n");
+
+    await expect(
+      resolveConfig(withEve<TestConfig>({}, { agents: { alpha: "./eve-alpha" } })),
+    ).rejects.toThrow(/Give .+eve-alpha its own package\.json that depends on eve\./u);
+  });
+
   it("normalizes existing Build Output service arrays before adding named agents", async () => {
     const appRoot = await createTempAppRoot();
     process.chdir(appRoot);
+    await createAgentRoots(appRoot, ["agents/billing", "agents/support"]);
     await mkdir(join(appRoot, ".vercel", "output"), { recursive: true });
     await writeFile(join(appRoot, ".vercel", "project.json"), "{}\n");
     await writeFile(join(appRoot, ".vercel", "output", "builds.json"), "{}\n");

@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { NextConfig } from "next";
@@ -375,23 +376,54 @@ async function normalizeAgentsConfig(
     throw new Error("withEve agents must contain at least one named eve agent.");
   }
 
-  return entries.map(([name, config], index) => {
-    assertValidAgentName(name);
+  return await Promise.all(
+    entries.map(async ([name, config], index) => {
+      assertValidAgentName(name);
 
-    const agentConfig = typeof config === "string" ? { root: config } : config;
-    const appRoot = resolveApplicationRoot(agentConfig.root);
+      const agentConfig = typeof config === "string" ? { root: config } : config;
+      const appRoot = resolveApplicationRoot(agentConfig.root);
+      await assertEveAppRoot(name, appRoot);
 
-    return {
-      appRoot,
-      buildCommand: resolveBuildCommand(appRoot, agentConfig.buildCommand),
-      localProductionPortOffset: index,
-      name,
-      publicRoutePrefix: createNamedAgentRoutePrefix(name),
-      servicePrefix: normalizeRoutePrefix(
-        agentConfig.servicePrefix ?? createNamedAgentServicePrefix(servicePrefixBase, name),
-      ),
-    };
-  });
+      return {
+        appRoot,
+        buildCommand: resolveBuildCommand(appRoot, agentConfig.buildCommand),
+        localProductionPortOffset: index,
+        name,
+        publicRoutePrefix: createNamedAgentRoutePrefix(name),
+        servicePrefix: normalizeRoutePrefix(
+          agentConfig.servicePrefix ?? createNamedAgentServicePrefix(servicePrefixBase, name),
+        ),
+      };
+    }),
+  );
+}
+
+// `eve build` and `eve dev` rediscover their app root from the working
+// directory, so a root that resolves elsewhere would silently build and run a
+// different agent.
+async function assertEveAppRoot(name: string, appRoot: string): Promise<void> {
+  const isDirectory = await stat(appRoot).then(
+    (entry) => entry.isDirectory(),
+    () => false,
+  );
+  if (!isDirectory) {
+    throw new Error(`withEve agents.${name} points to ${appRoot}, which is not a directory.`);
+  }
+
+  const context = await findEveProjectContext(appRoot);
+  const resolvedAppRoot =
+    context?.kind === "standalone"
+      ? context.appRoot
+      : context?.kind === "workspace-member"
+        ? context.member.appRoot
+        : undefined;
+  if (resolvedAppRoot === appRoot) return;
+
+  throw new Error(
+    resolvedAppRoot === undefined
+      ? `withEve agents.${name} points to ${appRoot}, which is not an eve agent root. Give it an agent/ directory and a package.json that depends on eve.`
+      : `withEve agents.${name} points to ${appRoot}, but eve resolves that path to the agent at ${resolvedAppRoot}. Give ${appRoot} its own package.json that depends on eve.`,
+  );
 }
 
 async function buildAgentWorkspaceExtensions(
