@@ -13,6 +13,15 @@ const models = (
 // `agent/lib/program-arms.ts` configures their runtime.
 const arms = (process.env.EVE_ARMS_MODES ?? "direct,deferred,subagents").split(",");
 const TASKS = 10;
+// A shell started inside an `eve dev` session (an agent's sandbox, a dev
+// terminal) inherits that session's local-world wiring. Passed through, the
+// eval's queue deliveries go to the outer dev server and every run hangs on
+// "Workflow delivery is not trusted", so drop it before spawning `eve eval`.
+const baseEnv = Object.fromEntries(
+  Object.entries(process.env).filter(
+    ([key]) => key !== "WORKFLOW_LOCAL_BASE_URL" && !key.startsWith("EVE_DEV_"),
+  ),
+);
 const sizes = (process.env.EVE_ARMS_SIZES ?? "moderate,large").split(",");
 // `--summary` rebuilds summary.md from the existing rows without running evals.
 const summaryOnly = process.argv.includes("--summary");
@@ -28,7 +37,7 @@ for (let repetition = 1; !summaryOnly && repetition <= repetitions; repetition++
           timeout: 900_000,
           maxBuffer: 32 * 1024 * 1024,
           env: {
-            ...process.env,
+            ...baseEnv,
             EVE_E2E_MODEL: model,
             EVE_ARMS_MODE: arm,
             EVE_ARMS_SIZE: size,
