@@ -12,8 +12,10 @@ export function measuredEval(id: string, prompt: string, expected: string[]) {
         row,
         expected,
         referenceOf,
-        send: () =>
-          t.send(
+        // Through a live turn rather than `t.send`, so a turn that times out
+        // still hands back the events it streamed.
+        start: async () =>
+          (await t.session()).start(
             prompt + " Include the exact reference returned by each requested tool in your answer.",
           ),
         collect: (turn, events) => collectChildEvents(turn.session, events, t.signal),
