@@ -179,7 +179,7 @@ describe("summarizeTurnEvents across a task wait", () => {
     expect(summarizeTurnEvents(events).message).toBe("The requested answer.");
   });
 
-  it("replaces the reply written before the wait with the one written after it", () => {
+  it("reports every reply the turn wrote, in order, separated by a blank line", () => {
     const events = [
       {
         type: "message.completed",
@@ -193,7 +193,9 @@ describe("summarizeTurnEvents across a task wait", () => {
       ...turnEnd,
     ] satisfies UnstampedMessageStreamEvent[];
 
-    expect(summarizeTurnEvents(events).message).toBe("The team confirmed it.");
+    expect(summarizeTurnEvents(events).message).toBe(
+      "Checking with the team.\n\nThe team confirmed it.",
+    );
   });
 
   it("does not report tool-call narration written before the wait as the reply", () => {

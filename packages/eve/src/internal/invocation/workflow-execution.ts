@@ -22,6 +22,7 @@ import {
   type HandleMessageStreamEvent,
   type InputResolution,
   isReplyMessageCompleted,
+  joinReplies,
 } from "#protocol/message.js";
 import { type InputRequest, type InputResponse, parseInputResponses } from "#shared/input.js";
 import type { JsonValue } from "#shared/json.js";
@@ -318,14 +319,14 @@ function projectInvocation(
 ): AgentInvocation {
   const authorizations = new Map<string, AgentInvocationAuthorizationRequest>();
   let inputBatch: PendingInputBatch | undefined;
-  let result: JsonValue | undefined;
+  let replies: string[] = [];
   let settled: "completed" | "cancelled" | InvocationFailureEvent | undefined;
   for (const event of events) {
     switch (event.type) {
       case "turn.started":
         authorizations.clear();
         inputBatch = undefined;
-        result = undefined;
+        replies = [];
         settled = undefined;
         break;
       case "input.requested":
@@ -361,7 +362,7 @@ function projectInvocation(
         settled = undefined;
         break;
       case "message.completed":
-        if (isReplyMessageCompleted(event)) result = safeJson(event.data.message);
+        if (isReplyMessageCompleted(event)) replies.push(event.data.message);
         break;
       case "turn.completed":
         settled = "completed";
@@ -375,6 +376,8 @@ function projectInvocation(
         break;
     }
   }
+  const reply = joinReplies(replies);
+  const result = reply === undefined ? undefined : safeJson(reply);
   const failure = typeof settled === "object" ? settled : undefined;
   const failed = (): AgentInvocation => ({
     ...base,

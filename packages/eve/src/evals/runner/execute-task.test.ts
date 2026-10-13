@@ -137,7 +137,7 @@ describe("executeTask", () => {
     expect(outcome.result.finalMessage).toBe("Welcome back Alice");
   });
 
-  it("reports the reply written before a task wait when the resumed turn writes none", async () => {
+  it("reports every reply a turn wrote across a task wait", async () => {
     const server = createScriptedServer([
       {
         sessionId: "session_1",
@@ -145,6 +145,7 @@ describe("executeTask", () => {
           turnStarted("turn_0"),
           messageCompleted("The requested answer.", "turn_0"),
           turnWaitingOnTasks("turn_0"),
+          messageCompleted("Slack also confirmed it.", "turn_0"),
           turnCompleted("turn_0"),
           sessionWaiting(),
         ],
@@ -155,11 +156,13 @@ describe("executeTask", () => {
       client: new Client({ host: target.url }),
       target,
       evaluation: createTestEval(async (t) => {
-        expect((await t.send("Summarize the thread")).message).toBe("The requested answer.");
+        expect((await t.send("Summarize the thread")).message).toBe(
+          "The requested answer.\n\nSlack also confirmed it.",
+        );
       }),
     });
     expect(outcome.error).toBeUndefined();
-    expect(outcome.result.finalMessage).toBe("The requested answer.");
+    expect(outcome.result.finalMessage).toBe("The requested answer.\n\nSlack also confirmed it.");
   });
 
   it("reports no message for a silent turn after an answered one", async () => {

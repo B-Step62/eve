@@ -61,20 +61,20 @@ This consumes the stream until the current turn boundary:
   attached through it; see [authorization pauses](#authorization-pauses)
 
 A `turn.waiting` with `on: "tasks"` is informational: the turn stays open, and
-`result()` keeps reading to its final reply. When a call the turn
+`result()` keeps reading to the turn's end. When a call the turn
 runs asks a question, such as a workflow tool's `ctx.ask()`, `result()` returns
 `status: "waiting"` with the question in `inputRequests` and any reply written
 before it in `message`. Answer it with
-`respond()`, which keeps reading the same turn; its `message` holds only a reply
-written after the answer. A question stays pending until
+`respond()`, which keeps reading the same turn; its `message` holds only the
+replies written after the answer. A question stays pending until
 its `input.resolved`, which the session you answer on also emits for a
 subagent's or workflow tool's question.
 
 A turn that waits on its [tasks](/docs/tools/workflows#run-calls-as-tasks-task)
 emits `turn.waiting` with `on: "tasks"`. `result()` resolves after the tasks
-finish with the last reply the turn completed: a reply written after the wait
-replaces the text written before it, and when the resumed turn writes nothing
-more, the text written before the wait stands.
+finish. Its `message` holds every reply the turn wrote, in order and separated
+by a blank line, so it matches what a channel such as Slack posted: the text
+written before the wait, then any reply written after it.
 
 `result()` closes that HTTP stream, including when fetch instrumentation clones
 the response for tracing. The durable session remains available for follow-up

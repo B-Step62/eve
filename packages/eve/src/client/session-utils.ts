@@ -7,6 +7,7 @@ import {
   isCurrentTurnBoundaryEvent,
   isReplyMessageCompleted,
   isTurnFailureEvent,
+  joinReplies,
 } from "#protocol/message.js";
 import {
   foldSession,
@@ -42,19 +43,19 @@ export function summarizeTurnEvents(
   const segment = new TurnSegment();
   let boundary: UnstampedMessageStreamEvent | undefined;
   let failure: TurnFailureStreamEvent | undefined;
-  let message: string | undefined;
+  const replies: string[] = [];
 
   for (const event of events) {
     if (segment.observe(event)) boundary = event;
     if (isTurnFailureEvent(event)) failure = event;
-    if (isReplyMessageCompleted(event)) message = event.data.message ?? undefined;
+    if (isReplyMessageCompleted(event)) replies.push(event.data.message);
   }
 
   return {
     boundary,
     failure,
     inputRequests: segment.inputRequests,
-    message,
+    message: joinReplies(replies),
     pendingAuthorizations: segment.pendingAuthorizations,
     status: summarizeBoundaryStatus(boundary),
   };

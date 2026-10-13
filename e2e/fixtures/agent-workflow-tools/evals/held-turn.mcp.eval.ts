@@ -1,16 +1,17 @@
 import { defineEval } from "eve/evals";
 import { equals, satisfies } from "eve/evals/expect";
 
+import { DELEGATE_INTERIM_MESSAGE } from "../task-scenario-text";
 import { callMcpTool, pollInvocation, type McpInvocation } from "./mcp-client";
 
 /**
  * An MCP client starts the delegating script with `agent_start`. The root
- * agent's turn holds while `workflow-stager` works, so its interim text is not
- * the answer: `agent_get` reports `working` until the turn really ends, then
- * `completed` with the final reply.
+ * agent's turn holds while `workflow-stager` works: `agent_get` reports
+ * `working` until the turn really ends, then `completed` with the text written
+ * before the wait followed by the final reply.
  */
 export default defineEval({
-  description: "MCP agent_start with a delegating agent reports only the final reply.",
+  description: "MCP agent_start with a delegating agent reports every reply of its held turn.",
   async test(t) {
     const started = await callMcpTool(t.target, "agent_start", {
       message: "WORKFLOW-DELEGATE-STAGE Stage api through workflow-stager and report back.",
@@ -24,8 +25,10 @@ export default defineEval({
       satisfies(
         (result: unknown) =>
           typeof result === "string" &&
-          result.startsWith("WORKFLOW-DELEGATE-RESULT WORKFLOW-CHILD-STAGED "),
-        "the completed result is the final reply",
+          result.startsWith(
+            `${DELEGATE_INTERIM_MESSAGE}\n\nWORKFLOW-DELEGATE-RESULT WORKFLOW-CHILD-STAGED `,
+          ),
+        "the completed result is the text before the wait, then the final reply",
       ),
     );
     t.check(

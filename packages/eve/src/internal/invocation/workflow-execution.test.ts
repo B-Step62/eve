@@ -498,7 +498,7 @@ describe("WorkflowAgentInvocationExecution", () => {
     ).resolves.toMatchObject({ result: "The requested answer.", status: "completed" });
   });
 
-  it("completes with the reply written after a task wait in place of the one before it", async () => {
+  it("completes with every reply the turn wrote across a task wait", async () => {
     runsGet.mockResolvedValue(run({ status: "running" }));
     getReadable.mockReturnValue(
       eventStream([
@@ -511,7 +511,10 @@ describe("WorkflowAgentInvocationExecution", () => {
 
     await expect(
       execution().read({ auth, invocationId: "wrun_invocation" }),
-    ).resolves.toMatchObject({ result: "The team confirmed it.", status: "completed" });
+    ).resolves.toMatchObject({
+      result: "Checking with the team.\n\nThe team confirmed it.",
+      status: "completed",
+    });
   });
 
   it("completes without a result when the turn after an answered one stays silent", async () => {

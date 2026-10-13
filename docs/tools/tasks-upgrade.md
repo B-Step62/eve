@@ -163,13 +163,12 @@ reports each wait with the new `turn.waiting` event, which carries the open turn
 - **`turn.completed` comes only when the turn really ends,** and `session.waiting` always means
   the turn has ended.
 
-The TypeScript client's `send(...).result()` reads past `turn.waiting` and returns the last reply a
-held turn completed: a reply written after the wait replaces the text written before it, and the
-text written before the wait stands when the resumed turn writes nothing more. It stops at
-`turn.waiting` only while a question is pending, and returns `status: "waiting"` with that
-question; `respond()` then reads the same turn to its end. A custom client that ends a response at
-`turn.completed` or `session.waiting` mid-turn, or that shows the first completed message as the
-reply, should follow the same rule. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
+The TypeScript client's `send(...).result()` reads past `turn.waiting` and returns every reply a
+held turn wrote, in order and separated by a blank line. It stops at `turn.waiting` only while a
+question is pending, and returns `status: "waiting"` with that question; `respond()` then reads the
+same turn to its end. A custom client that ends a response at `turn.completed` or
+`session.waiting` mid-turn, or that shows only one completed message as the reply, should follow
+the same rule. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
 
 Task results aren't stream events. Background task results used to appear as `message.received`
 with `data.kind: "execution.background_task"`; `message.received` no longer has `kind`, and a task
