@@ -39,6 +39,54 @@ afterEach(() => {
 });
 
 describe("workflowEntry integration", () => {
+  it("starts its first model turn without a separate durable session-creation step", async () => {
+    const runtime = await createTestRuntime({ agent: { name: "workflow-entry-fast-first-turn" } });
+    await runtime.run(async () => {
+      const run = await start(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          sessionTimeoutMs: false,
+          input: { message: "hello" },
+          serializedContext: buildSerializedContext({ channelKind: "http" }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+      try {
+        const turn = await stream.nextTurn();
+        expectSingleTurn(turn, "turn_0");
+        const world = await getWorld();
+        const events = await world.events.list({
+          runId: run.runId,
+          resolveData: "all",
+          pagination: { limit: 1000 },
+        });
+        const created = events.data.filter((event) => event.eventType === "step_created");
+        expect(created.length).toBeGreaterThan(0);
+        expect(created[0]).toMatchObject({
+          eventData: { stepName: expect.stringMatching(/\/\/turnStep$/) },
+        });
+        expect(created.some((event) => JSON.stringify(event).includes("//createSessionStep"))).toBe(
+          false,
+        );
+        const firstStart = events.data.findIndex((event) => event.eventType === "step_started");
+        expect(
+          events.data.slice(0, firstStart).filter((event) => event.eventType === "hook_created"),
+        ).toHaveLength(3);
+        // Recovery uses the complete state delta in turnStep's result, not a lost local preparation.
+        const { readTurnStepStates } = await import("#internal/testing/session-test-helpers.js");
+        const { waitForParkedTurnStep } = await import("#internal/testing/session-test-helpers.js");
+        await waitForParkedTurnStep(run.runId);
+        const states = await readTurnStepStates(run.runId);
+        expect(states[0]?.sessionState.sessionId).toBe(run.runId);
+        expect(states[0]?.sessionState.snapshot.session.history.length).toBeGreaterThan(0);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
   it("parks before initialization and initializes with the first message identity and title", async () => {
     let initializedSessions = 0;
     let initializedAuth: unknown;

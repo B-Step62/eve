@@ -138,8 +138,6 @@ export function createWorkflowRuntime(config: {
           return undefined;
         }
       };
-      const existing = await existingHandle();
-      if (existing) return existing;
       const bundle = await getCompiledRuntimeAgentBundle({
         compiledArtifactsSource: config.compiledArtifactsSource,
         nodeId: config.nodeId,
@@ -218,8 +216,10 @@ export function createWorkflowRuntime(config: {
       } catch (error) {
         // A different Functions instance may have won the same run creation.
         // The world's durable run is the authority, not an in-process lock.
-        const winner = await existingHandle();
-        if (winner) return winner;
+        if (EntityConflictError.is(error)) {
+          const winner = await existingHandle();
+          if (winner) return winner;
+        }
         logError(log, "failed to start workflow run", error, {
           continuationToken: input.continuationToken,
         });
