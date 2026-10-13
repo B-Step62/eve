@@ -16,8 +16,8 @@ have more detail:
 - [`session-event-tree.md`](./session-event-tree.md): ownership and closing.
 - [`session-core-target.md`](./session-core-target.md): waiting, and what 1.0 locks.
 - [`session-reactions.md`](./session-reactions.md): dynamic values and hooks.
-- [`instrumentation-session-events.md`](./instrumentation-session-events.md): instrumentation
-  alongside main's tracing library and reactions.
+- [`instrumentation-session-events.md`](./instrumentation-session-events.md): how the stack's
+  instrumentation meets main's tracing library.
 
 ## Summary
 
@@ -134,8 +134,7 @@ consumer.
   cards, HITL, usage, instrumentation and eval facts.
 - **Instrumentation speaks the stream's vocabulary.** Providers hear `session.ended`,
   `turn.settled`, `call.requested`/`call.settled` and `interaction.opened`/`interaction.settled`,
-  each ending carrying the fact's outcome. How this meets main's new tracing library, and a
-  proposal to have each ending carry what its start knew, are in
+  each ending carrying the fact's outcome. How this meets main's new tracing library is in
   [`instrumentation-session-events.md`](./instrumentation-session-events.md).
 
 ### Framework examples
@@ -927,16 +926,11 @@ flowchart LR
 | Facts and their meaning                              | Yes           | Clients fold them, and stored streams are read forever               |
 | `eve/events` tables and selectors                    | Yes           | Hooks, channels and clients read them through `ctx.view`             |
 | Hook and channel keys, `committed`                   | Yes           | Authored code keys on them                                           |
-| Instrumentation event names and outcomes             | Yes           | Providers key on them; see the proposal below the table              |
+| Instrumentation event names and outcomes             | Yes           | Providers key on them                                                |
 | Client types: `eve/client`, `react`, `vue`, `svelte` | Yes           | Frontends render them                                                |
 | `defineDynamic` / `defineHook` shapes, commands      | Yes           | Authored code                                                        |
 | Inbox, remote agent protocol 3, relays               | Additive only | Deployments talk during skew; versioned                              |
 | Session program, durable steps, private state        | No            | Only idle sessions cross deployments, through a versioned checkpoint |
-
-Because provider events lock at 1.0,
-[`instrumentation-session-events.md`](./instrumentation-session-events.md) proposes completing
-them first: each ending carries its start's name, kind and start time, read from the rows, so
-common providers need no `ctx.state`.
 
 Within stream version 27, a minor release may add facts that only add information, optional
 fields, outcomes, kinds, displays and styles. Outcomes and kinds are closed in TypeScript and
