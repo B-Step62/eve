@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { MontyProgramRuntime } from "./monty-runtime.js";
 import { renderPythonSignature } from "../catalog/python-signatures.js";
 const runtime = new MontyProgramRuntime();
+afterAll(() => runtime.close());
 function input(source: string) {
   return {
     source,
@@ -21,20 +22,47 @@ describe("Monty recorded-call replay", () => {
     expect(first).toEqual({
       status: "parked",
       calls: [{ index: 0, tool: "echo", input: { x: 1 } }],
-      state: null,
+      state: expect.any(String),
     });
     const resume = {
       ...program,
       state: null,
       results: [{ index: 0, status: "completed" as const, output: { x: 2 } }],
     };
-    expect(await runtime.resume(resume)).toEqual(await runtime.resume(resume));
+    expect(await runtime.resume(resume)).toMatchObject({ status: "parked", calls: [{ index: 1 }] });
     expect(
       await runtime.resume({
         ...resume,
         results: [...resume.results, { index: 1, status: "completed", output: 3 }],
       }),
     ).toMatchObject({ status: "completed", output: 3 });
+  });
+  it("continues a live execution and replays after losing its cache", async () => {
+    const program = input('first = await echo({"x": 1})\nawait echo(first)');
+    const first = await runtime.start(program);
+    if (first.status !== "parked") throw new Error("Expected park");
+    const resumed = {
+      ...program,
+      state: first.state,
+      results: [{ index: 0, status: "completed" as const, output: 2 }],
+    };
+    const live = await runtime.resume(resumed);
+    const restarted = new MontyProgramRuntime();
+    try {
+      const replay = await restarted.resume(resumed);
+      expect(live).toMatchObject({ status: "parked", calls: [{ index: 1, input: 2 }] });
+      expect(replay).toMatchObject({ status: "parked", calls: [{ index: 1, input: 2 }] });
+      if (live.status !== "parked") throw new Error("Expected park");
+      expect(
+        await runtime.resume({
+          ...resumed,
+          state: live.state,
+          results: [...resumed.results, { index: 1, status: "completed", output: 3 }],
+        }),
+      ).toMatchObject({ status: "completed", output: 3 });
+    } finally {
+      await restarted.close();
+    }
   });
   it.each(["failed", "unknown"] as const)("raises %s in Python", async (status) => {
     const program = input(

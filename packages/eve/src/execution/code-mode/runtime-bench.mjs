@@ -52,5 +52,6 @@ for (const runtime of runtimes) {
   await measure(runtime, "warm", 0);
   for (const count of [1, 10, 100]) await measure(runtime, "run", count);
 }
+for (const runtime of runtimes) await runtime.close?.();
 console.table(rows);
 console.log(JSON.stringify(rows));

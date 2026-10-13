@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   Monty,
   MontyComplete,
@@ -5,6 +6,7 @@ import {
   FunctionSnapshot,
   FutureSnapshot,
   type Snapshot,
+  type MontySession,
 } from "@pydantic/monty/wasm";
 import type { JsonValue } from "#shared/json.js";
 import type {
@@ -18,31 +20,64 @@ import type {
 } from "./runtime.js";
 
 /** Python uses flat external names: `await namespace__tool({"key": "value"})`.
- * Only recorded calls are durable; each step replays in a fresh sandbox.
+ * Only recorded calls are durable. Live continuations are a process-local optimization;
+ * an absent continuation replays recorded calls in a fresh sandbox.
  */
+interface LiveExecution {
+  session: MontySession;
+  snapshot: Snapshot;
+  index: number;
+  logs: string[];
+  pendingIds: Map<number, number>;
+  identity: string;
+  timer: ReturnType<typeof setTimeout>;
+}
 export class MontyProgramRuntime implements ProgramRuntime {
+  private pool: Promise<Monty> | undefined;
+  private live = new Map<string, LiveExecution>();
+  async close(): Promise<void> {
+    for (const execution of this.live.values()) {
+      clearTimeout(execution.timer);
+      await execution.session.close();
+    }
+    this.live.clear();
+    if (this.pool) await (await this.pool).close();
+    this.pool = undefined;
+  }
   readonly language = "py" as const;
   start(input: ProgramStart): Promise<ProgramStep> {
     return this.run(input, []);
   }
   resume(input: ProgramResume): Promise<ProgramStep> {
-    return this.run(input, input.results);
+    return this.run(
+      input,
+      input.results,
+      typeof input.state === "string" ? input.state : undefined,
+    );
   }
 
   private async run(
     input: ProgramStart,
     results: readonly ProgramCallResult[],
+    token?: string,
   ): Promise<ProgramStep> {
-    const logs: string[] = [];
+    const identity = JSON.stringify([input.source, input.toolNames, input.limits]);
+    let execution = token ? this.live.get(token) : undefined;
+    if (execution?.identity !== identity) execution = undefined;
+    if (execution && token) this.live.delete(token);
+    const logs: string[] = execution?.logs ?? [];
     const pending: ProgramCall[] = [];
     const futures = new Map<number, ProgramCallResult>();
     let errorClass: ProgramErrorClass = "runtime";
     const remaining = (input.limits.deadlineAt - Date.now()) / 1000;
     if (remaining <= 0)
       return { status: "failed", error: "Program deadline exceeded", errorClass: "deadline", logs };
-    const pool = await Monty.create({ maxProcesses: 1, requestTimeout: remaining });
+    this.pool ??= Monty.create({ maxProcesses: 32 });
+    const pool = await this.pool;
+    let parked = false;
+    let session: MontySession | undefined = execution?.session;
     try {
-      await using session = await pool.checkout({
+      session ??= await pool.checkout({
         limits: {
           maxMemory: input.limits.memoryBytes,
           maxRecursionDepth: 1000,
@@ -57,10 +92,17 @@ export class MontyProgramRuntime implements ProgramRuntime {
         },
       });
       const recorded = new Map(results.map((result) => [result.index, result]));
-      let index = 0;
-      let snapshot: Snapshot = await session.feedStart(input.source, {
-        printCallback: (_stream, text) => logs.push(text),
-      });
+      let index = execution?.index ?? 0;
+      const pendingIds = execution?.pendingIds ?? new Map<number, number>();
+      for (const [callId, callIndex] of pendingIds) {
+        const result = recorded.get(callIndex);
+        if (result) futures.set(callId, result);
+      }
+      let snapshot: Snapshot =
+        execution?.snapshot ??
+        (await session.feedStart(input.source, {
+          printCallback: (_stream, text) => logs.push(text),
+        }));
       while (!(snapshot instanceof MontyComplete)) {
         if (Date.now() >= input.limits.deadlineAt) {
           errorClass = "deadline";
@@ -105,6 +147,7 @@ export class MontyProgramRuntime implements ProgramRuntime {
               throw new Error("In-flight tool call limit exceeded");
             }
             pending.push(call);
+            pendingIds.set(snapshot.callId, call.index);
             snapshot = await snapshot.resumeFuture();
           }
         } else if (snapshot instanceof FutureSnapshot) {
@@ -127,11 +170,28 @@ export class MontyProgramRuntime implements ProgramRuntime {
                       },
                 ),
               );
-              for (const [id] of ready) futures.delete(id);
+              for (const [id] of ready) {
+                futures.delete(id);
+                pendingIds.delete(id);
+              }
               continue;
             }
           }
-          return { status: "parked", calls: pending, state: null };
+          const key = token ?? randomUUID();
+          const timer =
+            execution?.timer ??
+            setTimeout(
+              () => {
+                const expired = this.live.get(key);
+                this.live.delete(key);
+                void expired?.session.close();
+              },
+              Math.max(1, input.limits.deadlineAt - Date.now()),
+            );
+          timer.unref();
+          this.live.set(key, { session, snapshot, index, logs, pendingIds, identity, timer });
+          parked = true;
+          return { status: "parked", calls: pending, state: key };
         }
       }
       // A synchronous external may return an unawaited future. Its call still needs dispatch.
@@ -144,7 +204,10 @@ export class MontyProgramRuntime implements ProgramRuntime {
       else if (/TimeoutError|timed out/iu.test(message)) errorClass = "deadline";
       return { status: "failed", error: message, errorClass, logs };
     } finally {
-      await pool.close();
+      if (!parked) {
+        if (execution) clearTimeout(execution.timer);
+        await session?.close();
+      }
     }
   }
 }
