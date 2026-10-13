@@ -270,13 +270,15 @@ replacement session.
 
 ### Subscription and delivery flow
 
-With the matching runtime, `connection_search` exposes one typed subscribe action
+With the matching runtime, `eve__search` exposes one typed subscribe action
 for each webhook event in the current account's catalog, plus list, get, and stop
-actions. `connection_execute` applies the connection's usual approval and auth
+actions. `eve__tool` applies the connection's usual approval and auth
 gates. Event arguments and an explicit `expiresAt` deadline (or `null`) are model
 inputs. The framework binds the account, session, receiver path, and idempotency
 key itself. Lists and ID-based operations only expose subscriptions created by
-that caller in the current session. A session can create at most 100 bindings.
+that caller in the current session. A session can create at most 100 bindings. If MCP discovery fails, the caller can
+still list, inspect, and stop their existing subscriptions through Connect.
+Creating a new watch still requires a fresh authorized catalog.
 
 Subscription action results include `retired`, which reports eve's local state,
 alongside `status`, which reports Connect's last-known state. `retired: true`

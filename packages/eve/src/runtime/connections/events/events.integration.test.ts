@@ -1,3 +1,5 @@
+import { connectionEntry } from "#execution/catalog/connection-entry.js";
+import { ConnectionRegistryImpl } from "#runtime/connections/registry.js";
 import { stopConnectionEventStep } from "#runtime/connections/events/cleanup-step.js";
 import { compileFromMemory } from "#internal/testing/compile-from-memory.js";
 import { resolveRuntimeAgentGraph } from "#runtime/resolve-agent-graph.js";
@@ -102,7 +104,7 @@ beforeEach(async () => {
     sourceKind: "module",
     authorization: {
       principalType: "user",
-      getToken: vi.fn(),
+      getToken: vi.fn(async () => ({ token: "test-token" })),
       vercelConnect: {
         connector: "oauth/issues",
         experimental_events: { createAdapter: vi.fn(async () => adapter), verify: vi.fn() },
@@ -143,18 +145,23 @@ beforeEach(async () => {
   loadBundle.mockResolvedValue(bundle);
   createClient.mockImplementation(async (config) => ({
     close: vi.fn(),
-    experimental_events: {
-      ...config.experimental_events.adapter.createAdapter({ transport: config.transport }),
-      list: async () => ({
-        events: [
-          {
-            name: `${config.transport.headers.account}.issue.created`,
-            delivery: ["webhook"],
-            inputSchema: eventSchema,
+    listTools: async () => ({ tools: [] }),
+    toolsFromDefinitions: () => ({}),
+    experimental_events:
+      config.experimental_events === undefined
+        ? undefined
+        : {
+            ...config.experimental_events.adapter.createAdapter({ transport: config.transport }),
+            list: async () => ({
+              events: [
+                {
+                  name: `${config.transport.headers.account}.issue.created`,
+                  delivery: ["webhook"],
+                  inputSchema: eventSchema,
+                },
+              ],
+            }),
           },
-        ],
-      }),
-    },
   }));
   ctx = new ContextContainer();
   ctx.set(BundleKey, bundle);
@@ -269,6 +276,55 @@ it.each<SessionStart>([
     );
     expect(callback).toHaveBeenCalledTimes(1);
     expect(turn).toHaveBeenCalledTimes(start.kind === "turn" ? 1 : 0);
+  },
+);
+
+it.each(["available", "catalog unavailable", "connection unavailable"])(
+  "returns subscription results through eve's connection tool entry with MCP %s",
+  async (availability) => {
+    connection = { ...connection, headers: { account: "alice" } };
+    const registry = new ConnectionRegistryImpl([connection]);
+    try {
+      await contextStorage.run(ctx, async () => {
+        const [tool] = await registry.getClient(connection.connectionName).getToolMetadata();
+        const execute = (name: string, input: unknown) =>
+          connectionEntry(registry, connection, name).execute!(input, {
+            toolCallId: name,
+            messages: [],
+          });
+        expect(
+          await execute(tool!.name, { arguments: { project: "ABC" }, expiresAt: null }),
+        ).toMatchObject({
+          id: "sub_0",
+          status: "active",
+          retired: false,
+        });
+        expect(await execute("events_list_subscriptions", {})).toMatchObject({
+          subscriptions: [{ id: "sub_0" }],
+        });
+        if (availability !== "available") {
+          if (availability === "connection unavailable") await registry.dispose();
+          createClient.mockRejectedValue(new Error("MCP unavailable"));
+        }
+        vi.mocked(adapter.getSubscription).mockResolvedValue(saved.values().next().value!);
+        expect(await execute("events_get_subscription", { id: "sub_0" })).toMatchObject({
+          id: "sub_0",
+        });
+        expect(await execute("events_unsubscribe", { id: "sub_0" })).toMatchObject({
+          id: "sub_0",
+          status: "stopped",
+          retired: true,
+        });
+        if (availability !== "available") {
+          setUser("bob");
+          await expect(
+            registry.getClient(connection.connectionName).getToolMetadata(),
+          ).rejects.toThrow("MCP unavailable");
+        }
+      });
+    } finally {
+      await registry.dispose();
+    }
   },
 );
 
@@ -544,6 +600,35 @@ it("records a gap before dispatch and keeps the subscription available for later
   expect((await prepare(next)).accepted).toBe(true);
   await dispatch(next);
   expect(callback).toHaveBeenCalledTimes(1);
+});
+
+it("does not reactivate a retired binding when a concurrent status refresh finishes later", async () => {
+  await watch();
+  let finishGet!: (subscription: ManagedEventSubscription) => void;
+  let getStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    getStarted = resolve;
+  });
+  vi.mocked(adapter.getSubscription).mockImplementationOnce(() => {
+    getStarted();
+    return new Promise((resolve) => {
+      finishGet = resolve;
+    });
+  });
+  await contextStorage.run(ctx, async () => {
+    const refreshing = actions.execute(
+      "events_get_subscription",
+      { id: "sub_0" },
+      { callId: "get" },
+    );
+    await started;
+    await actions.execute("events_unsubscribe", { id: "sub_0" }, { callId: "stop" });
+    finishGet(saved.values().next().value!);
+    expect(await refreshing).toMatchObject({ retired: true });
+  });
+  initial = { ...initial, serializedContext: serializeContext(ctx) };
+  expect((await prepare(payload())).accepted).toBe(false);
+  expect(callback).not.toHaveBeenCalled();
 });
 
 it("can stop an uncertain creation by its local ID without contacting the MCP server", async () => {

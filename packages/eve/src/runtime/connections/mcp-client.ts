@@ -160,7 +160,14 @@ export class McpConnectionClient implements ConnectionClient {
    * promise.
    */
   async getToolMetadata(): Promise<readonly ConnectionToolMetadata[]> {
-    const cache = await this.#ensureTools();
+    let cache: McpToolCache;
+    try {
+      cache = await this.#ensureTools();
+    } catch (error) {
+      const recovery = this.#eventRecoveryMetadata();
+      if (recovery.length > 0) return recovery;
+      throw error;
+    }
     if (this.#events === undefined) return cache.metadata;
     if (cache.metadata.some((tool) => isEventAction(tool.name)))
       throw new Error("MCP server tools conflict with eve's reserved events_ actions.");
@@ -168,12 +175,20 @@ export class McpConnectionClient implements ConnectionClient {
     try {
       events = await this.#events.metadata();
     } catch (error) {
+      const recovery = this.#eventRecoveryMetadata();
+      if (recovery.length > 0) return [...cache.metadata, ...recovery];
       return await this.#rethrowClassified(error);
     }
     return [
       ...cache.metadata,
       ...events.filter((tool) => passesToolFilter(tool.name, this.#connection.tools)),
     ];
+  }
+
+  #eventRecoveryMetadata(): ConnectionToolMetadata[] {
+    return (this.#events?.recoveryMetadata() ?? []).filter((tool) =>
+      passesToolFilter(tool.name, this.#connection.tools),
+    );
   }
 
   /**
@@ -196,7 +211,10 @@ export class McpConnectionClient implements ConnectionClient {
       if (this.#events !== undefined && isEventAction(toolName)) {
         if (!passesToolFilter(toolName, this.#connection.tools))
           throw new Error("Event action is blocked by this connection's tool filter.");
-        return await this.#events.execute(toolName, args, options);
+        return {
+          content: [],
+          structuredContent: await this.#events.execute(toolName, args, options),
+        };
       }
       const { tools } = await this.#ensureTools();
 

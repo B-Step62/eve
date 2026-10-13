@@ -69,12 +69,26 @@ export class ConnectionEventActions {
       authorization,
       ctx,
     );
+    const sessionId = ctx.require(SessionIdKey);
+    const owner = principalKey(principal);
+    const executionPrincipal = principalOf(ctx.get(AuthKey));
+    const connector = authorization.vercelConnect.connector;
+    const owned = (binding: EventBinding) =>
+      binding.sessionId === sessionId &&
+      binding.connectionName === this.connection.connectionName &&
+      binding.instanceId === this.connection.instanceId &&
+      binding.connector === connector &&
+      binding.principalKey === owner &&
+      binding.executionPrincipal === executionPrincipal;
     return {
       ctx,
       principal,
-      authorization,
+      sessionId,
+      owner,
+      executionPrincipal,
+      owned,
       backend: authorization.vercelConnect.experimental_events,
-      connector: authorization.vercelConnect.connector,
+      connector,
     };
   }
 
@@ -142,27 +156,19 @@ export class ConnectionEventActions {
             },
           },
         })),
-        {
-          name: LIST,
-          description:
-            "List this caller's event subscriptions created in this session. status is Connect's last-known state; retired=true means eve accepts no new event work for this subscription, regardless of status.",
-          inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        },
-        ...[GET, STOP].map((name) => ({
-          name,
-          description:
-            name === GET
-              ? "Get one of this caller's subscriptions in this session and refresh its Connect status. retired=true means eve accepts no new event work for this subscription, regardless of status."
-              : "Stop one of this caller's subscriptions in this session. eve retires it before requesting cancellation from Connect; retired=true does not confirm upstream cancellation.",
-          inputSchema: {
-            type: "object",
-            properties: { id: { type: "string" } },
-            required: ["id"],
-            additionalProperties: false,
-          },
-        })),
+        ...managementMetadata(),
       ];
     });
+  }
+
+  /** Existing watches must remain stoppable when upstream discovery fails. */
+  recoveryMetadata(): ConnectionToolMetadata[] {
+    const { ctx, owned } = this.scope();
+    if (!Object.values(ctx.get(ConnectionEventsStateKey)?.bindings ?? {}).some(owned)) return [];
+    return managementMetadata().map((tool) => ({
+      ...tool,
+      description: `MCP discovery is unavailable. ${tool.description}`,
+    }));
   }
 
   async execute(
@@ -171,27 +177,23 @@ export class ConnectionEventActions {
     options: ConnectionToolExecuteOptions,
   ): Promise<unknown> {
     const args = parseJsonObject(input);
-    const { ctx, principal, connector, backend } = this.scope();
-    const sessionId = ctx.require(SessionIdKey);
-    const owner = principalKey(principal);
-    const executionPrincipal = principalOf(ctx.get(AuthKey));
+    const { ctx, principal, connector, backend, sessionId, owner, executionPrincipal, owned } =
+      this.scope();
     const currentState = () =>
       ctx.ensure(ConnectionEventsStateKey, (): ConnectionEventsState => ({
         bindings: {},
         receipts: {},
       }));
-    const owned = (binding: EventBinding) =>
-      binding.sessionId === sessionId &&
-      binding.connectionName === this.connection.connectionName &&
-      binding.instanceId === this.connection.instanceId &&
-      binding.connector === connector &&
-      binding.principalKey === owner &&
-      binding.executionPrincipal === executionPrincipal;
-    const save = (binding: EventBinding) =>
-      ctx.set(ConnectionEventsStateKey, (state) => ({
-        receipts: state?.receipts ?? {},
-        bindings: { ...state?.bindings, [binding.id]: binding },
-      }));
+    const save = (binding: EventBinding): EventBinding => {
+      const state = currentState();
+      // A status refresh that began before stop must never reopen the binding.
+      const saved = { ...binding, retired: state.bindings[binding.id]?.retired ?? binding.retired };
+      ctx.set(ConnectionEventsStateKey, {
+        receipts: state.receipts,
+        bindings: { ...state.bindings, [binding.id]: saved },
+      });
+      return saved;
+    };
     if (name === LIST)
       return {
         subscriptions: Object.values(currentState().bindings).filter(owned).map(subscriptionResult),
@@ -203,7 +205,7 @@ export class ConnectionEventActions {
       );
       if (binding === undefined)
         throw new Error("Unknown subscription for this session and account.");
-      if (name === STOP) save({ ...binding, retired: true });
+      if (name === STOP) binding = save({ ...binding, retired: true });
       const events = await backend.createAdapter({
         principal,
         connection: { url: this.connection.url },
@@ -219,13 +221,13 @@ export class ConnectionEventActions {
           subscription,
           retired: name === STOP ? true : binding.retired,
         };
-        save(binding);
+        binding = save(binding);
       }
       const subscription = await (name === STOP
         ? events.unsubscribe({ id: binding.subscription!.id, options: { timeout: 30_000 } })
         : events.getSubscription({ id: binding.subscription!.id, options: { timeout: 30_000 } }));
       binding = { ...binding, retired: name === STOP ? true : binding.retired, subscription };
-      save(binding);
+      binding = save(binding);
       return subscriptionResult(binding);
     }
     return this.withClient(async (events) => {
@@ -285,7 +287,7 @@ export class ConnectionEventActions {
           auth: structuredClone(ctx.get(AuthKey) ?? null),
           request,
         };
-        save(binding);
+        binding = save(binding);
       }
       if (!owned(binding) || binding.retired)
         throw new Error("Subscription binding is no longer active.");
@@ -304,7 +306,7 @@ export class ConnectionEventActions {
           ) as ManagedEventSubscribeInput["arguments"],
         },
       };
-      save(binding);
+      binding = save(binding);
       return subscriptionResult(binding);
     });
   }
@@ -323,4 +325,28 @@ function subscriptionResult(binding: EventBinding) {
 
 function actionName(eventName: string): string {
   return `${PREFIX}${createHash("sha256").update(eventName).digest("hex").slice(0, 24)}`;
+}
+
+function managementMetadata(): ConnectionToolMetadata[] {
+  return [
+    {
+      name: LIST,
+      description:
+        "List this caller's event subscriptions created in this session. status is Connect's last-known state; retired=true means eve accepts no new event work for this subscription, regardless of status.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    ...[GET, STOP].map((name) => ({
+      name,
+      description:
+        name === GET
+          ? "Get one of this caller's subscriptions in this session and refresh its Connect status. retired=true means eve accepts no new event work for this subscription, regardless of status."
+          : "Stop one of this caller's subscriptions in this session. eve retires it before requesting cancellation from Connect; retired=true does not confirm upstream cancellation.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    })),
+  ];
 }
