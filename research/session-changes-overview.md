@@ -16,8 +16,8 @@ have more detail:
 - [`session-event-tree.md`](./session-event-tree.md): ownership and closing.
 - [`session-core-target.md`](./session-core-target.md): waiting, and what 1.0 locks.
 - [`session-reactions.md`](./session-reactions.md): dynamic values and hooks.
-- [`instrumentation-session-events.md`](./instrumentation-session-events.md): how the stack's
-  instrumentation meets main's tracing library.
+- [`instrumentation-session-events.md`](./instrumentation-session-events.md): a reviewer's
+  guide to the instrumentation changes.
 
 ## Summary
 
@@ -134,7 +134,7 @@ consumer.
   cards, HITL, usage, instrumentation and eval facts.
 - **Instrumentation speaks the stream's vocabulary.** Providers hear `session.ended`,
   `turn.settled`, `call.requested`/`call.settled` and `interaction.opened`/`interaction.settled`,
-  each ending carrying the fact's outcome. How this meets main's new tracing library is in
+  each ending carrying the fact's outcome. A reviewer's guide to these changes is
   [`instrumentation-session-events.md`](./instrumentation-session-events.md).
 
 ### Framework examples
@@ -423,8 +423,9 @@ round up (`Math.ceil` of UTF-8 bytes / 4), because they reach an integer field o
   provider ends a turn's span at its `turn.settled` instead of the next session transition. A
   direct `invokeTool` emits the same call pair. Live model, attempt, memory and channel names stay.
   OTel trace schema 4 and its span names don't change, and span trees were diffed against the
-  previous build for five evals. Main's new tracing adapter still uses the old names;
-  [`instrumentation-session-events.md`](./instrumentation-session-events.md) covers the port.
+  previous build for five evals. One exception: remote agent calls are reported with
+  `subagent-call`'s kind and span kind. That issue, others, and the port onto main's new tracing
+  adapter are in [`instrumentation-session-events.md`](./instrumentation-session-events.md).
 
 - **Usage**: `turn-tag-state.ts` (342 lines) kept session and turn totals privately, beside the
   `usage.recorded` facts the fold already totals. `session-usage.ts` (173 lines) reads the view.
