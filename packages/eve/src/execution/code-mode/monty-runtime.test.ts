@@ -19,7 +19,7 @@ describe("Monty recorded-call replay", () => {
   it("starts, parks and replays deterministically", async () => {
     const program = input('x = await echo({"x": 1})\nawait echo(x)');
     const first = await runtime.start(program);
-    expect(first).toEqual({
+    expect(first).toMatchObject({
       status: "parked",
       calls: [{ index: 0, tool: "echo", input: { x: 1 } }],
       state: expect.any(String),
@@ -62,6 +62,31 @@ describe("Monty recorded-call replay", () => {
       ).toMatchObject({ status: "completed", output: 3 });
     } finally {
       await restarted.close();
+    }
+  });
+  it("reports cold readiness, warm/live zero startup and execution slices", async () => {
+    const measured = new MontyProgramRuntime();
+    try {
+      const cold = await measured.start(input("42"));
+      expect(cold.timing!.startupMs).toBeGreaterThan(0);
+      expect(cold.timing!.runMs).toBeGreaterThan(0);
+      const warm = await measured.start(input("42"));
+      expect(warm.timing!.startupMs).toBe(0);
+      const program = input("await echo({})");
+      const parked = await measured.start(program);
+      if (parked.status !== "parked") throw new Error("Expected park");
+      // Parked time is outside the measured interpreter operations.
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      const done = await measured.resume({
+        ...program,
+        state: parked.state,
+        results: [{ index: 0, status: "completed", output: 1 }],
+      });
+      expect(done.timing!.startupMs).toBe(0);
+      expect(done.timing!.runMs).toBeGreaterThan(0);
+      expect(done.timing!.runMs).toBeLessThan(75);
+    } finally {
+      await measured.close();
     }
   });
   it.each(["failed", "unknown"] as const)("raises %s in Python", async (status) => {

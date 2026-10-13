@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import {
   Monty,
@@ -34,6 +35,7 @@ interface LiveExecution {
 }
 export class MontyProgramRuntime implements ProgramRuntime {
   private pool: Promise<Monty> | undefined;
+  private readyWorkers = new Set<number | undefined>();
   private live = new Map<string, LiveExecution>();
   async close(): Promise<void> {
     for (const execution of this.live.values()) {
@@ -43,6 +45,7 @@ export class MontyProgramRuntime implements ProgramRuntime {
     this.live.clear();
     if (this.pool) await (await this.pool).close();
     this.pool = undefined;
+    this.readyWorkers.clear();
   }
   readonly language = "py" as const;
   start(input: ProgramStart): Promise<ProgramStep> {
@@ -61,6 +64,26 @@ export class MontyProgramRuntime implements ProgramRuntime {
     results: readonly ProgramCallResult[],
     token?: string,
   ): Promise<ProgramStep> {
+    const timing = { startupMs: 0, runMs: 0 };
+    const step = await this.runMeasured(input, results, token, timing);
+    return { ...step, timing };
+  }
+
+  private async runMeasured(
+    input: ProgramStart,
+    results: readonly ProgramCallResult[],
+    token: string | undefined,
+    timing: { startupMs: number; runMs: number },
+  ): Promise<ProgramStep> {
+    async function drive(operation: () => Promise<Snapshot>): Promise<Snapshot> {
+      const started = performance.now();
+      try {
+        return await operation();
+      } finally {
+        timing.runMs += performance.now() - started;
+      }
+    }
+    const startupStarted = performance.now();
     const identity = JSON.stringify([input.source, input.toolNames, input.limits]);
     let execution = token ? this.live.get(token) : undefined;
     if (execution?.identity !== identity) execution = undefined;
@@ -91,6 +114,9 @@ export class MontyProgramRuntime implements ProgramRuntime {
           processTime: "zero",
         },
       });
+      if (!execution && !this.readyWorkers.has(session.workerId))
+        timing.startupMs = performance.now() - startupStarted;
+      this.readyWorkers.add(session.workerId);
       const recorded = new Map(results.map((result) => [result.index, result]));
       let index = execution?.index ?? 0;
       const pendingIds = execution?.pendingIds ?? new Map<number, number>();
@@ -100,22 +126,28 @@ export class MontyProgramRuntime implements ProgramRuntime {
       }
       let snapshot: Snapshot =
         execution?.snapshot ??
-        (await session.feedStart(input.source, {
-          printCallback: (_stream, text) => logs.push(text),
-        }));
+        (await drive(() =>
+          session!.feedStart(input.source, {
+            printCallback: (_stream, text) => logs.push(text),
+          }),
+        ));
       while (!(snapshot instanceof MontyComplete)) {
         if (Date.now() >= input.limits.deadlineAt) {
           errorClass = "deadline";
           throw new Error("Program deadline exceeded");
         }
         if (snapshot instanceof NameLookupSnapshot) {
-          snapshot = await snapshot.resume(
-            input.toolNames.includes(snapshot.variableName) ? snapshot.variableName : undefined,
+          const lookup = snapshot;
+          snapshot = await drive(() =>
+            lookup.resume(
+              input.toolNames.includes(lookup.variableName) ? lookup.variableName : undefined,
+            ),
           );
         } else if (snapshot instanceof FunctionSnapshot) {
           if (snapshot.isOsFunction) {
-            snapshot = await snapshot.resumeError(
-              new Error("Clock, entropy and OS access are disabled"),
+            const call = snapshot;
+            snapshot = await drive(() =>
+              call.resumeError(new Error("Clock, entropy and OS access are disabled")),
             );
             continue;
           }
@@ -140,7 +172,8 @@ export class MontyProgramRuntime implements ProgramRuntime {
           const result = recorded.get(call.index);
           if (result) {
             futures.set(snapshot.callId, result);
-            snapshot = await snapshot.resumeFuture();
+            const callSnapshot = snapshot;
+            snapshot = await drive(() => callSnapshot.resumeFuture());
           } else {
             if (pending.length >= Math.min(32, input.limits.maxInFlightCalls)) {
               errorClass = "call-limit";
@@ -148,7 +181,8 @@ export class MontyProgramRuntime implements ProgramRuntime {
             }
             pending.push(call);
             pendingIds.set(snapshot.callId, call.index);
-            snapshot = await snapshot.resumeFuture();
+            const callSnapshot = snapshot;
+            snapshot = await drive(() => callSnapshot.resumeFuture());
           }
         } else if (snapshot instanceof FutureSnapshot) {
           if (futures.size > 0) {
@@ -156,18 +190,21 @@ export class MontyProgramRuntime implements ProgramRuntime {
               ([id]) => snapshot instanceof FutureSnapshot && snapshot.pendingCallIds.includes(id),
             );
             if (ready.length > 0) {
-              snapshot = await snapshot.resume(
-                ready.map(([callId, result]) =>
-                  result.status === "completed"
-                    ? { callId, value: result.output }
-                    : {
-                        callId,
-                        error: new Error(
-                          result.status === "unknown"
-                            ? `Side effect may or may not have happened: ${result.error}`
-                            : result.error,
-                        ),
-                      },
+              const futureSnapshot = snapshot;
+              snapshot = await drive(() =>
+                futureSnapshot.resume(
+                  ready.map(([callId, result]) =>
+                    result.status === "completed"
+                      ? { callId, value: result.output }
+                      : {
+                          callId,
+                          error: new Error(
+                            result.status === "unknown"
+                              ? `Side effect may or may not have happened: ${result.error}`
+                              : result.error,
+                          ),
+                        },
+                  ),
                 ),
               );
               for (const [id] of ready) {
