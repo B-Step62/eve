@@ -21,15 +21,13 @@ the areas you're reviewing.
 
 ## Summary
 
-- **One idea, in two steps: history → view → decisions.** v27 makes the session's history a
-  stream of explicit facts that fold into one shared view. Reactions make the decisions that
-  depend on the session (which model, which tools, cancel this turn) read that view instead of
-  naming events.
 - **v27: one fold replaces a dozen private ones.** On main, the client reducers, HITL candidates,
   instrumentation, usage tallies, channel task cards, evals and the server projection each
   rebuilt lifecycles from loosely typed events. On the stack they read rows and selectors from
   one fold. On the write side, the writer closes and scopes facts in one place, so transitions no
-  longer do it by hand.
+  longer do it by hand. This is enabled by a more formal model of events that tracks all necessary
+  information in a uniform way. Previously, many facts were completely missing and others were
+  modeled inconsistently, which made it impossible to write simple folds over them.
 - **Reactions: one runner replaces eight lifecycles and a compiler pass.** Each dynamic kind had
   its own events, precedence rules, failure behavior and recovery. Tools survived cold starts
   through a pass that parsed authored source and snapshotted closures. With reactions, every kind
@@ -37,14 +35,8 @@ the areas you're reviewing.
   it.
 - **The two depend on each other.** The reactions runner reads the v27 view. Until reactions
   lands, v27 carries an adapter that maps facts back to the v26 event keys today's resolvers
-  expect, and reactions deletes it.
-- **About 3,700 fewer production lines than main.** v27 is −634 against main: its contract, fold
-  and writer cost less than the old protocol, the readers' own copies and the channels' parallel
-  card model. Reactions is −3,059 on top. Without Rui's work under and inside the stack (+263),
-  our own changes are about −4,000.
-- **What grew did so on purpose.** Entities that used to be implicit now have facts someone
-  writes (compaction runs, deliveries, attempts). There's also a dev-time checker, and
-  compatibility for sessions that span the upgrade.
+  expect. This means that the v27 changes can land without a breaking change to defineDynamic
+  and friends.
 
 ## The numbers
 
@@ -58,20 +50,7 @@ the areas you're reviewing.
 | Reactions (#4616)                                        |           −3,059 |
 | **Both against main**                                    |       **−3,693** |
 
-Production means `packages/*/src` without tests and without generated files (the web scaffold
-template and extension contracts). Everything is measured on the pushed branches: main
-`9559de83b`, the base `v27/hitl-base` (`0606084ae`), the prep tip `61ffbd129`, PR 10's head
-`b4dc0715a` and #4616's head `b01914f26`. Reactions now sits on the stack, so the combined figure
-is exact. The reactions doc's −3,143 and this doc's earlier −3,127 and −3,112 are from before the restack and
-the review fixes.
-
 ![Production lines by area: what v27 and reactions remove, what each writes, and the net each saves](./assets/session-changes-sankey.svg)
-
-The sankey uses net lines per area. The left side (red) is what went away, the middle node is the
-step that removed it, and the right side is what that step wrote (blue) and its net saving
-(green). Both panels share one scale. `assets/session-changes-sankey.py` draws it from the
-figures in the tables below. v27 now removes more than it adds:
-531 lines net, with the prep PRs' −266 under it. Reactions removes 3,059 more than it adds.
 
 <details>
 <summary>v27 by area, against the stack's base</summary>
@@ -97,10 +76,6 @@ Channels are on the deleting side. Shared sign-in, failure notices and text
 limits had cost +291. Then one surface took over the common handlers for five channels (about
 −124), and the task card became the turn's call rows (−224), so the parallel card model is gone.
 
-Per area, file by file: `/tmp/cats.py` over `git diff 61ffbd129 b4dc0715a`. The longer account
-in `~/harness-core-loc.md` is from the earlier base `695221a1d` (stack −535 there), before the
-restack onto current main and Round 4.
-
 </details>
 
 <details>
@@ -109,11 +84,7 @@ restack onto current main and Round 4.
 Against main, v27 deletes 124 test files and adds 38. In lines, that's +7,874 / −94,829, net
 −86,955. Regex-counted cases drop from about 9,850 to 7,890, about 20% fewer. Most of the deleted
 lines are v26-shaped suites removed wholesale (`tool-loop.test.ts`, `slackChannel.test.ts`,
-`terminal-renderer.test.ts`, …). That's lost coverage, not simplification. The deletion was
-deliberate: the suites fought the churn while the model was settling. `~/event-model-test-debt.md`
-lists them and the slimmer coverage each area should get back, rather than restoring them one for
-one. Eleven deleted suites (116 cases) tested code that is gone too, such as the message reducer,
-the HITL coordinator and candidates, and turn tags.
+`terminal-renderer.test.ts`, …).
 
 Coverage came back in three forms:
 
@@ -122,14 +93,12 @@ Coverage came back in three forms:
 - The mock eval matrix: 14 evals covering approval, budget, relay, cancel, compaction, remote
   approval, sign-in, images, billing and MCP.
 
-At PR 10's head, the unit suite is 799 files, 7,532 passed and 1 skipped; one header test fails
-only because the environment sets `VERCEL_OIDC_TOKEN`. Reactions deletes another +2,338 / −6,557
-test lines, mostly for the lifecycles and transforms it deletes. That brings cases to about 7,770,
-and its unit suite is 787 files, 7,404 passed.
+Reactions deletes another +2,338 / −6,557 test lines, mostly for the lifecycles and transforms
+it deletes. That brings cases to about 7,770, and its unit suite is 787 files, 7,404 passed.
 
 </details>
 
-## One idea
+## High-level idea
 
 ```mermaid
 flowchart LR
@@ -156,7 +125,7 @@ consumer.
 - **The entities form one ownership tree.** `tree.ts` states each family's owner once. When an
   owner ends, the writer closes everything still open under it in the same commit, leaves first,
   with `session.ended` last, and derives each fact's scope from the tree.
-- **One fold, shared by client and server.** The fold produces typed tables (`turns`, `runs`,
+- **Client and server share a fold.** The fold produces typed tables (`turns`, `runs`,
   `calls`, `interactions`, `responses`, …), and selectors in `eve/events` answer questions over
   them. Each row records where it ended (`closedAt`).
 - **One taxonomy for people.** Approvals, questions, sign-ins and the budget prompt are all
