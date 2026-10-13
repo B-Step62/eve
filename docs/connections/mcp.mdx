@@ -253,6 +253,10 @@ export default defineMcpClientConnection({
 This contract is experimental and requires the matching managed-events runtime
 and Connect SDK releases. Defining callbacks does not create a subscription or
 start a model turn. `onEvent` is required; lifecycle callbacks are optional.
+`experimental_events` opts this connection into event handling. The `connect()`
+auth provider supplies the backend that manages subscriptions and verifies
+deliveries using the same authorized account. Using `connect()` alone does not
+enable event handling or create subscriptions.
 Use a statically authored MCP connection and a static `connect()` auth provider
 that exposes the events bridge. Dynamic connections and auth resolvers are not
 supported by this first version because the receiver must be mounted at build
