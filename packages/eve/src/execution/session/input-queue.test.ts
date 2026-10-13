@@ -36,7 +36,7 @@ describe("SessionInputQueue", () => {
         kind: "deliver",
         payloads: [{ message }],
         turnPolicy: "queue",
-      }).sequence;
+      })!.sequence;
 
     const before = send("approve");
     const heldSince = queue.nextAdmission;
