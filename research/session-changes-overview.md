@@ -423,9 +423,10 @@ round up (`Math.ceil` of UTF-8 bytes / 4), because they reach an integer field o
   provider ends a turn's span at its `turn.settled` instead of the next session transition. A
   direct `invokeTool` emits the same call pair. Live model, attempt, memory and channel names stay.
   OTel trace schema 4 and its span names don't change, and span trees were diffed against the
-  previous build for five evals. One exception: remote agent calls are reported with
-  `subagent-call`'s kind and span kind. That issue, others, and the port onto main's new tracing
-  adapter are in [`instrumentation-session-events.md`](./instrumentation-session-events.md).
+  previous build for five evals. A call's capability marks a remote agent with `remote: true`, so
+  instrumentation still reports `remote-agent-call`. A reviewer's guide, including the port onto
+  main's new tracing adapter, is
+  [`instrumentation-session-events.md`](./instrumentation-session-events.md).
 
 - **Usage**: `turn-tag-state.ts` (342 lines) kept session and turn totals privately, beside the
   `usage.recorded` facts the fold already totals. `session-usage.ts` (173 lines) reads the view.
