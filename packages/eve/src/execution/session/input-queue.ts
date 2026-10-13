@@ -60,6 +60,11 @@ export class SessionInputQueue {
     return this.entries.length;
   }
 
+  /** Delivery ids admitted so far, carried to a successor owner on handoff. */
+  get admittedIds(): readonly string[] {
+    return [...this.admittedDeliveryIds];
+  }
+
   /** Seeds input carried by the owner boot rather than admitted through the inbox. */
   markAdmitted(ids: readonly string[]): void {
     for (const id of ids) this.admittedDeliveryIds.add(id);

@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Deduplicate session input payloads by delivery ID within each session owner run.
+Admit each session delivery ID once. A re-sent delivery, including one that arrives after a deployment handoff, starts no second turn.

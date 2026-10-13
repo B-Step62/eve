@@ -55,7 +55,7 @@ describe("validateSessionCheckpointStep", () => {
     );
   });
 
-  it.each([5, 6, 7, 8, 9, 11])(
+  it.each([5, 6, 7, 8, 9, 10, 12])(
     "reports checkpoint version %s as incompatible before reading nested state",
     async (version) => {
       const checkpoint = createCheckpoint();
@@ -86,6 +86,7 @@ describe("validateSessionCheckpointStep", () => {
 function createCheckpoint(): SessionCheckpoint {
   return {
     version: SESSION_CHECKPOINT_VERSION,
+    admittedDeliveryIds: [],
     sessionTimeoutMs: false,
     serializedContext: {},
     sessionState: createTestSessionState({

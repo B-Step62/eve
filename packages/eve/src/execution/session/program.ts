@@ -50,6 +50,8 @@ export interface SessionBoot {
   readonly capabilities?: SessionCapabilities;
   readonly deploymentId: string;
   readonly initialInput: DeliverHookPayload | undefined;
+  /** Delivery ids earlier owners admitted; a re-send of any of them starts no turn. */
+  readonly admittedDeliveryIds: readonly string[];
   /** Parks on the inbox before any session-scoped lifecycle work. */
   readonly awaitFirstMessage: boolean;
   readonly retention?: AgentWorkflowRetentionDefinition;
@@ -207,7 +209,10 @@ async function runSessionLoop(
 ): Promise<SessionLoopOutcome> {
   const { cursor, handoff, inbox, progress } = deps;
   const queue = new SessionInputQueue();
-  queue.markAdmitted(boot.initialInput?.deliveryMetadata?.map((entry) => entry.deliveryId) ?? []);
+  queue.markAdmitted([
+    ...boot.admittedDeliveryIds,
+    ...(boot.initialInput?.deliveryMetadata?.map((entry) => entry.deliveryId) ?? []),
+  ]);
   const execution = new SessionExecution({
     capabilities: boot.capabilities,
     initialTurnControllers: boot.initialTurnControllers,
@@ -264,6 +269,7 @@ async function runSessionLoop(
     next: Extract<NextTurnInstruction, { kind: "turn" }>,
   ): Promise<SessionActionResult> => {
     const transfer = await handoff.tryTransfer(next, {
+      admittedDeliveryIds: queue.admittedIds,
       serializedContext: cursor.serializedContext,
       sessionState: cursor.sessionState,
     });

@@ -55,6 +55,7 @@ export async function turnWorkflow(rawInput: unknown): Promise<void> {
             sessionWritable,
           }),
       },
+      admittedDeliveryIds: [],
       caller: undefined,
       capabilities: prepared.input.capabilities,
       deploymentId: prepared.deploymentId,

@@ -42,8 +42,9 @@ describe("SessionHandoff", () => {
       activationToken: "owner-1:handoff",
       anchorRunId: "session-1",
       checkpoint: expect.objectContaining({
+        admittedDeliveryIds: ["delivery-earlier"],
         sessionTimeoutMs: 60_000,
-        version: 10,
+        version: 11,
       }),
       delivery: trigger.delivery,
       targetDeploymentId: "deployment-b",
@@ -261,6 +262,7 @@ function state(
   } = {},
 ) {
   return {
+    admittedDeliveryIds: ["delivery-earlier"],
     serializedContext: input.serializedContext ?? {},
     sessionState: {
       continuationToken: input.continuationToken ?? "",

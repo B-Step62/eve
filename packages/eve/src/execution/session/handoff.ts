@@ -20,11 +20,13 @@ import type { AgentWorkflowRetentionDefinition } from "#shared/agent-definition.
  * Mount-owned state requires a new version so older readers reject it rather
  * than dropping unrecognized state keys during reverse handoff.
  */
-export const SESSION_CHECKPOINT_VERSION = 10;
+export const SESSION_CHECKPOINT_VERSION = 11;
 
 /** Everything a successor needs to continue an idle session. Hooks are derived from the state. */
 export interface SessionCheckpoint {
   readonly version: typeof SESSION_CHECKPOINT_VERSION;
+  /** Every delivery id an owner of this session has admitted, so a re-send after handoff stays a no-op. */
+  readonly admittedDeliveryIds: readonly string[];
   readonly capabilities?: SessionCapabilities;
   readonly retention?: AgentWorkflowRetentionDefinition;
   readonly serializedContext: Record<string, unknown>;
@@ -65,7 +67,10 @@ type SessionTransferOutcome =
     };
 
 interface SessionHandoffInput {
-  readonly checkpoint: Omit<SessionCheckpoint, "serializedContext" | "sessionState" | "version">;
+  readonly checkpoint: Omit<
+    SessionCheckpoint,
+    "admittedDeliveryIds" | "serializedContext" | "sessionState" | "version"
+  >;
   readonly deploymentId: string;
   readonly inbox: SessionInboxHandle;
   readonly isInitialOwner: boolean;
@@ -104,7 +109,7 @@ export class SessionHandoff {
    */
   async tryTransfer(
     selection: TurnSelection,
-    state: Pick<SessionCheckpoint, "serializedContext" | "sessionState">,
+    state: Pick<SessionCheckpoint, "admittedDeliveryIds" | "serializedContext" | "sessionState">,
   ): Promise<SessionTransferOutcome> {
     const { deploymentId, inbox } = this.input;
     const targetDeploymentId = readAcceptedDeploymentId(selection.delivery);
