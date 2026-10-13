@@ -17,7 +17,7 @@ export default defineEval({
     const first = await t.send("Hi, I'm Dana from the fleet operations team.");
     first.expectOk();
 
-    const turn = await t.send(
+    const turn = await first.session.send(
       "What was EV charger uptime at the Oakland depot this week, and which charger is offline?",
     );
 
