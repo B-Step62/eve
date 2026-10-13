@@ -60,6 +60,7 @@ vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
 }));
 
 beforeEach(() => {
+  vi.stubEnv("WORKFLOW_QUEUE_NAMESPACE", "eve");
   cancelRunMock.mockResolvedValue(undefined);
   getHookByTokenMock.mockImplementation(async (token: string) => {
     if (token.startsWith(sessionHandoffMarkerToken(""))) throw new HookNotFoundError(token);
@@ -155,6 +156,7 @@ describe("session owner starts", () => {
   });
 
   it("starts a successor on the accepted deployment with the original stream", async () => {
+    vi.stubEnv("WORKFLOW_QUEUE_NAMESPACE", "custom-eve");
     const sessionWritable = new WritableStream<Uint8Array>();
     getRunMock.mockReturnValue({ getWritable: () => sessionWritable });
     startMock.mockResolvedValue({ runId: "owner-2" });
@@ -163,6 +165,7 @@ describe("session owner starts", () => {
       serializedContext: {},
       sessionState: { continuationToken: "continuation-1", sessionId: "session-1" },
       sessionTimeoutMs: 60_000,
+      retention: 0,
     } as never;
     const delivery = { kind: "deliver", payloads: [{ message: "hello" }] } as const;
 
@@ -194,7 +197,12 @@ describe("session owner starts", () => {
       {
         deploymentId: "deployment-b",
         allowReservedAttributes: true,
-        attributes: { "$eve.version": resolveInstalledPackageInfo().version },
+        attributes: {
+          "$eve.proactive_handoff": "custom-eve",
+          "$eve.session": "anchor-1",
+          "$eve.version": resolveInstalledPackageInfo().version,
+        },
+        experimental_retention: 0,
       },
     );
   });
@@ -607,6 +615,7 @@ describe("createWorkflowRuntime#createSession", () => {
 
   it("starts workflowEntry on the deployment accepting the request", async () => {
     vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_current");
+    vi.stubEnv("WORKFLOW_QUEUE_NAMESPACE", "custom-eve");
     const compiledArtifactsSource = {} as RuntimeCompiledArtifactsSource;
     mockBundleAndRun(compiledArtifactsSource);
     startMock.mockResolvedValue({ runId: "owner-run" });
@@ -637,6 +646,7 @@ describe("createWorkflowRuntime#createSession", () => {
         attributes: {
           "$eve.is_otel_trace_enabled": "false",
           "$eve.is_trace_content_visible": "false",
+          "$eve.proactive_handoff": "custom-eve",
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
@@ -809,6 +819,7 @@ describe("createWorkflowRuntime#createSession", () => {
           "$eve.channel_request_id": "req_run",
           "$eve.is_otel_trace_enabled": "false",
           "$eve.is_trace_content_visible": "false",
+          "$eve.proactive_handoff": "eve",
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
@@ -853,6 +864,7 @@ describe("createWorkflowRuntime#createSession", () => {
         "$eve.parent": "parent-session",
         "$eve.parent_call": "call-1",
         "$eve.parent_turn": "turn-1",
+        "$eve.proactive_handoff": "eve",
         "$eve.root": "root-session",
         "$eve.subagent": "researcher",
         "$eve.is_trace_content_visible": "false",
@@ -881,6 +893,7 @@ describe("createWorkflowRuntime#createSession", () => {
       attributes: {
         "$eve.is_otel_trace_enabled": "false",
         "$eve.is_trace_content_visible": "false",
+        "$eve.proactive_handoff": "eve",
         "$eve.title": "hello",
         "$eve.trigger": "http",
         "$eve.type": "session",

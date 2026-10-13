@@ -20,6 +20,20 @@ afterEach(() => {
 });
 
 describe("createSessionTimeoutControl", () => {
+  it("keeps the recorded timer deadline when replay supplies a different start time", async () => {
+    const recordedDeadline = new Date("2026-02-01T00:00:00.000Z");
+    vi.mocked(startSessionTimeoutStep).mockResolvedValue({
+      deadline: recordedDeadline,
+      runId: "timer-run",
+    });
+    const control = createSessionTimeoutControl({
+      deadline: new Date("2026-02-01T00:05:00.000Z"),
+      sessionId: "wrun_1",
+    });
+
+    await expect(control.getDeadline()).resolves.toEqual(recordedDeadline);
+  });
+
   it("starts one absolute deadline against the stable command inbox", async () => {
     const deadline = new Date("2026-02-01T00:00:00.000Z");
     vi.mocked(startSessionTimeoutStep).mockResolvedValue({ runId: "timer-run" });

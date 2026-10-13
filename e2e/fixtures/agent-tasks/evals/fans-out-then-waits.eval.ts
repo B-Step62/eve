@@ -12,7 +12,7 @@ export default defineEval({
   tags: ["real-model"],
   async test(t) {
     const turn = await t.send(
-      "Alice needs the churn report and the latency report for Monday's review. Please compile both and give me each report id with its headline.",
+      "Alice needs the churn report and the latency report for Monday's review. Please compile both, wait until both are ready, then send one reply with each report id and headline.",
     );
     turn.expectOk();
 
