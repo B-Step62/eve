@@ -22,9 +22,16 @@ export default defineTool({
 function webhookUrl(): string {
   const explicit = process.env.RECALL_WEBHOOK_URL?.trim();
   if (explicit) return explicit;
-  // Preview URLs sit behind Deployment Protection, which blocks Recall.
   const host = process.env.VERCEL_PROJECT_PRODUCTION_URL;
-  if (host) return `https://${host}/recall/webhook`;
+  if (host) {
+    // Recall requires a trailing slash before a query string.
+    const url = new URL(`https://${host}/recall/webhook/`);
+    // Lets Recall past Deployment Protection when the project has a
+    // Protection Bypass for Automation secret.
+    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    if (bypass) url.searchParams.set("x-vercel-protection-bypass", bypass);
+    return url.toString();
+  }
   throw new Error(
     "Set RECALL_WEBHOOK_URL to a public HTTPS URL for /recall/webhook, such as a tunnel to `eve dev`.",
   );

@@ -12,6 +12,7 @@
     "typecheck": "tsc"
   },
   "dependencies": {
+    "@vercel/connect": "^2.5.0",
     "ai": "7.0.128",
     "eve": "^0.79.0",
     "zod": "4.4.3"

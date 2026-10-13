@@ -1,19 +1,17 @@
+import { connect } from "@vercel/connect/eve";
 import { defineMcpClientConnection } from "eve/connections";
 
-// Meeting sessions have no signed-in user, so the agent acts in Linear with
-// one workspace API key. Linear's MCP server accepts API keys as bearer tokens.
+// LINEAR_CONNECTOR is the UID of a Vercel Connect connector for Linear, e.g.
+// from `vercel connect create linear --connection-method api-key`.
+const linearConnector = process.env.LINEAR_CONNECTOR ?? "linear";
+
 export default defineMcpClientConnection({
   url: "https://mcp.linear.app/mcp",
   description:
     "Linear workspace: find teams and people, and search, create, update, and comment on issues.",
-  auth: {
-    credentialOwner: "app",
-    async getToken() {
-      const token = process.env.LINEAR_API_KEY;
-      if (!token) throw new Error("LINEAR_API_KEY is not set.");
-      return { token };
-    },
-  },
+  // Meeting sessions have no signed-in user, so the agent acts in Linear with
+  // the connector's own credential.
+  auth: connect({ connector: linearConnector, principalType: "app" }),
   // Anyone in the meeting can reach these tools, so a destructive call waits
   // for a numbered reply in the meeting chat.
   approval: ({ toolAnnotations }) =>
