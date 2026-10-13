@@ -13,7 +13,15 @@ import type { SessionExecutionInput } from "#execution/session/turn.js";
 import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
 import type { SessionInboxPayload } from "#execution/session-inbox/inbox.js";
 import { decodeSessionInboxPayload } from "#execution/session-inbox/protocol.js";
-import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
+import {
+  runMessageBatchBudget,
+  type WorkflowToolRunMessage,
+} from "#execution/tools/workflow/messages.js";
+import {
+  isAppliedRunMessage,
+  takeLeadingAppliedRunMessages,
+} from "#execution/session-workflow-tool-run.js";
+import type { AppliedRunMessage } from "#execution/tools/workflow/apply-run-messages-step.js";
 import { readDurableSession } from "#execution/durable-session-read.js";
 import { activeTurnId, storedProjection, turnPosition } from "#harness/session-machine/view.js";
 import { coalesceDeliveries } from "#harness/messages.js";
@@ -160,6 +168,29 @@ export class ActiveTurn {
     }
     this.runtimeResults.splice(0, this.runtimeResults.length, ...kept);
     return taken;
+  }
+
+  /**
+   * Removes the run messages read after one the session just took, as long as
+   * each is one it applies as it reads it and they fit one batch. Those it
+   * already admitted come first, then those still in the inbox, so arrival
+   * order holds.
+   */
+  takeAppliedRunMessages(): AppliedRunMessage[] {
+    const admits = runMessageBatchBudget();
+    const taken: AppliedRunMessage[] = [];
+    for (let next = this.runtimeResults[0]; next !== undefined; next = this.runtimeResults[0]) {
+      if (
+        next === "cancelled" ||
+        next.kind !== "workflow" ||
+        !isAppliedRunMessage(next.message) ||
+        !admits(next.message)
+      )
+        return taken;
+      taken.push(next.message);
+      this.runtimeResults.shift();
+    }
+    return [...taken, ...takeLeadingAppliedRunMessages(this.input.inbox, admits)];
   }
 
   /**

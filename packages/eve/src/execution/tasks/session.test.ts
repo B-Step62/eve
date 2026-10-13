@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DurableSession } from "#execution/durable-session-store.js";
 import type { SessionInbox } from "#execution/session-inbox/inbox.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
+import { applyRunMessagesStep } from "#execution/tools/workflow/apply-run-messages-step.js";
 import { answerTaskCancel } from "#execution/tasks/session.js";
-import { applyTaskRunMessageStep } from "#execution/tasks/steps.js";
 import {
   createTask,
   markTaskRunStarted,
@@ -97,7 +97,49 @@ describe("answerTaskCancel", () => {
   });
 });
 
-describe("applyTaskRunMessageStep", () => {
+describe("applyRunMessagesStep", () => {
+  it("publishes a batch's reports and task results in the order they arrived", async () => {
+    const research = startedTask(readTaskTable(undefined), "research");
+    const summarize = startedTask(research.table, "summarize");
+    const cursor = cursorFor(
+      writeTaskTable(
+        createTestSessionState({ sessionId: "session-1" }).snapshot.session,
+        summarize.table,
+      ),
+    );
+    const from = (name: string, taskId: string) => ({
+      callId: `${name}-call`,
+      input: {},
+      runId: `${name}-run`,
+      sequence: 3,
+      stepIndex: 1,
+      taskId,
+      toolName: name,
+      turnId: "turn_1",
+    });
+
+    await cursor.advance((state) =>
+      applyRunMessagesStep({
+        ...state,
+        messages: [
+          { from: from("research", research.taskId), kind: "report", update: "sources found" },
+          {
+            from: from("research", research.taskId),
+            kind: "outcome",
+            result: { output: "Alice's brief", status: "completed" },
+          },
+          { from: from("summarize", summarize.taskId), kind: "report", update: "drafting" },
+        ],
+      }),
+    );
+
+    expect(published.map((entry) => (entry as { event: { type: string } }).event.type)).toEqual([
+      "action.partial",
+      "task.settled",
+      "action.partial",
+    ]);
+  });
+
   it("withdraws the questions of a task() run that fails on its own, and only those", async () => {
     const research = startedTask(readTaskTable(undefined), "research");
     const summarize = startedTask(research.table, "summarize");
@@ -110,22 +152,24 @@ describe("applyTaskRunMessageStep", () => {
     const cursor = cursorFor(session);
 
     await cursor.advance((state) =>
-      applyTaskRunMessageStep({
+      applyRunMessagesStep({
         ...state,
-        message: {
-          from: {
-            callId: "research-call",
-            input: {},
-            runId: "research-run",
-            sequence: 3,
-            stepIndex: 1,
-            taskId: research.taskId,
-            toolName: "research",
-            turnId: "turn_1",
+        messages: [
+          {
+            from: {
+              callId: "research-call",
+              input: {},
+              runId: "research-run",
+              sequence: 3,
+              stepIndex: 1,
+              taskId: research.taskId,
+              toolName: "research",
+              turnId: "turn_1",
+            },
+            kind: "outcome",
+            result: { error: "The research service is unavailable.", status: "failed" },
           },
-          kind: "outcome",
-          result: { error: "The research service is unavailable.", status: "failed" },
-        },
+        ],
       }),
     );
 

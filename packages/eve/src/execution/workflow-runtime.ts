@@ -8,8 +8,6 @@ import {
 } from "#compiled/@workflow/errors/index.js";
 
 import type {
-  CancelTurnInput,
-  CancelTurnResult,
   DispatchContinuationInput,
   DispatchSessionInput,
   GetEventStreamOptions,
@@ -80,6 +78,7 @@ import {
 } from "#execution/session-inbox/resume.js";
 import {
   assertRunnableSessionInbox,
+  findSessionHookHolder,
   StrandedSessionOwnerError,
 } from "#execution/session-inbox/owner.js";
 import { describeStrandedSession, SessionStrandedError } from "#channel/session-stranded-error.js";
@@ -293,21 +292,7 @@ export function createWorkflowRuntime(config: {
       return await readSessionStreamTailIndex(sessionId);
     },
 
-    async resolveContinuation(
-      continuationToken: string,
-    ): Promise<{ sessionId: string } | undefined> {
-      try {
-        return await resolveSessionInbox(continuationToken);
-      } catch (error) {
-        if (HookNotFoundError.is(error)) {
-          return undefined;
-        }
-        logError(log, "failed to resolve session by continuation token", error, {
-          continuationToken,
-        });
-        throw error;
-      }
-    },
+    resolveContinuation,
   };
 }
 
@@ -465,15 +450,6 @@ export async function dispatchWorkflowSessionCommand<TCommand extends SessionCom
   }
 }
 
-/** Requests cancellation through a session's stable command inbox. */
-export async function requestWorkflowTurnCancellation(
-  input: CancelTurnInput,
-): Promise<CancelTurnResult> {
-  const command: { kind: "cancel"; turnId?: string } = { kind: "cancel" };
-  if (input.turnId !== undefined) command.turnId = input.turnId;
-  return await dispatchWorkflowSessionCommand({ command, sessionId: input.sessionId });
-}
-
 async function isRunActive(runId: string): Promise<boolean> {
   try {
     const status = await getRun(runId).status;
@@ -499,20 +475,87 @@ function isInactiveCommandTarget(error: unknown): boolean {
   return false;
 }
 
+/** The session holding a continuation token's inbox, if any does. */
+export async function resolveContinuation(
+  continuationToken: string,
+): Promise<{ sessionId: string } | undefined> {
+  try {
+    return await resolveSessionInbox(continuationToken);
+  } catch (error) {
+    if (HookNotFoundError.is(error)) {
+      return undefined;
+    }
+    logError(log, "failed to resolve session by continuation token", error, {
+      continuationToken,
+    });
+    throw error;
+  }
+}
+
 /**
  * Resolves hook ownership for replay-idempotent work already running inside a
  * durable step. Request handlers must return from start/resume acceptance and
  * leave ownership arbitration to the workflow.
  */
 export async function waitForCommandHookOwner(token: string): Promise<WorkflowHookRecord> {
-  const deadline = Date.now() + SESSION_HOOK_HANDOVER_TIMEOUT_MS;
-  while (true) {
+  const owner = await pollUntil(async () => {
     try {
       return normalizeWorkflowHook(await getHookByToken(token));
     } catch (error) {
-      if (!HookNotFoundError.is(error) || Date.now() >= deadline) throw error;
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      if (!HookNotFoundError.is(error)) throw error;
+      return undefined;
     }
+  }, SESSION_HOOK_HANDOVER_TIMEOUT_MS);
+  if (owner === undefined) throw new HookNotFoundError(token);
+  return owner;
+}
+
+/**
+ * Waits until a started session claims its inbox, which it does when its run
+ * first suspends. Resolves `false` when the run ended without an inbox, so
+ * there is nothing left to command.
+ */
+export async function waitForSessionInbox(sessionId: string): Promise<boolean> {
+  const token = sessionInboxHookToken(sessionCommandHookToken(sessionId));
+  const opened = await pollUntil(async () => {
+    if ((await findSessionHookHolder(token)) !== undefined) return true;
+    return (await hasRunEnded(sessionId)) ? false : undefined;
+  }, SESSION_HOOK_HANDOVER_TIMEOUT_MS);
+  if (opened === undefined) {
+    throw new Error(
+      `Session "${sessionId}" did not start taking commands within ${SESSION_HOOK_HANDOVER_TIMEOUT_MS / 1000} seconds.`,
+    );
+  }
+  return opened;
+}
+
+/**
+ * Calls `check` until it returns a value, backing off from 20 ms to 200 ms
+ * between calls, and resolves `undefined` once `timeoutMs` passes without one.
+ */
+export async function pollUntil<T>(
+  check: () => Promise<T | undefined>,
+  timeoutMs: number,
+): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  for (let delayMs = 20; ; delayMs = Math.min(delayMs * 2, 200)) {
+    const value = await check();
+    if (value !== undefined || Date.now() >= deadline) return value;
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
+/** A run `start()` accepted may not be readable yet, which is not an ended run. */
+export async function hasRunEnded(runId: string): Promise<boolean> {
+  try {
+    const status = await getRun(runId).status;
+    return status !== "pending" && status !== "running";
+  } catch (error) {
+    for (const cause of walkCauseChain(error)) {
+      if (WorkflowRunNotFoundError.is(cause)) return false;
+    }
+    if (isInactiveCommandTarget(error)) return true;
+    throw error;
   }
 }
 
