@@ -12,14 +12,17 @@ Three pieces of in-flight work change eve's instrumentation:
   recovery. eve's adapter, `tracing/eve/*`, turns instrumentation events into library operations.
   The provider API, `defineInstrumentation` and the events in `instrumentation/lifecycle.ts`, is
   unchanged on main.
-- **v27 (the stack).** gives providers the stream's names for what the stream
-  records, with each ending carrying its outcome. It rebuilds the events from committed
-  facts and the tables after them.
+- **v27 (the stack)** gives providers the stream's names for what the stream records, with each
+  ending carrying its outcome. It builds the events from committed facts and the tables after
+  them.
 - **Reactions (#4616).** Hooks observe the session through one context:
   `(fact, { view, position, occurrence })`, plus `select` with `run` for derived state.
 
-This doc relates the three. Its proposal: once reactions lands, instrumentation providers observe
-the session the same way hooks do. The proposal isn't implemented.
+This doc relates the three. Its recommendation: keep provider events shaped as operations that
+stand alone, and use v27's rows to fill each ending with what its start knew. Authors then need
+no `ctx.state` for common cases, and most of the machinery behind it can go. Reactions shares
+infrastructure with instrumentation, not its authoring shape. None of this beyond PR 10 is
+implemented.
 
 ## Three vocabularies
 
@@ -29,10 +32,12 @@ the session the same way hooks do. The proposal isn't implemented.
 | Provider events (`defineInstrumentation`) | `turn.settled`, `model.call.started`, `channel.delivery.completed`, … | What eve tells authored providers      |
 | `@eve/tracing` operations                 | turn, attempt, model call, tool, approval, memory                     | Span layout for any agent framework    |
 
-Main's provider events are a second name for most facts (`tool.call.completed` for
-`call.settled`), and they aren't neutral: they carry eve scopes, channel audience and principals.
-With the library as the neutral layer, the middle layer only needs to be eve's own vocabulary.
-PR 10 moves it most of the way there, and the proposal below finishes the move.
+Facts are built for folding: small, normalized records that refer to each other and rebuild state.
+Telemetry wants operations: a start and an end, one key, and the name, kind and timing in the
+payload. OTel spans and log pipelines work this way. So turning facts into provider events isn't
+duplication. It's a projection for a different reader, and it's where `tracePolicy` decides which
+content each provider receives. PR 10 makes the projection use the stream's names; this doc keeps
+the projection and makes its endings complete.
 
 ## User-facing changes
 
@@ -50,52 +55,39 @@ that carries the fact's outcome:
 | `input.requested`, `input.resolved`               | `interaction.opened`, `interaction.settled` with its outcome       |
 
 Step attempt, model call, memory and channel delivery events keep their names. `ctx.state`,
-`idempotencyKey` and a payload type per event stay. OpenTelemetry trace schema 4 and
-its span names don't change.
+`idempotencyKey` and a payload type per event stay. OpenTelemetry trace schema 4 and its span
+names don't change.
 
-### Proposed: providers observe like hooks (after #4616)
+### Proposed: endings that stand alone
 
-Hooks, channel `events` and instrumentation all key handlers by event type. The proposal gives
-instrumentation the hook context as well: fact handlers receive the literal fact, and `select` with
-`run` covers derived state. [Examples from the guide](#examples-from-the-guide) shows four of
-the published examples rewritten.
+Today an ending carries only what changed: `call.settled` has the outcome, output, error and
+usage, but not the tool's name, kind or start time. A provider that needs them stores them in
+`ctx.state` at the start. The event builder already reads the rows when it builds each ending, so
+it can copy the start's fields across:
 
-What changes for authors:
+| Ending                | Adds, from the row                                 |
+| --------------------- | -------------------------------------------------- |
+| `call.settled`        | `toolName`, `kind`, `startedAtMs`                  |
+| `interaction.settled` | `call` (as on `interaction.opened`), `startedAtMs` |
+| `turn.settled`        | `sequence`, `startedAtMs`                          |
+| `session.ended`       | `startedAtMs`                                      |
 
-| Stack today                                                               | Proposed                                                                                    |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| A payload type per event (`event.toolName`, `event.outcome`)              | The fact itself (`event.data.capability.name`, `event.data.outcome`), as hooks receive it   |
-| `ctx.state` to carry data from a start to its end                         | `ctx.view`: the row holds the start time, input, kind and outcome                           |
-| `idempotencyKey`, a retry key that a start and its end share              | `occurrence.id` for one fact; `callId` or `interactionId` for the operation                 |
-| `kind` of `tool-call`, `load-skill`, `subagent-call`, `remote-agent-call` | The capability's `kind`: `tool`, `agent`, `skill` or `control`                              |
-| `session.waiting` gone, with no replacement                               | `select` over the view, for example open interactions, and `run` when the selection changes |
-| Model output in `model.call.completed`                                    | The `content.completed` fact                                                                |
+Where a start already has a field, the ending uses the same name: `call.requested` has `toolName`,
+`kind` and `startedAtMs`, and `turn.started` has `sequence`. Content stays on the event
+that produced it: inputs on the start, outputs on the ending. That keeps `tracePolicy` as it is.
 
-These stay live events, using one convention, `started` and then `settled` with an `outcome`:
-
-- **Model calls and step attempts.** The `model.started` and `model.settled` facts cover timing
-  and outcome. The prompt and instructions aren't recorded, so a live event still carries model
-  input.
-- **Memory operations and channel deliveries.** Neither has facts. A delivery's ending already
-  carries an `outcome`, so folding its three ending names into one loses nothing.
-
-What stays different from hooks: an instrumentation handler is failure-isolated, its return value
-is ignored, it never cancels a turn, it runs after the commit without blocking it, and
-`tracePolicy` decides which content each provider receives. `setup`, `flush` and `shutdown`
-stay.
+Nothing else changes for authors. `idempotencyKey` stays the operation's one key, `kind` keeps
+instrumentation's own values (`tool-call`, `load-skill`, `subagent-call`, `remote-agent-call`),
+which tell local and remote subagents apart, and model calls stay a matched pair of live events.
 
 ## Examples from the guide
 
 Each "before" is the example as `docs/guides/instrumentation/instrumentation.mdx` publishes it on
-the stack, where it already uses PR 10's names. Each "after" is the proposed shape. The proposed
-API isn't implemented, so these are sketches.
+the stack, where it already uses PR 10's names.
 
 ### Time a tool call
 
-The guide stores the tool name and start time in `ctx.state` when the call is requested and reads
-them back when it settles.
-
-Before:
+Before: the start stores the name and time in `ctx.state`, and the ending reads them back.
 
 ```ts title="agent/instrumentation/audit.ts"
 import { defineInstrumentation } from "eve/instrumentation";
@@ -119,49 +111,48 @@ export default defineInstrumentation({
 });
 ```
 
-After:
+After: the ending has what the start had.
 
 ```ts title="agent/instrumentation/audit.ts"
 import { defineInstrumentation } from "eve/instrumentation";
 
 export default defineInstrumentation({
   events: {
-    "call.settled": (event, { view }) => {
-      const call = view.calls[event.data.callId];
+    "call.settled": (event) => {
       console.log({
-        tool: call.capability.name,
-        durationMs: Date.parse(call.endedAt!) - Date.parse(call.startedAt),
-        outcome: event.data.outcome,
+        tool: event.toolName,
+        durationMs: Date.now() - event.startedAtMs,
+        outcome: event.outcome,
       });
     },
   },
 });
 ```
 
-In the previous code, the instrumentation provider needed to manually track state on event
-open, and then reach into that state on close to log the final event.
+In the previous code, the provider tracks state when the call starts and reaches back into it
+when the call ends. In the new code, the ending already carries what the start knew, read from
+the session's rows, so the provider tracks nothing itself. `startedAtMs` is when the call was
+requested, so the duration still includes time spent waiting for an approval.
 
-In the new code, the instrumentation provider has access to the session view, which already
-has rich information from the unified session fold, meaning it does not need to track state
-itself.
+### Time an approval
 
-### Send a redacted audit record
-
-The guide's `id` is `idempotencyKey`. The guide says a start and its end share it, and to use it
-as a stable key when upserting records across replays.
+The guide has no example for this one. It's the same pattern, and a common thing to measure.
 
 Before:
 
-```ts title="agent/instrumentation/audit.ts"
+```ts title="agent/instrumentation/approvals.ts"
 export default defineInstrumentation({
-  tracePolicy: () => ({ emit: true, recordInputs: true, recordOutputs: false }),
   events: {
-    "call.requested": async (event) => {
-      await sendAuditRecord({
-        id: event.idempotencyKey,
-        input: redactApiKey(event.input),
-        kind: event.kind, // "tool-call" | "load-skill" | "subagent-call" | "remote-agent-call"
-        name: event.toolName,
+    "interaction.opened": (event, ctx) => {
+      if (event.kind !== "approval") return;
+      ctx.state.set({ tool: event.call?.name, openedAt: Date.now() });
+    },
+    "interaction.settled": (event, ctx) => {
+      const opened = ctx.state.get() as { tool?: string; openedAt: number } | undefined;
+      if (opened === undefined) return;
+      metrics.histogram("eve.approval_ms", Date.now() - opened.openedAt, {
+        tool: opened.tool,
+        outcome: event.outcome,
       });
     },
   },
@@ -170,117 +161,58 @@ export default defineInstrumentation({
 
 After:
 
-```ts title="agent/instrumentation/audit.ts"
-export default defineInstrumentation({
-  tracePolicy: () => ({ emit: true, recordInputs: true, recordOutputs: false }),
-  events: {
-    "call.requested": async (event, { occurrence }) => {
-      await sendAuditRecord({
-        id: occurrence.id, // this fact; a retried step computes the same one
-        callId: event.data.callId, // the call, shared with its call.settled
-        input: redactApiKey(event.data.input),
-        kind: event.data.capability.kind, // "tool" | "agent" | "skill" | "control"
-        name: event.data.capability.name,
-      });
-    },
-  },
-});
-```
-
-`idempotencyKey` did two jobs, deduplicating replays and naming the operation, and each now has
-its own key. `kind` becomes the session's capability
-kind, where `agent` covers local and remote subagents alike; telling them apart would mean
-reading the call's child row.
-
-### Capture model input and output
-
-The guide logs the prompt and the response under a policy that records content only for public
-conversations and in development.
-
-Before:
-
-```ts title="agent/instrumentation/audit.ts"
-export default defineInstrumentation({
-  tracePolicy: ({ audience, environment }) => ({
-    emit: true,
-    recordInputs: audience === "public" || environment === "development",
-    recordOutputs: audience === "public" || environment === "development",
-  }),
-  events: {
-    "model.call.started": (event) => {
-      console.log("input", event.input);
-    },
-    "model.call.completed": (event) => {
-      console.log("output", event.content);
-    },
-  },
-});
-```
-
-After:
-
-```ts title="agent/instrumentation/audit.ts"
-export default defineInstrumentation({
-  tracePolicy: ({ audience, environment }) => ({
-    emit: true,
-    recordInputs: audience === "public" || environment === "development",
-    recordOutputs: audience === "public" || environment === "development",
-  }),
-  events: {
-    "model.call.started": (event) => {
-      console.log("input", event.input); // still a live event
-    },
-    "content.completed": (event) => {
-      if (event.data.phase === "reply") console.log("output", event.data.value);
-    },
-  },
-});
-```
-
-Output comes from the `content.completed` fact, as it does for hooks. No fact records the prompt
-and instructions, so `model.call.started` stays. `tracePolicy` now has to strip `event.data.value`
-when outputs aren't recorded, which is the content-policy work under
-[What doesn't get simpler](#what-doesnt-get-simpler).
-
-### Report who the session is waiting on
-
-The guide has no example for this. On the stack, a provider would count open requests from
-`interaction.opened` and `interaction.settled`, sending a change for each event. Those events
-skip sign-ins, so the "after" filters them out too. `metrics` stands for any metrics client.
-
-Before:
-
-```ts title="agent/instrumentation/waiting.ts"
+```ts title="agent/instrumentation/approvals.ts"
 export default defineInstrumentation({
   events: {
-    "interaction.opened": (event) => {
-      metrics.increment("eve.waiting_on_person", { kind: event.kind });
-    },
     "interaction.settled": (event) => {
-      metrics.decrement("eve.waiting_on_person", { kind: event.kind });
+      if (event.kind !== "approval") return;
+      metrics.histogram("eve.approval_ms", Date.now() - event.startedAtMs, {
+        tool: event.call?.name,
+        outcome: event.outcome,
+      });
     },
   },
 });
 ```
 
-After:
+`metrics` stands for any metrics client.
 
-```ts title="agent/instrumentation/waiting.ts"
-export default defineInstrumentation({
-  select: (view) =>
-    Object.values(view.interactions)
-      .filter((row) => row.status === "open" && row.request.kind !== "sign-in")
-      .map((row) => row.request.kind),
-  run: (open, ctx) => {
-    metrics.gauge("eve.waiting_on_person", open.length, { session: ctx.session.id });
-  },
-});
+### Unchanged examples
+
+- **Send a redacted audit record.** It reads `call.requested` alone, which already has the name,
+  kind, input and `idempotencyKey`.
+- **Capture model input and output.** `model.call.started` and `model.call.completed` already
+  form a matched pair with content on each side, under the provider's `tracePolicy`.
+
+## Considered: the hook context
+
+An earlier draft proposed giving providers the hook context after reactions: fact handlers
+receive the literal fact and `{ view, position, occurrence }`, and `select` with `run` covers
+derived state. Rewriting the guide's examples that way made most of them harder to write:
+
+| Example                | With the hook context                                                                                                                                 |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Time a tool call       | One handler, but it reads `event.data`, joins to `view.calls[callId]` and parses ISO times. About even                                                |
+| Audit record           | Worse: two keys (`occurrence.id` and `callId`) instead of one, deeper paths, and the capability `kind` doesn't tell local and remote subagents apart  |
+| Model input and output | Worse: a live start plus a `content.completed` fact filtered by `phase`, output per content part instead of per model call, and nothing links the two |
+| Waiting gauge          | More code, and a per-session gauge isn't the same metric as the global count it replaced                                                              |
+
+```ts
+// The hook-context version of "time a tool call", for comparison
+"call.settled": (event, { view }) => {
+  const call = view.calls[event.data.callId];
+  console.log({
+    tool: call.capability.name,
+    durationMs: Date.parse(call.endedAt!) - Date.parse(call.startedAt),
+    outcome: event.data.outcome,
+  });
+},
 ```
 
-A counter built from deltas drifts when a provider misses an event, such as a handler that timed
-out. The selection is the whole state, so each `run` sets the gauge to what the view says. Main's
-`session.waiting` doesn't fill this gap: it fires whenever the session suspends, including when it
-goes idle after a turn.
+It would also have made `tracePolicy` redact fact data and the whole view per provider, instead
+of fields on events it builds. The view helps hooks because they act on where the session stands.
+Instrumentation records operations, and joining facts against tables moves that work onto every
+provider.
 
 ## What gets simpler internally
 
@@ -295,52 +227,55 @@ goes idle after a turn.
   stored terminal, its codec and its error serializer (about 50 lines).
 - Instrumentation is −380 production lines across the stack.
 
-### With reactions-shaped providers (proposed)
+### With endings that stand alone (proposed)
 
 These follow from the design and haven't been measured:
 
-- **The fact mapping mostly goes.** `instrumentationEventsOf` in `native-events.ts` (about 210
-  lines, 10 fact cases) builds a payload per fact. Fact handlers would receive the fact, so only
-  the live events need building.
-- **`ctx.state` and its machinery go.** That's `instrumentation/state.ts` (235 lines): durable
-  slots per provider and operation, kept in serialized workflow context. Also the abandon and
-  release paths in `dispatch.ts`, and the slot preservation that `cancelled-model-call-batch.ts`
-  calls.
-- **Idempotency keys reduce to IDs eve already has.** Builders such as `actionIdempotencyKey`
-  give way to `occurrence.id` and the entity's own ID.
-- **Payload types for four families go.** `lifecycle.ts` defines a type for each session, turn,
-  call and interaction event, each with its own scope shape. Handlers would take the fact types
-  and the hook context type instead.
-- **The tracing adapter stops copying lifecycle data.** Main's trace state stores each turn's
-  `terminal` (`recordTerminal` in `tracing/eve/session.ts`), start time, sequence and parent
-  lineage, and each call's end time. The session, turn and call rows hold all of these. The
-  adapter keeps what only tracing knows: span contexts, sampling decisions, channel audience and
-  principals.
-- **The turn span gets a real end.** Main ends a turn's span at the next session transition,
-  usually `session.waiting`. Main's channel-delivery spans read the turn's trace state until
-  then. A `select` over the view, such as "this turn's deliveries are done", gives the adapter
-  that moment without a waiting event.
+- **The builder grows a little.** `call.settled` and `interaction.settled` already read their row
+  in `instrumentationEventsOf`; copying the start's fields is a few lines per ending.
+- **`ctx.state` and its machinery can go,** if no provider needs it once endings are complete.
+  That's `instrumentation/state.ts` (235 lines): durable slots per provider and operation, kept in
+  serialized workflow context. It also covers the abandon and release paths in `dispatch.ts` and
+  the slot preservation that `cancelled-model-call-batch.ts` calls. See open question 1.
+- **The OTel adapter stops recording what events now carry.** On main, the adapter stores the
+  turn's ending (`terminal`, via `recordTerminal` in `tracing/eve/session.ts`) until the session
+  transition. `turn.settled` carries the outcome, so that state goes. The adapter keeps what only
+  tracing knows: span contexts, sampling decisions, channel audience and principals.
+- **The adapter can use the view where it needs derived state.** Main ends a turn's span at the
+  next session transition, usually `session.waiting`, and channel-delivery spans read the turn's
+  trace state until then. The adapter is framework code, so it can watch the view, for example
+  for "this turn's deliveries are done", without exposing the view to authors.
+
+### Shared with reactions
+
+The reactions runner and instrumentation both run after each commit, over the commit's facts and
+the view after it. They can share that dispatch, and instrumentation's keys can be derived the
+way occurrences are, from the session and the entity's ID, instead of each family building its
+own (`actionIdempotencyKey`, `inputIdempotencyKey`, …). The authored shapes stay separate: an
+instrumentation handler is failure-isolated, its return value is ignored, it never cancels a turn,
+and `tracePolicy` decides what content it gets.
 
 ### What doesn't get simpler
 
 - **The live layer stays.** The AI SDK hook bridge, `runInContext` for parenting third-party spans,
   MCP spans, and memory and delivery events.
-- **Content policy gets new work.** `tracePolicy` redacts fields of today's payloads. Handing
-  providers facts and a view means projecting fact data and the view per provider. This is the
-  proposal's main cost.
-- **Direct `invokeTool` calls have no session stream.** They need a synthetic fact or their own
-  event.
+- **Direct `invokeTool` calls have no session stream,** so the publisher still builds their call
+  events itself.
 - **Span identity and durable recovery stay in `@eve/tracing`** and its checkpointer.
 
 ## Open questions
 
-1. How to project the view under `tracePolicy`: a redacted copy per provider, or content-free
-   rows with content only on facts.
-2. Whether to record model input as facts, or keep `model.call.started` as a live event.
-3. Where the turn span ends. The options are an adapter `select`, or the library recording an
-   outcome without ending the turn. The library's
+1. Whether any provider needs `ctx.state` once endings are complete. A provider that creates a
+   value at the start, such as an ID returned by its backend, still has to carry it to the
+   ending. Rows can't supply that. If such providers can derive the value from `idempotencyKey`
+   instead, `ctx.state` can go; otherwise it stays, used less.
+2. Where the turn span ends. The options are the adapter watching the view, or the library
+   recording an outcome without ending the turn. The library's
    [design doc](https://github.com/vercel/eve/blob/main/research/agent-tracing-library.md#open-questions)
    lists the second as an open question.
+3. Whether the live families should share one convention: `started`, then `settled` with an
+   `outcome`. A channel delivery's ending already carries `outcome`, so its three ending names
+   repeat that field.
 4. Whether trace backends should implement the library's `AgentTelemetry` instead of consuming
    provider events. That depends on publishing `@eve/tracing`, which is private.
 
@@ -352,8 +287,9 @@ These follow from the design and haven't been measured:
 2. **Restore the tracing tests from main.** PR 2 deleted three suites (5,289 lines): the provider
    tests, the telemetry contract test and the invoke-tool parity test. Main keeps them under
    `tracing/eve/`, so port main's versions to the new names.
-3. **After #4616**, a follow-up gives providers the hook context, removes `ctx.state` and moves the
-   remaining live events to `started` and `settled` with an `outcome`.
+3. **Complete the endings** in a small follow-up: copy the start's fields onto each ending, update
+   the guide's timing example, and answer open question 1 before removing `ctx.state`. This
+   doesn't depend on reactions, and it should land before 1.0 locks provider events.
 
 Related: [`session-changes-overview.md`](./session-changes-overview.md) (the stack),
 [`session-reactions.md`](./session-reactions.md) (`select`, `record`, `render` and occurrences),

@@ -135,7 +135,7 @@ consumer.
 - **Instrumentation speaks the stream's vocabulary.** Providers hear `session.ended`,
   `turn.settled`, `call.requested`/`call.settled` and `interaction.opened`/`interaction.settled`,
   each ending carrying the fact's outcome. How this meets main's new tracing library, and a
-  proposal to give providers the hook context after reactions, are in
+  proposal to have each ending carry what its start knew, are in
   [`instrumentation-session-events.md`](./instrumentation-session-events.md).
 
 ### Framework examples
@@ -934,9 +934,9 @@ flowchart LR
 | Session program, durable steps, private state        | No            | Only idle sessions cross deployments, through a versioned checkpoint |
 
 Because provider events lock at 1.0,
-[`instrumentation-session-events.md`](./instrumentation-session-events.md) proposes settling
-their final shape first: after reactions, providers would take the hook context, keyed by fact
-type, with no `ctx.state`.
+[`instrumentation-session-events.md`](./instrumentation-session-events.md) proposes completing
+them first: each ending carries its start's name, kind and start time, read from the rows, so
+common providers need no `ctx.state`.
 
 Within stream version 27, a minor release may add facts that only add information, optional
 fields, outcomes, kinds, displays and styles. Outcomes and kinds are closed in TypeScript and
