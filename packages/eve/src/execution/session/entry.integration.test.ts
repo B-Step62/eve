@@ -91,6 +91,72 @@ describe("workflowEntry integration", () => {
     });
   });
 
+  it("preclaims the first turn and deadline launcher in one SDK event batch", async () => {
+    const runtime = await createTestRuntime({ agent: { name: "workflow-entry-batched-start" } });
+    await runtime.run(async () => {
+      const world = await getWorld();
+      const originalBatch = world.events.createBatch;
+      const batches: Parameters<NonNullable<typeof originalBatch>>[1][] = [];
+      // This test adapter exercises the SDK's optional-batch dispatch. It is
+      // deliberately NOT a production atomic implementation of createBatch.
+      world.events.createBatch = async (runId, entries, params) => {
+        batches.push(entries);
+        const results = [];
+        for (const entry of entries) {
+          const value = await world.events.create(runId, entry.event, {
+            ...params,
+            occurredAt: entry.occurredAt,
+            computeInstanceId: entry.computeInstanceId,
+          });
+          if (!value.event) throw new Error("Test batch adapter expected a committed event");
+          results.push({ ...value, status: 200 as const, event: value.event });
+        }
+        return { results };
+      };
+      try {
+        const run = await start(workflowEntry, [
+          {
+            kind: "initial",
+            ownerDeploymentId: "dpl_inline",
+            sessionTimeoutMs: 60_000,
+            input: { message: "hello" },
+            serializedContext: buildSerializedContext({ channelKind: "http" }),
+          },
+        ]);
+        const stream = captureTurnEvents(run);
+        try {
+          await stream.nextTurn();
+          const firstPairBatch = batches.find((batch) =>
+            batch.some(
+              ({ event }) =>
+                event.eventType === "step_created" &&
+                event.eventData.stepName.endsWith("//turnStep"),
+            ),
+          );
+          expect(firstPairBatch?.map(({ event }) => event.eventType)).toEqual([
+            "step_created",
+            "step_started",
+            "step_created",
+            "step_started",
+          ]);
+          expect(
+            firstPairBatch
+              ?.filter(({ event }) => event.eventType === "step_created")
+              .map(({ event }) => event.eventType === "step_created" && event.eventData.stepName),
+          ).toEqual([
+            expect.stringMatching(/\/\/turnStep$/),
+            expect.stringMatching(/\/\/startSessionTimeoutStep$/),
+          ]);
+        } finally {
+          stream.dispose();
+          await run.cancel();
+        }
+      } finally {
+        world.events.createBatch = originalBatch;
+      }
+    });
+  });
+
   it("folds session preparation through the eve channel HTTP create route", async () => {
     vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_inline");
     const runtime = await createTestRuntime({
