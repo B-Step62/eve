@@ -153,6 +153,67 @@ describe("summarizeTurnEvents", () => {
   });
 });
 
+describe("summarizeTurnEvents across a task wait", () => {
+  const taskWait = {
+    type: "turn.waiting",
+    data: { on: "tasks", sequence: 1, turnId: "turn_1" },
+  } satisfies UnstampedMessageStreamEvent;
+  const turnEnd = [
+    { type: "turn.completed", data: { sequence: 1, turnId: "turn_1" } },
+    {
+      type: "session.waiting",
+      data: { continuationToken: "session-id", wait: "next-user-message" },
+    },
+  ] satisfies UnstampedMessageStreamEvent[];
+
+  it("keeps the reply written before the wait when the resumed turn writes none", () => {
+    const events = [
+      { type: "turn.started", data: { sequence: 1, turnId: "turn_1" } },
+      {
+        type: "message.completed",
+        data: { ...eventData, finishReason: "stop", message: "The requested answer." },
+      },
+      taskWait,
+      ...turnEnd,
+    ] satisfies UnstampedMessageStreamEvent[];
+
+    expect(summarizeTurnEvents(events)).toMatchObject({
+      message: "The requested answer.",
+      status: "waiting",
+    });
+  });
+
+  it("reports the reply written after the wait", () => {
+    const events = [
+      {
+        type: "message.completed",
+        data: { ...eventData, finishReason: "stop", message: "Checking with the team." },
+      },
+      taskWait,
+      {
+        type: "message.completed",
+        data: { ...eventData, finishReason: "stop", message: "The team confirmed it." },
+      },
+      ...turnEnd,
+    ] satisfies UnstampedMessageStreamEvent[];
+
+    expect(summarizeTurnEvents(events).message).toBe("The team confirmed it.");
+  });
+
+  it("reports no message when the turn only narrated tool calls", () => {
+    const events = [
+      {
+        type: "message.completed",
+        data: { ...eventData, finishReason: "tool-calls", message: "I'll ask the team." },
+      },
+      taskWait,
+      ...turnEnd,
+    ] satisfies UnstampedMessageStreamEvent[];
+
+    expect(summarizeTurnEvents(events).message).toBeUndefined();
+  });
+});
+
 describe("collectTurnEvents", () => {
   it("stops at the current-turn boundary", async () => {
     async function* stream(): AsyncGenerator<UnstampedMessageStreamEvent> {

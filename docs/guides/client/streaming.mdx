@@ -69,9 +69,10 @@ its `input.resolved`, which the session you answer on also emits for a
 subagent's or workflow tool's question.
 
 A turn that waits on its [tasks](/docs/tools/workflows#run-calls-as-tasks-task)
-emits `turn.waiting` with `on: "tasks"`. The text the model wrote
-before the wait is not the reply: `result()` resolves with the final reply
-after the tasks finish.
+emits `turn.waiting` with `on: "tasks"`. `result()` resolves after the tasks
+finish with the last reply the turn completed: a reply written after the wait
+replaces the text written before it, and when the resumed turn writes nothing
+more, the text written before the wait stands.
 
 `result()` closes that HTTP stream, including when fetch instrumentation clones
 the response for tracing. The durable session remains available for follow-up

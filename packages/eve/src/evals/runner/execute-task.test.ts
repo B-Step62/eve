@@ -137,6 +137,33 @@ describe("executeTask", () => {
     expect(outcome.result.finalMessage).toBe("Welcome back Alice");
   });
 
+  it("reports the reply written before a task wait when the resumed turn writes none", async () => {
+    const server = createScriptedServer([
+      {
+        sessionId: "session_1",
+        events: [
+          turnStarted("turn_0"),
+          messageCompleted("The requested answer.", "turn_0"),
+          turnWaitingOnTasks("turn_0"),
+          turnCompleted("turn_0"),
+          sessionWaiting(),
+        ],
+      },
+    ]);
+    vi.spyOn(globalThis, "fetch").mockImplementation(server.fetch);
+    let message: string | undefined;
+    const outcome = await executeTask({
+      client: new Client({ host: target.url }),
+      target,
+      evaluation: createTestEval(async (t) => {
+        message = (await t.send("Summarize the thread")).message;
+      }),
+    });
+    expect(outcome.error).toBeUndefined();
+    expect(message).toBe("The requested answer.");
+    expect(outcome.result.finalMessage).toBe("The requested answer.");
+  });
+
   it("creates independent sessions concurrently and does not expose failed creations", async () => {
     const failed = new Error("Create failed");
     let count = 0;
@@ -1246,6 +1273,10 @@ function messageReceived(message: string, turnId: string): UnstampedMessageStrea
 
 function turnCompleted(turnId: string): UnstampedMessageStreamEvent {
   return { data: { sequence: 3, turnId }, type: "turn.completed" };
+}
+
+function turnWaitingOnTasks(turnId: string): UnstampedMessageStreamEvent {
+  return { data: { on: "tasks", sequence: 2, turnId }, type: "turn.waiting" };
 }
 
 function usage(inputTokens: number, outputTokens = 1, costUsd?: number): TokenUsage {
