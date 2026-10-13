@@ -1,10 +1,35 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readRows, summarize } from "./summary.mjs";
+
 const cwd = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const output = resolve(process.env.EVE_ARMS_OUTPUT ?? `${cwd}/results/measurements.jsonl`);
+
+// `--summary [file]` prints the table for an existing dataset (the committed
+// baseline by default) and writes nothing.
+const summaryAt = process.argv.indexOf("--summary");
+if (summaryAt !== -1) {
+  const path = resolve(process.argv[summaryAt + 1] ?? `${cwd}/results/baseline/measurements.jsonl`);
+  const rows = readRows(path);
+  process.stdout.write(summarize(rows, Math.max(0, ...rows.map((r) => r.repetition))));
+  process.exit(0);
+}
+
+// Every execution gets its own dataset: a fresh directory under results/runs/,
+// or EVE_ARMS_OUTPUT if that file doesn't exist yet. Rows are never appended
+// to an earlier execution's file, so the summary covers this execution only.
+const output = resolve(
+  process.env.EVE_ARMS_OUTPUT ??
+    `${cwd}/results/runs/${new Date().toISOString().replaceAll(":", "-")}/measurements.jsonl`,
+);
+if (existsSync(output) && statSync(output).size > 0) {
+  console.error(`${output} already has rows; pass a new EVE_ARMS_OUTPUT path.`);
+  process.exit(1);
+}
 mkdirSync(dirname(output), { recursive: true });
+writeFileSync(output, "");
+
 const repetitions = Number(process.env.EVE_ARMS_REPETITIONS ?? 3);
 const models = (
   process.env.EVE_ARMS_MODELS ?? "openai/gpt-6.1-sol,anthropic/claude-opus-5.5"
@@ -12,7 +37,11 @@ const models = (
 // Program arms (`js`, `py`) are opt-in: add them to EVE_ARMS_MODES once
 // `agent/lib/program-arms.ts` configures their runtime.
 const arms = (process.env.EVE_ARMS_MODES ?? "direct,deferred,subagents").split(",");
-const TASKS = 10;
+const sizes = (process.env.EVE_ARMS_SIZES ?? "moderate,large").split(",");
+// Tests substitute the eval command; real runs use `eve eval`.
+const [command, ...args] = JSON.parse(
+  process.env.EVE_ARMS_EVAL_COMMAND ?? '["pnpm","exec","eve","eval","--strict","--verbose"]',
+);
 // A shell started inside an `eve dev` session (an agent's sandbox, a dev
 // terminal) inherits that session's local-world wiring. Passed through, the
 // eval's queue deliveries go to the outer dev server and every run hangs on
@@ -22,16 +51,15 @@ const baseEnv = Object.fromEntries(
     ([key]) => key !== "WORKFLOW_LOCAL_BASE_URL" && !key.startsWith("EVE_DEV_"),
   ),
 );
-const sizes = (process.env.EVE_ARMS_SIZES ?? "moderate,large").split(",");
-// `--summary` rebuilds summary.md from the existing rows without running evals.
-const summaryOnly = process.argv.includes("--summary");
-for (let repetition = 1; !summaryOnly && repetition <= repetitions; repetition++) {
+
+console.log(`Writing ${output}`);
+for (let repetition = 1; repetition <= repetitions; repetition++) {
   for (const model of models)
     for (const size of sizes)
       for (const arm of arms) {
         const key = `${model.replaceAll("/", "-")}-${size}-${arm}-${repetition}`;
         console.log(`Running ${key}`);
-        const run = spawnSync("pnpm", ["exec", "eve", "eval", "--strict", "--verbose"], {
+        const run = spawnSync(command, args, {
           cwd,
           encoding: "utf8",
           timeout: 900_000,
@@ -45,39 +73,13 @@ for (let repetition = 1; !summaryOnly && repetition <= repetitions; repetition++
             EVE_ARMS_OUTPUT: output,
           },
         });
-        writeFileSync(`${dirname(output)}/${key}.log`, (run.stdout ?? "") + (run.stderr ?? ""));
+        writeFileSync(join(dirname(output), `${key}.log`), (run.stdout ?? "") + (run.stderr ?? ""));
         console.log(
           `Exit ${run.status}; ${(run.stdout ?? "").match(/Results: .*/)?.[0] ?? run.error ?? "No result summary"}`,
         );
       }
 }
-const rows = existsSync(output)
-  ? readFileSync(output, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
-  : [];
-// Every run writes a row, failed ones included, so means cover every attempt.
-// A run whose eval process died before writing shows up as a shortfall in Runs.
-const lines = [
-  "| Model | Size | Arm | Success | Runs | Mean input tokens | Cache read ratio | Mean model calls | Mean actions | Mean program attempts | Mean latency (s) | Error classes |",
-  "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
-];
-for (const model of models)
-  for (const size of sizes)
-    for (const arm of arms) {
-      const r = rows.filter((r) => r.model === model && r.size === size && r.arm === arm);
-      const sum = (key) => r.reduce((n, row) => n + (row[key] ?? 0), 0);
-      const mean = (key, digits = 1) => (r.length ? (sum(key) / r.length).toFixed(digits) : "-");
-      const errors = {};
-      for (const row of r) {
-        for (const c of [row.errorClass, ...(row.programErrorClasses ?? [])])
-          if (c) errors[c] = (errors[c] ?? 0) + 1;
-      }
-      const errorText =
-        Object.entries(errors)
-          .map(([c, n]) => `${c} ×${n}`)
-          .join(", ") || "-";
-      lines.push(
-        `| ${model} | ${size} | ${arm} | ${r.filter((r) => r.success).length}/${r.length} | ${r.length}/${TASKS * repetitions} | ${mean("inputTokens")} | ${sum("inputTokens") ? ((100 * sum("cacheReadTokens")) / sum("inputTokens")).toFixed(1) : "-"}% | ${mean("modelCalls")} | ${mean("actions")} | ${mean("programAttempts")} | ${r.length ? (sum("latencyMs") / r.length / 1000).toFixed(2) : "-"} | ${errorText} |`,
-      );
-    }
-writeFileSync(`${dirname(output)}/summary.md`, lines.join("\n") + "\n");
-console.log(lines.join("\n"));
+
+const table = summarize(readRows(output), repetitions);
+writeFileSync(join(dirname(output), "summary.md"), table);
+console.log(table);

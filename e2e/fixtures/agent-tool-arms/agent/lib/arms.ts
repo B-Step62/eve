@@ -16,10 +16,6 @@ if (isProgramArm && !PROGRAM_ARMS[mode])
   throw new Error(`EVE_ARMS_MODE=${mode}: no program runtime is configured for this arm yet`);
 /** Agent definition fields for the selected arm; empty unless it's a program arm. */
 export const armAgentConfig = (isProgramArm ? PROGRAM_ARMS[mode] : null) ?? {};
-/** The program tool; every call to it is one program attempt. */
-export const PROGRAM_TOOL = "eve__execute";
-/** Catalog tools that find or route to a tool rather than doing the task. */
-export const ROUTING_TOOLS = new Set(["eve__search", "eve__tool", "eve__skill"]);
 if (!["moderate", "large"].includes(size)) throw new Error("Invalid EVE_ARMS_SIZE");
 export const groups = ["sre", "d0", "index", "support", "office"];
 export const groupOf = (name: string) => (name.includes("__") ? name.split("__")[0]! : "office");
