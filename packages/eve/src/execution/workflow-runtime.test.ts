@@ -8,12 +8,12 @@ import {
   context as otelContext,
   trace as otelTrace,
 } from "#compiled/@opentelemetry/api/index.js";
-import {
-  EntityConflictError,
-  HookNotFoundError,
-  WorkflowRunNotFoundError,
-} from "#compiled/@workflow/errors/index.js";
+import { HookNotFoundError, WorkflowRunNotFoundError } from "#compiled/@workflow/errors/index.js";
 import type { ChannelAdapter } from "#channel/adapter.js";
+import {
+  SessionDeliveryConflictError,
+  SessionNotRecordedError,
+} from "#execution/runtime-errors.js";
 import { ChannelRequestIdKey, SessionTitleKey } from "#context/keys.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import {
@@ -561,22 +561,29 @@ describe("createWorkflowRuntime#createSession", () => {
     });
   }
 
-  it("honors a reserved run id and stores the initial delivery identity", async () => {
-    const source = {} as RuntimeCompiledArtifactsSource;
-    mockBundleAndRun(source);
-    const get = vi.fn().mockRejectedValue(new WorkflowRunNotFoundError("reserved"));
-    getWorldMock.mockResolvedValue({ ...world, runs: { get } });
-    const sessionId = "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-    startMock.mockResolvedValue({ runId: sessionId });
-    const handle = await buildRuntime(source).createSession({
+  function createReserved(source: RuntimeCompiledArtifactsSource, deliveryId: string) {
+    return buildRuntime(source).createSession({
       adapter,
       auth: null,
       input: { message: "hello" },
-      sessionId,
-      delivery: { deliveryId: "dlv_first", channelKind: "eve", channelName: "eve" },
+      sessionId: "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      delivery: { deliveryId, channelKind: "eve", channelName: "eve" },
     });
+  }
+
+  it("accepts a reserved run id once run storage records it for this delivery", async () => {
+    const source = {} as RuntimeCompiledArtifactsSource;
+    mockBundleAndRun(source);
+    const sessionId = "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    const get = vi.fn().mockResolvedValue({
+      runId: sessionId,
+      attributes: { "eve.channel.initialDeliveryId": "dlv_first" },
+    });
+    getWorldMock.mockResolvedValue({ ...world, runs: { get } });
+    startMock.mockResolvedValue({ runId: sessionId });
+    const handle = await createReserved(source, "dlv_first");
     expect(handle).toMatchObject({ sessionId, deliveryId: "dlv_first" });
-    expect(get).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledWith(sessionId, { resolveData: "none" });
     expect(startMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -587,27 +594,31 @@ describe("createWorkflowRuntime#createSession", () => {
     );
   });
 
-  it("returns the stored delivery identity after a reserved creation conflict", async () => {
+  it("rejects a reserved run id recorded for a different delivery", async () => {
     const source = {} as RuntimeCompiledArtifactsSource;
     mockBundleAndRun(source);
-    const sessionId = "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV";
     const get = vi.fn().mockResolvedValue({
-      runId: sessionId,
+      runId: "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV",
       attributes: { "eve.channel.initialDeliveryId": "dlv_original" },
     });
-
     getWorldMock.mockResolvedValue({ ...world, runs: { get } });
-    startMock.mockRejectedValue(new EntityConflictError("Run already exists"));
-    const handle = await buildRuntime(source).createSession({
-      adapter,
-      auth: null,
-      input: { message: "retry" },
-      sessionId,
-      delivery: { deliveryId: "dlv_retry", channelKind: "eve", channelName: "eve" },
-    });
-    expect(handle).toMatchObject({ sessionId, existing: true, deliveryId: "dlv_original" });
-    expect(startMock).toHaveBeenCalledTimes(1);
-    expect(get).toHaveBeenCalledTimes(1);
+    // The installed `start()` swallows the run-creation conflict and resolves.
+    startMock.mockResolvedValue({ runId: "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV" });
+    await expect(createReserved(source, "dlv_retry")).rejects.toBeInstanceOf(
+      SessionDeliveryConflictError,
+    );
+  });
+
+  it("does not accept a reserved run id run storage has not recorded", async () => {
+    const source = {} as RuntimeCompiledArtifactsSource;
+    mockBundleAndRun(source);
+    const get = vi.fn().mockRejectedValue(new WorkflowRunNotFoundError("reserved"));
+    getWorldMock.mockResolvedValue({ ...world, runs: { get } });
+    // A throttled `run_created` write: `start()` resolves on queue acceptance.
+    startMock.mockResolvedValue({ runId: "wrun_01ARZ3NDEKTSV4RRFFQ69G5FAV" });
+    await expect(createReserved(source, "dlv_first")).rejects.toBeInstanceOf(
+      SessionNotRecordedError,
+    );
   });
 
   it("does not treat unrelated start failures as reserved creation conflicts", async () => {

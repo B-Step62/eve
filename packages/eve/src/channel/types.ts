@@ -546,7 +546,6 @@ export type RunResult =
  */
 export interface RunHandle {
   readonly deliveryId?: string;
-  readonly existing?: boolean;
   readonly events: ReadableStream<MessageStreamEvent>;
   /**
    * Runtime-owned identifier for this session. Stream and inspection APIs

@@ -21,3 +21,33 @@ export function isRuntimeNoActiveSessionError(
 ): error is RuntimeNoActiveSessionError {
   return error instanceof RuntimeNoActiveSessionError;
 }
+
+/**
+ * Thrown by `createSession` when the reserved session id is already recorded
+ * for a different delivery. The caller's delivery was not accepted; it belongs
+ * in that session as a follow-up.
+ */
+export class SessionDeliveryConflictError extends Error {
+  readonly sessionId: string;
+
+  constructor(sessionId: string) {
+    super(`Session "${sessionId}" already exists for a different delivery.`);
+    this.name = "SessionDeliveryConflictError";
+    this.sessionId = sessionId;
+  }
+}
+
+/**
+ * Thrown by `createSession` when the queue accepted the reserved session but
+ * run storage has not recorded it yet. Acceptance is unknown to the caller, who
+ * re-sends with the same session and delivery ids.
+ */
+export class SessionNotRecordedError extends Error {
+  readonly sessionId: string;
+
+  constructor(sessionId: string) {
+    super(`Session "${sessionId}" is not recorded yet.`);
+    this.name = "SessionNotRecordedError";
+    this.sessionId = sessionId;
+  }
+}

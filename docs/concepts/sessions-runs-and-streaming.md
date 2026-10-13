@@ -59,6 +59,13 @@ code with bounded backoff. The TypeScript client retries sends for up to 20 seco
 the caller's abort signal. Do not wait
 for `session.waiting` on a prewarmed session: initialization and its first events require a message.
 
+A caller that reserves the `sessionId` (and `deliveryId`) in the create body can re-send the
+same create safely. eve answers `202` only once run storage records the session for that
+delivery, so a re-send of an accepted create also gets `202`. If the session is recorded for a
+different delivery, the create returns `409 session_exists`: send the message to
+`POST /eve/v1/session/:sessionId` instead. If run storage has not recorded the session yet, it
+returns `503 session_not_recorded`: re-send with the same ids.
+
 ## Stream a session
 
 ```bash

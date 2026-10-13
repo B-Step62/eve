@@ -21,6 +21,10 @@ import type {
 } from "#channel/types.js";
 import { serializeContext } from "#context/serialize.js";
 import {
+  SessionDeliveryConflictError,
+  SessionNotRecordedError,
+} from "#execution/runtime-errors.js";
+import {
   buildSessionAttributes,
   buildSubagentRootAttributes,
   readParentLineage,
@@ -110,6 +114,30 @@ export const workflowToolRunWorkflowReference = {
 };
 
 /**
+ * Accepts a create for a reserved session id only once run storage records the
+ * run for this delivery. `start()` returns once the queue accepts the run: it
+ * writes `run_created` alongside, and swallows both a conflict (another caller,
+ * or this caller's own queued start, created the run first) and a retryable
+ * write failure. So its return proves neither that the run is recorded nor that
+ * this caller's input created it; the recorded run decides both.
+ */
+async function requireRecordedDelivery(
+  sessionId: string,
+  deliveryId: string | undefined,
+): Promise<void> {
+  let run;
+  try {
+    run = await (await getWorld()).runs.get(sessionId, { resolveData: "none" });
+  } catch (error) {
+    if (WorkflowRunNotFoundError.is(error)) throw new SessionNotRecordedError(sessionId);
+    throw error;
+  }
+  if (run.attributes["eve.channel.initialDeliveryId"] !== deliveryId) {
+    throw new SessionDeliveryConflictError(sessionId);
+  }
+}
+
+/**
  * Creates a workflow-backed runtime whose current owner executes turns and
  * whose original run retains the public event stream across owner handoffs.
  */
@@ -120,24 +148,6 @@ export function createWorkflowRuntime(config: {
 }): Runtime {
   return {
     async createSession(input: RunInput): Promise<RunHandle> {
-      const existingHandle = async (): Promise<RunHandle | undefined> => {
-        if (input.sessionId === undefined) return undefined;
-        try {
-          const run = await (await getWorld()).runs.get(input.sessionId);
-          const deliveryId = run.attributes?.["eve.channel.initialDeliveryId"];
-          return {
-            sessionId: input.sessionId,
-            deliveryId: typeof deliveryId === "string" ? deliveryId : undefined,
-            existing: true,
-            get events() {
-              return readSessionEventStream(run.runId);
-            },
-          };
-        } catch (error) {
-          if (!WorkflowRunNotFoundError.is(error)) throw error;
-          return undefined;
-        }
-      };
       const bundle = await getCompiledRuntimeAgentBundle({
         compiledArtifactsSource: config.compiledArtifactsSource,
         nodeId: config.nodeId,
@@ -214,16 +224,13 @@ export function createWorkflowRuntime(config: {
           startOptions,
         );
       } catch (error) {
-        // A different Functions instance may have won the same run creation.
-        // The world's durable run is the authority, not an in-process lock.
-        if (EntityConflictError.is(error)) {
-          const winner = await existingHandle();
-          if (winner) return winner;
-        }
         logError(log, "failed to start workflow run", error, {
           continuationToken: input.continuationToken,
         });
         throw error;
+      }
+      if (input.sessionId !== undefined) {
+        await requireRecordedDelivery(input.sessionId, input.delivery?.deliveryId);
       }
 
       let events: ReadableStream<MessageStreamEvent> | undefined;

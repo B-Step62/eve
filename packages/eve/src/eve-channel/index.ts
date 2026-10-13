@@ -1,4 +1,8 @@
 import { handleExpiredLegacyAuthorization } from "#execution/legacy-session/authorization.js";
+import {
+  SessionDeliveryConflictError,
+  SessionNotRecordedError,
+} from "#execution/runtime-errors.js";
 import { EVE_ROUTE_PREFIX } from "#protocol/routes.js";
 import type { SessionAuthContext, SessionParent, SessionTraceContext } from "#channel/types.js";
 import type { Session } from "#channel/session.js";
@@ -101,18 +105,16 @@ const log = createLogger("eve.channel");
 function createdSessionBody(
   sessionId: string,
   body: ParsedCreateBody,
-  handle?: { deliveryId?: string; existing?: boolean },
+  handle?: { deliveryId?: string },
 ) {
   const created: {
     ok: true;
     deliveryId?: string;
-    existing?: boolean;
     protocolVersion?: number;
     sessionId: string;
     status: "accepted";
   } = { ok: true, sessionId, status: "accepted" };
   if (handle?.deliveryId !== undefined) created.deliveryId = handle.deliveryId;
-  if (handle?.existing) created.existing = true;
   if (body.protocolVersion !== undefined) created.protocolVersion = body.protocolVersion;
   return created;
 }
@@ -358,6 +360,26 @@ export function eveChannel(input: EveChannelInput): EveChannel {
             title: messageResult.title,
           });
         } catch (error) {
+          if (error instanceof SessionDeliveryConflictError) {
+            return Response.json(
+              {
+                code: "session_exists",
+                error: "The session already exists; send this message to it as a follow-up.",
+                ok: false,
+              },
+              { headers: { "cache-control": "no-store" }, status: 409 },
+            );
+          }
+          if (error instanceof SessionNotRecordedError) {
+            return Response.json(
+              {
+                code: "session_not_recorded",
+                error: "The session is not recorded yet; re-send with the same ids.",
+                ok: false,
+              },
+              { headers: { "cache-control": "no-store" }, status: 503 },
+            );
+          }
           const errorId = logError(log, "session-create request failed", error);
           return Response.json(
             { error: "Failed to create the session.", errorId, ok: false },
@@ -370,7 +392,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
             "cache-control": "no-store",
             [EVE_SESSION_ID_HEADER]: handle.sessionId,
           },
-          status: handle.existing ? 200 : 202,
+          status: 202,
         });
       }),
 
