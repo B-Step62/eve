@@ -6,7 +6,7 @@ last_updated: "2026-10-11"
 
 # Session core: the target and what 1.0 locks
 
-This doc describes where the session core should end up, and which parts of that have to be decided before 1.0. It follows [`session-machine-simplification.md`](./session-machine-simplification.md), which named the duplication, and [`session-event-lifecycle.md`](./session-event-lifecycle.md), which defined the v27 facts. Code was read and prototyped on `proto/harness-core`, stacked on the reactions prototype [#4616](https://github.com/vercel/eve/pull/4616).
+This doc describes where the session core should end up, and which parts of that have to be decided before 1.0. It builds on [`session-event-lifecycle.md`](./session-event-lifecycle.md), which defines the v27 facts, and [`session-changes-overview.md`](./session-changes-overview.md), which maps what landed. Code was read and prototyped on `proto/harness-core`, stacked on the reactions prototype [#4616](https://github.com/vercel/eve/pull/4616).
 
 ## Summary
 
@@ -113,7 +113,7 @@ loop:
 - **One commit path:** every step publishes through one publisher, which folds the view and announces waits. The prototype already routes every publication through it.
 - **What goes:** the turn loop's pause kinds (person, tasks, calls) and their waiters, `DurableStepResult`'s actions, the steps that only publish, and the split between a turn step and the dispatch step that follows it.
 - **What stays separate:** handoff, finalization and the caller's notification, and the mid-generation steering abort, which can't wait for a step boundary.
-- **The other cuts** from [`session-machine-simplification.md`](./session-machine-simplification.md) fit underneath: one executor for every call, one registry and protocol for running work. None of them changes a fact.
+- **The machine cuts already on the stack** fit underneath: one executor for every call (#4549) and one record of running work (#4588). None of them changes a fact.
 
 **Batching.** `experimental.workflow.modelCallsPerStep` becomes the bound on one `advance`. It's experimental, so 1.0 doesn't lock it. Durable cost per turn is measured in [`turn-performance.md`](./turn-performance.md); fewer, larger steps should help, but nothing here is measured.
 
@@ -140,7 +140,7 @@ Each of these changes only private state or the program, so it can land in a min
 
 - the single scheduler, and deleting the pause kinds and waiters;
 - one executor for every call, and one registry and protocol for running work, under the remote protocol's versioning;
-- a session log from which state is derived ([Toward a session log](./session-machine-simplification.md#toward-a-session-log));
+- a session log from which state is derived ([Toward a session log](./session-event-lifecycle.md#toward-a-session-log));
 - batching and step sizes.
 
 ## Open questions
