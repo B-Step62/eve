@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const TASKS = 10;
@@ -14,10 +14,6 @@ export function readRows(path) {
  */
 export function readMatrix(rowsPath) {
   return JSON.parse(readFileSync(join(dirname(rowsPath), "matrix.json"), "utf8"));
-}
-
-export function hasMatrix(rowsPath) {
-  return existsSync(join(dirname(rowsPath), "matrix.json"));
 }
 
 /**

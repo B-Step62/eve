@@ -120,6 +120,20 @@ test("configurations that recorded no rows show as 0 runs, then and later", () =
   rmSync(dirname(output), { recursive: true });
 });
 
+test("--summary of a dataset without a matrix fails and writes nothing", () => {
+  const output = tempOutput();
+  run({ EVE_ARMS_OUTPUT: output });
+  rmSync(join(dirname(output), "matrix.json"));
+  rmSync(join(dirname(output), "summary.md"));
+  const files = readdirSync(dirname(output)).sort();
+  const summary = run({}, ["--summary", output]);
+  assert.notEqual(summary.status, 0);
+  assert.match(summary.stderr, /matrix\.json/);
+  assert.equal(summary.stdout, "");
+  assert.deepEqual(readdirSync(dirname(output)).sort(), files);
+  rmSync(dirname(output), { recursive: true });
+});
+
 test("summarize lists every requested configuration even with no rows", () => {
   const table = summarize([], { models: ["a"], sizes: ["s"], arms: ["x", "y"], repetitions: 3 });
   assert.match(table, /\| a \| s \| x \| 0\/0 \| 0\/30 \| - \|/);
