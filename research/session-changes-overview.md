@@ -4,20 +4,16 @@ status: draft
 last_updated: "2026-10-13"
 ---
 
-# The session stack, in one place
+# Session stack overview
 
-This is a reviewer's map of the session work landing before 1.0. It has two parts: the v27 event
+This is a map of the session work landing before 1.0. It contains the v27 event
 model and the cleanup built on it (six prep PRs, then PRs 1–10, as GitHub stack #4696 from
 [#4532](https://github.com/vercel/eve/pull/4532)), then reactions
-([#4616](https://github.com/vercel/eve/pull/4616)), one commit on top of PR 10. It covers what
-changes, where the code goes, and why the result is smaller than main. The design docs have the
-detail: [`session-event-lifecycle.md`](./session-event-lifecycle.md) (the facts),
+([#4616](https://github.com/vercel/eve/pull/4616)), one commit on top of PR 10. The design docs
+have additional detail: [`session-event-lifecycle.md`](./session-event-lifecycle.md) (the facts),
 [`session-event-tree.md`](./session-event-tree.md) (ownership and closing),
 [`session-core-target.md`](./session-core-target.md) (waiting, and what 1.0 locks), and
 [`session-reactions.md`](./session-reactions.md) (dynamic values and hooks).
-
-Each section starts with the short version. The collapsed sections hold examples and numbers for
-the areas you're reviewing.
 
 ## Summary
 
@@ -86,7 +82,7 @@ Against main, v27 deletes 124 test files and adds 38. In lines, that's +7,874 / 
 lines are v26-shaped suites removed wholesale (`tool-loop.test.ts`, `slackChannel.test.ts`,
 `terminal-renderer.test.ts`, …).
 
-Coverage came back in three forms:
+Coverage comes back in three forms:
 
 - Units over the fold, cascade, checker, retention, task cards, selectors and conversation.
 - Seventeen channel conformance suites.
@@ -122,13 +118,13 @@ consumer.
 - **Every entity has a lifecycle on the stream.** A session, delivery, turn, model run, content
   part, call, task, interaction, response or context change is introduced by one fact and ends
   with one terminal fact and an outcome. Readers no longer infer endings from timing.
-- **The entities form one ownership tree.** `tree.ts` states each family's owner once. When an
+- **The entities form an ownership tree.** `tree.ts` states each family's owner once. When an
   owner ends, the writer closes everything still open under it in the same commit, leaves first,
   with `session.ended` last, and derives each fact's scope from the tree.
 - **Client and server share a fold.** The fold produces typed tables (`turns`, `runs`,
   `calls`, `interactions`, `responses`, …), and selectors in `eve/events` answer questions over
   them. Each row records where it ended (`closedAt`).
-- **One taxonomy for people.** Approvals, questions, sign-ins and the budget prompt are all
+- **Single taxonomy for interactions.** Approvals, questions, sign-ins and the budget prompt are all
   interactions, and a turn waits only on people. An answer is
   `{ interactionId, optionId?, text? }` everywhere: client, channel, MCP, `eve invoke`, engine.
 - **Consumers read rows instead of keeping their own state:** client messages, channel task
@@ -554,21 +550,20 @@ is in `docs/concepts/upgrade-to-v27-events.md`.
 
 ### Why it isn't more code
 
-- **One fold replaces many.** The contract, fold and writer cost about +5,000. The old protocol
+- **Deleting fold duplication.** The contract, fold and writer cost about +5,000. The old protocol
   (−2,832) and the readers' private reconstructions (about −3,400 across clients, HITL,
-  instrumentation, usage and channels) pay for it. Every later consumer gets the fold for free,
+  instrumentation, usage and channels) are removed. Every later consumer gets the fold for free,
   reactions included.
 - **Conversions in both directions become one vocabulary.** Interactions, calls and answers have
-  one shape inside and out, and instrumentation hears the stream's names. That removed the
-  request converters, the three-way answer plumbing, the batch-scoped MCP hashes and the
-  per-ending instrumentation events.
+  a single shape. That removed the request converters, the three-way answer plumbing, the
+  batch-scoped MCP hashes and the per-ending instrumentation events.
 - **Closing and scoping happen once, in the writer,** not in each transition.
 - **Private state holds only what the facts don't:** raised limits, responder records,
   sign-in secrets, relay routes, task records, payloads. Usage, lifecycle and attempts moved to
   facts, and records that rows can close retire with them.
-- **Code nothing reaches is deleted.** An audit of 1,063 exports, which protected public, path,
+- **Dead code removal.** An audit of 1,063 exports, which protected public, path,
   convention, workflow and synced entries, removed about 400 production lines (PR 9).
-- **What grew, and why:**
+- **What grew:**
   - Entities that used to be invisible now have facts. Compaction is a control delivery, a
     context change and a summary run with its own spend and run facts (about +120 in
     `compaction/step.ts`). The task lifecycle is published beside the private task table (about
