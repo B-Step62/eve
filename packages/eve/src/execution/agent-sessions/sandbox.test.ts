@@ -191,7 +191,8 @@ describe("shared sandbox at child start", () => {
       });
       // The session inbox services requests sequentially, including parallel child starts.
       let requests = Promise.resolve();
-      runtime.request.mockImplementation((_token: string, message: WorkflowSandboxRequest) => {
+      runtime.request.mockImplementation((token: string, message: WorkflowSandboxRequest) => {
+        expect(token).toBe(`eve:inbox:v1:eve:session:${ownerId}:inbox`);
         const request = requests.then(() => handleWorkflowToolRunMessage({ cursor, message }));
         requests = request.then(() => {});
         return request;

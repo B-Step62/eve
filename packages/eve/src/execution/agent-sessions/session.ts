@@ -15,7 +15,10 @@ import {
   type OpenedAgentSession,
 } from "#execution/agent-sessions/steps.js";
 import type { RunUsageTally } from "#execution/agent-sessions/usage.js";
-import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
+import {
+  sessionCommandHookToken,
+  sessionInboxHookToken,
+} from "#execution/session-inbox/address.js";
 import { resumeHookStep } from "#execution/tools/workflow/resume-hook-step.js";
 import type { SandboxState } from "#sandbox/state.js";
 import { claimHookOwnership, disposeHook } from "#execution/hook-ownership.js";
@@ -235,7 +238,7 @@ class RunAgentSession implements AgentSession {
         const hook = createHook<{ readonly state: SandboxState } | { readonly error: string }>();
         try {
           await claimHookOwnership(hook);
-          await resumeHookStep(sessionInboxHookToken(ownerSessionId), {
+          await resumeHookStep(sessionInboxHookToken(sessionCommandHookToken(ownerSessionId)), {
             kind: "sandbox-request",
             auth: message.auth,
             from,
