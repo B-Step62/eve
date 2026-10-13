@@ -1,3 +1,7 @@
+import { dispatchChannelRequest } from "#internal/nitro/routes/channel-dispatch.js";
+import { eveChannel } from "#public/channels/eve.js";
+import { none } from "#public/channels/auth.js";
+import { getRun } from "#internal/workflow/runtime.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getWorld, resumeHook, start } from "#internal/workflow/runtime.js";
 import { hydrateWorkflowArguments } from "@workflow/core/serialization";
@@ -80,6 +84,76 @@ describe("workflowEntry integration", () => {
         const states = await readTurnStepStates(run.runId);
         expect(states[0]?.sessionState.sessionId).toBe(run.runId);
         expect(states[0]?.sessionState.snapshot.session.history.length).toBeGreaterThan(0);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
+  it("folds session preparation through the eve channel HTTP create route", async () => {
+    vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_inline");
+    const runtime = await createTestRuntime({
+      agent: { name: "eve-http-fast", limits: { sessionTimeoutMs: false } },
+      modules: [
+        {
+          logicalPath: "channels/eve.ts",
+          loadNamespace: async () => ({
+            default: eveChannel({ auth: [none()], turnPolicy: "queue" }),
+          }),
+        },
+      ],
+    });
+    await runtime.run(async () => {
+      const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+      let timestamp = Date.now();
+      let encoded = "";
+      for (let i = 0; i < 10; i++) {
+        encoded = alphabet[timestamp % 32] + encoded;
+        timestamp = Math.floor(timestamp / 32);
+      }
+      const sessionId =
+        "wrun_" +
+        encoded +
+        Array.from(crypto.getRandomValues(new Uint8Array(16)), (v) => alphabet[v % 32]).join("");
+      const request = new Request("https://example.com/eve/v1/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "hello", sessionId, deliveryId: "dlv_first" }),
+      });
+      const response = await dispatchChannelRequest(
+        { req: request, context: { params: {} }, waitUntil: () => {} } as never,
+        "POST /eve/v1/session",
+        { kind: "production", sandboxScope: "test" },
+      );
+      expect(response.status).toBe(202);
+      const run = getRun(sessionId);
+      const stream = captureTurnEvents(run);
+      try {
+        const turn = await stream.nextTurn();
+        expectSingleTurn(turn, "turn_0");
+        const events = await (
+          await getWorld()
+        ).events.list({ runId: sessionId, resolveData: "all", pagination: { limit: 1000 } });
+        const created = events.data.find((event) => event.eventType === "run_created");
+        if (created?.eventType !== "run_created") throw new Error("Missing run creation event.");
+        const [input] = await hydrateWorkflowArguments(
+          created.eventData.input,
+          sessionId,
+          undefined,
+        );
+        expect(input).toMatchObject({
+          input: { message: "hello" },
+          serializedContext: { "eve.channel": { kind: "http" } },
+        });
+        expect(input.serializedContext["eve.sessionCallback"]).toBeUndefined();
+        const firstStart = events.data.findIndex((event) => event.eventType === "step_started");
+        expect(
+          events.data.slice(0, firstStart).filter((event) => event.eventType === "hook_created"),
+        ).toHaveLength(3);
+        expect(
+          events.data.some((event) => JSON.stringify(event).includes("//createSessionStep")),
+        ).toBe(false);
       } finally {
         stream.dispose();
         await run.cancel();
