@@ -5,7 +5,7 @@ import {
   FunctionSnapshot,
   FutureSnapshot,
   type Snapshot,
-} from "@pydantic/monty";
+} from "@pydantic/monty/wasm";
 import type { JsonValue } from "#shared/json.js";
 import type {
   ProgramRuntime,
