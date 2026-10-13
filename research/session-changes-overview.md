@@ -587,14 +587,28 @@ is in `docs/concepts/upgrade-to-v27-events.md`.
 
 ## Part 2: Reactions
 
-- **A dynamic value is `select`, `record`, `render`.** `select` reads the view and returns the
-  JSON the value depends on. `record` fetches or decides, and eve keeps what it returns. `render`
-  turns that into a live tool, skill, model or connection. It's pure, so any process can render
-  it again from the record.
-- **A hook is `select` + `run`, or an event handler, and can return commands** (`cancel()`,
-  `compact()`). A throw fails the turn instead of being logged.
+#4616 is the prototype; the authoring examples below show the target API for the initial land.
+
+- **A dynamic value is `select`, `record`, `render`.** `select(ctx)` reads `ctx.view` and returns
+  the JSON the value depends on. `record(selection, ctx)` fetches or decides, and eve keeps what
+  it returns. `render(record)` turns that into a live tool, skill, model or connection. It's pure
+  and has no context, so any process can render it again from the record.
+- **A hook is `select` + `run`, or an `events` map, and can return commands** (`cancel()`,
+  `compact()`). The two forms are mutually exclusive. A state hook runs initially and when its
+  selection changes; an event handler runs for each matching fact. A throw during a turn fails
+  that turn instead of being logged and ignored.
+- **Only dynamic values read the assembled conversation:** `ctx.view.messages` in `select`,
+  and `await ctx.messages()` in `record`, at the next model-call boundary. Hook selectors,
+  `run`, and event handlers read committed session state and event payloads, not the assembled
+  conversation. Their public types and runtime contexts enforce this; hooks need no
+  conversation-dependent scheduling exceptions. Event payloads can still carry message content.
 - **Each evaluation is an occurrence** with a stable identity, so a retry is distinguishable from
-  doing the work again, and `ctx.occurrence.id` works as an idempotency key.
+  doing the work again. `ctx.occurrence.id` is available in `record`, hook `run`, and event
+  handlers as an idempotency key for services that honor it.
+- **Persistence boundaries are validated.** `select` and `record` return JSON; `select` and
+  `render` are synchronous. Errors name the file and callback, and non-JSON errors identify the
+  offending path and type. Public types reject statically known violations, with runtime
+  validation for external data.
 - **One runner and a short adapter per kind.** The kind adapter says how a value contributes:
   validate, name, and store as JSON with live code beside it.
 - **Values don't change under a waiting turn.** Nothing evaluates while a turn waits, and an
@@ -649,13 +663,13 @@ return async (event, messages) => {
 With reactions, every surface desugars to one shape:
 
 ```ts
-// reactions/reaction.ts
+// reactions/reaction.ts (target shape, condensed)
 export interface Reaction {
   readonly id: string;
   readonly kind: ReactionKind;
   readonly label: string; // where it was authored, for errors and logs
   readonly timing?: "commit"; // hooks: after every commit; values: before each model call
-  readonly select?: (view: ReactionView, ctx: SelectContext) => unknown;
+  readonly select?: (ctx: SelectContext) => unknown; // includes the kind's read-only view
   readonly record?: (selected: unknown, ctx: InternalRecordContext) => unknown;
   readonly render?: (input: JsonValue, ctx: InternalRecordContext) => unknown;
   /** Validates and names the value: its JSON form, and the live code it can't carry. */
@@ -666,9 +680,12 @@ export interface Reaction {
 The runner does what each lifecycle used to do, once:
 
 ```ts
-// reactions/runner.ts (condensed)
+// reactions/runner.ts (target shape, condensed)
 for (const reaction of values) {
-  const selection = selectionOf(reaction, reactionView(ctx, reaction.kind, conversation));
+  const selection = selectionOf(reaction, {
+    ...selectContextOf(ctx),
+    view: reactionView(ctx, reaction.kind, conversation),
+  });
   const digest = digestOf(selection);
   const slot = readSlot(ctx, reaction.id);
   const trigger =
@@ -802,7 +819,7 @@ export default defineDynamic({
 
 // reactions
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.team ?? null,
+  select: ({ session }) => session.auth.current?.attributes.team ?? null,
   render: (team) => (team && PLAYBOOKS[team] ? defineSkill({ markdown: PLAYBOOKS[team] }) : null),
 });
 ```
@@ -824,13 +841,51 @@ execute: async ({ query }) => (await fetch(`${baseUrl}/search?q=${query}`)).json
 
 ```ts
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.tenantId ?? null,
+  select: ({ session }) => session.auth.current?.attributes.tenantId ?? null,
   record: async (tenantId) => (tenantId === null ? [] : await db.crmTools(tenantId)),
   render: (rows) => Object.fromEntries(rows.map((row) => [row.slug, crmTool(row)])),
 });
 ```
 
-**A hook returns its decision:**
+**A model can select from the conversation:**
+
+```ts
+model: defineDynamic({
+  select: ({ view }) => view.messages.some(hasImage),
+  render: (image) => (image ? "google/gemini-3.5-flash" : "zai/glm-5.2"),
+});
+```
+
+**A recorded decision can use an idempotency key:**
+
+```ts
+model: defineDynamic({
+  select: perTurn,
+  record: async (_turn, ctx) =>
+    chooseTier({
+      messages: await ctx.messages(),
+      idempotencyKey: `${ctx.occurrence.id}:route`,
+    }),
+  render: (tier) => models[tier],
+});
+```
+
+The router must honor the key to deduplicate an interrupted evaluation's retry.
+
+**A hook can act on committed state:**
+
+```ts
+export default defineHook({
+  select: ({ view }) => ({ idle: idle(view), turnId: view.turn?.id ?? null }),
+  run: ({ idle, turnId }) =>
+    idle && turnId !== null ? compact({ reason: "The session went idle." }) : null,
+});
+```
+
+Selectors take one context argument. `record`, hook `run`, and event handlers take their input
+first and context second; only `render` receives no context.
+
+**An event hook returns its decision:**
 
 ```ts
 // main: ctx.cancel(), and a throw is logged while the turn continues
@@ -965,8 +1020,10 @@ come after 1.0.
 - Extensions: `channel`, `schedule` and `hook` drop their earlier epochs, so extensions that
   provide them are rebuilt. `tool`, `connection`, `subagent` and the dynamic capabilities keep
   theirs.
-- With reactions: the `events` form of `defineDynamic` becomes `select`/`record`/`render`;
-  `defineDurableCallback`/`defineDurableSchema` are gone; a throwing hook fails the turn.
+- With reactions: the `events` form of `defineDynamic` becomes `select`/`record`/`render`, with
+  one context argument to `select`. Hooks use `select`/`run` or an `events` map; hooks that read
+  the assembled conversation must migrate to event payloads and committed session state.
+  `defineDurableCallback`/`defineDurableSchema` are gone; a throwing hook fails the owning turn.
   `dynamicTool`, `dynamicSkill`, `dynamicInstructions` and `hook` drop earlier epochs, and so do
   the `connection` and `subagent` epochs whose examples use `events`.
 

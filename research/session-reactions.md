@@ -1,7 +1,7 @@
 ---
 issue: "None (maintainer-requested research)"
 status: draft
-last_updated: "2026-10-12"
+last_updated: "2026-10-13"
 ---
 
 # Session reactions and dynamic values
@@ -10,7 +10,7 @@ This doc covers everything that changes during an eve session: the model, tools,
 
 The broader idea: **the session has a durable history, reactions make decisions from it, and work produces new observations that become part of that history.**
 
-**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, implements this design: recorded dynamic values and hooks with `select`, `record`, `render`, and `run`, evaluated as described below, in place of main's per-kind lifecycles and closure transforms.
+**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, prototypes recorded dynamic values and hooks in place of main's per-kind lifecycles and closure transforms. The authoring API below is the target for the initial land.
 
 ## Summary
 
@@ -21,7 +21,7 @@ The broader idea: **the session has a durable history, reactions make decisions 
   - `record` handles fetching or non-deterministic computation: query a database for this tenant's tools, ask a router which model to use, or choose a random value. It returns JSON that eve keeps. It runs when a new evaluation is needed, not just because a process restarted.
   - `render` turns that data into a live definition, such as a tool, skill, connection, or model. Without `record`, it receives the selection directly. It is synchronous and deterministic, so a fresh process can reconstruct the same capability without fetching its configuration again.
 - **`auto()` stops being special.** On `main` it hand-writes this pattern with framework internals. Here it is an ordinary `select`, `record`, and `render`, and an author can write their own router the same way ([How `auto()` works](#how-auto-works-on-main-and-now)).
-- **Hooks use `select` and `run`, or an event handler.** They perform effects or return commands such as `cancel()` and `compact()`. They share the reaction lifecycle, but do not need a rendering step.
+- **Hooks use `select` and `run`, or an `events` map.** They perform effects or return commands such as `cancel()` and `compact()`. They observe committed session state and event payloads, not the assembled conversation. Dynamic values can read the conversation for the next model call.
 - **Unhandled errors fail the turn.** Nothing silently drops a required instruction or a failed credential check. Optional behavior is expressed in ordinary code.
 - **The prototype is about 3,100 lines of production code smaller than its base,** mostly because one runner replaces six lifecycles and recording data replaces a compiler ([Why the prototype is smaller](#why-the-prototype-is-smaller)).
 
@@ -92,6 +92,20 @@ We use the same language for both:
 
 This is a conceptual model of durable history, not a requirement to put every private record on the public event stream. Capability configuration and other private data can remain in checkpointed state. Nor does it mean arbitrary I/O is a pure function of the log: the point of recording an external answer is to make it available on recovery without asking again.
 
+### Callback context
+
+Selectors take one context argument. Callbacks with an input take that input first and the context second:
+
+| Callback         | Signature                | Context                                                                                                   |
+| ---------------- | ------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Selection        | `select(ctx)`            | Read-only `ctx.view`, session identity and auth, channel metadata                                         |
+| Data acquisition | `record(selection, ctx)` | Session and channel context, `abortSignal`, `occurrence.id`, and `messages()`                             |
+| Hook effect      | `run(selection, ctx)`    | Hook execution context and `occurrence.id`; no conversation access                                        |
+| Event handler    | `handler(event, ctx)`    | Hook execution context, committed `ctx.view`, event position, and `occurrence.id`; no conversation access |
+| Materialization  | `render(record)`         | No context; only the recorded data, or the selection when there is no `record`                            |
+
+Dynamic selectors can read the conversation through `ctx.view.messages`, and `record` can read it through `await ctx.messages()`. Hook selectors, `run`, and event handlers have neither conversation access path. Their public types and runtime contexts enforce that boundary. An event payload can still contain message content, such as the value of a `content.completed` fact; that is not the assembled conversation.
+
 ## Dynamic values: what the session should have
 
 ### Select
@@ -104,7 +118,7 @@ import { defineDynamic, defineSkill } from "eve/skills";
 import { PLAYBOOKS } from "../lib/playbooks";
 
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.team ?? null,
+  select: ({ session }) => session.auth.current?.attributes.team ?? null,
   render: (team) => (team && PLAYBOOKS[team] ? defineSkill({ markdown: PLAYBOOKS[team] }) : null),
 });
 ```
@@ -118,7 +132,7 @@ import { defineDynamic } from "eve/models";
 
 export default defineAgent({
   model: defineDynamic({
-    select: (view) => view.messages.some(hasImage),
+    select: ({ view }) => view.messages.some(hasImage),
     render: (image) => (image ? "google/gemini-3.5-flash" : "zai/glm-5.2"),
   }),
 });
@@ -231,7 +245,7 @@ import { defineDynamic } from "eve/tools";
 import { crmTool, db } from "../lib/crm";
 
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.tenantId ?? null,
+  select: ({ session }) => session.auth.current?.attributes.tenantId ?? null,
   record: async (tenantId) => (tenantId === null ? [] : await db.crmTools(tenantId)),
   render: (rows) => Object.fromEntries(rows.map((row) => [row.slug, crmTool(row)])),
 });
@@ -239,7 +253,7 @@ export default defineDynamic({
 
 The database rows are kept. `crmTool` is an ordinary function that constructs a tool, including its schema and callbacks. A package can supply it without a special compiler transform or durable callback wrapper.
 
-`record` is for data acquisition and computation, and must return JSON..
+`record` is for data acquisition and computation, and must return JSON. `select` must also return JSON, and both `select` and `render` must be synchronous. eve rejects invalid phase results with the reaction's file and callback name; a non-JSON result also identifies the offending path and type, such as `record returned Date at $.accounts[2].createdAt`. Public types reject statically known violations, with runtime validation for external data.
 
 `render` must be pure and synchronous. Time, randomness, and mutable process state can change a callback's behavior even if its tool description stays the same. Values that need to survive a restart belong in the record.
 
@@ -256,7 +270,7 @@ A skill's supporting files are rendered too, not stored. eve keeps the skill's n
 | `perStep`         | Evaluate for each upcoming ordinary model call                      |
 | A custom selector | Evaluate when the selected input changes                            |
 
-These are ordinary selectors and can be combined with other dependencies. This playbook follows the caller's team, and fetches it again every turn:
+These are ordinary `select(ctx)` functions and can be combined with other dependencies. This playbook follows the caller's team, and fetches it again every turn:
 
 ```ts
 // agent/skills/team_playbook.ts
@@ -264,9 +278,9 @@ import { defineDynamic, defineSkill, perTurn } from "eve/skills";
 import { playbooks } from "../lib/playbooks";
 
 export default defineDynamic({
-  select: (view, { session }) => ({
-    turn: perTurn(view),
-    team: session.auth.current?.attributes.team ?? null,
+  select: (ctx) => ({
+    turn: perTurn(ctx),
+    team: ctx.session.auth.current?.attributes.team ?? null,
   }),
   record: async ({ team }) => (team === null ? null : await playbooks.fetch(team)),
   render: (markdown) => (markdown ? defineSkill({ markdown }) : null),
@@ -287,17 +301,21 @@ const models = { hard: openai("gpt-6-sol"), easy: openai("gpt-6-luna") };
 export default defineAgent({
   model: defineDynamic({
     select: perTurn,
-    record: async (_turn, ctx) => await chooseTier(await ctx.messages()), // "hard" | "easy"
+    record: async (_turn, ctx) =>
+      await chooseTier({
+        messages: await ctx.messages(),
+        idempotencyKey: `${ctx.occurrence.id}:route`,
+      }), // "hard" | "easy"
     render: (tier) => models[tier],
   }),
 });
 ```
 
-The tier is recorded, and `render` picks the live model. Data fetched from outside eve stays current only as far as its selection asks; selecting `perTurn` refreshes it each turn, not whenever the database changes.
+The tier is recorded, and `render` picks the live model. `record` receives the same occurrence identity on a retry; this router passes an operation-specific idempotency key to an evaluator that honors it. Data fetched from outside eve stays current only as far as its selection asks; selecting `perTurn` refreshes it each turn, not whenever the database changes.
 
 ## Hooks
 
-Hooks share selection and durable evaluation with dynamic values, but their authoring shape is `select` plus `run`. `run(selection, ctx)` can do I/O and return a command. There is no live capability to reconstruct, so a hook does not need `render`.
+Hooks share selection and durable evaluation with dynamic values. A definition uses either `select` plus `run`, or an `events` map; the two forms are mutually exclusive. `run(selection, ctx)` can do I/O and return a command. There is no live capability to reconstruct, so a hook does not need `render`. All hook callbacks read committed session state and event payloads, without access to the assembled conversation.
 
 ```ts
 // agent/hooks/compact-when-idle.ts
@@ -305,7 +323,7 @@ import { idle } from "eve/events";
 import { compact, defineHook } from "eve/hooks";
 
 export default defineHook({
-  select: (view) => ({ idle: idle(view), turnId: view.turn?.id ?? null }),
+  select: ({ view }) => ({ idle: idle(view), turnId: view.turn?.id ?? null }),
   run: ({ idle, turnId }) =>
     idle && turnId !== null ? compact({ reason: "The session went idle." }) : null,
 });
@@ -346,7 +364,7 @@ The two `true` values are equal, but they represent different occurrences. A ret
 
 eve derives a state-selected occurrence's identity from the reaction, a count of its selection changes, and a digest of the selection. A retry after a crash computes the same identity, because nothing new was committed, so eve doesn't have to write anything before the effect runs. An event hook's occurrence is the fact's position in the stream.
 
-For an external effect, the identity is available as an idempotency key:
+`ctx.occurrence.id` is available in a dynamic value's `record`, a hook's `run`, and every event handler. Pass it to an external service as an idempotency key; if an occurrence performs several operations, give each a stable suffix, such as `${ctx.occurrence.id}:route` in the router above.
 
 ```ts
 // agent/hooks/budget-alert.ts
@@ -355,7 +373,7 @@ import { email } from "../lib/email";
 import { spentUsd } from "../lib/usage";
 
 export default defineHook({
-  select: (view) => spentUsd(view) > 50,
+  select: ({ view }) => spentUsd(view) > 50,
   run: async (over, ctx) => {
     if (over) await email.send({ template: "budget", idempotencyKey: ctx.occurrence.id });
   },
@@ -395,7 +413,7 @@ A **system instruction** is something to hold. It applies to every model call wh
 import { defineDynamic, defineInstructions } from "eve/instructions";
 
 export default defineDynamic({
-  select: (view) => view.session.turnCount > 6,
+  select: ({ view }) => view.session.turnCount > 6,
   render: (long) =>
     long ? defineInstructions({ content: "Summarize what's settled before answering." }) : null,
 });
@@ -429,7 +447,7 @@ This is the author-facing contract, rather than an incidental order of internal 
 - **Dynamic values are evaluated before each model call.** eve runs their selects, records what changed, and fixes the model, tools, and context that call uses. Changes during a tool batch affect the next model call.
 - **A cancelling hook stops subsequent work at that boundary.** Hooks run before values, so a cancel takes effect before any value fetches data.
 - **A requested tool runs only as it was offered.** A call that waits for approval keeps a digest of the record its tool was rendered from. If the tool's current record differs when the call executes, because the caller's role or tenant changed during an approval wait, the call fails with a tool error saying the tool changed since it was offered, and the model can request it again. A re-evaluation that records the same data, such as a `perTurn` value, is not a change. Authorization is still checked at execution time.
-- **`record` and `run` read the conversation explicitly.** `await ctx.messages()` returns it wherever the step holds it: before every model call, and in every commit of a turn step, including the ones where a turn settles and the session goes idle. Steps that settle background work between turns, such as a task finishing, don't carry it, and reading it there throws. A hook's `select` that reads `view.messages` runs only where the conversation is held. `select` is pure, so skipping it repeats no work.
+- **Only dynamic values read the conversation.** At the model-call boundary, `select` reads it through `ctx.view.messages` and `record` through `await ctx.messages()`. Hooks have no assembled-conversation access in `select`, `run`, or event handlers, so their selections can be checked after every commit, including background work between turns.
 
 Which model calls are boundaries:
 
@@ -489,7 +507,7 @@ import { defineDynamic, defineRemoteAgent } from "eve";
 import { mintTenantToken, tenants } from "../lib/tenants";
 
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.tenantId ?? null,
+  select: ({ session }) => session.auth.current?.attributes.tenantId ?? null,
   record: async (tenantId) => (tenantId === null ? null : await tenants.lookup(tenantId)), // { id, region }
   render: (tenant) =>
     tenant === null
@@ -554,7 +572,7 @@ import { defineDynamic } from "eve/models";
 
 export default defineAgent({
   model: defineDynamic({
-    select: (view) => view.messages.some(hasImage),
+    select: ({ view }) => view.messages.some(hasImage),
     render: (image) => (image ? "google/gemini-3.5-flash" : "zai/glm-5.2"),
   }),
 });
@@ -590,7 +608,7 @@ import { defineDynamic } from "eve/models";
 
 export default defineAgent({
   model: defineDynamic({
-    select: (_view, { session }) => session.auth.initiator?.attributes.plan === "enterprise",
+    select: ({ session }) => session.auth.initiator?.attributes.plan === "enterprise",
     render: (enterprise) =>
       enterprise ? "anthropic/claude-opus-5.5" : "anthropic/claude-sonnet-5",
   }),
@@ -626,7 +644,7 @@ export default defineDynamic({
 import { defineAgent, defineDynamic } from "eve";
 
 export default defineDynamic({
-  select: (view, { session }) =>
+  select: ({ view, session }) =>
     session.auth.current?.attributes.plan === "enterprise"
       ? (view.model?.id ?? "openai/gpt-5.5-mini")
       : null,
@@ -679,7 +697,7 @@ import { defineDynamic, defineMcpClientConnection } from "eve/connections";
 import { type Account, listEnabledAccounts, mintAccountToken } from "../lib/accounts";
 
 export default defineDynamic({
-  select: (_view, { session }) =>
+  select: ({ session }) =>
     session.auth.current?.principalType === "user" ? session.auth.current : null,
   record: async (principal) => (principal === null ? [] : await listEnabledAccounts(principal)),
   render: (accounts) =>
@@ -769,7 +787,7 @@ export default defineDynamic({
 ```ts
 // agent/tools/catalog.ts (proposed)
 export default defineDynamic({
-  select: (view) => view.turn !== null, // before the first turn, or after it
+  select: ({ view }) => view.turn !== null, // before the first turn, or after it
   render: (started) => (started ? { search: searchTool } : { query: queryTool }),
 });
 ```
@@ -816,7 +834,7 @@ export function createSearchTool(baseUrl: string) {
 
 // agent/tools/search.ts
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.region ?? "us",
+  select: ({ session }) => session.auth.current?.attributes.region ?? "us",
   render: (region) => ({ search: createSearchTool(`https://${region}.catalog.example.com`) }),
 });
 ```
@@ -848,7 +866,7 @@ import { defineDynamic, defineSkill } from "eve/skills";
 import { PLAYBOOKS } from "../lib/playbooks";
 
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.team ?? null,
+  select: ({ session }) => session.auth.current?.attributes.team ?? null,
   render: (team) => (team && PLAYBOOKS[team] ? defineSkill({ markdown: PLAYBOOKS[team] }) : null),
 });
 ```
@@ -878,7 +896,7 @@ export default defineDynamic({
 import { defineDynamic, defineInstructions } from "eve/instructions";
 
 export default defineDynamic({
-  select: (_view, { session }) => session.auth.current?.attributes.plan ?? "free",
+  select: ({ session }) => session.auth.current?.attributes.plan ?? "free",
   render: (plan) =>
     defineInstructions({
       content: `The caller is on the ${plan} plan. Match the depth of your answers to it.`,
@@ -918,7 +936,7 @@ export default defineDynamic({
 ```
 
 - **The same behavior:** the brief joins the conversation every turn, even when it hasn't changed.
-- **`main`'s augmented message snapshots go away.** An instruction resolver on `main` sees static user instructions at `session.started`, and session results at `turn.started`; other kinds see a different snapshot. `ctx.messages()` is the same conversation for every reaction.
+- **`main`'s augmented message snapshots go away.** An instruction resolver on `main` sees static user instructions at `session.started`, and session results at `turn.started`; other kinds see a different snapshot. `ctx.messages()` is the same conversation for every dynamic value evaluated at that boundary; hooks do not receive it.
 
 ### Cancel a turn when credentials are missing
 
@@ -967,7 +985,7 @@ export default defineHook({
 
 ### Hooks that observe
 
-`main`'s audit, persistence, and sandbox-stopping hooks are unchanged: they are event handlers with side effects, and remain so. A side effect that must happen once per occurrence keys on `ctx.occurrence.id` instead of coordinates copied from `event.data`.
+Audit, persistence, and sandbox-stopping hooks remain event handlers with side effects. They read event payloads and committed session state; any hook that previously read the assembled conversation must migrate to those inputs. A side effect that must happen once per occurrence keys on `ctx.occurrence.id` instead of coordinates copied from `event.data`.
 
 </details>
 
