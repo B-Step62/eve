@@ -20,6 +20,7 @@ export type TemplateIntegration =
   | "Stripe Link"
   | "Typefully"
   | "Vercel"
+  | "Voice"
   | "Web chat";
 
 export type TemplateSource = "GitHub" | "Vercel Templates";
@@ -81,6 +82,34 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/memory/profile.ts",
       "agent/skills/plan_a_trip.md",
       "agent/tools/get_weather.ts",
+    ],
+  },
+  {
+    slug: "eve-voice-template",
+    title: "Voice Agent",
+    setupPrompt:
+      "Set up the eve voice template in my current workspace using https://github.com/vercel/eve/tree/main/apps/templates/eve-voice-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required environment variables or manual setup steps.",
+    description:
+      "A Next.js voice app where GPT-Live-1 on AI Gateway handles listening and speaking while your eve agent runs tools, asks for approvals, and keeps durable state.",
+    sourceHref: "https://github.com/vercel/eve/tree/main/apps/templates/eve-voice-template",
+    category: "Chat",
+    model: "anthropic/claude-haiku-5.5",
+    integrations: ["Voice", "Web chat"],
+    source: "Vercel Templates",
+    github: {
+      owner: "vercel",
+      repo: "eve",
+      ref: "main",
+      pathPrefix: "apps/templates/eve-voice-template",
+    },
+    files: [
+      "agent/agent.ts",
+      "agent/channels/eve.ts",
+      "agent/instructions.md",
+      "agent/tools/create_reminder.ts",
+      "agent/tools/get_weather.ts",
+      "apps/web/app/api/live/client-secret/route.ts",
+      "apps/web/components/voice-call.tsx",
     ],
   },
   {
