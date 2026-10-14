@@ -5,7 +5,10 @@ import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import { createWorkflowRuntime } from "#execution/workflow-runtime.js";
 import { createAttachSessionFn } from "#channel/session.js";
-import { ConnectionEventsStateKey, type EventBinding } from "#runtime/connections/events/state.js";
+import type {
+  ConnectionEventHandlerState,
+  EventBinding,
+} from "#runtime/connections/events/state.js";
 import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
 import {
   principalKey,
@@ -15,16 +18,14 @@ import { connectionEventDestination } from "#runtime/connections/events/path.js"
 import { connectionEventStore } from "#runtime/connections/events/store.js";
 import type { AlsContext } from "#context/container.js";
 
-function resolveBinding(ctx: AlsContext, payload: ConnectionEventPayload) {
-  const state = ctx.get(ConnectionEventsStateKey);
-  const binding = state?.bindings[payload.bindingId];
+function resolveBinding(ctx: AlsContext, payload: ConnectionEventPayload, binding: EventBinding) {
   const connection = ctx
     .require(BundleKey)
     .resolvedAgent.connections.find(
       (connection) => connection.connectionName === payload.connectionName,
     );
   if (
-    binding === undefined ||
+    binding.id !== payload.bindingId ||
     connection?.experimental_events === undefined ||
     binding.sessionId !== ctx.require(SessionIdKey) ||
     binding.connectionName !== payload.connectionName ||
@@ -47,7 +48,6 @@ function resolveBinding(ctx: AlsContext, payload: ConnectionEventPayload) {
   );
   if (principalKey(principal) !== binding.principalKey) return undefined;
   return {
-    state: state!,
     binding,
     connection,
     principal,
@@ -57,20 +57,27 @@ function resolveBinding(ctx: AlsContext, payload: ConnectionEventPayload) {
 
 export async function prepareConnectionEventStep(input: {
   serializedContext: Record<string, unknown>;
+  state: ConnectionEventHandlerState;
   payload: ConnectionEventPayload;
 }) {
   "use step";
   const ctx = await deserializeContext(input.serializedContext);
-  const resolved = resolveBinding(ctx, input.payload);
-  const result = (accepted: boolean) => ({ accepted, serializedContext: serializeContext(ctx) });
+  const resolved = resolveBinding(ctx, input.payload, input.state.binding);
+  const result = (accepted: boolean, state = input.state) => ({
+    accepted,
+    state,
+    serializedContext: serializeContext(ctx),
+  });
   if (resolved === undefined) return result(false);
-  const { state, connection, principal, backend } = resolved;
+  const { connection, principal, backend } = resolved;
+  const state = input.state;
   let { binding } = resolved;
   const { delivery } = input.payload;
   const receipt = state.receipts[delivery.deliveryId];
   const store = connectionEventStore(connection, binding);
   const current = (await store.list())[binding.id];
-  if (current === undefined) return result(false);
+  if (current === undefined || resolveBinding(ctx, input.payload, current) === undefined)
+    return result(false);
   binding = current;
   if (receipt === "complete" || (binding.retired && receipt !== "pending")) return result(false);
   // A timeout may have hidden Connect's successful subscribe response. Reconcile
@@ -120,28 +127,30 @@ export async function prepareConnectionEventStep(input: {
     !("control" in delivery && delivery.control.type === "terminated")
   )
     return result(false);
-  ctx.set(ConnectionEventsStateKey, {
-    bindings: { ...state.bindings, [binding.id]: next },
+  return result(true, {
+    binding: next,
     receipts: { ...state.receipts, [delivery.deliveryId]: "pending" },
   });
-  return result(true);
 }
 
 export async function dispatchConnectionEventStep(input: {
   serializedContext: Record<string, unknown>;
+  state: ConnectionEventHandlerState;
   payload: ConnectionEventPayload;
 }) {
   "use step";
   const ctx = await deserializeContext(input.serializedContext);
-  const resolved = resolveBinding(ctx, input.payload);
-  if (resolved === undefined) return { serializedContext: input.serializedContext };
-  const { binding, connection, state } = resolved;
+  const resolved = resolveBinding(ctx, input.payload, input.state.binding);
+  if (resolved === undefined)
+    return { serializedContext: input.serializedContext, state: input.state };
+  const { binding, connection } = resolved;
+  const state = input.state;
   const { delivery } = input.payload;
   if (
     state.receipts[delivery.deliveryId] !== "pending" ||
     binding.subscription?.id !== delivery.subscriptionId
   )
-    return { serializedContext: input.serializedContext };
+    return { serializedContext: input.serializedContext, state };
   const bundle = ctx.require(BundleKey);
   const callbacks = connection.experimental_events!;
   // The callback runs as its creator without replacing the last conversational caller.
@@ -196,12 +205,12 @@ export async function dispatchConnectionEventStep(input: {
   const pending = Object.entries(state.receipts).filter(
     ([id, status]) => status === "pending" && id !== delivery.deliveryId,
   );
-  ctx.set(ConnectionEventsStateKey, {
+  const next: ConnectionEventHandlerState = {
     ...state,
     receipts: {
       ...Object.fromEntries([...completed, ...pending]),
       [delivery.deliveryId]: "complete",
     },
-  });
-  return { serializedContext: serializeContext(ctx) };
+  };
+  return { serializedContext: serializeContext(ctx), state: next };
 }

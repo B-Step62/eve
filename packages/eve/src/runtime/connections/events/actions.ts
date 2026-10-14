@@ -27,10 +27,7 @@ import type { ManagedEventSubscribeInput } from "#shared/connection-events.js";
 import { parseJsonObject } from "#shared/json.js";
 import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
 import { connectionEventDestination } from "#runtime/connections/events/path.js";
-import {
-  type ConnectionEventsState,
-  type EventBinding,
-} from "#runtime/connections/events/state.js";
+import type { EventBinding } from "#runtime/connections/events/state.js";
 
 const LIST = "events_list_subscriptions";
 const GET = "events_get_subscription";
@@ -205,19 +202,18 @@ export class ConnectionEventActions {
       principalKey: owner,
       executionPrincipal,
     });
-    let state: ConnectionEventsState = { bindings: await store.list(), receipts: {} };
-    const currentState = () => state;
+    const bindings = await store.list();
     const save = async (binding: EventBinding): Promise<EventBinding> => {
       const saved = await store.save(binding);
-      state = { ...state, bindings: { ...state.bindings, [binding.id]: saved } };
+      bindings[binding.id] = saved;
       return saved;
     };
     if (name === LIST)
       return {
-        subscriptions: Object.values(currentState().bindings).filter(owned).map(subscriptionResult),
+        subscriptions: Object.values(bindings).filter(owned).map(subscriptionResult),
       };
     if (name === GET || name === STOP) {
-      let binding = Object.values(currentState().bindings).find(
+      let binding = Object.values(bindings).find(
         (binding) =>
           owned(binding) && (binding.subscription?.id === args.id || binding.id === args.id),
       );
@@ -303,9 +299,9 @@ export class ConnectionEventActions {
           ]),
         )
         .digest("hex");
-      let binding = currentState().bindings[id];
+      let binding = bindings[id];
       if (binding === undefined) {
-        if (Object.keys(currentState().bindings).length >= MAX_BINDINGS)
+        if (Object.keys(bindings).length >= MAX_BINDINGS)
           throw new Error(
             "This caller has reached its 100-subscription limit for this connection.",
           );

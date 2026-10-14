@@ -25,7 +25,7 @@ import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import type { CompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 import { ConnectionEventActions } from "#runtime/connections/events/actions.js";
-import { ConnectionEventsStateKey } from "#runtime/connections/events/state.js";
+import type { ConnectionEventHandlerState } from "#runtime/connections/events/state.js";
 import {
   prepareConnectionEventStep,
   dispatchConnectionEventStep,
@@ -64,7 +64,10 @@ let subscriber: ReturnType<typeof vi.fn<ConnectionEventsAdapter["subscribe"]>>;
 let callback: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<void>>>;
 let gap: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<void>>>;
 let terminated: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<void>>>;
-let initial: { serializedContext: Record<string, unknown> };
+let initial: {
+  serializedContext: Record<string, unknown>;
+  state: ConnectionEventHandlerState | undefined;
+};
 let eventSchema: Record<string, unknown>;
 const callbackState = defineState("events-test.receipts", () => [] as string[]);
 
@@ -187,6 +190,7 @@ beforeEach(async () => {
   }));
   initial = {
     serializedContext: {},
+    state: undefined,
   };
 });
 afterEach(() => {
@@ -261,9 +265,16 @@ it("discovers through the released AI SDK and subscribes through the backend wit
   expect(subscriber).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ name: "issue.created", arguments: { project: "ABC" } }),
   );
-  expect(Object.values(ctx.require(ConnectionEventsStateKey).bindings)[0]?.subscription?.id).toBe(
-    "sub_0",
-  );
+  const authorization = connection.authorization;
+  if (authorization === undefined || typeof authorization === "function")
+    throw new Error("Static auth required");
+  const bindings = await connectionEventStore(connection, {
+    principalKey: principalKey(
+      resolveConnectionPrincipal(connection.connectionName, authorization, ctx),
+    ),
+    executionPrincipal: principalOf(ctx.get(AuthKey)),
+  }).list();
+  expect(Object.values(bindings)[0]?.subscription?.id).toBe("sub_0");
 });
 
 it.each(["available", "filtered", "catalog unavailable", "connection unavailable"])(
@@ -378,12 +389,16 @@ async function watch(callId = "watch-1") {
         principalKey: owner,
         executionPrincipal: principalOf(ctx.get(AuthKey)),
       });
-      ctx.set(ConnectionEventsStateKey, { bindings: await store.list(), receipts: {} });
+      const binding = Object.values(await store.list())[0];
+      initial = {
+        ...initial,
+        state: binding === undefined ? undefined : { binding, receipts: {} },
+      };
     }
   });
 }
 function payload(): ConnectionEventPayload {
-  const binding = Object.values(ctx.require(ConnectionEventsStateKey).bindings)[0]!;
+  const binding = initial.state!.binding;
   return {
     kind: "connection-event",
     connectionName: "issues",
@@ -405,18 +420,28 @@ function payload(): ConnectionEventPayload {
   };
 }
 async function prepare(message: ConnectionEventPayload) {
-  const result = await prepareConnectionEventStep({ ...initial, payload: message });
+  const result = await prepareConnectionEventStep({
+    ...initial,
+    state: initial.state!,
+    payload: message,
+  });
   initial = {
     ...initial,
     serializedContext: result.serializedContext,
+    state: result.state,
   };
   return result;
 }
 async function dispatch(message: ConnectionEventPayload) {
-  const result = await dispatchConnectionEventStep({ ...initial, payload: message });
+  const result = await dispatchConnectionEventStep({
+    ...initial,
+    state: initial.state!,
+    payload: message,
+  });
   initial = {
     ...initial,
     serializedContext: result.serializedContext,
+    state: result.state,
   };
 }
 
@@ -528,10 +553,7 @@ it("persists termination before its callback and does not execute later normal e
     },
   };
   expect((await prepare(message)).accepted).toBe(true);
-  const state = initial.serializedContext[ConnectionEventsStateKey.name] as {
-    bindings: Record<string, { retired: boolean }>;
-  };
-  expect(state.bindings[message.bindingId]!.retired).toBe(true);
+  expect(initial.state!.binding.retired).toBe(true);
   await dispatch(message);
   expect(terminated).toHaveBeenCalledTimes(1);
   expect(
@@ -571,8 +593,10 @@ it("keeps failed callbacks pending for durable retry and prevents a duplicate su
 });
 
 it("registers and retires a durable event handler without a conversation session", async () => {
+  await watch();
   const bindingId = crypto.randomUUID();
-  const run = await start(connectionEventWorkflow, [{ bindingId, serializedContext: {} }]);
+  const binding = { ...initial.state!.binding, id: bindingId };
+  const run = await start(connectionEventWorkflow, [{ binding, serializedContext: {} }]);
   try {
     await waitForHook(run, { token: connectionEventHookToken(bindingId) });
     await resumeHook(connectionEventHookToken(bindingId), { kind: "retire" });
@@ -586,7 +610,6 @@ it("registers and retires a durable event handler without a conversation session
 it("lets the creator manage a watch from a later session without copying subscription state", async () => {
   await watch();
   ctx.set(SessionIdKey, "session-2");
-  ctx.set(ConnectionEventsStateKey, { bindings: {}, receipts: {} });
   await contextStorage.run(ctx, async () => {
     expect(
       await actions.execute("events_list_subscriptions", {}, { callId: "list" }),
@@ -610,10 +633,7 @@ it("records a gap before dispatch and keeps the subscription available for later
     delivery: { ...envelope, control: { type: "gap", cursor: "cursor-2", truncated: true } },
   };
   expect((await prepare(message)).accepted).toBe(true);
-  const state = initial.serializedContext[ConnectionEventsStateKey.name] as {
-    bindings: Record<string, { gap: { cursor: string } }>;
-  };
-  expect(state.bindings[message.bindingId]!.gap.cursor).toBe("cursor-2");
+  expect(initial.state!.binding.gap?.cursor).toBe("cursor-2");
   await dispatch(message);
   expect(gap).toHaveBeenCalledTimes(1);
   const next = { ...normal, delivery: { ...normal.delivery, deliveryId: "next" } };
@@ -658,7 +678,7 @@ it("can stop an uncertain creation by its local ID without contacting the MCP se
     throw new Error("response lost");
   });
   await expect(watch()).rejects.toThrow("response lost");
-  const binding = Object.values(ctx.require(ConnectionEventsStateKey).bindings)[0]!;
+  const binding = initial.state!.binding;
   createClient.mockRejectedValue(new Error("MCP unavailable"));
   const result = await contextStorage.run(ctx, () =>
     actions.execute("events_unsubscribe", { id: binding.id }, { callId: "stop" }),
@@ -671,22 +691,23 @@ it("can stop an uncertain creation by its local ID without contacting the MCP se
 
 it("bounds completed delivery history while retaining pending receipts", async () => {
   await watch();
-  const state = ctx.require(ConnectionEventsStateKey);
-  ctx.set(ConnectionEventsStateKey, {
-    ...state,
-    receipts: {
-      ...Object.fromEntries(
-        Array.from({ length: 1000 }, (_, i) => [`old-${i}`, "complete" as const]),
-      ),
-      waiting: "pending",
+  const state = initial.state!;
+  initial = {
+    ...initial,
+    state: {
+      ...state,
+      receipts: {
+        ...Object.fromEntries(
+          Array.from({ length: 1000 }, (_, i) => [`old-${i}`, "complete" as const]),
+        ),
+        waiting: "pending",
+      },
     },
-  });
+  };
   initial = { ...initial, serializedContext: serializeContext(ctx) };
   await prepare(payload());
   await dispatch(payload());
-  const next = initial.serializedContext[ConnectionEventsStateKey.name] as {
-    receipts: Record<string, string>;
-  };
+  const next = initial.state!;
   expect(Object.values(next.receipts).filter((status) => status === "complete")).toHaveLength(1000);
   expect(next.receipts.waiting).toBe("pending");
   expect(next.receipts["old-0"]).toBeUndefined();

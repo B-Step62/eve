@@ -1,6 +1,10 @@
 import { createHook } from "#compiled/@workflow/core/index.js";
 import { claimHookOwnership, disposeHook, isHookConflictError } from "#execution/hook-ownership.js";
 import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
+import type {
+  ConnectionEventHandlerState,
+  EventBinding,
+} from "#runtime/connections/events/state.js";
 import {
   prepareConnectionEventStep,
   dispatchConnectionEventStep,
@@ -14,12 +18,12 @@ export function connectionEventHookToken(bindingId: string): string {
 
 /** Owns callback state and receipts independently of conversation sessions. */
 export async function connectionEventWorkflow(input: {
-  readonly bindingId: string;
+  readonly binding: EventBinding;
   readonly serializedContext: Record<string, unknown>;
 }): Promise<void> {
   "use workflow";
   const hook = createHook<ConnectionEventMessage>({
-    token: connectionEventHookToken(input.bindingId),
+    token: connectionEventHookToken(input.binding.id),
   });
   try {
     await claimHookOwnership(hook);
@@ -29,17 +33,25 @@ export async function connectionEventWorkflow(input: {
     throw error;
   }
   let serializedContext = input.serializedContext;
+  let state: ConnectionEventHandlerState = { binding: input.binding, receipts: {} };
   try {
     for await (const message of hook) {
       if (message.kind === "retire") return;
-      const prepared = await prepareConnectionEventStep({ serializedContext, payload: message });
+      const prepared = await prepareConnectionEventStep({
+        serializedContext,
+        state,
+        payload: message,
+      });
       serializedContext = prepared.serializedContext;
+      state = prepared.state;
       if (prepared.accepted) {
         const dispatched = await dispatchConnectionEventStep({
           serializedContext,
+          state,
           payload: message,
         });
         serializedContext = dispatched.serializedContext;
+        state = dispatched.state;
       }
       if (
         prepared.accepted &&

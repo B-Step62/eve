@@ -1,4 +1,3 @@
-import { ContextKey } from "#context/key.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { SessionTraceSeed } from "#context/keys.js";
 import type {
@@ -21,10 +20,7 @@ export interface EventBinding {
   readonly retired?: true;
   readonly gap?: { readonly cursor: string | null; readonly deliveryId: string };
 }
-export interface ConnectionEventsState {
-  readonly bindings: Readonly<Record<string, EventBinding>>;
+export interface ConnectionEventHandlerState {
+  readonly binding: EventBinding;
   readonly receipts: Readonly<Record<string, "pending" | "complete">>;
 }
-export const ConnectionEventsStateKey = new ContextKey<ConnectionEventsState>(
-  "eve.connectionEvents",
-);

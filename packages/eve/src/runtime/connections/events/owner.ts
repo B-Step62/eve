@@ -2,7 +2,7 @@ import { ContextContainer } from "#context/container.js";
 import { AuthKey, SessionIdKey, SessionTraceSeedKey } from "#context/keys.js";
 import { serializeContext } from "#context/serialize.js";
 import { BundleKey, type CompiledBundle } from "#runtime/sessions/runtime-context-keys.js";
-import { ConnectionEventsStateKey, type EventBinding } from "#runtime/connections/events/state.js";
+import type { EventBinding } from "#runtime/connections/events/state.js";
 import {
   connectionEventWorkflowReference,
   pollUntil,
@@ -22,10 +22,9 @@ export async function startConnectionEventOwner(
   if (binding.traceSeed !== undefined) ctx.set(SessionTraceSeedKey, binding.traceSeed);
   // This is origin metadata, not a conversation owner or a state snapshot.
   ctx.set(SessionIdKey, binding.sessionId);
-  ctx.set(ConnectionEventsStateKey, { bindings: { [binding.id]: binding }, receipts: {} });
   await startWorkflowOnCurrentDeployment(connectionEventWorkflowReference, [
     {
-      bindingId: binding.id,
+      binding,
       serializedContext: serializeContext(ctx),
     },
   ]);
