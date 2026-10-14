@@ -1,4 +1,12 @@
-import { shallowRef, computed, onScopeDispose, type ComputedRef } from "vue";
+import {
+  shallowRef,
+  computed,
+  onScopeDispose,
+  toValue,
+  watch,
+  type ComputedRef,
+  type MaybeRefOrGetter,
+} from "vue";
 import type { UserContent } from "ai";
 
 import {
@@ -136,9 +144,9 @@ export interface UseEveAgentOptions<TData> extends EveAgentStoreCallbacks<TData>
   /**
    * Keep the session stream open between turns to show events that arrive from schedules,
    * channels, or other clients. Set to false to close it once the session is idle and reopen it
-   * on the next send, answer, or resume. @default true
+   * on the next send, answer, or resume. Pass a ref or getter to change it later. @default true
    */
-  readonly followIdle?: boolean;
+  readonly followIdle?: MaybeRefOrGetter<boolean | undefined>;
   /** Prewarm an owned session on mount and after reset. @default false */
   readonly prewarm?: boolean;
   /**
@@ -192,7 +200,7 @@ export function useEveAgent<TData>(
     initialSession: options.initialSession,
     optimistic: options.optimistic,
     followSubagents: options.followSubagents,
-    followIdle: options.followIdle,
+    followIdle: toValue(options.followIdle),
     prewarm: options.prewarm,
     reducer,
     session: options.session,
@@ -214,6 +222,10 @@ export function useEveAgent<TData>(
     });
     attachEveAgentStore(store);
     if (options.resume) void store.resume();
+    watch(
+      () => toValue(options.followIdle) ?? true,
+      (followIdle) => store.setFollowIdle(followIdle),
+    );
 
     onScopeDispose(() => {
       unsubscribe();

@@ -117,10 +117,7 @@ export interface UseEveAgentOptions<TData> extends EveAgentStoreCallbacks<TData>
   /**
    * Keep the session stream open between turns to show events that arrive from schedules,
    * channels, or other clients. Set to false to close it once the session is idle and reopen it
-   * on the next send, answer, or resume. React observes this value across renders: changing it
-   * to true opens the stream, and changing it to false closes it once the session is idle.
-   *
-   * @default true
+   * on the next send, answer, or resume. React reads it on every render. @default true
    */
   readonly followIdle?: boolean;
   /**

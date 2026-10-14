@@ -174,15 +174,10 @@ the stream from the session cursor, so events that arrived in between are applie
 `followIdle` on when other sources, such as schedules, channels, or another tab, can start turns
 in the session while your UI is idle.
 
-In React, `followIdle` is a live boolean. Changing it to `true` opens the stream from the session
-cursor, and changing it back to `false` closes the stream once the session is idle. For example,
-follow the session only while someone is typing in the composer:
-
-```tsx
-const agent = useEveAgent({ followIdle: composerActive });
-```
-
-Vue and Svelte read `followIdle` when their binding is created.
+You can change `followIdle` after mount, for example to keep the stream open only while someone is
+typing. React reads it on every render, so pass `useEveAgent({ followIdle: composerActive })`. Vue
+accepts a ref or getter, such as `followIdle: () => composerActive.value`. In Svelte, assign the
+returned property: `$effect(() => { agent.followIdle = composerActive; })`.
 
 `reset()` reuses the hook instance and clears the conversation. When `prewarm` is true after
 the reset, it prepares the next owned session; otherwise, the next send creates it. An explicitly

@@ -64,6 +64,31 @@ afterEach(() => {
 });
 
 describe("useEveAgent (Svelte rune binding)", () => {
+  it("opens and closes the idle session stream when followIdle is assigned", async () => {
+    vi.stubGlobal("window", {});
+    const streams: AbortSignal[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_request, init) => {
+      streams.push(init!.signal!);
+      return new Response(new ReadableStream<Uint8Array>(), {
+        headers: { [EVE_STREAM_VERSION_HEADER]: EVE_MESSAGE_STREAM_VERSION },
+      });
+    });
+    const agent = useEveAgent({
+      followIdle: false,
+      initialSession: { sessionId: "session_1", streamIndex: 0 },
+    });
+    expect(agent.followIdle).toBe(false);
+    expect(streams).toHaveLength(0);
+
+    agent.followIdle = true;
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    expect(streams[0]?.aborted).toBe(false);
+
+    agent.followIdle = false;
+    expect(agent.followIdle).toBe(false);
+    expect(streams[0]?.aborted).toBe(true);
+  });
+
   it("renders the initial projection through plain reactive properties", () => {
     const agent = useEveAgent({
       initialEvents: stampTestEvents([

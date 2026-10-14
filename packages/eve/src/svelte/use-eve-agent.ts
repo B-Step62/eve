@@ -64,6 +64,8 @@ export interface UseEveAgentReturn<TData> {
   readonly resume: () => Promise<void>;
   /** Create the session without starting its first turn. */
   readonly prewarm: () => Promise<void>;
+  /** Starts as the `followIdle` option; assign it, for example from `$effect`, to change it. */
+  followIdle: boolean;
   /** Clear all state and start a new session. */
   readonly reset: () => void;
   /** Send a message with optional turn settings. */
@@ -138,7 +140,8 @@ export interface UseEveAgentOptions<TData> extends EveAgentStoreCallbacks<TData>
   /**
    * Keep the session stream open between turns to show events that arrive from schedules,
    * channels, or other clients. Set to false to close it once the session is idle and reopen it
-   * on the next send, answer, or resume. @default true
+   * on the next send, answer, or resume. Assign the returned `followIdle` to change it later.
+   * @default true
    */
   readonly followIdle?: boolean;
   /** Prewarm an owned session on mount and after reset. @default false */
@@ -160,9 +163,11 @@ class SvelteEveAgent<TData> implements UseEveAgentReturn<TData> {
   #snapshot: EveAgentStoreSnapshot<TData>;
   readonly #store: EveAgentStore<TData>;
   readonly #subscribe: () => void;
+  #followIdle: boolean;
 
-  constructor(store: EveAgentStore<TData>) {
+  constructor(store: EveAgentStore<TData>, followIdle: boolean) {
     this.#store = store;
+    this.#followIdle = followIdle;
     this.#snapshot = store.snapshot;
     this.#subscribe = createSubscriber((update) => {
       if (!("window" in globalThis)) return;
@@ -206,6 +211,15 @@ class SvelteEveAgent<TData> implements UseEveAgentReturn<TData> {
   get status(): UseEveAgentStatus {
     this.#subscribe();
     return this.#snapshot.status;
+  }
+
+  get followIdle(): boolean {
+    return this.#followIdle;
+  }
+
+  set followIdle(followIdle: boolean) {
+    this.#followIdle = followIdle;
+    this.#store.setFollowIdle(followIdle);
   }
 
   cancel = (): Promise<CancelSessionResult> => {
@@ -291,5 +305,5 @@ export function useEveAgent<TData>(
       return () => detachEveAgentStore(store);
     });
 
-  return new SvelteEveAgent(store);
+  return new SvelteEveAgent(store, options.followIdle ?? true);
 }

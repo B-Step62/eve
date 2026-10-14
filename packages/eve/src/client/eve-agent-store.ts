@@ -136,18 +136,12 @@ export class EveAgentStore<TData> {
     return () => void this.#subscribers.delete(callback);
   }
 
-  /**
-   * Starts or stops following the session between turns. Turning it on opens the stream from the
-   * session cursor; turning it off closes the stream once the session is idle.
-   */
+  /** Changes `followIdle` after construction, opening or closing the idle stream to match. */
   setFollowIdle(followIdle: boolean): void {
     if (this.#followIdle === followIdle) return;
     this.#followIdle = followIdle;
-    if (!followIdle) {
-      if (this.#activeTurn === undefined) this.#closeStreamWhenIdle();
-    } else if (this.#session !== undefined) {
-      this.#ensureStream();
-    }
+    if (followIdle && this.#session !== undefined) this.#ensureStream();
+    else this.#closeStreamWhenIdle();
   }
 
   /** Creates this store's owned session without starting a turn. */
@@ -657,12 +651,12 @@ export class EveAgentStore<TData> {
     if (this.#activeTurn === undefined && wasStreaming && settled) {
       this.#callbacks.onFinish?.(this.#snapshot);
     }
-    if (this.#activeTurn === undefined) this.#closeStreamWhenIdle();
+    this.#closeStreamWhenIdle();
     return true;
   }
 
   #closeStreamWhenIdle(): void {
-    if (this.#followIdle) return;
+    if (this.#followIdle || this.#activeTurn !== undefined) return;
     const { conversation } = this.#conversationClient;
     if (conversation.activeTurnId !== undefined) return;
     // Unsettled tails include sign-ins whose callbacks resume the session from elsewhere.

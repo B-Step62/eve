@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { effectScope } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 
 import {
   detachEveAgentStore,
@@ -364,6 +364,36 @@ describe("EveAgentStore (Vue composable backing store)", () => {
 });
 
 describe("useEveAgent (Vue composable wiring)", () => {
+  it("opens and closes the idle session stream as a followIdle ref changes", async () => {
+    vi.stubGlobal("window", {});
+    const streams: AbortSignal[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_request, init) => {
+      streams.push(init!.signal!);
+      return new Response(new ReadableStream<Uint8Array>(), {
+        headers: { [EVE_STREAM_VERSION_HEADER]: EVE_MESSAGE_STREAM_VERSION },
+      });
+    });
+    const followIdle = ref(false);
+    const scope = effectScope();
+    scope.run(() =>
+      useEveAgent({ followIdle, initialSession: { sessionId: "session_1", streamIndex: 0 } }),
+    );
+
+    await nextTick();
+    expect(streams).toHaveLength(0);
+
+    followIdle.value = true;
+    await nextTick();
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    expect(streams[0]?.aborted).toBe(false);
+
+    followIdle.value = false;
+    await nextTick();
+    expect(streams[0]?.aborted).toBe(true);
+
+    scope.stop();
+  });
+
   it("automatically replays an initial session when resume is enabled", async () => {
     vi.stubGlobal("window", {});
     const events = [
