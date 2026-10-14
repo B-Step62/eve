@@ -45,7 +45,6 @@ const copies = [
       "AGENTS.md",
       "CLAUDE.md",
       "agent/channels/eve.ts",
-      "agent/tools/get_weather.ts",
       "apps/web/app/icon.svg",
       "apps/web/drizzle.config.ts",
       "apps/web/lib/auth-client.ts",

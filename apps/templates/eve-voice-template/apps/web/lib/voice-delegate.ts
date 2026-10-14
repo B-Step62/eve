@@ -1,6 +1,6 @@
 import type { InputOption, InputRequest, MessageStreamEvent } from "eve/client";
 import type { UseEveAgentHelpers } from "eve/react";
-import { VOICE_CLIENT_CONTEXT } from "./voice-config";
+import { voiceClientContext } from "./voice-config";
 
 /** GPT-Live-1 context channels: `thinking` is silent, `commentary` is spoken. */
 export type LiveContextChannel = "commentary" | "thinking";
@@ -165,7 +165,7 @@ export class VoiceDelegate {
     this.held = false;
     this.idle = false;
     // eve reports failures through the stream or the hook's onError.
-    void this.options.agent.send(next.request, { clientContext: VOICE_CLIENT_CONTEXT });
+    void this.options.agent.send(next.request, { clientContext: voiceClientContext() });
   }
 
   private speak(id: string, content: string): void {

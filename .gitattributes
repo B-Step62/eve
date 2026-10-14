@@ -16,7 +16,6 @@ apps/templates/eve-voice-template/.vercelignore linguist-generated
 apps/templates/eve-voice-template/AGENTS.md linguist-generated
 apps/templates/eve-voice-template/CLAUDE.md linguist-generated
 apps/templates/eve-voice-template/agent/channels/eve.ts linguist-generated
-apps/templates/eve-voice-template/agent/tools/get_weather.ts linguist-generated
 apps/templates/eve-voice-template/apps/web/app/icon.svg linguist-generated
 apps/templates/eve-voice-template/apps/web/drizzle.config.ts linguist-generated
 apps/templates/eve-voice-template/apps/web/lib/auth-client.ts linguist-generated

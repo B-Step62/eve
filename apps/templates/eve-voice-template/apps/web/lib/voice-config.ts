@@ -29,10 +29,19 @@ user. Keep every reply short.`;
 
 /**
  * Ephemeral per-turn context for the eve agent. eve does not persist client
- * context, so the agent's instructions stay channel-neutral.
+ * context, so the agent's instructions stay channel-neutral. The caller's
+ * local time lets the agent resolve "tomorrow" or "Friday at 7".
  */
-export const VOICE_CLIENT_CONTEXT =
-  "This request was spoken during a live voice call and your reply will be read " +
-  "aloud by a voice assistant. Answer in one to three short spoken sentences. Do " +
-  "not use markdown, lists, tables, code, emoji, or URLs. If you need more " +
-  "information, ask one short question.";
+export function voiceClientContext(now = new Date()): string {
+  const localTime = now.toLocaleString("en-US", {
+    dateStyle: "full",
+    timeStyle: "short",
+  });
+  const { timeZone } = Intl.DateTimeFormat().resolvedOptions();
+  return (
+    "This request was spoken during a live voice call and your reply will be read " +
+    "aloud by a voice assistant. Answer in one to three short spoken sentences. Do " +
+    "not use markdown, lists, tables, code, emoji, or URLs. If you need more " +
+    `information, ask one short question. The caller's local time is ${localTime} (${timeZone}).`
+  );
+}

@@ -10,7 +10,7 @@ A Next.js voice app for [eve](https://eve.dev). You talk to an eve agent in the 
 2. Click **Deploy with Vercel** and enter `AI_GATEWAY_API_KEY` and a strong `EVE_VOICE_PASSWORD`.
 3. Open the deployed app, enter the password, and click **Start call**.
 
-Try "What's the weather in Paris?" or "Remind me to call Bob tomorrow." The reminder tool asks for approval before it runs; say "approve" or click the button.
+The agent is the phone host for Juniper Table, a fictional restaurant. Try "What time do you close on Sunday?" or "Can I get a table for four on Friday at 7?" It checks availability, offers nearby times when a slot is full, and asks for approval before it books; say "approve" or click the button.
 
 Voice sessions are billed per second, including silence and time spent waiting on the agent; see [AI Gateway pricing](https://vercel.com/docs/ai-gateway/pricing). The agent's own model calls are billed separately. The app ends each call after 10 minutes.
 
@@ -69,7 +69,8 @@ Open http://localhost:3000 and allow microphone access. `pnpm dev` starts only t
 
 ## Customize
 
-- **Agent:** `agent/agent.ts` (model), `agent/instructions.md`, and `agent/tools/`.
+- **Agent:** `agent/agent.ts` (model), `agent/instructions.md` (the restaurant's details and booking steps), and `agent/tools/`.
+- **Reservations:** `agent/lib/reservations.ts` is a sample reservation book. Replace `checkAvailability` and the booking in `agent/tools/book_table.ts` with calls to your reservation system.
 - **Voice behavior:** `apps/web/lib/voice-config.ts` holds GPT-Live-1's instructions, the per-turn voice context sent to eve, and the call length cap.
 - **Delegation and approvals:** `apps/web/lib/voice-delegate.ts` decides what reaches eve and GPT-Live-1, and how spoken replies answer prompts.
 - **Chat UI:** `apps/web/app/_components/agent-message.tsx`, `apps/web/components/`, and `apps/web/app/globals.css` come from the [eve Web Chat registry](https://eve.dev/docs/channels/eve).
