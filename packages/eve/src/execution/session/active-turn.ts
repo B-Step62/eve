@@ -13,7 +13,15 @@ import type { SessionExecutionInput } from "#execution/session/turn.js";
 import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
 import type { SessionInboxPayload } from "#execution/session-inbox/inbox.js";
 import { decodeSessionInboxPayload } from "#execution/session-inbox/protocol.js";
-import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
+import {
+  runMessageBatchBudget,
+  type WorkflowToolRunMessage,
+} from "#execution/tools/workflow/messages.js";
+import {
+  isAppliedRunMessage,
+  takeLeadingAppliedRunMessages,
+} from "#execution/session-workflow-tool-run.js";
+import type { AppliedRunMessage } from "#execution/tools/workflow/apply-run-messages-step.js";
 import { readDurableSession } from "#execution/durable-session-read.js";
 import { activeTurnId, storedProjection, turnPosition } from "#harness/session-machine/view.js";
 import { coalesceDeliveries } from "#harness/messages.js";
@@ -25,7 +33,7 @@ export type RuntimeEvent =
   | { readonly kind: "workflow"; readonly message: WorkflowToolRunMessage }
   /** A steering message that answered no pending request arrived during the wait. */
   | { readonly kind: "steering" }
-  /** A `task_wait` call's timeout passed. */
+  /** An `eve__task_wait` call's timeout passed. */
   | { readonly kind: "timeout"; readonly callId: string }
   /** A delivery or sign-in callback was admitted; a held request may be answered. */
   | { readonly kind: "input" }
@@ -163,6 +171,29 @@ export class ActiveTurn {
   }
 
   /**
+   * Removes the run messages read after one the session just took, as long as
+   * each is one it applies as it reads it and they fit one batch. Those it
+   * already admitted come first, then those still in the inbox, so arrival
+   * order holds.
+   */
+  takeAppliedRunMessages(): AppliedRunMessage[] {
+    const admits = runMessageBatchBudget();
+    const taken: AppliedRunMessage[] = [];
+    for (let next = this.runtimeResults[0]; next !== undefined; next = this.runtimeResults[0]) {
+      if (
+        next === "cancelled" ||
+        next.kind !== "workflow" ||
+        !isAppliedRunMessage(next.message) ||
+        !admits(next.message)
+      )
+        return taken;
+      taken.push(next.message);
+      this.runtimeResults.shift();
+    }
+    return [...taken, ...takeLeadingAppliedRunMessages(this.input.inbox, admits)];
+  }
+
+  /**
    * Next runtime result, workflow message, steering, or timeout, admitting
    * inbox traffic while waiting. Deliveries admitted before the wait began are
    * routed first, so a message that arrived as the calls started still steers.
@@ -231,7 +262,7 @@ export class ActiveTurn {
   }
 
   private cancelsThisTurn(payload: SessionInboxPayload): boolean {
-    if (payload.kind === "reset") return true;
+    if (payload.kind === "reset" || payload.kind === "session-failure") return true;
     if (payload.kind !== "cancel") return false;
     return payload.turnId === undefined || payload.turnId === this.expectedTurnId;
   }

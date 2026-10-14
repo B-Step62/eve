@@ -1,8 +1,15 @@
+import { createMcpTraceFetch } from "#runtime/connections/mcp-tracing.js";
+import { createMcpTracing } from "#tracing/eve/mcp.js";
+import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 import { principalOf } from "#execution/session/principal.js";
 import { z } from "zod";
 import { toInputSchema } from "#tools/schema.js";
 import { createHash } from "node:crypto";
-import { createMCPClient } from "#compiled/@ai-sdk/mcp/index.js";
+import {
+  createMCPClient,
+  type Experimental_MCPEventDefinition as EventDefinition,
+  type Experimental_ManagedMCPEvents as ManagedEvents,
+} from "#compiled/@ai-sdk/mcp/index.js";
 import { contextStorage } from "#context/container.js";
 import { AuthKey, SessionIdKey } from "#context/keys.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
@@ -11,10 +18,7 @@ import type {
   ConnectionToolExecuteOptions,
   ConnectionToolMetadata,
 } from "#shared/connection-types.js";
-import type {
-  ConnectionEventsAdapter,
-  ManagedEventSubscribeInput,
-} from "#shared/connection-events.js";
+import type { ManagedEventSubscribeInput } from "#shared/connection-events.js";
 import { parseJsonObject } from "#shared/json.js";
 import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
 import { connectionEventDestination } from "#runtime/connections/events/path.js";
@@ -24,20 +28,6 @@ import {
   type EventBinding,
 } from "#runtime/connections/events/state.js";
 
-type EventDefinition = {
-  name: string;
-  description?: string | null;
-  delivery: string[];
-  inputSchema: boolean | Record<string, unknown>;
-};
-// Removed when the merged managed-events release can be selected in the catalog.
-// This structural boundary keeps the public eve contract independent of SDK types.
-interface ManagedEvents extends ConnectionEventsAdapter {
-  list(input?: {
-    params?: { cursor?: string };
-    options?: { timeout?: number };
-  }): Promise<{ events: EventDefinition[]; nextCursor?: string | null }>;
-}
 const LIST = "events_list_subscriptions";
 const GET = "events_get_subscription";
 const STOP = "events_unsubscribe";
@@ -82,12 +72,26 @@ export class ConnectionEventActions {
       authorization,
       ctx,
     );
+    const sessionId = ctx.require(SessionIdKey);
+    const owner = principalKey(principal);
+    const executionPrincipal = principalOf(ctx.get(AuthKey));
+    const connector = authorization.vercelConnect.connector;
+    const owned = (binding: EventBinding) =>
+      binding.sessionId === sessionId &&
+      binding.connectionName === this.connection.connectionName &&
+      binding.instanceId === this.connection.instanceId &&
+      binding.connector === connector &&
+      binding.principalKey === owner &&
+      binding.executionPrincipal === executionPrincipal;
     return {
       ctx,
       principal,
-      authorization,
+      sessionId,
+      owner,
+      executionPrincipal,
+      owned,
       backend: authorization.vercelConnect.experimental_events,
-      connector: authorization.vercelConnect.connector,
+      connector,
     };
   }
 
@@ -99,24 +103,24 @@ export class ConnectionEventActions {
       destination: { path: connectionEventDestination(this.connection.connectionName) },
     });
     // A fresh authenticated transport keeps catalogs isolated between people sharing a session.
+    let client: Awaited<ReturnType<typeof createMCPClient>> | undefined;
     const config = {
       transport: {
         type: "http" as const,
-        fetch: this.transportFetch,
+        fetch: createMcpTraceFetch({
+          connectionName: this.connection.connectionName,
+          fetcher: this.transportFetch,
+          getProtocolVersion: () => client?.initializeResult?.protocolVersion,
+        }),
         url: this.connection.url,
         headers: await this.headers(),
       },
       protocolVersionDiscovery: this.connection.protocolVersionDiscovery,
-      experimental_events: { adapter },
+      experimental_events: { adapter: { createAdapter: () => adapter } },
     };
-    const client = await createMCPClient(config);
+    client = await createMCPClient(config);
     try {
-      const events = (client as typeof client & { experimental_events?: ManagedEvents })
-        .experimental_events;
-      if (events === undefined || typeof events.listSubscriptions !== "function") {
-        throw new Error("Managed events require the AI SDK release containing vercel/ai#22250.");
-      }
-      return await run(events);
+      return await run(client.experimental_events);
     } finally {
       await client.close();
     }
@@ -128,7 +132,19 @@ export class ConnectionEventActions {
     let cursor: string | undefined;
     let discovered = 0;
     for (let pageIndex = 0; pageIndex < 20; pageIndex++) {
-      const page = await events.list({ params: { cursor }, options: { timeout: 15_000 } });
+      const page = await withConnectionEventSpan(
+        {
+          ctx: this.scope().ctx,
+          connectionName: this.connection.connectionName,
+          operation: "catalog",
+        },
+        () =>
+          createMcpTracing().list({
+            connectionName: this.connection.connectionName,
+            method: "events/list",
+            execute: () => events.list({ params: { cursor }, options: { timeout: 15_000 } }),
+          }),
+      );
       discovered += page.events.length;
       if (discovered > 1000) throw new Error("MCP event catalog exceeds the 1000-event limit.");
       result.push(...page.events.filter((event) => event.delivery.includes("webhook")));
@@ -160,27 +176,19 @@ export class ConnectionEventActions {
             },
           },
         })),
-        {
-          name: LIST,
-          description:
-            "List this caller's event subscriptions created in this session. status is Connect's last-known state; retired=true means eve accepts no new event work for this subscription, regardless of status.",
-          inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        },
-        ...[GET, STOP].map((name) => ({
-          name,
-          description:
-            name === GET
-              ? "Get one of this caller's subscriptions in this session and refresh its Connect status. retired=true means eve accepts no new event work for this subscription, regardless of status."
-              : "Stop one of this caller's subscriptions in this session. eve retires it before requesting cancellation from Connect; retired=true does not confirm upstream cancellation.",
-          inputSchema: {
-            type: "object",
-            properties: { id: { type: "string" } },
-            required: ["id"],
-            additionalProperties: false,
-          },
-        })),
+        ...managementMetadata(),
       ];
     });
+  }
+
+  /** Existing watches must remain stoppable when upstream discovery fails. */
+  recoveryMetadata(): ConnectionToolMetadata[] {
+    const { ctx, owned } = this.scope();
+    if (!Object.values(ctx.get(ConnectionEventsStateKey)?.bindings ?? {}).some(owned)) return [];
+    return managementMetadata().map((tool) => ({
+      ...tool,
+      description: `MCP discovery is unavailable. ${tool.description}`,
+    }));
   }
 
   async execute(
@@ -189,27 +197,23 @@ export class ConnectionEventActions {
     options: ConnectionToolExecuteOptions,
   ): Promise<unknown> {
     const args = parseJsonObject(input);
-    const { ctx, principal, connector, backend } = this.scope();
-    const sessionId = ctx.require(SessionIdKey);
-    const owner = principalKey(principal);
-    const executionPrincipal = principalOf(ctx.get(AuthKey));
+    const { ctx, principal, connector, backend, sessionId, owner, executionPrincipal, owned } =
+      this.scope();
     const currentState = () =>
       ctx.ensure(ConnectionEventsStateKey, (): ConnectionEventsState => ({
         bindings: {},
         receipts: {},
       }));
-    const owned = (binding: EventBinding) =>
-      binding.sessionId === sessionId &&
-      binding.connectionName === this.connection.connectionName &&
-      binding.instanceId === this.connection.instanceId &&
-      binding.connector === connector &&
-      binding.principalKey === owner &&
-      binding.executionPrincipal === executionPrincipal;
-    const save = (binding: EventBinding) =>
-      ctx.set(ConnectionEventsStateKey, (state) => ({
-        receipts: state?.receipts ?? {},
-        bindings: { ...state?.bindings, [binding.id]: binding },
-      }));
+    const save = (binding: EventBinding): EventBinding => {
+      const state = currentState();
+      // A status refresh that began before stop must never reopen the binding.
+      const saved = { ...binding, retired: state.bindings[binding.id]?.retired ?? binding.retired };
+      ctx.set(ConnectionEventsStateKey, {
+        receipts: state.receipts,
+        bindings: { ...state.bindings, [binding.id]: saved },
+      });
+      return saved;
+    };
     if (name === LIST)
       return {
         subscriptions: Object.values(currentState().bindings).filter(owned).map(subscriptionResult),
@@ -221,29 +225,46 @@ export class ConnectionEventActions {
       );
       if (binding === undefined)
         throw new Error("Unknown subscription for this session and account.");
-      if (name === STOP) save({ ...binding, retired: true });
+      if (name === STOP) binding = save({ ...binding, retired: true });
       const events = await backend.createAdapter({
         principal,
         connection: { url: this.connection.url },
         destination: { path: connectionEventDestination(this.connection.connectionName) },
       });
       if (binding.subscription === undefined) {
-        const subscription = await events.subscribe({
-          ...binding.request,
-          options: { timeout: 30_000 },
-        });
+        const request = binding.request;
+        const subscription = await withConnectionEventSpan(
+          {
+            ctx,
+            connectionName: this.connection.connectionName,
+            bindingId: binding.id,
+            operation: "recover",
+          },
+          () => events.subscribe({ ...request, options: { timeout: 30_000 } }),
+        );
         binding = {
           ...binding,
           subscription,
           retired: name === STOP ? true : binding.retired,
         };
-        save(binding);
+        binding = save(binding);
       }
-      const subscription = await (name === STOP
-        ? events.unsubscribe({ id: binding.subscription!.id, options: { timeout: 30_000 } })
-        : events.getSubscription({ id: binding.subscription!.id, options: { timeout: 30_000 } }));
+      const subscriptionId = binding.subscription!.id;
+      const subscription = await withConnectionEventSpan(
+        {
+          ctx,
+          connectionName: this.connection.connectionName,
+          bindingId: binding.id,
+          subscriptionId,
+          operation: name === STOP ? "unsubscribe" : "get",
+        },
+        () =>
+          name === STOP
+            ? events.unsubscribe({ id: subscriptionId, options: { timeout: 30_000 } })
+            : events.getSubscription({ id: subscriptionId, options: { timeout: 30_000 } }),
+      );
       binding = { ...binding, retired: name === STOP ? true : binding.retired, subscription };
-      save(binding);
+      binding = save(binding);
       return subscriptionResult(binding);
     }
     return this.withClient(async (events) => {
@@ -303,17 +324,36 @@ export class ConnectionEventActions {
           auth: structuredClone(ctx.get(AuthKey) ?? null),
           request,
         };
-        save(binding);
+        binding = save(binding);
       }
       if (!owned(binding) || binding.retired)
         throw new Error("Subscription binding is no longer active.");
       if (binding.subscription !== undefined) return subscriptionResult(binding);
-      const subscription = await events.subscribe({
-        ...binding.request,
-        options: { signal: options.abortSignal, timeout: 30_000 },
-      });
-      binding = { ...binding, subscription };
-      save(binding);
+      const request = binding.request;
+      const subscription = await withConnectionEventSpan(
+        {
+          ctx,
+          connectionName: this.connection.connectionName,
+          bindingId: binding.id,
+          operation: "subscribe",
+        },
+        () =>
+          events.subscribe({
+            ...request,
+            options: { signal: options.abortSignal, timeout: 30_000 },
+          }),
+      );
+      binding = {
+        ...binding,
+        subscription: {
+          ...subscription,
+          // Snapshot the SDK's readonly JSON into eve's owned, mutable state.
+          arguments: structuredClone(
+            subscription.arguments,
+          ) as ManagedEventSubscribeInput["arguments"],
+        },
+      };
+      binding = save(binding);
       return subscriptionResult(binding);
     });
   }
@@ -332,4 +372,28 @@ function subscriptionResult(binding: EventBinding) {
 
 function actionName(eventName: string): string {
   return `${PREFIX}${createHash("sha256").update(eventName).digest("hex").slice(0, 24)}`;
+}
+
+function managementMetadata(): ConnectionToolMetadata[] {
+  return [
+    {
+      name: LIST,
+      description:
+        "List this caller's event subscriptions created in this session. status is Connect's last-known state; retired=true means eve accepts no new event work for this subscription, regardless of status.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    ...[GET, STOP].map((name) => ({
+      name,
+      description:
+        name === GET
+          ? "Get one of this caller's subscriptions in this session and refresh its Connect status. retired=true means eve accepts no new event work for this subscription, regardless of status."
+          : "Stop one of this caller's subscriptions in this session. eve retires it before requesting cancellation from Connect; retired=true does not confirm upstream cancellation.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    })),
+  ];
 }

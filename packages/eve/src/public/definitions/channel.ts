@@ -4,6 +4,7 @@ import {
   type ChannelAudienceProjector,
 } from "#channel/audience.js";
 import { defaultDeliverResult } from "#channel/adapter.js";
+import { mergeUploadPolicy } from "#public/channels/upload-policy.js";
 import {
   CHANNEL_SENTINEL,
   type ChannelReference,
@@ -38,6 +39,7 @@ export type {
   SessionCallback,
   TurnPolicy,
 } from "#channel/types.js";
+export { SessionStrandedError } from "#channel/session-stranded-error.js";
 export type { Session, SessionHandle } from "#channel/session.js";
 export type { ChannelAudience } from "#shared/channel-audience.js";
 export type {
@@ -358,7 +360,9 @@ function buildAdapter<TState, TCtx, TReceiveTarget, TMetadata extends Record<str
   const metadata = definition.metadata;
   const hasMetadata = metadata !== undefined;
   const audience = definition.audience;
-  const hasBehavior = hasState || hasContext || hasMetadata;
+  const uploadPolicy =
+    definition.uploadPolicy === undefined ? undefined : mergeUploadPolicy(definition.uploadPolicy);
+  const hasBehavior = hasState || hasContext || hasMetadata || uploadPolicy !== undefined;
 
   const eventHandlers: Record<string, unknown> = {};
   let hasEventHandlers = false;
@@ -414,6 +418,7 @@ function buildAdapter<TState, TCtx, TReceiveTarget, TMetadata extends Record<str
     kind: definition.kindHint ?? "defineChannel",
     state: hasState ? { ...(definition.state as Record<string, unknown>) } : {},
     fetchFile: definition.fetchFile,
+    uploadPolicy,
     instrumentation:
       metadata === undefined && audience === undefined
         ? undefined

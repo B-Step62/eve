@@ -1,6 +1,7 @@
 import { bindTurnCallerContext } from "#subagents/parent-notification.js";
 import type { HandleEventFn } from "#harness/types.js";
 import { bindDynamicConnections } from "#execution/dynamic-connections.js";
+import { recoverDynamicConnectionRehydration } from "#execution/dynamic-connection-recovery.js";
 import { deriveSessionTitle } from "#execution/eve-workflow-attributes.js";
 import { setEveAttributes } from "#runtime/attributes/emit.js";
 import { defaultDeliverResult } from "#channel/adapter.js";
@@ -31,17 +32,23 @@ import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { bindSessionInstrumentation } from "#instrumentation/runtime.js";
 import { RuntimeActionSettlementTimesKey } from "#harness/runtime-action-settlement-state.js";
-import * as agentTraceState from "#tracing/agent-trace-context-store.js";
+import * as agentTraceState from "#tracing/eve/agent-trace-context-store.js";
 import { matchAuthorizationCallbacks } from "#execution/authorization-callback-match.js";
 import { isTurnCancellation, throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import { setChannelContext } from "#execution/channel-context.js";
-import { activeTurnId, isBetweenTurns, turnPosition } from "#harness/session-machine/view.js";
+import {
+  activeTurnId,
+  isBetweenTurns,
+  storedProjection,
+  turnPosition,
+} from "#harness/session-machine/view.js";
 import {
   currentProjection,
   enterSessionProjection,
   saveSessionProjection,
 } from "#harness/session-machine/current.js";
-import { dropClosedRecords } from "#harness/session-machine/commit.js";
+import { saveTransition, dropClosedRecords, sessionView } from "#harness/session-machine/commit.js";
+import { matchSignIns } from "#harness/session-machine/transitions.js";
 import {
   sessionStartedForResolvers,
   turnStartedForResolvers,
@@ -59,12 +66,8 @@ import { withSessionStateDelta } from "#execution/session/state-delta.js";
 import { openSessionEventPublisher } from "#execution/publish-session-events.js";
 import { createTurnEventHandler } from "#execution/session/turn-event-handler.js";
 import { derivePendingState } from "#execution/session/pending-turn-state.js";
-import {
-  CallbackBaseUrlKey,
-  clearPendingAuthorization,
-  getPendingAuthorization,
-  PendingAuthorizationResultKey,
-} from "#harness/authorization.js";
+import { CallbackBaseUrlKey, PendingAuthorizationResultKey } from "#harness/authorization.js";
+import { readHitlState } from "#harness/hitl/index.js";
 import { resolveWorkflowCallbackBaseUrl } from "#execution/workflow-callback-url.js";
 import { countRunUsage } from "#execution/agent-sessions/usage.js";
 import {
@@ -151,22 +154,20 @@ async function runSessionStepBody(
     // Outside a workflow context (e.g. tests) — getHookUrl will return undefined.
   }
 
-  const pendingAuth = getPendingAuthorization(durableSession.state);
+  const { signIns } = readHitlState(durableSession.state);
   let completedAuths: ReturnType<typeof matchAuthorizationCallbacks>["matches"] | undefined;
-  if (pendingAuth && delivery !== undefined) {
-    const { matches, remainingPayloads } = matchAuthorizationCallbacks(
-      pendingAuth,
-      delivery.payloads,
-    );
+  if (signIns.length > 0 && delivery !== undefined) {
+    const { matches, remainingPayloads } = matchAuthorizationCallbacks(signIns, delivery.payloads);
     delivery = { ...delivery, payloads: remainingPayloads };
     if (matches.length > 0) {
       const matchedAttemptIds = matches.map((match) => match.result.attemptId);
       const authResults = matches.map((match) => match.result);
       ctx.set(PendingAuthorizationResultKey, authResults);
-      durableSession = {
-        ...durableSession,
-        state: clearPendingAuthorization(durableSession.state, matchedAttemptIds),
-      };
+      // The session stops waiting on them; the turn they resume reports their completion.
+      const view = sessionView(storedProjection(durableSession.state), durableSession.state);
+      const transition = matchSignIns(view, { attemptIds: matchedAttemptIds });
+      if (transition.events.length !== 0) throw new Error("matchSignIns must not emit events.");
+      durableSession = saveTransition(durableSession, transition);
       completedAuths = matches;
       if (remainingPayloads.length === 0) delivery = undefined;
     }
@@ -526,13 +527,24 @@ async function runSessionStepBody(
                 ? { ...enrichedSession, outputSchema: resolved.outputSchema }
                 : enrichedSession;
             const connectionState = turnPosition(currentProjection(ctx));
-            await dynamicConnections.rehydrate(
-              connectionState,
-              runtimeIdentity,
-              isBetweenTurns(currentProjection(ctx))
-                ? undefined
-                : { sequence: connectionState.sequence, turnId: activeTurnId(connectionState) },
-            );
+            try {
+              await dynamicConnections.rehydrate(
+                connectionState,
+                runtimeIdentity,
+                isBetweenTurns(currentProjection(ctx))
+                  ? undefined
+                  : { sequence: connectionState.sequence, turnId: activeTurnId(connectionState) },
+              );
+            } catch (error) {
+              const recovered = await recoverDynamicConnectionRehydration({
+                emit: handleEvent,
+                error,
+                projection: currentProjection(ctx),
+                session: schemaSession,
+              });
+              if (recovered !== undefined) return recovered;
+              throw error;
+            }
             // A sign-in completes before the turn it resumes, in the first call only.
             const completions =
               firstCall && completedAuths !== undefined

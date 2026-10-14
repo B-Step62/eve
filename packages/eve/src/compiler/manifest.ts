@@ -22,8 +22,10 @@ import type {
   SkillPackageSourceRef,
 } from "#shared/source-ref.js";
 import type { NamedSkillDefinition } from "#shared/skill-definition.js";
+import { WEB_SEARCH_FALLBACK_PROVIDERS, WEB_SEARCH_PROVIDERS } from "#shared/web-search.js";
 import {
   AGENT_WORKFLOW_RETENTION_VALUES,
+  ANTHROPIC_PROMPT_CACHE_TTLS,
   type InternalAgentDefinition,
   type InternalAgentModelDefinition,
   type InternalAgentCompactionDefinition,
@@ -576,6 +578,15 @@ const compiledRuntimeModelReferenceSchema: z.ZodType<CompiledRuntimeModelReferen
     id: z.string(),
     maxOutputTokens: z.number().int().positive().optional(),
     source: moduleSourceRefSchema.optional(),
+    promptCache: z
+      .object({
+        anthropic: z
+          .object({ ttl: z.literal(ANTHROPIC_PROMPT_CACHE_TTLS).optional() })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     providerOptions: z.record(z.string(), jsonObjectSchema).optional(),
     routing: modelRoutingSchema,
   })
@@ -633,7 +644,7 @@ const compiledAgentConfigBaseFields = {
     .enum(["provider-default", "none", "minimal", "low", "medium", "high", "xhigh"])
     .optional(),
   source: moduleSourceRefSchema,
-  tool: z.boolean().optional(),
+  tool: z.union([z.boolean(), z.literal("deferred")]).optional(),
   limits: compiledAgentLimitsDefinitionSchema.optional(),
 };
 
@@ -681,6 +692,7 @@ const compiledInstructionsSchema: z.ZodType<CompiledInstructionsDefinition> = z.
 
 const compiledSkillBaseFields = {
   name: z.string(),
+  deferred: z.boolean().optional(),
   description: z.string(),
   license: z.string().optional(),
   markdown: z.string(),
@@ -847,8 +859,9 @@ const compiledToolBehaviorSchema: z.ZodType<CompiledToolBehavior> = z
           .strict(),
         z
           .object({
+            fallback: z.enum(WEB_SEARCH_FALLBACK_PROVIDERS).optional(),
             kind: z.literal("provider-tool"),
-            provider: z.enum(["exa", "parallel", "browserbase"]),
+            provider: z.enum(WEB_SEARCH_PROVIDERS),
           })
           .strict(),
         z
@@ -860,7 +873,6 @@ const compiledToolBehaviorSchema: z.ZodType<CompiledToolBehavior> = z
           .strict(),
       ])
       .optional(),
-    presentation: z.literal("load-skill").optional(),
     shape: z
       .object({
         suspend: z.enum(["none", "workflow"]),
@@ -874,6 +886,7 @@ const compiledToolDefinitionSchema = z
   .object({
     availableInSubagents: z.boolean().optional(),
     behavior: compiledToolBehaviorSchema.optional(),
+    deferred: z.boolean().optional(),
     description: z.string(),
     exportName: z.string().optional(),
     hasExecute: z.boolean(),
@@ -1354,6 +1367,9 @@ function cloneCompiledRuntimeModelReference(
   }
   if (model.providerOptions !== undefined) {
     clone.providerOptions = { ...model.providerOptions };
+  }
+  if (model.promptCache !== undefined) {
+    clone.promptCache = structuredClone(model.promptCache);
   }
   if (model.source !== undefined) {
     clone.source = { ...model.source };

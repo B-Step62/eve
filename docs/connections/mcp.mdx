@@ -3,7 +3,7 @@ title: "MCP Connections"
 description: "Connect an eve agent to a remote MCP server, authorize it with Vercel Connect or static credentials, and control which tools the model can discover."
 ---
 
-MCP connections point eve at a remote MCP server you do not author. The server publishes its tools and schemas, and the model finds and calls them through `connection_search` and `connection_execute`.
+MCP connections point eve at a remote MCP server you do not author. The server publishes its tools and schemas, and the model finds them with `eve__search` and calls them with `eve__tool`.
 
 Use MCP when the service already has an MCP server, when the server owns tool schemas dynamically, or when one connection should expose a family of related remote tools. Use an [OpenAPI connection](./openapi) instead when the service publishes an HTTP API contract and you want eve to generate one tool per operation.
 
@@ -48,10 +48,10 @@ For OAuth-backed MCP servers, use the shared [Vercel Connect flow](../connection
 
 eve asks the user to sign in only when the MCP server asks for it. When a connection has `auth` but no token yet, because its `getToken` throws `ConnectionAuthorizationRequiredError`, eve connects without an `Authorization` header and lists the server's tools. Any other error from `getToken` still fails the connection.
 
-- **The server rejects every request without a token.** Most hosted OAuth servers, such as Linear, GitHub, and Notion, answer `initialize` or `tools/list` with HTTP `401`. A plain `connection_search` lists the connection under `unavailable` with `requiresSignIn: true`. Calling `connection_search({ connection, signIn: true })` or any of its tools with `connection_execute` asks the user to sign in.
-- **The server lists tools without a token.** `connection_search` returns its tools with no prompt, and `connection_execute` runs tools the server answers anonymously. Sign-in starts only when a tool call comes back with HTTP `401`, or with an error result that carries a `WWW-Authenticate` challenge in `_meta["mcp/www_authenticate"]`.
+- **The server rejects every request without a token.** Most hosted OAuth servers, such as Linear, GitHub, and Notion, answer `initialize` or `tools/list` with HTTP `401`. `eve__search` lists the connection as one result named after it, such as `linear`. Calling that name with `eve__tool({ name: "linear" })`, or any of its tools with `eve__tool`, asks the user to sign in.
+- **The server lists tools without a token.** `eve__search` returns its tools with no prompt, and `eve__tool` runs tools the server answers anonymously. Sign-in starts only when a tool call comes back with HTTP `401`, or with an error result that carries a `WWW-Authenticate` challenge in `_meta["mcp/www_authenticate"]`.
 
-After the user signs in, the call that asked for it runs again. eve reconnects with the token and reloads the tool list, which may now include tools the server hides from anonymous callers. A connection that already has a token sends it on every request, as before.
+After the user signs in, the turn resumes and the model makes the call again. eve reconnects with the token and reloads the tool list, which may now include tools the server hides from anonymous callers. A connection that already has a token sends it on every request, as before.
 
 A server that leaves protected tools out of its anonymous `tools/list` never triggers sign-in, because the model cannot find those tools. Servers that support anonymous use should list every tool and refuse the protected calls.
 
@@ -115,7 +115,7 @@ Use the shared `approval` option to gate every tool served by an MCP connection.
 
 ### Gate specific tools by name or input
 
-A remote MCP server usually mixes read tools with destructive or publishing ones, so a blanket `always()` would prompt on every harmless call. Pass a custom policy instead — the same [`Approval`](/docs/human-in-the-loop#approvals) shape authored tools use — to gate only the calls that matter. The policy receives `{ session, toolName, toolInput, approvedTools, callId, abortSignal }` and returns an approval status, synchronously or as a promise.
+A remote MCP server usually mixes read tools with destructive or publishing ones, so a blanket `always()` would prompt on every harmless call. Pass a custom policy instead — the same [`Approval`](/docs/human-in-the-loop#approvals) shape authored tools use — to gate only the calls that matter. The policy receives `{ session, toolName, toolInput, toolAnnotations, approvedTools, callId, abortSignal }` and returns an approval status, synchronously or as a promise.
 
 This connection always gates deletes, gates a publish only when the call actually schedules a post, and lets everything else through:
 
@@ -157,6 +157,27 @@ Two details are specific to connection tools:
 
 Return `"user-approval"` (or `true`) to pause for a person and `"not-applicable"` (or `false`) to run without a prompt; return `"approved"` or `"denied"` to decide automatically without involving anyone.
 
+### Gate by the server's tool annotations
+
+Many MCP servers declare [tool annotations](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool) such as `readOnlyHint` and `destructiveHint` for each tool. eve passes what the server declared for the called tool as `toolAnnotations`, typed as `ConnectionToolAnnotations` from `eve/tools/approval`. It is `undefined` when the server declares none, so keep a fallback:
+
+```ts title="agent/connections/linear.ts"
+import { connect } from "@vercel/connect/eve";
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://mcp.linear.app/mcp",
+  description: "Linear issues and projects.",
+  auth: connect("mcp.linear.app/linear"),
+  approval: ({ toolAnnotations }) => {
+    if (toolAnnotations?.readOnlyHint === true) return "not-applicable";
+    return "user-approval";
+  },
+});
+```
+
+Annotations are hints from the server, not guarantees. Trust them only as far as you trust the server that sent them.
+
 [Human-in-the-loop](/docs/human-in-the-loop#approvals) covers the full set of statuses, how `approvedTools` and `session.auth` factor in, and how a gated call pauses and resumes durably.
 
 ## Forward the caller to an eve agent
@@ -180,7 +201,7 @@ Authenticate the connection as this deployment, with a stable service credential
 
 ## Control result size
 
-`connection_execute` returns an MCP tool's `structuredContent` when the server sends it. Otherwise it returns the result's text, parsed as JSON when the tool declares no output schema. Image, audio, and resource content reaches the model as file parts, and a result with `isError: true` fails the call with its text. MCP connections do not expose a per-result transform equivalent to an authored tool's [`toModelOutput`](/docs/tools#shape-what-the-model-sees-with-tomodeloutput).
+An MCP tool call returns the tool's `structuredContent` when the server sends it. Otherwise it returns the result's text, parsed as JSON when the tool declares no output schema. Image, audio, and resource content reaches the model as file parts, and a result with `isError: true` fails the call with its text. MCP connections do not expose a per-result transform equivalent to an authored tool's [`toModelOutput`](/docs/tools#shape-what-the-model-sees-with-tomodeloutput).
 
 When a remote tool returns more data than the model needs, narrow the result at the MCP server. Prefer a purpose-built search or summary tool, or return a stable handle that another call can use to fetch a smaller slice. If you do not control the server and an equivalent upstream API is available, replace only that operation with an authored tool that stores the full payload outside model context and projects the needed fields through `toModelOutput`. Block the original MCP operation through [`tools.block`](#tool-filters) so the model does not see duplicate tools.
 
@@ -200,7 +221,7 @@ When a remote tool returns more data than the model needs, narrow the result at 
 - [Authentication](../guides/auth-and-route-protection): establish the caller identity required by user-scoped auth.
 - [Security model](../concepts/security-model): how connection credentials stay out of the model's reach.
 
-## Experimental managed events
+## Events (experimental)
 
 The experimental connection event contract accepts separate callbacks:
 
@@ -232,6 +253,10 @@ export default defineMcpClientConnection({
 This contract is experimental and requires the matching managed-events runtime
 and Connect SDK releases. Defining callbacks does not create a subscription or
 start a model turn. `onEvent` is required; lifecycle callbacks are optional.
+`experimental_events` opts this connection into event handling. The `connect()`
+auth provider supplies the backend that manages subscriptions and verifies
+deliveries using the same authorized account. Using `connect()` alone does not
+enable event handling or create subscriptions.
 Use a statically authored MCP connection and a static `connect()` auth provider
 that exposes the events bridge. Dynamic connections and auth resolvers are not
 supported by this first version because the receiver must be mounted at build
@@ -245,13 +270,15 @@ replacement session.
 
 ### Subscription and delivery flow
 
-With the matching runtime, `connection_search` exposes one typed subscribe action
+With the matching runtime, `eve__search` exposes one typed subscribe action
 for each webhook event in the current account's catalog, plus list, get, and stop
-actions. `connection_execute` applies the connection's usual approval and auth
+actions. `eve__tool` applies the connection's usual approval and auth
 gates. Event arguments and an explicit `expiresAt` deadline (or `null`) are model
 inputs. The framework binds the account, session, receiver path, and idempotency
 key itself. Lists and ID-based operations only expose subscriptions created by
-that caller in the current session. A session can create at most 100 bindings.
+that caller in the current session. A session can create at most 100 bindings. If MCP discovery fails, the caller can
+still list, inspect, and stop their existing subscriptions through Connect.
+Creating a new watch still requires a fresh authorized catalog.
 
 Subscription action results include `retired`, which reports eve's local state,
 alongside `status`, which reports Connect's last-known state. `retired: true`
@@ -296,6 +323,15 @@ redeliveries can invoke the callback again; use durable application idempotency
 for effects that must remain deduplicated beyond that window. Callback code explicitly decides when to queue
 a new model turn through `attachSession(...).send(...)`.
 
+With OpenTelemetry configured, event discovery, subscription operations, callback
+attempts, and session-end cancellation emit spans. Callback and subscription spans
+follow the session's trace policy and sampling decision. They record bounded
+identifiers, timing, and outcomes, without event bodies, subscription arguments,
+credentials, or provider error text. HTTP receiver spans use the existing
+`traceChannelRequests` setting. Verified deliveries carry the receiver's trace
+identity through the durable inbox; callbacks that call `attachSession(...).send(...)`
+link the consuming turn to their callback span. Each retried callback gets a new span.
+
 When a session ends, eve attempts to cancel its managed subscriptions through
 durable cleanup. An unavailable provider or Connect API can delay or fail that
 cleanup; inspect the workflow's failed step before treating the upstream watch
@@ -303,3 +339,13 @@ as stopped. `expiresAt: null` removes the Connect monitoring deadline; it does
 not keep an ended eve session alive.
 Subscription cleanup failures do not prevent child-task termination or hide an
 existing session failure from its waiting caller.
+
+The runtime vendors `@ai-sdk/mcp@2.0.73`, which includes managed event operations
+and the transport-context adapter factory.
+The Connect bridge binds subscriptions to the same URL as the connection and
+forwards it as `source.url`; you do not need to configure that URL a second time.
+The backend must support and authorize that endpoint before forwarding provider
+credentials. A connection URL alone does not grant permission to use it.
+
+eve wraps the bridge's bound operations in the AI SDK's `createAdapter` contract.
+This is internal wiring; authored connections only specify their MCP URL once.

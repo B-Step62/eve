@@ -16,6 +16,7 @@ import { assertWithinLimit } from "#internal/attachments/limited-read.js";
 import { createLogger, extractErrorId, formatErrorHint } from "#internal/logging.js";
 import type { InputResolution, UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { FetchFileResult } from "#shared/channel-definition.js";
+import { actionLabel, visibleActions } from "#shared/action-label.js";
 import type { InputRequest } from "#shared/input.js";
 import {
   type InputResponse,
@@ -447,10 +448,11 @@ function defaultEvents<TAdapters extends ChatSdkAdapters>(
         await safeStartTyping(channel.thread, truncate(buffered));
         return;
       }
-      const labels = event.actions.map((action) =>
-        action.kind === "tool-call" ? action.toolName : action.kind,
+      const labels = visibleActions(event.actions).map((action) =>
+        actionLabel(action, event.presentation),
       );
-      await safeStartTyping(channel.thread, truncate(`Running ${labels.join(", ")}...`));
+      if (labels.length === 0) return;
+      await safeStartTyping(channel.thread, truncate(`${labels.join(", ")}...`));
     },
     async "message.appended"(event, channel, _ctx) {
       if (!channel.thread || !canStream(channel)) return;
@@ -512,10 +514,21 @@ function defaultEvents<TAdapters extends ChatSdkAdapters>(
       await finalizeStreamedMessage(channel, event.message, true);
     },
     async "turn.failed"(event, channel, _ctx) {
-      await postFailure(channel.thread, "I hit an error while handling your request", event);
+      if (event.terminal) return;
+      await postFailure(
+        channel.thread,
+        "I hit an error while handling your request",
+        "Please try again, rephrase, or reach out if it keeps failing.",
+        event,
+      );
     },
     async "session.failed"(event, channel) {
-      await postFailure(channel.thread, "This session could not recover from an error", event);
+      await postFailure(
+        channel.thread,
+        "This session could not recover from an error",
+        "Start a new conversation to continue.",
+        event,
+      );
     },
   };
 }
@@ -606,17 +619,14 @@ function truncate(text: string, max = MAX_TYPING_STATUS): string {
 async function postFailure(
   thread: Thread | null,
   prefix: string,
+  nextStep: string,
   event: EventData<"turn.failed"> | EventData<"session.failed">,
 ): Promise<void> {
   if (!thread) return;
   const hint = formatErrorHint(event);
   const errorId = extractErrorId(event.details);
   await thread.post(
-    [
-      `${prefix}${hint}.`,
-      "Please try again, rephrase, or reach out if it keeps failing.",
-      ...(errorId ? [`Error id: ${errorId}`] : []),
-    ].join("\n\n"),
+    [`${prefix}${hint}.`, nextStep, ...(errorId ? [`Error id: ${errorId}`] : [])].join("\n\n"),
   );
 }
 

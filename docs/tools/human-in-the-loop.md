@@ -64,7 +64,29 @@ approval: auto({
 
 A reusable approval grant applies only after every matching request that is already pending has been resolved. If several calls to a `once()`-gated tool have each produced an approval prompt, approving one does not authorize the others; each visible prompt remains an independent decision. After those pending requests are resolved, later calls in the session are allowed automatically.
 
-When the decision depends on the input, pass your own policy instead of a helper. It receives the same session context as tool execution, plus `{ toolName, toolInput, approvedTools, callId, abortSignal }`, and returns an AI SDK 7 approval status synchronously or as a promise. Use `abortSignal` for asynchronous policy work so cancellation stops it with the turn. Use `ctx.session.auth.current` to guard by the caller of the current turn and `ctx.session.auth.initiator` to guard by the caller that created the session. Return `"user-approval"` to pause for a person or `"not-applicable"` to continue without a prompt. `toolInput` can be undefined, so guard the access. This policy denies cross-tenant calls, then requires approval only when an amount crosses a threshold:
+Use the object form of `approval` to replace the default `Approve <tool label>?` text with a tool-specific summary. The `prompt` callback receives the validated `input`, final `toolName`, and `callId`:
+
+```ts title="agent/tools/refund_charge.ts"
+import { defineTool } from "eve/tools";
+import { always } from "eve/tools/approval";
+import { z } from "zod";
+
+export default defineTool({
+  description: "Refund a charge.",
+  inputSchema: z.object({ chargeId: z.string(), amount: z.number() }),
+  approval: {
+    request: always(),
+    prompt: ({ input }) => `Refund $${input.amount.toFixed(2)} for charge ${input.chargeId}?`,
+  },
+  async execute(input) {
+    return refund(input);
+  },
+});
+```
+
+Channels render this prompt in their approval UI. Slack also includes the complete tool input in a collapsed **Tool input** block so an approver can inspect the original structured value.
+
+When the decision depends on the input, pass your own policy instead of a helper. It receives the same session context as tool execution, plus `{ toolName, toolInput, approvedTools, callId, abortSignal }` (connection tools also get `toolAnnotations`), and returns an AI SDK 7 approval status synchronously or as a promise. Use `abortSignal` for asynchronous policy work so cancellation stops it with the turn. Use `ctx.session.auth.current` to guard by the caller of the current turn and `ctx.session.auth.initiator` to guard by the caller that created the session. Return `"user-approval"` to pause for a person or `"not-applicable"` to continue without a prompt. `toolInput` can be undefined, so guard the access. This policy denies cross-tenant calls, then requires approval only when an amount crosses a threshold:
 
 ```ts
 approval: ({ session, toolInput }) => {
@@ -219,7 +241,9 @@ Approvals and questions share one protocol:
 3. The run parks durably, for as long as it takes. The turn stays open: the stream emits `turn.waiting`, and after the answer the turn resumes under the same `turnId`. That `turn.waiting` carries `on: "input"`, since a person must act.
 4. The client answers with `inputResponses` (structured, keyed by `requestId`) or a normal follow-up `message`. A follow-up whose text matches an option ID, option label, or numeric option index resolves automatically, including approval options such as `approve` and `cancel`.
 
-For `ctx.ask()` questions from tools, a follow-up message answers the first open request, as described in [Several requests at once](#several-requests-at-once). The message must match an option, or the question must allow free text. Otherwise the message follows the session's `turnPolicy`. A steering message, the default, aborts the `ctx.abortSignal` of each `execute` workflow tool call the turn waits on, so a question such a call asked, such as `ask_question`'s, is withdrawn and resolves as `cancelled`. The model reads the message once those calls settle. Questions from subagents need a structured response.
+To tell the model why a call was denied, send `text` with the `cancel` response, for example `{ requestId, optionId: "cancel", text: "Only the three-pack." }`. The model receives the note quoted in the denial result, marked as written by the person who denied the call, who may not be the user. The note is also visible to anyone who can read the session stream, in `input.resolved`.
+
+For `ctx.ask()` questions from tools and prompts proxied from subagents, a follow-up message answers the first open request, as described in [Several requests at once](#several-requests-at-once). The message must match an option, or the question must allow free text. Otherwise the message follows the session's `turnPolicy`. A steering message, the default, aborts the `ctx.abortSignal` of each `execute` workflow tool call the turn waits on, so a question such a call asked, such as `ask_question`'s, is withdrawn and resolves as `cancelled`. The model reads the message once those calls settle.
 
 Each request includes a `kind` discriminator: `tool-approval`, `question`, or
 `session-limit`. Clients should use `kind` to choose behavior and presentation.
@@ -230,7 +254,7 @@ The run picks back up exactly where it parked. Because the pause is durable, not
 
 When a subagent requests input, eve emits the same `input.requested` event on its parent session. Answering through that parent session routes the response directly to the blocked child without invoking the parent model.
 
-If a tool is approved by another user, only the approved call runs with that user's auth. Subsequent tool calls in the turn stay with the original owner.
+Approval is consent only. An approved tool call runs with the requesting user's identity, connections, and credentials, including its policy recheck. The approver's access is never lent to the call. Subsequent tool calls in the turn also stay with the original owner.
 
 For approval requests, a follow-up message that doesn't match an option steers the turn instead of answering it. eve cancels the turn's pending approval, so the call doesn't run and `input.resolved` reports `outcome: "ignored"`, and the model reads the message next. This happens even when the message is sent with `turnPolicy: "queue"`, because a turn held on a person can't end until they act. Calls the person already approved in the same batch still run. A message from someone other than the person the turn serves waits until the turn ends. Cancelling the turn withdraws its approval: the call doesn't run, `input.resolved` reports `outcome: "cancelled"`, and a later answer to it approves nothing.
 

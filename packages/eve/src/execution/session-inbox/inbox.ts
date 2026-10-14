@@ -5,7 +5,10 @@ import { releaseSessionHooksStep } from "#execution/session-inbox/release-step.j
 
 import type { DeliverPayload, HookPayload, SessionCommand } from "#channel/types.js";
 import { claimHookOwnership, disposeHook } from "#execution/hook-ownership.js";
-import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
+import type {
+  WorkflowToolRunMessage,
+  WorkflowToolRunMessageBatch,
+} from "#execution/tools/workflow/messages.js";
 
 /** All session addresses accept the same protocol. Callback routes construct
  * their own message kind; they never accept arbitrary session commands. */
@@ -14,8 +17,15 @@ export interface AuthorizationCallbackPayload {
   readonly payloads: DeliverPayload[];
 }
 
+/** The runtime sends this command; channel request bodies cannot supply it. */
+export interface SessionFailurePayload {
+  readonly kind: "session-failure";
+  readonly error: string;
+}
+
 export type SessionInboxPayload =
   | ConnectionEventInboxPayload
+  | SessionFailurePayload
   | HookPayload
   | SessionCommand
   | WorkflowToolRunMessage
@@ -23,7 +33,7 @@ export type SessionInboxPayload =
 
 interface Source {
   readonly token: string;
-  readonly hook: Hook<SessionInboxPayload>;
+  readonly hook: Hook<SessionInboxPayload | WorkflowToolRunMessageBatch>;
   registered?: Promise<void>;
   stopping: boolean;
   closed: boolean;
@@ -38,6 +48,10 @@ export interface SessionInboxReader {
   next(): Promise<SessionInboxPayload | undefined>;
   /** Removes every payload accepted so far, in arrival order. */
   drain(): SessionInboxPayload[];
+  /** Removes the payloads at the front of the queue that `accepts` takes, stopping at the first it doesn't. */
+  takeLeading<T extends SessionInboxPayload>(
+    accepts: (payload: SessionInboxPayload) => payload is T,
+  ): T[];
   hasPending(): boolean;
   /** Resolves once a payload is ready or the inbox closes, without consuming anything. */
   whenPending(): Promise<void>;
@@ -50,6 +64,7 @@ export interface SessionInboxReader {
   onInterrupt(handler: (payload: SessionInboxPayload) => void): () => void;
   /** Observes deliveries without consuming them; replays unread deliveries on subscription. */
   onDelivery(handler: (payload: SessionInboxPayload) => void): () => void;
+  /** Requeues payloads a successor handed back, ahead of everything pumped since. */
   restore(payloads: readonly SessionInboxPayload[]): void;
 }
 
@@ -68,7 +83,12 @@ export interface SessionInboxHandle extends SessionInbox {
 }
 
 export function isInterrupt(value: SessionInboxPayload): boolean {
-  return value.kind === "cancel" || value.kind === "reset" || value.kind === "session-timeout";
+  return (
+    value.kind === "cancel" ||
+    value.kind === "reset" ||
+    value.kind === "session-timeout" ||
+    value.kind === "session-failure"
+  );
 }
 
 /**
@@ -101,11 +121,17 @@ export function createSessionInbox(sessionId: string): SessionInboxHandle {
       while (!source.stopping) {
         const result = await iterator.next();
         if (result.done) break;
-        queue.push(result.value);
-        if (result.value.kind === "send" || result.value.kind === "deliver")
-          for (const handler of deliveryHandlers) handler(result.value);
-        if (isInterrupt(result.value))
-          for (const handler of interruptHandlers) handler(result.value);
+        const payload = result.value;
+        if (payload.kind === "workflow-batch") {
+          // A run's messages carry no deliveries or interrupts.
+          queue.push(...payload.messages);
+          notify();
+          continue;
+        }
+        queue.push(payload);
+        if (payload.kind === "send" || payload.kind === "deliver")
+          for (const handler of deliveryHandlers) handler(payload);
+        if (isInterrupt(payload)) for (const handler of interruptHandlers) handler(payload);
         notify();
       }
     } catch (error) {
@@ -133,7 +159,7 @@ export function createSessionInbox(sessionId: string): SessionInboxHandle {
     if (sources.length >= 256) throw new Error("A session may claim at most 256 addresses.");
     const source: Source = {
       token,
-      hook: createHook<SessionInboxPayload>({
+      hook: createHook<SessionInboxPayload | WorkflowToolRunMessageBatch>({
         token: sessionInboxHookToken(token),
         metadata: { sessionId },
       }),
@@ -173,6 +199,17 @@ export function createSessionInbox(sessionId: string): SessionInboxHandle {
     drain() {
       if (failure !== undefined) throw failure.error;
       return queue.splice(0);
+    },
+    takeLeading<T extends SessionInboxPayload>(
+      accepts: (payload: SessionInboxPayload) => payload is T,
+    ): T[] {
+      if (failure !== undefined) throw failure.error;
+      const taken: T[] = [];
+      for (let next = queue[0]; next !== undefined && accepts(next); next = queue[0]) {
+        taken.push(next);
+        queue.shift();
+      }
+      return taken;
     },
     hasPending() {
       if (failure !== undefined) throw failure.error;

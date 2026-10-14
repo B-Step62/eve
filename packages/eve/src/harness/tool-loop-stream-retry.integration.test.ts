@@ -104,6 +104,7 @@ function enqueueToolCall(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -384,6 +385,142 @@ describe("tool loop streamed provider retries", () => {
     expect(events.filter((event) => event.type === "step.failed")).toHaveLength(0);
     expect(events.filter((event) => event.type === "turn.failed")).toHaveLength(0);
     expect(events.filter((event) => event.type === "session.failed")).toHaveLength(0);
+  });
+
+  it("retries a provider stream that stops sending chunks without closing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const abortSignals: (AbortSignal | undefined)[] = [];
+    const doStream = vi.fn(
+      async ({ abortSignal }: Parameters<MockLanguageModelV3["doStream"]>[0]) => {
+        abortSignals.push(abortSignal);
+        const attempt = abortSignals.length;
+        return {
+          stream: new ReadableStream<StreamPart>({
+            start(controller) {
+              if (attempt > 1) {
+                enqueueTextSuccess(controller, "Recovered answer.");
+                return;
+              }
+              // The response body stalls mid-answer without closing. Only an abort releases it,
+              // the way an aborted `fetch` errors its body.
+              controller.enqueue({ type: "stream-start", warnings: [] });
+              controller.enqueue({ id: "stalled", type: "text-start" });
+              controller.enqueue({ delta: "Partial ans", id: "stalled", type: "text-delta" });
+              abortSignal?.addEventListener("abort", () => controller.error(abortSignal.reason), {
+                once: true,
+              });
+            },
+          }),
+        };
+      },
+    );
+    const model = new MockLanguageModelV3({
+      doStream,
+      modelId: "retry-integration-model",
+      provider: "eve-integration-mock",
+    });
+    const { emit, events } = createEventCollector();
+
+    let settled = false;
+    const run = createToolLoopHarness(createConfig(model, emit))(createSession(), {
+      message: "Continue.",
+    }).finally(() => {
+      settled = true;
+    });
+
+    // Well past any plausible idle window for a stream that sends nothing.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await vi.waitFor(
+      () => expect(settled, "the stalled model stream never released the turn").toBe(true),
+      { timeout: 5_000 },
+    );
+    const result = await run;
+
+    expect(abortSignals[0]?.aborted).toBe(true);
+    expect(doStream).toHaveBeenCalledTimes(2);
+    expect(result.next).toBeNull();
+    expect(result.settledTurn).toEqual({ output: "Recovered answer." });
+    expect(events.filter((event) => event.type === "step.failed")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "turn.failed")).toHaveLength(0);
+  });
+
+  it("keeps the model call alive while an inline tool outlasts the output timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const doStream = vi.fn(async () => ({
+      stream: new ReadableStream<StreamPart>({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] });
+          enqueueToolCall(controller, "call_slow", "slow note");
+          controller.enqueue({
+            finishReason: { raw: undefined, unified: "tool-calls" },
+            type: "finish",
+            usage,
+          });
+          controller.close();
+        },
+      }),
+    }));
+    const model = new MockLanguageModelV3({
+      doStream,
+      modelId: "retry-integration-model",
+      provider: "eve-integration-mock",
+    });
+    let toolSignal: AbortSignal | undefined;
+    const execute = vi.fn(
+      async ({ note }: { readonly note: string }, options?: { abortSignal?: AbortSignal }) => {
+        toolSignal = options?.abortSignal;
+        await new Promise((resolve) => setTimeout(resolve, 20 * 60_000));
+        return { saved: note };
+      },
+    );
+    const tools: ToolLoopHarnessConfig["tools"] = new Map([
+      [
+        "save_note",
+        {
+          description: "Save a note.",
+          execute,
+          inputSchema: jsonSchema({
+            additionalProperties: false,
+            properties: { note: { type: "string" } },
+            required: ["note"],
+            type: "object",
+          }),
+          name: "save_note",
+        },
+      ],
+    ]);
+    const { emit, events } = createEventCollector();
+
+    let settled = false;
+    const run = createToolLoopHarness(createConfig(model, emit, tools))(createSession(), {
+      message: "Save the note.",
+    }).finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await vi.waitFor(() => expect(settled).toBe(true), { timeout: 5_000 });
+    await run;
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(toolSignal?.aborted).toBe(false);
+    expect(doStream).toHaveBeenCalledTimes(1);
+    expect(events.flatMap((event) => (event.type === "action.result" ? [event.data] : []))).toEqual(
+      [
+        expect.objectContaining({
+          result: expect.objectContaining({ callId: "call_slow", output: { saved: "slow note" } }),
+          status: "completed",
+        }),
+      ],
+    );
+    expect(events.filter((event) => event.type === "step.failed")).toHaveLength(0);
   });
 
   it("fails once after the overloaded retry attempts are exhausted", async () => {

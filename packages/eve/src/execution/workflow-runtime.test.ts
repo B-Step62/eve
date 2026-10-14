@@ -8,13 +8,14 @@ import {
   context as otelContext,
   trace as otelTrace,
 } from "#compiled/@opentelemetry/api/index.js";
-import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
+import { HookNotFoundError, WorkflowRunNotFoundError } from "#compiled/@workflow/errors/index.js";
 import type { ChannelAdapter } from "#channel/adapter.js";
 import { ChannelRequestIdKey, SessionTitleKey } from "#context/keys.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import {
   createWorkflowRuntime,
   waitForCommandHookOwner,
+  waitForSessionInbox,
   sessionTimeoutWorkflowReference,
   startSessionOwnerStep,
   startWorkflowOnCurrentDeployment,
@@ -26,15 +27,17 @@ import {
   sessionHandoffMarkerToken,
 } from "#execution/session-inbox/address.js";
 import { registerInstrumentationRuntime } from "#instrumentation/runtime.js";
-import { AgentSpanIdGenerator } from "#tracing/agent-span-id-generator.js";
+import { AgentSpanIdGenerator } from "#compiled/@eve/tracing/index.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
-import { markAgentTraceContext } from "#tracing/agent-trace-context.js";
+import { markAgentTraceContext } from "#tracing/eve/agent-trace-context.js";
 import type { TraceCaptureContext } from "#shared/trace-policy.js";
 import { captureLogRecords } from "#internal/testing/log-records.js";
 
 const getHookByTokenMock = vi.fn();
 const world = {
+  // Vercel-shaped: owners run on their own deployment, so ingress resumes by token.
+  capabilities: { deploymentAffinity: true },
   getDeploymentId: vi.fn(async () => "dpl_current"),
 };
 const getRunMock = vi.fn();
@@ -143,7 +146,7 @@ describe("session owner starts", () => {
       startSessionOwnerStep({
         activationToken: "owner-1:handoff",
         anchorRunId: "anchor-1",
-        checkpoint: {} as never,
+        checkpoint: { serializedContext: {} } as never,
         delivery: { kind: "deliver", payloads: [] },
         targetDeploymentId: "latest",
       }),
@@ -188,7 +191,11 @@ describe("session owner starts", () => {
           sessionId: "anchor-1",
         }),
       ],
-      { deploymentId: "deployment-b" },
+      {
+        deploymentId: "deployment-b",
+        allowReservedAttributes: true,
+        attributes: { "$eve.version": resolveInstalledPackageInfo().version },
+      },
     );
   });
 });
@@ -229,7 +236,6 @@ describe("createWorkflowRuntime command dispatch", () => {
       payload: { message: "hello" },
       requestId: "req_deliver",
     });
-    expect(getHookByTokenMock).not.toHaveBeenCalled();
   });
 
   it.each(["pending", "running", "completed", "failed", "cancelled"])(
@@ -267,7 +273,6 @@ describe("createWorkflowRuntime command dispatch", () => {
         kind: "clear",
       },
     );
-    expect(getHookByTokenMock).not.toHaveBeenCalled();
   });
 
   it("does not report an accepted command as missing when metadata hydration fails", async () => {
@@ -310,7 +315,6 @@ describe("createWorkflowRuntime command dispatch", () => {
         payload: { message: "hello" },
       },
     );
-    expect(getHookByTokenMock).not.toHaveBeenCalled();
   });
 
   it("acknowledges the exact delivery accepted by the session inbox", async () => {
@@ -382,7 +386,6 @@ describe("createWorkflowRuntime command dispatch", () => {
         turnId: "turn-2",
       },
     );
-    expect(getHookByTokenMock).not.toHaveBeenCalled();
   });
 
   it("maps missing and terminal targets to 'no_active_turn'", async () => {
@@ -425,9 +428,11 @@ describe("createWorkflowRuntime command dispatch", () => {
   it("waits for reset to release the stable command inbox", async () => {
     const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
     resumeHookMock.mockResolvedValue(currentSessionHook("eve:token", "session-1"));
-    getHookByTokenMock.mockImplementation(async (token: string) => {
-      throw new HookNotFoundError(token);
-    });
+    getHookByTokenMock
+      .mockResolvedValueOnce(currentSessionHook(sessionInboxHookToken("eve:token"), "session-1"))
+      .mockImplementation(async (token: string) => {
+        throw new HookNotFoundError(token);
+      });
 
     await expect(
       buildRuntime().dispatchContinuation({
@@ -516,6 +521,49 @@ describe("waitForCommandHookOwner", () => {
   });
 });
 
+describe("waitForSessionInbox", () => {
+  const inboxToken = sessionInboxHookToken(sessionCommandHookToken("child-session"));
+
+  it("waits for a started session to claim its inbox", async () => {
+    getHookByTokenMock
+      .mockRejectedValueOnce(new HookNotFoundError(inboxToken))
+      .mockResolvedValueOnce({ runId: "child-session" });
+    // `start()` may accept a run before it can be read.
+    getRunMock.mockReturnValue({
+      get status() {
+        return Promise.reject(new WorkflowRunNotFoundError("child-session"));
+      },
+    });
+
+    await expect(waitForSessionInbox("child-session")).resolves.toBe(true);
+    expect(getHookByTokenMock).toHaveBeenLastCalledWith(inboxToken);
+  });
+
+  it("stops waiting once the session's run ended without an inbox", async () => {
+    getHookByTokenMock.mockRejectedValue(new HookNotFoundError(inboxToken));
+    getRunMock.mockReturnValue({ status: Promise.resolve("completed") });
+
+    await expect(waitForSessionInbox("child-session")).resolves.toBe(false);
+  });
+
+  it("gives up on a running session that never claims its inbox", async () => {
+    vi.useFakeTimers();
+    try {
+      getHookByTokenMock.mockRejectedValue(new HookNotFoundError(inboxToken));
+      getRunMock.mockReturnValue({ status: Promise.resolve("running") });
+
+      const waiting = waitForSessionInbox("child-session");
+      const settled = expect(waiting).rejects.toThrow(
+        'Session "child-session" did not start taking commands within 30 seconds.',
+      );
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("createWorkflowRuntime#createSession", () => {
   const adapter: ChannelAdapter = { kind: "http" };
 
@@ -592,6 +640,7 @@ describe("createWorkflowRuntime#createSession", () => {
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
+          "$eve.version": resolveInstalledPackageInfo().version,
         },
         deploymentId: "dpl_current",
       },
@@ -763,6 +812,7 @@ describe("createWorkflowRuntime#createSession", () => {
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
+          "$eve.version": resolveInstalledPackageInfo().version,
         },
         deploymentId: "dpl_current",
       },
@@ -808,6 +858,7 @@ describe("createWorkflowRuntime#createSession", () => {
         "$eve.is_trace_content_visible": "false",
         "$eve.trigger": "subagent",
         "$eve.type": "subagent",
+        "$eve.version": resolveInstalledPackageInfo().version,
       },
       deploymentId: "dpl_current",
     });
@@ -833,6 +884,7 @@ describe("createWorkflowRuntime#createSession", () => {
         "$eve.title": "hello",
         "$eve.trigger": "http",
         "$eve.type": "session",
+        "$eve.version": resolveInstalledPackageInfo().version,
       },
       deploymentId: "dpl_current",
     });

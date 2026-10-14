@@ -13,8 +13,11 @@ import {
   registerWorkflowToolRun,
 } from "#harness/workflow-tool-runs.js";
 
+import { readHitlState } from "#harness/hitl/requests.js";
+import { withRelays } from "#internal/testing/session-machine.js";
+
 import { toolOutput } from "#tools/model-output.js";
-import { getProxyInputRequests, upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+
 import { setTurnUsageState } from "#harness/turn-tag-state.js";
 import type { HarnessSession } from "#harness/types.js";
 import { isRuntimeWorkflowToolAction } from "#shared/action-types.js";
@@ -63,35 +66,6 @@ describe("createRuntimeActionRequestFromToolCall", () => {
       });
     },
   );
-  const loadSkillCall = {
-    input: { skill: "research" },
-    toolCallId: "call-skill",
-    toolName: "load_skill",
-    type: "tool-call" as const,
-  };
-
-  it("classifies the framework load_skill tool as a skill action", () => {
-    expect(
-      createRuntimeActionRequestFromToolCall({
-        toolCall: loadSkillCall,
-        tools: new Map([
-          [
-            "load_skill",
-            {
-              description: "Load a skill.",
-              frameworkAction: "load-skill" as const,
-              inputSchema: jsonSchema({ type: "object" }),
-              name: "load_skill",
-            },
-          ],
-        ]),
-      }),
-    ).toEqual({
-      callId: "call-skill",
-      input: { skill: "research" },
-      kind: "load-skill",
-    });
-  });
 
   it("preserves workflow identity without changing observable action data", () => {
     const action = createRuntimeActionRequestFromToolCall({
@@ -232,20 +206,6 @@ describe("createRuntimeActionRequestFromToolCall", () => {
       },
     });
   });
-
-  it("keeps an authored load_skill override as an ordinary tool action", () => {
-    expect(
-      createRuntimeActionRequestFromToolCall({
-        toolCall: loadSkillCall,
-        tools: new Map(),
-      }),
-    ).toEqual({
-      callId: "call-skill",
-      input: { skill: "research" },
-      kind: "tool-call",
-      toolName: "load_skill",
-    });
-  });
 });
 
 describe("createCoordinationRequestFromToolCall", () => {
@@ -339,25 +299,15 @@ describe("runtime results", () => {
       address: { runId: "run-1", hookToken: "eve:workflow-tool-run:op-1" },
     });
     const answerToken = "eve:workflow-tool-run-answer:run-1:0";
-    const session = upsertProxyInputRequests({
-      entries: [
-        [
-          "other-request",
-          {
-            childContinuationToken: CHILD_CONTINUATION_TOKEN,
-            event: REQUEST_EVENT,
-            kind: "question",
-          },
-        ],
-      ],
-      forChildContinuationToken: CHILD_CONTINUATION_TOKEN,
-      session: upsertProxyInputRequests({
+    const session = withRelays(
+      withRelays(withRun, {
         entries: [
           [
             answerToken,
             {
               runId: "run-1",
-              workflowAsk: { control: "control", question: {} },
+              workflowAsk: { control: "control" },
+              reply: {},
               childContinuationToken: answerToken,
               event: REQUEST_EVENT,
               kind: "question",
@@ -365,9 +315,21 @@ describe("runtime results", () => {
           ],
         ],
         forChildContinuationToken: answerToken,
-        session: withRun,
       }),
-    });
+      {
+        entries: [
+          [
+            "other-request",
+            {
+              childContinuationToken: CHILD_CONTINUATION_TOKEN,
+              event: REQUEST_EVENT,
+              kind: "question",
+            },
+          ],
+        ],
+        forChildContinuationToken: CHILD_CONTINUATION_TOKEN,
+      },
+    );
 
     const finished = forgetFinishedRuns(
       session,
@@ -377,7 +339,7 @@ describe("runtime results", () => {
 
     expect(getBlockingWorkflowToolRuns(finished.session.state)).toEqual([]);
     expect(finished.requestIds).toEqual([answerToken]);
-    expect([...getProxyInputRequests(finished.session.state).keys()]).toContain("other-request");
+    expect([...readHitlState(finished.session.state).relays.keys()]).toContain("other-request");
   });
 
   it("projects a workflow tool's result through its toModelOutput", async () => {

@@ -1,3 +1,4 @@
+import { AgentSpanIdGenerator } from "#compiled/@eve/tracing/index.js";
 import { ToolLoopAgent } from "ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "#channel/types.js";
@@ -70,7 +71,7 @@ function setupMockAgentForToolExecution(toolName: string, args: unknown): void {
       | undefined;
     const onStepEnd = settings.onStepEnd as ((...args: unknown[]) => Promise<unknown>) | undefined;
 
-    this.generate = vi.fn().mockImplementation(async (options: { messages: unknown[] }) => {
+    this.stream = vi.fn().mockImplementation(async (options: { messages: unknown[] }) => {
       let preparedMessages = options.messages;
       if (prepareStep) {
         const prepared = await prepareStep({
@@ -122,7 +123,10 @@ function setupMockAgentForToolExecution(toolName: string, args: unknown): void {
       };
 
       if (onStepEnd) await onStepEnd(result);
-      return { ...result, responseMessages: result.response.messages };
+      return {
+        fullStream: (async function* () {})(),
+        responseMessages: Promise.resolve(result.response.messages),
+      };
     });
 
     return this as unknown as ToolLoopAgent;
@@ -327,6 +331,7 @@ describe("createExecutionNodeStep", () => {
     setupMockAgentForToolExecution("regular-tool", { question: "Run the tool." });
     const forceFlush = vi.fn(async () => undefined);
     const runtime: InstrumentationRuntime = {
+      idGenerator: new AgentSpanIdGenerator(),
       forceFlush,
       hooks: createInstrumentationHooks([]),
       otelSettings: undefined,
@@ -377,6 +382,9 @@ describe("createExecutionNodeStep", () => {
     ctx.set(InitiatorAuthKey, null);
     ctx.set(BundleKey, {
       compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+      resolvedAgent: { dynamicSkillResolvers: [], dynamicToolResolvers: [], skills: [] },
+      subagentRegistry: rootNode.subagentRegistry,
+      toolRegistry: rootNode.toolRegistry,
     } as never);
     ctx.set(ChannelKey, { kind: "http" });
     ctx.set(SessionIdKey, "sess-root");
@@ -461,6 +469,9 @@ describe("createExecutionNodeStep", () => {
     ctx.set(InitiatorAuthKey, null);
     ctx.set(BundleKey, {
       compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+      resolvedAgent: { dynamicSkillResolvers: [], dynamicToolResolvers: [], skills: [] },
+      subagentRegistry: node.subagentRegistry,
+      toolRegistry: node.toolRegistry,
     } as never);
     ctx.set(ChannelKey, { kind: "http" });
     ctx.set(SessionIdKey, "sess-dynamic");

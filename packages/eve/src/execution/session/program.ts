@@ -2,6 +2,8 @@ import {
   prepareConnectionEventStep,
   dispatchConnectionEventStep,
 } from "#runtime/connections/events/dispatch-step.js";
+import { STUB_CONTEXT_KEY, type StubScope } from "#tool-stubs/types.js";
+import { withStubPlayback } from "#execution/tool-stubs/playback.js";
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
 import type { AgentWorkflowRetentionDefinition } from "#shared/agent-definition.js";
 import {
@@ -100,6 +102,10 @@ export async function runPreparedSession(
   boot: SessionBoot,
   inbox: SessionInboxHandle,
 ): Promise<WorkflowEntryResult> {
+  const scope = boot.serializedContext[STUB_CONTEXT_KEY] as StubScope | undefined;
+  if (scope !== undefined && scope.rootSessionId === undefined) {
+    boot.serializedContext[STUB_CONTEXT_KEY] = { ...scope, rootSessionId: boot.sessionId };
+  }
   const cursor = new SessionStateCursor({
     history: boot.history,
     inbox,
@@ -122,22 +128,25 @@ export async function runPreparedSession(
   let result: WorkflowEntryResult = { output: "", isError: true };
   let loop: SessionLoopOutcome | undefined;
   try {
-    try {
-      loop = await runSessionLoop(boot, { cursor, handoff, inbox, progress });
-    } finally {
-      await inbox.dispose();
-    }
-    if (loop.kind === "transferred") {
-      if (boot.anchor.kind !== "self") return { output: "" };
-      result = await handoff.awaitAnchoredResult();
+    result = await withStubPlayback(scope, boot.sessionId, async () => {
+      try {
+        loop = await runSessionLoop(boot, { cursor, handoff, inbox, progress });
+      } finally {
+        await inbox.dispose();
+      }
+      if (loop.kind === "transferred") {
+        if (boot.anchor.kind !== "self") return { output: "" };
+        result = await handoff.awaitAnchoredResult();
+        return result;
+      }
+      result = await finalizeSession(loop.outcome, {
+        caller: progress.caller,
+        cursor,
+        sessionWritable: boot.sessionWritable,
+      });
+      progress.terminalEmitted = true;
       return result;
-    }
-    result = await finalizeSession(loop.outcome, {
-      caller: progress.caller,
-      cursor,
-      sessionWritable: boot.sessionWritable,
     });
-    progress.terminalEmitted = true;
     return result;
   } catch (error) {
     if (!progress.terminalEmitted) {
@@ -148,6 +157,8 @@ export async function runPreparedSession(
     }
     throw createSafeOuterWorkflowError();
   } finally {
+    // Also dispose if playback setup fails before the session loop starts. Disposal is idempotent.
+    await inbox.dispose();
     await reportResultToAnchor(boot, result, handoff, loop);
   }
 }
