@@ -187,6 +187,7 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/channels/github.ts",
       "agent/extensions/code.ts",
       "agent/extensions/git.ts",
+      "agent/hooks/reset-github-egress.ts",
       "agent/instructions.md",
       "agent/lib/github.ts",
       "agent/sandbox.ts",
