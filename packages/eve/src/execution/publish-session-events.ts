@@ -385,6 +385,16 @@ async function drainSessionWritable(sessionWritable: WritableStream<Uint8Array>)
   await drain.call(sessionWritable);
 }
 
+/**
+ * The events that carry a delivery into a turn: `turn.started` for the input
+ * that opens it, `message.received` for input steered into it while it runs.
+ * A caller that sees a delivery id on one may stop resending that delivery.
+ */
+const ACCEPTS_DELIVERIES: ReadonlySet<MessageStreamEvent["type"]> = new Set([
+  "turn.started",
+  "message.received",
+]);
+
 function openSessionEventWriter(input: {
   /**
    * The delivery ids stamped on each event. Read at each write because a turn
@@ -395,6 +405,8 @@ function openSessionEventWriter(input: {
 }): StreamWriter {
   const streamWriter = input.sessionWritable.getWriter();
 
+  // Delivery ids this writer has already made durable on an accepting event.
+  const accepted = new Set<string>();
   let released = false;
   const release = (): void => {
     if (released) return;
@@ -405,10 +417,14 @@ function openSessionEventWriter(input: {
     async write(event) {
       const stamped = stampMessageStreamEvent(event, input.deliveryIds());
       await streamWriter.write(encodeMessageStreamEvent(stamped));
-      // `turn.started` records which deliveries the session accepted. A caller
-      // that sees it may stop resending them, so the turn does no further work
-      // until it is durable, and none at all if the append fails.
-      if (stamped.type === "turn.started") await drainSessionWritable(input.sessionWritable);
+      // The first event that accepts a delivery is durable before the turn
+      // does any further work, and the turn does none at all if its append
+      // fails. Later events stamped with the same ids need no barrier.
+      const ids = stamped.meta.deliveryIds ?? [];
+      if (ACCEPTS_DELIVERIES.has(stamped.type) && ids.some((id) => !accepted.has(id))) {
+        await drainSessionWritable(input.sessionWritable);
+        for (const id of ids) accepted.add(id);
+      }
       return stamped;
     },
     close: async () => {

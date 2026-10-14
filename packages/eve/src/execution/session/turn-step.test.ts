@@ -66,6 +66,7 @@ import { createRuntimeHookRegistry } from "#runtime/hooks/registry.js";
 import {
   createInputRequestedEvent,
   createMessageCompletedEvent,
+  createMessageReceivedEvent,
   createStepStartedEvent,
   createTurnCompletedEvent,
   createTurnStartedEvent,
@@ -1846,8 +1847,105 @@ describe("turnStep", () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  describe("turn.started durability", () => {
-    function installTurnStartingStep(modelCall: () => void): void {
+  describe("delivery acceptance durability", () => {
+    // `turn.started` accepts the input that opens a turn; `message.received`
+    // accepts input steered into an open turn. Each scenario's node step
+    // publishes the accepting event, then calls the model.
+    const scenarios = [
+      {
+        name: "turn.started",
+        accepting: createTurnStartedEvent({ sequence: 1, turnId: "turn_1" }),
+        openTurnId: "",
+      },
+      {
+        name: "a steered message.received",
+        accepting: createMessageReceivedEvent({
+          message: "steered",
+          sequence: 1,
+          turnId: "turn_1",
+        }),
+        openTurnId: "turn_1",
+      },
+    ] as const;
+
+    function installAcceptingStep(
+      scenario: (typeof scenarios)[number],
+      modelCall: () => void,
+    ): void {
+      const compiledBundle = createStubBundle() as never;
+      vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
+      installSessionStoreMocks([
+        createStubSession({
+          state: positionState({ sequence: 1, stepIndex: 0, turnId: scenario.openTurnId }),
+        }),
+      ]);
+      vi.mocked(createExecutionNodeStep).mockImplementation((input) => {
+        return async (stepSession): Promise<StepResult> => {
+          await input.handleEvent?.(scenario.accepting, stepSession.history);
+          modelCall();
+          return { next: { done: true, output: "ok" }, session: stepSession };
+        };
+      });
+    }
+
+    function deliver(drain: () => Promise<void>): Promise<unknown> {
+      const ctx = new ContextContainer();
+      ctx.set(AuthKey, null);
+      ctx.set(BundleKey, createStubBundle() as never);
+      ctx.set(ChannelKey, threadContextAdapter);
+      ctx.set(ContinuationTokenKey, "http:durable-turn");
+      ctx.set(SessionIdKey, "session-1");
+      return turnStep({
+        input: {
+          kind: "deliver",
+          payloads: [{ message: "hello" }],
+          deliveryMetadata: [
+            { channelKind: "eve", channelName: "eve", deliveryId: "delivery-1", payloadIndex: 0 },
+          ],
+        },
+        sessionWritable: createTestWritable(DEFAULT_WORKFLOW_STREAM_NAMESPACE, drain),
+        serializedContext: serializeContext(ctx),
+        sessionState: createStubSessionState({}),
+      });
+    }
+
+    for (const scenario of scenarios) {
+      it(`does no model work until ${scenario.name} is durable`, async () => {
+        const modelCall = vi.fn();
+        installAcceptingStep(scenario, modelCall);
+        let markDurable!: () => void;
+        const durable = new Promise<void>((resolve) => {
+          markDurable = resolve;
+        });
+        let drainEntered!: () => void;
+        const draining = new Promise<void>((resolve) => {
+          drainEntered = resolve;
+        });
+
+        const turn = deliver(() => {
+          drainEntered();
+          return durable;
+        });
+        await draining;
+        expect(modelCall).not.toHaveBeenCalled();
+
+        markDurable();
+        await turn;
+        expect(modelCall).toHaveBeenCalledOnce();
+      });
+
+      it(`does no model work when the append of ${scenario.name} is rejected`, async () => {
+        const modelCall = vi.fn();
+        installAcceptingStep(scenario, modelCall);
+
+        await expect(
+          deliver(() => Promise.reject(new Error("append rejected: run is terminal"))),
+        ).rejects.toThrow("append rejected: run is terminal");
+        expect(modelCall).not.toHaveBeenCalled();
+      });
+    }
+
+    it("waits on the barrier once per newly accepted delivery", async () => {
       const compiledBundle = createStubBundle() as never;
       vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
       installSessionStoreMocks([
@@ -1859,60 +1957,17 @@ describe("turnStep", () => {
             createTurnStartedEvent({ sequence: 1, turnId: "turn_1" }),
             stepSession.history,
           );
-          modelCall();
+          await input.handleEvent?.(
+            createMessageReceivedEvent({ message: "hello", sequence: 1, turnId: "turn_1" }),
+            stepSession.history,
+          );
           return { next: { done: true, output: "ok" }, session: stepSession };
         };
       });
-    }
+      const drain = vi.fn(async () => {});
 
-    function startTurn(drain: () => Promise<void>): Promise<unknown> {
-      const ctx = new ContextContainer();
-      ctx.set(AuthKey, null);
-      ctx.set(BundleKey, createStubBundle() as never);
-      ctx.set(ChannelKey, threadContextAdapter);
-      ctx.set(ContinuationTokenKey, "http:durable-turn");
-      ctx.set(SessionIdKey, "session-1");
-      return turnStep({
-        input: { kind: "deliver", payloads: [{ message: "hello" }] },
-        sessionWritable: createTestWritable(DEFAULT_WORKFLOW_STREAM_NAMESPACE, drain),
-        serializedContext: serializeContext(ctx),
-        sessionState: createStubSessionState({}),
-      });
-    }
-
-    it("does no model work until turn.started is durable", async () => {
-      const modelCall = vi.fn();
-      installTurnStartingStep(modelCall);
-      let markDurable!: () => void;
-      const durable = new Promise<void>((resolve) => {
-        markDurable = resolve;
-      });
-
-      let drainEntered!: () => void;
-      const draining = new Promise<void>((resolve) => {
-        drainEntered = resolve;
-      });
-
-      const turn = startTurn(() => {
-        drainEntered();
-        return durable;
-      });
-      await draining;
-      expect(modelCall).not.toHaveBeenCalled();
-
-      markDurable();
-      await turn;
-      expect(modelCall).toHaveBeenCalledOnce();
-    });
-
-    it("does no model work when the turn.started append is rejected", async () => {
-      const modelCall = vi.fn();
-      installTurnStartingStep(modelCall);
-
-      await expect(
-        startTurn(() => Promise.reject(new Error("append rejected: run is terminal"))),
-      ).rejects.toThrow("append rejected: run is terminal");
-      expect(modelCall).not.toHaveBeenCalled();
+      await deliver(drain);
+      expect(drain).toHaveBeenCalledOnce();
     });
   });
 
