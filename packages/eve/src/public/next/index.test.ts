@@ -16,14 +16,10 @@ vi.mock("node:fs/promises", async (importOriginal) => ({
   stat: vi.fn(async () => ({ isDirectory: () => true })),
 }));
 
-vi.mock("#internal/project-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("#internal/project-context.js")>()),
+vi.mock("#discover/project.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("#discover/project.js")>()),
   // Agent roots in these tests are virtual; treat each as its own app root.
-  findEveProjectContext: vi.fn(async (startPath: string) => ({
-    appRoot: startPath,
-    environmentRoot: startPath,
-    kind: "standalone",
-  })),
+  resolveSingleAgentAppRoot: vi.fn(async (startPath: string) => startPath),
 }));
 
 vi.mock("./vercel-output-config.js", () => ({

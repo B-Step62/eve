@@ -104,6 +104,23 @@ export async function resolveDiscoveryProject(
   );
 }
 
+/**
+ * Resolves the app root `eve build` and `eve dev` use when run from
+ * `startPath` for a single agent, or `undefined` when they would fail or build
+ * a whole `agents/` workspace instead. Mirrors the CLI: the owning eve package
+ * must classify the path as one agent, then discovery picks the app root.
+ */
+export async function resolveSingleAgentAppRoot(startPath: string): Promise<string | undefined> {
+  const context = await findEveProjectContext(startPath);
+  if (context === undefined || context.kind === "workspace") return undefined;
+  try {
+    return (await resolveDiscoveryProject(startPath)).appRoot;
+  } catch (error) {
+    if (error instanceof DiscoveryProjectResolutionError) return undefined;
+    throw error;
+  }
+}
+
 async function resolveSearchDirectory(source: ProjectSource, startPath: string): Promise<string> {
   const resolvedPath = resolve(startPath);
   const kind = await source.stat(resolvedPath);

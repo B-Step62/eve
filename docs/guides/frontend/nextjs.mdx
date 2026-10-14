@@ -78,7 +78,7 @@ export default withEve(nextConfig, {
 });
 ```
 
-Each root must be an eve agent root that `eve build` resolves to itself: either a member of the project's `agents/` workspace, or a directory with its own `package.json` that depends on `eve`. `withEve` throws if a root would resolve to a different agent, such as a parent directory's `agent/`.
+Each root must be an eve agent root that `eve build` resolves to itself: either a member of the project's `agents/` workspace, or a directory with its own `package.json` that depends on `eve`. `withEve` throws if a root would resolve to a different agent, such as a parent directory's `agent/`. The check is skipped when `EVE_NEXT_PRODUCTION_ORIGIN` points production at agents run elsewhere, so those roots don't need to exist locally.
 
 Named agents mount under `/eve/<name>/v1/*`. Call the matching agent from React with `agent`:
 

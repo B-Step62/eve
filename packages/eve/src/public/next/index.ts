@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import type { NextConfig } from "next";
 
+import { resolveSingleAgentAppRoot } from "#discover/project.js";
 import { assertValidPublicAgentName } from "#internal/agent-name.js";
 import { findEveProjectContext } from "#internal/project-context.js";
 import { quoteVercelShellArgument, toVercelRelativePath } from "#internal/vercel/build-command.js";
@@ -223,6 +224,20 @@ function readLocalProductionPort(portOffset: number): number {
   return port;
 }
 
+function readProductionOrigin(): string | undefined {
+  const origin = process.env[EVE_NEXT_PRODUCTION_ORIGIN_ENV];
+  return origin !== undefined && origin.trim().length > 0 ? origin : undefined;
+}
+
+/** Production outside Vercel can proxy to agents supervised elsewhere, so their roots need not exist. */
+function buildsOrRunsAgentsLocally(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" ||
+    Boolean(process.env.VERCEL) ||
+    readProductionOrigin() === undefined
+  );
+}
+
 function resolveProductionDestination(input: {
   readonly localProductionPortOffset: number;
   readonly servicePrefix: string;
@@ -236,9 +251,9 @@ function resolveProductionDestination(input: {
     };
   }
 
-  const configuredOrigin = process.env[EVE_NEXT_PRODUCTION_ORIGIN_ENV];
+  const configuredOrigin = readProductionOrigin();
 
-  if (configuredOrigin !== undefined && configuredOrigin.trim().length > 0) {
+  if (configuredOrigin !== undefined) {
     return {
       destinationPrefix: joinRoutePrefix(normalizeOrigin(configuredOrigin), input.servicePrefix),
     };
@@ -376,13 +391,14 @@ async function normalizeAgentsConfig(
     throw new Error("withEve agents must contain at least one named eve agent.");
   }
 
+  const validateRoots = buildsOrRunsAgentsLocally();
   return await Promise.all(
     entries.map(async ([name, config], index) => {
       assertValidAgentName(name);
 
       const agentConfig = typeof config === "string" ? { root: config } : config;
       const appRoot = resolveApplicationRoot(agentConfig.root);
-      await assertEveAppRoot(name, appRoot);
+      if (validateRoots) await assertEveAppRoot(name, appRoot);
 
       return {
         appRoot,
@@ -410,18 +426,12 @@ async function assertEveAppRoot(name: string, appRoot: string): Promise<void> {
     throw new Error(`withEve agents.${name} points to ${appRoot}, which is not a directory.`);
   }
 
-  const context = await findEveProjectContext(appRoot);
-  const resolvedAppRoot =
-    context?.kind === "standalone"
-      ? context.appRoot
-      : context?.kind === "workspace-member"
-        ? context.member.appRoot
-        : undefined;
+  const resolvedAppRoot = await resolveSingleAgentAppRoot(appRoot);
   if (resolvedAppRoot === appRoot) return;
 
   throw new Error(
     resolvedAppRoot === undefined
-      ? `withEve agents.${name} points to ${appRoot}, which is not an eve agent root. Give it an agent/ directory and a package.json that depends on eve.`
+      ? `withEve agents.${name} points to ${appRoot}, which eve cannot build as a single agent. Point it at a directory with agent/ and a package.json that depends on eve.`
       : `withEve agents.${name} points to ${appRoot}, but eve resolves that path to the agent at ${resolvedAppRoot}. Give ${appRoot} its own package.json that depends on eve.`,
   );
 }

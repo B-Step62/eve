@@ -545,6 +545,46 @@ describe("withEve Vercel config", () => {
     ).rejects.toThrow(/Give .+eve-alpha its own package\.json that depends on eve\./u);
   });
 
+  it("accepts a named agent root that eve discovers through a nested vercel.json", async () => {
+    const appRoot = await createTempAppRoot();
+    process.chdir(appRoot);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VERCEL", "1");
+    await writeFile(
+      join(appRoot, "package.json"),
+      `${JSON.stringify({ dependencies: { eve: "*" } })}\n`,
+    );
+    await mkdir(join(appRoot, "agent"), { recursive: true });
+    await writeFile(join(appRoot, "agent", "instructions.md"), "Root agent.\n");
+    await mkdir(join(appRoot, "eve-alpha", "agent"), { recursive: true });
+    await writeFile(join(appRoot, "eve-alpha", "vercel.json"), "{}\n");
+    await writeFile(join(appRoot, "eve-alpha", "agent", "instructions.md"), "Alpha.\n");
+
+    await resolveConfig(withEve<TestConfig>({}, { agents: { alpha: "./eve-alpha" } }));
+    const outputConfig = (await readJsonFile(
+      join(appRoot, ".vercel", "output", "config.json"),
+    )) as { services?: Record<string, unknown> };
+
+    expect(Object.keys(outputConfig.services ?? {})).toEqual(["eve-alpha"]);
+  });
+
+  it("proxies named agents to a production origin without a local root", async () => {
+    const appRoot = await createTempAppRoot();
+    process.chdir(appRoot);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("EVE_NEXT_PRODUCTION_ORIGIN", "https://agent.example.com");
+
+    const config = await withEve<TestConfig>(
+      {},
+      { agents: { support: "./not-checked-out/support" } },
+    )("phase-production-server", { defaultConfig: {} });
+
+    expect(getBeforeFiles(await config.rewrites?.())).toContainEqual({
+      destination: "https://agent.example.com/_eve_internal/eve/support/eve/v1/:path+",
+      source: "/eve/support/v1/:path+",
+    });
+  });
+
   it("normalizes existing Build Output service arrays before adding named agents", async () => {
     const appRoot = await createTempAppRoot();
     process.chdir(appRoot);
