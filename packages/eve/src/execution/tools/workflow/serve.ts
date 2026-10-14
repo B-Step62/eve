@@ -30,7 +30,7 @@ import type {
   WorkflowToolRunRef,
 } from "#execution/tools/workflow/messages.js";
 import type { WorkflowToolRunInbox } from "#execution/tools/workflow/owner.js";
-import { parseJsonValue, type JsonValue } from "#shared/json.js";
+import type { JsonValue } from "#shared/json.js";
 import type { TokenUsage } from "#shared/token-usage.js";
 import type { ToolContext } from "#tools/definition.js";
 import type {
@@ -385,7 +385,7 @@ async function executeServeBody(
       target === undefined
         ? await resolveWorkflowEntryPoint<ServeEntryPoint>(input)(receive, ctx)
         : await serveStub(target.scope, target.tool, receive, ctx);
-    outcome = { output: parseJsonValue(output ?? null), status: "completed" };
+    outcome = { output, status: "completed" };
   } catch (error) {
     outcome = toFailedOutcome(error, calls.runSignal);
   }

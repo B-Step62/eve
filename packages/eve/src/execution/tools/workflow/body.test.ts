@@ -20,8 +20,8 @@ const agentContext = {
   capabilities: { requestInput: true },
 } as Partial<AgentSessionContext> as AgentSessionContext;
 
-it("binds workflow-only methods to the run context", async () => {
-  const input = {
+function makeInput(): WorkflowBodyInput {
+  return {
     agentContext,
     callId: "call",
     entry: { entryPoint: "execute" },
@@ -38,6 +38,9 @@ it("binds workflow-only methods to the run context", async () => {
     owner: { send: vi.fn(), sent: 0 },
     runId: "run",
   } as WorkflowBodyInput;
+}
+
+it("binds workflow-only methods to the run context", async () => {
   const question = { prompt: "Continue?" };
   const target = "reviewer";
   const session = { send: vi.fn() };
@@ -54,7 +57,7 @@ it("binds workflow-only methods to the run context", async () => {
     expect(mocks.openAgent).toHaveBeenCalledWith(target);
     return { answer };
   });
-  const started = startCallBody(input);
+  const started = startCallBody(makeInput());
   await expect(started.outcome).resolves.toEqual({
     status: "completed",
     output: { answer: { optionId: "yes" } },
@@ -62,31 +65,23 @@ it("binds workflow-only methods to the run context", async () => {
 });
 
 it("reports a JSON outcome when the body returns undefined values", async () => {
-  const input = {
-    agentContext,
-    callId: "call",
-    entry: { entryPoint: "execute" },
-    hookToken: "control",
-    input: {},
-    session: {
-      auth: { current: null, initiator: null },
-      id: "session",
-      turn: { id: "turn", sequence: 1 },
-    },
-    stepIndex: 0,
-    toolName: "deploy",
-    workflowId: "workflow//test//execute",
-    owner: { send: vi.fn(), sent: 0 },
-    runId: "run",
-  } as WorkflowBodyInput;
   mocks.execute.mockResolvedValueOnce({ status: "answered", optionId: "yes", text: undefined });
-  await expect(startCallBody(input).outcome).resolves.toStrictEqual({
+  await expect(startCallBody(makeInput()).outcome).resolves.toStrictEqual({
     status: "completed",
     output: { status: "answered", optionId: "yes" },
   });
   mocks.execute.mockResolvedValueOnce(undefined);
-  await expect(startCallBody(input).outcome).resolves.toStrictEqual({
+  await expect(startCallBody(makeInput()).outcome).resolves.toStrictEqual({
     status: "completed",
     output: null,
+  });
+  mocks.execute.mockResolvedValueOnce({ at: new Date(0) });
+  await expect(startCallBody(makeInput()).outcome).resolves.toMatchObject({
+    status: "failed",
+    error: {
+      message: expect.stringContaining(
+        'Tool "deploy" call "call" returned a non-JSON-serializable',
+      ),
+    },
   });
 });
