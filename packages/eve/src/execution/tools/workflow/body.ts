@@ -27,7 +27,7 @@ import type { WorkflowToolRunInbox } from "#execution/tools/workflow/owner.js";
 import { normalizeSerializableError } from "#execution/workflow-errors.js";
 import { readRegisteredWorkflow } from "#execution/workflow-registry.js";
 import type { WorkflowToolRunEntry } from "#shared/action-types.js";
-import type { JsonObject, JsonValue } from "#shared/json.js";
+import { parseJsonValue, type JsonObject, type JsonValue } from "#shared/json.js";
 import type { ToolContext } from "#tools/definition.js";
 
 export interface WorkflowBodyDefinition {
@@ -202,7 +202,8 @@ async function executeCallBody(
       }
       output = (next.value as JsonValue | undefined) ?? last ?? null;
     }
-    return { output, status: "completed" };
+    // Authored bodies can return `undefined` values the session cannot project.
+    return { output: parseJsonValue(output ?? null), status: "completed" };
   } catch (error) {
     if (signals.interrupted) return { output: INTERRUPTED_OUTPUT, status: "completed" };
     return toFailedOutcome(error, signals.runSignal);

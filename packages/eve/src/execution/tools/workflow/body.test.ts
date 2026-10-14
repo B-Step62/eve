@@ -60,3 +60,33 @@ it("binds workflow-only methods to the run context", async () => {
     output: { answer: { optionId: "yes" } },
   });
 });
+
+it("reports a JSON outcome when the body returns undefined values", async () => {
+  const input = {
+    agentContext,
+    callId: "call",
+    entry: { entryPoint: "execute" },
+    hookToken: "control",
+    input: {},
+    session: {
+      auth: { current: null, initiator: null },
+      id: "session",
+      turn: { id: "turn", sequence: 1 },
+    },
+    stepIndex: 0,
+    toolName: "deploy",
+    workflowId: "workflow//test//execute",
+    owner: { send: vi.fn(), sent: 0 },
+    runId: "run",
+  } as WorkflowBodyInput;
+  mocks.execute.mockResolvedValueOnce({ status: "answered", optionId: "yes", text: undefined });
+  await expect(startCallBody(input).outcome).resolves.toStrictEqual({
+    status: "completed",
+    output: { status: "answered", optionId: "yes" },
+  });
+  mocks.execute.mockResolvedValueOnce(undefined);
+  await expect(startCallBody(input).outcome).resolves.toStrictEqual({
+    status: "completed",
+    output: null,
+  });
+});
