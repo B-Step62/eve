@@ -243,7 +243,7 @@ async function runSessionLoop(
         continue;
       }
       if (next.kind === "cancel-working-tasks") {
-        await cancelWorkingTasks(cursor, "turn_cancelled");
+        await cancelWorkingTasks(cursor, "turn_cancelled", next.turnId);
         continue;
       }
       return next;
