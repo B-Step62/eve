@@ -1,14 +1,10 @@
 import type {
   AuthorizationRequiredStreamEvent,
+  MessageCompletedStreamEvent,
   TurnFailureStreamEvent,
   UnstampedMessageStreamEvent,
 } from "#protocol/message.js";
-import {
-  isCurrentTurnBoundaryEvent,
-  isReplyMessageCompleted,
-  isTurnFailureEvent,
-  joinReplies,
-} from "#protocol/message.js";
+import { isCurrentTurnBoundaryEvent, isTurnFailureEvent } from "#protocol/message.js";
 import {
   foldSession,
   initialSessionProjection,
@@ -43,19 +39,21 @@ export function summarizeTurnEvents(
   const segment = new TurnSegment();
   let boundary: UnstampedMessageStreamEvent | undefined;
   let failure: TurnFailureStreamEvent | undefined;
-  const replies: string[] = [];
+  let message: string | undefined;
 
   for (const event of events) {
     if (segment.observe(event)) boundary = event;
     if (isTurnFailureEvent(event)) failure = event;
-    if (isReplyMessageCompleted(event)) replies.push(event.data.message);
+    if (isFinalMessageCompleted(event)) message = event.data.message ?? undefined;
+    // Text completed before the turn parked was interim; the reply comes after it resumes.
+    if (event.type === "turn.waiting") message = undefined;
   }
 
   return {
     boundary,
     failure,
     inputRequests: segment.inputRequests,
-    message: joinReplies(replies),
+    message,
     pendingAuthorizations: segment.pendingAuthorizations,
     status: summarizeBoundaryStatus(boundary),
   };
@@ -133,6 +131,12 @@ export class TurnSegment {
       requests: openInputs(this.#projection).length > 0,
     });
   }
+}
+
+function isFinalMessageCompleted(
+  event: UnstampedMessageStreamEvent,
+): event is MessageCompletedStreamEvent {
+  return event.type === "message.completed" && event.data.finishReason !== "tool-calls";
 }
 
 export function authorizationKey(data: {

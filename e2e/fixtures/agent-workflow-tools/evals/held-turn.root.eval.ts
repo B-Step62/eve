@@ -1,5 +1,5 @@
 import { defineEval } from "eve/evals";
-import { satisfies } from "eve/evals/expect";
+import { includes } from "eve/evals/expect";
 
 import { STAGE_INTERIM_MESSAGE } from "../task-scenario-text";
 import { staysInOneTurn } from "./held-turn.shared";
@@ -9,11 +9,10 @@ import { staysInOneTurn } from "./held-turn.shared";
  * waiting. The turn rule holds the turn: the text completes as an ordinary
  * message, the stream reports `turn.waiting`, and the same turn resumes with
  * the result and completes once. `send()` reads through the wait, so the
- * turn's message holds both the text written before it and the final reply.
+ * turn's result is the final reply, not the text written before it.
  */
 export default defineEval({
-  description:
-    "A root session's held turn parks with turn.waiting and reports every reply it wrote.",
+  description: "A root session's held turn parks with turn.waiting and reports its final reply.",
   async test(t) {
     const turn = await t.send("WORKFLOW-STAGE-HOLD");
     turn.expectOk();
@@ -34,15 +33,9 @@ export default defineEval({
     turn.event("turn.completed", { count: 1 });
     turn.eventsSatisfy("the held turn resumes under its own id", staysInOneTurn);
     turn.notCalledTool("eve__task_wait");
-    t.check(
-      turn.message,
-      satisfies(
-        (message: string | undefined) =>
-          message?.startsWith(`${STAGE_INTERIM_MESSAGE}\n\nWORKFLOW-STAGE-RESULT {`) === true &&
-          message.includes('"plan":"deploy api"'),
-        "the text before the wait, then the final reply",
-      ),
-    ).label("the turn's message is every reply it wrote");
+    t.check(turn.message, includes(/^WORKFLOW-STAGE-RESULT \{.*"plan":"deploy api"/u)).label(
+      "the turn's result is the final reply",
+    );
     t.noFailedActions();
   },
 });

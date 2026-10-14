@@ -1,8 +1,7 @@
-import {
-  type AgentStartedStreamEvent,
-  isReplyMessageCompleted,
-  type MessageStreamEvent,
-  type TaskSettledStreamEvent,
+import type {
+  AgentStartedStreamEvent,
+  MessageStreamEvent,
+  TaskSettledStreamEvent,
 } from "#protocol/message.js";
 import type { InputRequest } from "#shared/input.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
@@ -163,7 +162,9 @@ export function deriveRunFacts(
       }
 
       case "message.completed": {
-        if (isReplyMessageCompleted(event)) messageCount += 1;
+        if (event.data.finishReason !== "tool-calls") {
+          messageCount += 1;
+        }
         break;
       }
 

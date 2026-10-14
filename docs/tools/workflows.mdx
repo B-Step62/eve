@@ -540,7 +540,7 @@ client's `MessageResult` fields, plus `error` when the turn failed:
 | Field     | Description                                                                                                                                                                                                         |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `data`    | The structured value, when the turn requested `outputSchema`.                                                                                                                                                       |
-| `message` | The agent's reply text for the turn, when the turn did not request `outputSchema`.                                                                                                                                  |
+| `message` | The agent's final reply text, when the turn did not request `outputSchema`.                                                                                                                                         |
 | `status`  | `"waiting"` when the session waits for its next message, `"completed"` when the session ended with the turn, or `"failed"` when the turn failed. A cancelled turn is `"waiting"` with neither `data` nor `message`. |
 | `error`   | `{ message }` with the reason the turn failed, present only when `status` is `"failed"`.                                                                                                                            |
 

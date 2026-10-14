@@ -289,8 +289,8 @@ export interface MessageResult<TOutput = unknown> {
   readonly data: TOutput | undefined;
 
   /**
-   * Every reply the turn completed, in order and separated by a blank line, or
-   * `undefined` if no terminal `message.completed` event was observed.
+   * The final completed assistant message text, or `undefined` if no terminal
+   * `message.completed` event was observed.
    */
   readonly message: string | undefined;
 

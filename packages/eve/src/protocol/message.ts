@@ -940,18 +940,6 @@ export function isCurrentTurnBoundaryEvent(event: UnstampedMessageStreamEvent): 
   );
 }
 
-/** Narrows a stream event to a completed message that is the turn's reply, not tool-call narration. */
-export function isReplyMessageCompleted<TEvent extends UnstampedMessageStreamEvent>(
-  event: TEvent,
-): event is TEvent & MessageCompletedStreamEvent {
-  return event.type === "message.completed" && event.data.finishReason !== "tool-calls";
-}
-
-/** Joins a turn's replies, in order, into the text the person received. */
-export function joinReplies(replies: readonly string[]): string | undefined {
-  return replies.length === 0 ? undefined : replies.join("\n\n");
-}
-
 /**
  * Narrows a stream event to the failure events that terminate or poison a turn.
  *

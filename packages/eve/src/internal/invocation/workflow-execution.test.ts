@@ -483,62 +483,6 @@ describe("WorkflowAgentInvocationExecution", () => {
     expect(invocation?.status === "working" ? invocation.result : undefined).toBeUndefined();
   });
 
-  it("completes with the reply written before a task wait when the resumed turn writes none", async () => {
-    runsGet.mockResolvedValue(run({ status: "running" }));
-    getReadable.mockReturnValue(
-      eventStream([
-        messageCompletedEvent("The requested answer."),
-        turnWaitingOnTasksEvent("turn_1"),
-        ...turnSettledEvents("turn_1"),
-      ]),
-    );
-
-    await expect(
-      execution().read({ auth, invocationId: "wrun_invocation" }),
-    ).resolves.toMatchObject({ result: "The requested answer.", status: "completed" });
-  });
-
-  it("completes with every reply the turn wrote across a task wait", async () => {
-    runsGet.mockResolvedValue(run({ status: "running" }));
-    getReadable.mockReturnValue(
-      eventStream([
-        messageCompletedEvent("Checking with the team."),
-        turnWaitingOnTasksEvent("turn_1"),
-        messageCompletedEvent("The team confirmed it."),
-        ...turnSettledEvents("turn_1"),
-      ]),
-    );
-
-    await expect(
-      execution().read({ auth, invocationId: "wrun_invocation" }),
-    ).resolves.toMatchObject({
-      result: "Checking with the team.\n\nThe team confirmed it.",
-      status: "completed",
-    });
-  });
-
-  it("completes without a result when the turn after an answered one stays silent", async () => {
-    runsGet.mockResolvedValue(run({ status: "running" }));
-    getReadable.mockReturnValue(
-      eventStream([
-        messageCompletedEvent("The requested answer."),
-        ...turnSettledEvents("turn_1"),
-        {
-          type: "turn.started",
-          data: { sequence: 1, turnId: "turn_2" },
-          meta: { at: "2026-07-20T00:00:03.000Z", id: "event_turn_2" },
-        } satisfies HandleMessageStreamEvent,
-        turnWaitingOnTasksEvent("turn_2"),
-        ...turnSettledEvents("turn_2"),
-      ]),
-    );
-
-    const invocation = await execution().read({ auth, invocationId: "wrun_invocation" });
-
-    expect(invocation).toMatchObject({ status: "completed" });
-    expect(invocation?.status === "completed" ? invocation.result : undefined).toBeUndefined();
-  });
-
   it("decodes a final persisted event without a trailing newline", async () => {
     runsGet.mockResolvedValue(run({ status: "running" }));
     getReadable.mockReturnValue(
@@ -776,14 +720,6 @@ function messageCompletedEvent(
     data: { finishReason, message, sequence: 0, stepIndex: 0, turnId: "turn_1" },
     meta: { at: "2026-07-20T00:00:00.000Z", id: "event_message" },
     type: "message.completed",
-  };
-}
-
-function turnWaitingOnTasksEvent(turnId: string): HandleMessageStreamEvent {
-  return {
-    data: { on: "tasks", sequence: 0, turnId },
-    meta: { at: "2026-07-20T00:00:01.000Z", id: "event_turn_waiting" },
-    type: "turn.waiting",
   };
 }
 
