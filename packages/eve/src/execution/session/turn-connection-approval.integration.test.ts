@@ -273,14 +273,19 @@ function setup(
     const stepInput = {
       ...snapshot,
       input,
-      sessionWritable: new WritableStream<Uint8Array>({
-        write(chunk) {
-          const text = new TextDecoder().decode(chunk);
-          for (const line of text.split("\n")) {
-            if (line.trim()) events.push(JSON.parse(line));
-          }
-        },
-      }),
+      sessionWritable: Object.defineProperty(
+        new WritableStream<Uint8Array>({
+          write(chunk) {
+            const text = new TextDecoder().decode(chunk);
+            for (const line of text.split("\n")) {
+              if (line.trim()) events.push(JSON.parse(line));
+            }
+          },
+        }),
+        // Every write above is already durable; this is the step writable's barrier.
+        Symbol.for("WORKFLOW_STREAM_DRAIN"),
+        { value: async () => {} },
+      ),
     };
     const result = await runSessionStateStep(stepInput, turnStep);
     snapshot = { serializedContext: result.serializedContext, sessionState: result.sessionState };

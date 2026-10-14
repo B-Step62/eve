@@ -178,16 +178,22 @@ const resumeHookMock = vi.fn();
 const startMock = vi.fn();
 const workflowWritesByNamespace = new Map<string, unknown[]>();
 
+const STREAM_DRAIN = Symbol.for("WORKFLOW_STREAM_DRAIN");
+
 function createTestWritable(
   namespace = DEFAULT_WORKFLOW_STREAM_NAMESPACE,
+  drain: () => Promise<void> = async () => {},
 ): WritableStream<Uint8Array> {
-  return new WritableStream<Uint8Array>({
+  const writable = new WritableStream<Uint8Array>({
     write(chunk) {
       const existing = workflowWritesByNamespace.get(namespace) ?? [];
       existing.push(chunk);
       workflowWritesByNamespace.set(namespace, existing);
     },
   });
+  // The step writable's durability barrier, as `@workflow/core` exposes it.
+  Object.defineProperty(writable, STREAM_DRAIN, { value: drain });
+  return writable;
 }
 
 vi.mock("../node-step.js", () => ({
@@ -1111,6 +1117,76 @@ describe("turnStep", () => {
     });
 
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  describe("turn.started durability", () => {
+    function installTurnStartingStep(modelCall: () => void): void {
+      const compiledBundle = createStubBundle() as never;
+      vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
+      installSessionStoreMocks([
+        createStubSession({ state: positionState({ sequence: 1, stepIndex: 0, turnId: "" }) }),
+      ]);
+      vi.mocked(createExecutionNodeStep).mockImplementation((input) => {
+        return async (stepSession): Promise<StepResult> => {
+          await input.handleEvent?.(
+            createTurnStartedEvent({ sequence: 1, turnId: "turn_1" }),
+            stepSession.history,
+          );
+          modelCall();
+          return { next: { done: true, output: "ok" }, session: stepSession };
+        };
+      });
+    }
+
+    function startTurn(drain: () => Promise<void>): Promise<unknown> {
+      const ctx = new ContextContainer();
+      ctx.set(AuthKey, null);
+      ctx.set(BundleKey, createStubBundle() as never);
+      ctx.set(ChannelKey, threadContextAdapter);
+      ctx.set(ContinuationTokenKey, "http:durable-turn");
+      ctx.set(SessionIdKey, "session-1");
+      return turnStep({
+        input: { kind: "deliver", payloads: [{ message: "hello" }] },
+        sessionWritable: createTestWritable(DEFAULT_WORKFLOW_STREAM_NAMESPACE, drain),
+        serializedContext: serializeContext(ctx),
+        sessionState: createStubSessionState({}),
+      });
+    }
+
+    it("does no model work until turn.started is durable", async () => {
+      const modelCall = vi.fn();
+      installTurnStartingStep(modelCall);
+      let markDurable!: () => void;
+      const durable = new Promise<void>((resolve) => {
+        markDurable = resolve;
+      });
+
+      let drainEntered!: () => void;
+      const draining = new Promise<void>((resolve) => {
+        drainEntered = resolve;
+      });
+
+      const turn = startTurn(() => {
+        drainEntered();
+        return durable;
+      });
+      await draining;
+      expect(modelCall).not.toHaveBeenCalled();
+
+      markDurable();
+      await turn;
+      expect(modelCall).toHaveBeenCalledOnce();
+    });
+
+    it("does no model work when the turn.started append is rejected", async () => {
+      const modelCall = vi.fn();
+      installTurnStartingStep(modelCall);
+
+      await expect(
+        startTurn(() => Promise.reject(new Error("append rejected: run is terminal"))),
+      ).rejects.toThrow("append rejected: run is terminal");
+      expect(modelCall).not.toHaveBeenCalled();
+    });
   });
 
   it("prepares resumed-session history before dynamic runtime refresh", async () => {

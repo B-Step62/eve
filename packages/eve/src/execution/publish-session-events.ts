@@ -312,6 +312,20 @@ function createSessionEventDispatcher(input: {
   };
 }
 
+/** The durability barrier `@workflow/core` exposes on a step's writable. */
+const STREAM_DRAIN = Symbol.for("WORKFLOW_STREAM_DRAIN");
+
+/** Resolves once every event written to the session stream is durable; rejects if an append failed. */
+async function drainSessionWritable(sessionWritable: WritableStream<Uint8Array>): Promise<void> {
+  const drain = (sessionWritable as { readonly [STREAM_DRAIN]?: () => Promise<void> })[
+    STREAM_DRAIN
+  ];
+  if (drain === undefined) {
+    throw new Error("The session stream exposes no durability barrier.");
+  }
+  await drain.call(sessionWritable);
+}
+
 function openSessionEventWriter(input: {
   /**
    * The delivery ids stamped on each event. Read at each write because a turn
@@ -332,6 +346,10 @@ function openSessionEventWriter(input: {
     async write(event) {
       const stamped = stampMessageStreamEvent(event, input.deliveryIds());
       await streamWriter.write(encodeMessageStreamEvent(stamped));
+      // `turn.started` records which deliveries the session accepted. A caller
+      // that sees it may stop resending them, so the turn does no further work
+      // until it is durable, and none at all if the append fails.
+      if (stamped.type === "turn.started") await drainSessionWritable(input.sessionWritable);
       return stamped;
     },
     close: async () => {
