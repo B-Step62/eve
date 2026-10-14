@@ -18,6 +18,7 @@ import chatAdapterSlack from "./@chat-adapter/slack.mjs";
 import chatAdapterStateMemory from "./@chat-adapter/state-memory.mjs";
 import chatAdapterTwilio from "./@chat-adapter/twilio.mjs";
 import eveCatalog from "./@eve/catalog.mjs";
+import eveTracing from "./@eve/tracing.mjs";
 import photonChatAdapterIMessage from "./@photon-ai/chat-adapter-imessage.mjs";
 import linqChatSdkAdapter from "./@linqapp/chat-sdk-adapter.mjs";
 
@@ -30,6 +31,7 @@ import vercelConnect from "./@vercel/connect.mjs";
 import vercelDetectAgent from "./@vercel/detect-agent.mjs";
 import vercelOidc from "./@vercel/oidc.mjs";
 import vercelOtel from "./@vercel/otel.mjs";
+import vercelQueue from "./@vercel/queue.mjs";
 import vercelSandbox from "./@vercel/sandbox.mjs";
 import vercelSdk from "./@vercel/sdk.mjs";
 import vercelSchedules from "./@vercel/schedules.mjs";
@@ -74,6 +76,7 @@ export const MODULES = [
   eventsourceParserStream,
   envRunner,
   eveCatalog,
+  eveTracing,
   google,
   jose,
   jsYaml,
@@ -101,6 +104,7 @@ export const MODULES = [
   vercelDetectAgent,
   vercelOidc,
   vercelOtel,
+  vercelQueue,
   vercelSandbox,
   vercelSdk,
   vercelSchedules,

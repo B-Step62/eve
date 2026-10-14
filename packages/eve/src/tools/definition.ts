@@ -4,7 +4,7 @@ import type {
   StandardSchemaV1,
 } from "#compiled/@standard-schema/spec/index.js";
 
-import type { Approval } from "#approval/definition.js";
+import type { ToolApproval } from "#approval/definition.js";
 import type { SessionContext } from "#context/session-context.js";
 import { stampDefinitionKey } from "#internal/authored-definition/source-identity.js";
 import type { JsonObject } from "#shared/json.js";
@@ -33,6 +33,11 @@ export type ToolExecuteFn<TInput = unknown, TOutput = unknown> = (
 interface ToolDefinitionBase {
   /** Whether delegated agent sessions receive this tool. Defaults to `true`. */
   readonly availableInSubagents?: boolean;
+  /**
+   * Keeps this tool out of the model's tool list. The model finds it with
+   * `eve__search` and calls it with `eve__tool`. Defaults to `false`.
+   */
+  readonly deferred?: boolean;
   readonly description: string;
 }
 
@@ -253,7 +258,7 @@ export interface ToolDefinition<TInput = unknown, TOutput = unknown> extends Pub
    * - {@link never}: never require approval
    * - {@link once}: require approval only the first time per session
    */
-  approval?: Approval<ApprovalContextInput<TInput>>;
+  approval?: ToolApproval<ApprovalContextInput<TInput>>;
   /**
    * Optional projection controlling what the model sees as the tool result.
    * Receives the full `TOutput` from {@link execute} and returns the
@@ -392,7 +397,7 @@ export function stampToolDefinition<
     readonly outputSchema?: unknown;
     readonly execute?: (...args: never[]) => unknown;
     readonly label?: ToolLabelDefinition;
-    readonly approval?: Approval<never>;
+    readonly approval?: ToolApproval<never>;
     readonly approvalKey?: (...args: never[]) => unknown;
     readonly toModelOutput?: (...args: never[]) => unknown;
   },

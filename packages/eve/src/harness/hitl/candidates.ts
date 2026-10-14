@@ -2,7 +2,7 @@ import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionStateMap } from "#harness/types.js";
 
-const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
+import { readApprovalState, writeApprovalState } from "./requests.js";
 
 type ApprovalCandidateStatus =
   | "pending"
@@ -37,9 +37,8 @@ export interface ApprovalResponderIdentity {
 
 export interface ApprovalSettlementAuditRecord {
   readonly actor: ApprovalResponderIdentity;
-  /** The approver's full auth, which the approved call runs as. Absent for cancellations. */
-  readonly approver?: SessionAuthContext;
-  readonly outcome: "allowed" | "cancelled";
+  /** `unavailable`: the request's entry was gone, so its call is reported unavailable, never run. */
+  readonly outcome: "allowed" | "cancelled" | "unavailable";
   readonly requestId: string;
   readonly settledAt: number;
   readonly candidateId?: string;
@@ -56,7 +55,7 @@ export interface ActiveApprovalCandidate {
   readonly authorizationChallenges?: readonly AuthorizationChallenge[];
 }
 
-interface DurableApprovalState {
+export interface DurableApprovalState {
   readonly activeCandidates: Readonly<Record<string, ActiveApprovalCandidate>>;
   readonly nextCandidateSequence: number;
   readonly candidateHistory: readonly ApprovalCandidateAuditRecord[];
@@ -229,6 +228,30 @@ export function settleAllowedCandidate(input: {
   });
 }
 
+/**
+ * Settles a request whose entry is gone, which no response can approve and no call can run: the
+ * candidate fails with `reason`, its competitors go stale, and the call is reported unavailable.
+ */
+export function settleUnavailableCandidate(input: {
+  readonly candidateId: string;
+  readonly reason: string;
+  readonly settledAt: number;
+  readonly state: SessionStateMap | undefined;
+}): ApprovalStateTransition {
+  const state = expireApprovalCandidates({ now: input.settledAt, state: input.state });
+  const candidate = readApprovalState(state).activeCandidates[input.candidateId];
+  if (candidate === undefined) return { changed: false, state };
+  return settleRequest({
+    candidateId: candidate.candidateId,
+    outcome: "unavailable",
+    reason: input.reason,
+    requestId: candidate.requestId,
+    responder: candidate.responder,
+    settledAt: input.settledAt,
+    state,
+  });
+}
+
 /** Atomically settles a direct authenticated approval response. */
 export function settleDirectApprovalResponse(input: {
   readonly actor: SessionAuthContext;
@@ -272,6 +295,8 @@ export function getApprovalAuditState(state: SessionStateMap | undefined): {
 function settleRequest(input: {
   readonly candidateId?: string;
   readonly outcome: ApprovalSettlementAuditRecord["outcome"];
+  /** Why the settling candidate failed, for an unavailable request. */
+  readonly reason?: string;
   readonly requestId: string;
   readonly responder: SessionAuthContext;
   readonly settledAt: number;
@@ -285,7 +310,6 @@ function settleRequest(input: {
 
   const settlement: ApprovalSettlementAuditRecord = {
     actor: projectResponder(input.responder),
-    ...(input.outcome === "allowed" && { approver: input.responder }),
     candidateId: input.candidateId,
     outcome: input.outcome,
     requestId: input.requestId,
@@ -298,11 +322,13 @@ function settleRequest(input: {
       activeCandidates[candidate.candidateId] = candidate;
       continue;
     }
+    const settling = candidate.candidateId === input.candidateId;
     candidateHistory.push(
       toCandidateAuditRecord({
         candidate,
         completedAt: input.settledAt,
-        status: candidate.candidateId === input.candidateId ? "allowed" : "stale",
+        reason: settling ? input.reason : undefined,
+        status: !settling ? "stale" : input.outcome === "unavailable" ? "failed" : "allowed",
       }),
     );
   }
@@ -357,66 +383,6 @@ export function sameResponder(
 }
 
 /**
- * A candidate is an Approve unless it records Cancel: candidates persisted
- * before Cancel was authorized carry no decision, and their responder pressed
- * Approve.
- */
-function readActiveCandidates(
-  candidates: Readonly<Record<string, ActiveApprovalCandidate>>,
-): Readonly<Record<string, ActiveApprovalCandidate>> {
-  return Object.fromEntries(
-    Object.entries(candidates).map(([candidateId, candidate]) => [
-      candidateId,
-      { ...candidate, decision: candidate.decision === "cancel" ? "cancel" : "approve" },
-    ]),
-  );
-}
-
-function readApprovalState(state: SessionStateMap | undefined): DurableApprovalState {
-  const value = state?.[APPROVAL_STATE_KEY];
-  if (typeof value !== "object" || value === null) {
-    return {
-      activeCandidates: {},
-      candidateHistory: [],
-      nextCandidateSequence: 0,
-      settlements: {},
-    };
-  }
-  const candidate = value as Partial<DurableApprovalState>;
-  return {
-    activeCandidates:
-      typeof candidate.activeCandidates === "object" && candidate.activeCandidates !== null
-        ? readActiveCandidates(candidate.activeCandidates)
-        : {},
-    candidateHistory: Array.isArray(candidate.candidateHistory) ? candidate.candidateHistory : [],
-    nextCandidateSequence:
-      typeof candidate.nextCandidateSequence === "number" &&
-      Number.isSafeInteger(candidate.nextCandidateSequence) &&
-      candidate.nextCandidateSequence >= 0
-        ? candidate.nextCandidateSequence
-        : deriveNextCandidateSequence(candidate),
-    settlements:
-      typeof candidate.settlements === "object" && candidate.settlements !== null
-        ? candidate.settlements
-        : {},
-  };
-}
-
-function deriveNextCandidateSequence(state: Partial<DurableApprovalState>): number {
-  return (
-    Object.keys(state.activeCandidates ?? {}).length +
-    (Array.isArray(state.candidateHistory) ? state.candidateHistory.length : 0)
-  );
-}
-
-function writeApprovalState(
-  state: SessionStateMap | undefined,
-  approvalState: DurableApprovalState,
-): SessionStateMap {
-  return { ...state, [APPROVAL_STATE_KEY]: approvalState };
-}
-
-/**
  * The held turn moved on, steered or cancelled: the responders still checking one of its
  * approvals stop, their candidates stale.
  */
@@ -435,12 +401,4 @@ export function retireActiveCandidates(
     });
   }
   return next;
-}
-
-/** The full auth of whoever approved `requestId`, when it was allowed. */
-export function approverOfRequest(
-  state: SessionStateMap | undefined,
-  requestId: string,
-): SessionAuthContext | undefined {
-  return readApprovalState(state).settlements[requestId]?.approver;
 }

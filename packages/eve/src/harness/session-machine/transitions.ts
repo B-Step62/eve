@@ -1,4 +1,4 @@
-import type { ModelMessage, UserContent } from "ai";
+import type { ModelMessage, ToolCallPart, UserContent } from "ai";
 
 import type {
   SubagentAuthorizationEventHookPayload,
@@ -32,6 +32,7 @@ import {
   type InputResolution,
   type RuntimeIdentity,
   type RuntimeTraceContext,
+  type SessionPredecessor,
   type TaskCancelReason,
   type TaskStartedStreamEvent,
   type UnstampedMessageStreamEvent,
@@ -49,6 +50,8 @@ import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { TokenUsage } from "#shared/token-usage.js";
 import type { Transition } from "./commit.js";
 import { inputWithdrawn, signInWithdrawn } from "./events.js";
+import { signInAttemptKey } from "#harness/hitl/sign-ins.js";
+import { toProxyInputRequestEntries, type WorkflowAskRoute } from "#harness/hitl/relays.js";
 import type { StepCoordinates, SuspendedStep, TurnState } from "./state.js";
 import {
   activeTurnId,
@@ -97,6 +100,8 @@ export function receive(
   view: SessionView,
   input: {
     readonly message?: string | UserContent;
+    /** The session this one replaced, when eve started it in place of a stranded one. */
+    readonly predecessor?: SessionPredecessor;
     readonly runtime?: RuntimeIdentity;
     readonly trace?: RuntimeTraceContext;
   },
@@ -105,7 +110,13 @@ export function receive(
   const turnId = activeTurnId(position);
   const events: UnstampedMessageStreamEvent[] = [];
   if (!position.sessionStarted) {
-    events.push(createSessionStartedEvent({ runtime: input.runtime, trace: input.trace }));
+    events.push(
+      createSessionStartedEvent({
+        predecessor: input.predecessor,
+        runtime: input.runtime,
+        trace: input.trace,
+      }),
+    );
   }
   if (position.turnId === "") {
     events.push(
@@ -199,9 +210,10 @@ function failedEvents(
 ): UnstampedMessageStreamEvent[] {
   const { sequence, stepIndex, turnId } = at;
   const { code, details, message } = failure;
+  const terminal = failure.terminal !== undefined;
   return [
     createStepFailedEvent({ code, details, message, sequence, stepIndex, turnId }),
-    createTurnFailedEvent({ code, details, message, sequence, turnId }),
+    createTurnFailedEvent({ code, details, message, sequence, terminal, turnId }),
     failure.terminal === undefined
       ? createSessionWaitingEvent(view.usage)
       : createSessionFailedEvent({
@@ -370,27 +382,44 @@ function isComplete(step: SuspendedStep): boolean {
   return [...stepCallIds(step)].every((callId) => answered.has(callId));
 }
 
-/** Places a result right after the message that made its call. */
+/**
+ * Places a result right after the message that made its call, under the call's name: a call
+ * made through `eve__tool` or `eve__skill` keeps that name in history, whatever entry it ran.
+ */
 export function withResult(
   messages: readonly ModelMessage[],
-  part: ToolResultPart,
+  result: ToolResultPart,
 ): ModelMessage[] {
   const next = [...messages];
-  const asking = next.findIndex(
-    (message) =>
-      message.role === "assistant" &&
-      Array.isArray(message.content) &&
-      message.content.some(
-        (content) => content.type === "tool-call" && content.toolCallId === part.toolCallId,
-      ),
-  );
-  const following = next[asking + 1];
-  if (asking >= 0 && following?.role === "tool") {
-    next[asking + 1] = { ...following, content: [...following.content, part] };
+  const asking = findCall(next, result.toolCallId);
+  if (asking === undefined) {
+    next.push({ content: [result], role: "tool" });
+    return next;
+  }
+  const part = { ...result, toolName: asking.call.toolName };
+  const following = next[asking.index + 1];
+  if (following?.role === "tool") {
+    next[asking.index + 1] = { ...following, content: [...following.content, part] };
   } else {
-    next.splice(asking >= 0 ? asking + 1 : next.length, 0, { content: [part], role: "tool" });
+    next.splice(asking.index + 1, 0, { content: [part], role: "tool" });
   }
   return next;
+}
+
+/** The call with this id, and the index of the message that made it. */
+function findCall(
+  messages: readonly ModelMessage[],
+  callId: string,
+): { readonly call: ToolCallPart; readonly index: number } | undefined {
+  for (const [index, message] of messages.entries()) {
+    if (message.role !== "assistant" || typeof message.content === "string") continue;
+    const call = message.content.find(
+      (content): content is ToolCallPart =>
+        content.type === "tool-call" && content.toolCallId === callId,
+    );
+    if (call !== undefined) return { call, index };
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +515,9 @@ export function relay(
   input: {
     readonly payload: SubagentInputRequestHookPayload | SubagentAuthorizationEventHookPayload;
     readonly replacedRequestIds?: Iterable<string>;
+    /** The workflow tool run that relays the request, and the hook its `ctx.ask()` answers reach. */
+    readonly runId?: string;
+    readonly workflowAsk?: WorkflowAskRoute;
   },
 ): Transition {
   const { payload } = input;
@@ -510,7 +542,29 @@ export function relay(
     if (event.type !== "authorization.required") return unchanged(view, events);
   }
   events.push(...hold(view, { on: "input" }).events);
-  return unchanged(view, events);
+  if (payload.kind !== "subagent-input-request") return unchanged(view, events);
+  // A child's fresh batch replaces the routes its prior one held.
+  const entries = toProxyInputRequestEntries(payload).map(
+    ([requestId, route]) =>
+      [
+        requestId,
+        {
+          ...route,
+          ...(input.workflowAsk !== undefined && { workflowAsk: input.workflowAsk }),
+          ...(input.runId !== undefined && { runId: input.runId }),
+        },
+      ] as const,
+  );
+  return {
+    ...unchanged(view, events),
+    relays: {
+      upsert: {
+        entries,
+        forChildContinuationToken: payload.childContinuationToken,
+        inputSource: payload.inputSource,
+      },
+    },
+  };
 }
 
 /**
@@ -531,12 +585,20 @@ export function routeAnswer(
       readonly event: StepCoordinates;
       readonly resolutions: readonly InputResolution[];
     }[];
+    /**
+     * Answers left other relayed requests pending, and nothing for the turn itself: the open
+     * turn stays held, as after a partial approval answer.
+     */
+    readonly holds?: boolean;
   },
 ): Transition {
   const events: UnstampedMessageStreamEvent[] = input.children
     .filter((child) => child.resolutions.length > 0)
     .map((child) => createInputResolvedEvent({ resolutions: child.resolutions, ...child.event }));
-  return unchanged(view, events);
+  if (input.holds === true) events.push(...hold(view, { on: "input" }).events);
+  // The answered routes retire, so a later delivery can't route through them.
+  const retire = input.children.flatMap((child) => child.resolutions.map((r) => r.requestId));
+  return { ...unchanged(view, events), ...(retire.length > 0 && { relays: { retire } }) };
 }
 
 /**
@@ -572,6 +634,21 @@ export function runSignIn(
 // ---------------------------------------------------------------------------
 // Sign-ins
 // ---------------------------------------------------------------------------
+
+/**
+ * Sign-in callbacks matched the attempts `attemptIds` name: the session stops waiting on them.
+ * Their completions report once the turn they resume runs (`completeSignIn`).
+ */
+export function matchSignIns(
+  view: SessionView,
+  input: { readonly attemptIds: readonly string[] },
+): Transition {
+  const matched = new Set(input.attemptIds);
+  return {
+    ...unchanged(view, []),
+    signIns: view.signIns.filter((challenge) => !matched.has(signInAttemptKey(challenge))),
+  };
+}
 
 /** Sign-in callbacks arrived: each completion is reported at the coordinates of the turn that asked. */
 export function completeSignIn(

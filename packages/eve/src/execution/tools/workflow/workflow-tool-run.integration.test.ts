@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hydrateStepArguments } from "#compiled/@workflow/core/serialization.js";
-import { getWorld, start } from "#internal/workflow/runtime.js";
+import { getWorld } from "#internal/workflow/runtime.js";
+import { startSessionOwner } from "#internal/testing/workflow-test-helpers.js";
 import {
   captureTurnEvents,
   containsEventSequence,
@@ -39,7 +40,7 @@ describe("workflow tools", () => {
       toolName: "deploy_service",
     });
     const output = await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -63,7 +64,7 @@ describe("workflow tools", () => {
     });
 
     const output = await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -87,7 +88,7 @@ describe("workflow tools", () => {
     });
 
     const output = await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -113,7 +114,7 @@ describe("workflow tools", () => {
     });
 
     const output = await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -145,7 +146,7 @@ describe("workflow tools", () => {
     });
 
     const output = await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -171,7 +172,7 @@ describe("workflow tools", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -201,7 +202,9 @@ describe("workflow tools", () => {
         });
         expect(request.options?.map((option) => option.id)).toEqual(["approve", "cancel"]);
         // The call is still running, so the question parks the open turn.
-        const [parked] = filterEventsByType(asked, "turn.waiting");
+        const parked = filterEventsByType(asked, "turn.waiting").find(
+          (event) => event.data.on === "input",
+        );
         expect(asked.at(-1)).toBe(parked);
         expect(filterEventsByType(asked, "turn.completed")).toHaveLength(0);
 
@@ -259,7 +262,7 @@ describe("workflow tools", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -338,7 +341,7 @@ describe("workflow tools", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -397,7 +400,7 @@ describe("workflow tools", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -463,7 +466,7 @@ describe("workflow tools", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -521,7 +524,7 @@ describe("workflow tools", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -560,7 +563,7 @@ describe("workflow tools", () => {
     const earlyNote = "Alice notes that the api rollout window opens at noon.";
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -585,7 +588,7 @@ describe("workflow tools", () => {
         expect(filterEventsByType(settled, "action.partial")).toHaveLength(1);
 
         const inputs = await readStepInputs(run.runId);
-        const reportInputs = inputs.get("emitWorkflowToolRunReportStep") ?? [];
+        const reportInputs = inputs.get("applyRunMessagesStep") ?? [];
         expect(reportInputs).toHaveLength(1);
         expect(reportInputs[0]).not.toContain(earlyNote);
         expect(inputs.get("turnStep")?.at(-1)).toContain(earlyNote);

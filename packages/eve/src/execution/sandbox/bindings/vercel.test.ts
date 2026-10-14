@@ -766,7 +766,7 @@ describe("createVercelSandbox", () => {
     vi.mocked(sessionSandbox.runCommand).mockResolvedValue(createMockDetachedCommand() as never);
     vi.mocked(sessionSandbox.runCommand).mockClear();
 
-    await handle.onSessionStop();
+    await handle.onSandboxStop();
     await handle.sandbox.run({ command: "printf resumed" });
 
     expect(sessionSandbox.stop).toHaveBeenCalledTimes(1);
@@ -812,7 +812,7 @@ describe("createVercelSandbox", () => {
     });
     const abortSignal = new AbortController().signal;
 
-    await expect(handle.onSessionDelete({ abortSignal })).resolves.toBeUndefined();
+    await expect(handle.onSandboxDelete({ abortSignal })).resolves.toBeUndefined();
 
     expect(order).toEqual(["stop", "sandbox-get", "sandbox-delete"]);
     expect(stableGet).toHaveBeenCalledWith({
@@ -860,7 +860,7 @@ describe("createVercelSandbox", () => {
     const { handle, sessionSandbox } = await createTestVercelSession();
     sessionSandbox.stop.mockRejectedValueOnce(new Error("provider unreachable"));
 
-    await expect(handle.onSessionStop()).rejects.toThrow("provider unreachable");
+    await expect(handle.onSandboxStop()).rejects.toThrow("provider unreachable");
   });
 
   it("applies the open-time policy after template-less base setup", async () => {
@@ -1045,7 +1045,7 @@ describe("createVercelSandbox", () => {
     );
   });
 
-  it("forwards env to runCommand when spawning a process", async () => {
+  it("forwards env with the AI_AGENT default to runCommand when spawning a process", async () => {
     const templateSandbox = createMockSandbox({ name: "template" });
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
@@ -1084,12 +1084,12 @@ describe("createVercelSandbox", () => {
       expect.objectContaining({
         args: ["-lc", "printenv DEPLOY_ENV"],
         cmd: "bash",
-        env: { DEPLOY_ENV: "staging" },
+        env: { AI_AGENT: "eve", DEPLOY_ENV: "staging" },
       }),
     );
   });
 
-  it("forwards env to runCommand when running a command", async () => {
+  it("lets environment env override the AI_AGENT default when running a command", async () => {
     const templateSandbox = createMockSandbox({ name: "template" });
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
@@ -1103,6 +1103,7 @@ describe("createVercelSandbox", () => {
     };
 
     const provider = createTestVercelSandbox({
+      createOptions: { env: { AI_AGENT: "alice-bot" } },
       loadSandboxModule: async () => sandboxModule as never,
     });
 
@@ -1128,7 +1129,7 @@ describe("createVercelSandbox", () => {
       expect.objectContaining({
         args: ["-lc", "printenv DEPLOY_ENV"],
         cmd: "bash",
-        env: { DEPLOY_ENV: "production" },
+        env: { AI_AGENT: "alice-bot", DEPLOY_ENV: "production" },
       }),
     );
   });

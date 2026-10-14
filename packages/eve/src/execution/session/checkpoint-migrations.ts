@@ -2,6 +2,7 @@ import { SESSION_CHECKPOINT_VERSION, type SessionCheckpoint } from "#execution/s
 import { isObject } from "#shared/guards.js";
 import { initialSessionProjection } from "#protocol/session-projection.js";
 import { getBlockingWorkflowToolRuns } from "#harness/workflow-tool-runs.js";
+import { LEGACY_HITL_STATE_KEYS, upgradeLegacyHitlState } from "#harness/hitl/requests.js";
 
 /**
  * Oldest checkpoint a successor upgrades (eve 0.66.0). Earlier checkpoints
@@ -36,8 +37,6 @@ interface UpgradeEffects {
 const CHECKPOINT_UPGRADES: Readonly<
   Record<number, (checkpoint: CheckpointRecord, effects: UpgradeEffects) => CheckpointRecord>
 > = {
-  // Managed event bindings must not move to an owner that discards their state.
-  12: (checkpoint) => checkpoint,
   // Run mode was removed (eve 0.67).
   8: (checkpoint) => {
     const { mode: _mode, ...rest } = checkpoint;
@@ -93,6 +92,26 @@ const CHECKPOINT_UPGRADES: Readonly<
   },
   // Lifecycle moved from emission/batch registries to the projection and TurnState.
   11: upgradeIdleLifecycle,
+  // Version 13 prevents older deployments from ignoring stubs and running real tools.
+  // Existing checkpoints need no data changes.
+  12: (checkpoint) => checkpoint,
+  // Version 14 prevents older deployments from dropping the batched messages
+  // workflow tool runs relay. Existing checkpoints need no data changes.
+  13: (checkpoint) => checkpoint,
+  // Approval candidates, sign-ins and relayed requests moved under one requests key.
+  14: (checkpoint) => {
+    const sessionState = readRecord(checkpoint, "sessionState");
+    const snapshot = readRecord(sessionState, "snapshot");
+    const session = readRecord(snapshot, "session");
+    if (session.state === undefined) return checkpoint;
+    const state = upgradeLegacyHitlState(readRecord(session, "state"));
+    return {
+      ...checkpoint,
+      sessionState: { ...sessionState, snapshot: { ...snapshot, session: { ...session, state } } },
+    };
+  },
+  // Managed event bindings must not move to an owner that discards their state.
+  15: (checkpoint) => checkpoint,
 };
 
 /**
@@ -152,7 +171,7 @@ function upgradeIdleLifecycle(checkpoint: CheckpointRecord): CheckpointRecord {
     refuse("lifecycle position is malformed or a turn is still open");
 
   const retiredPendingKeys = [
-    "eve.runtime.pendingAuthorization",
+    LEGACY_HITL_STATE_KEYS.signIns,
     "eve.runtime.pendingInputBatch",
     "eve.runtime.pendingCoordinationBatch",
     "eve.runtime.deferredStepInput",
@@ -163,7 +182,7 @@ function upgradeIdleLifecycle(checkpoint: CheckpointRecord): CheckpointRecord {
   const batches = state["eve.runtime.pendingInputBatches"];
   if (batches !== undefined && (!Array.isArray(batches) || batches.length > 0))
     refuse("session holds pending input");
-  const routes = state["eve.runtime.proxyInputRequests"];
+  const routes = state[LEGACY_HITL_STATE_KEYS.relays];
   if (
     sessionState.hasProxyInputRequests !== false ||
     (routes !== undefined && (!isObject(routes) || Object.keys(routes).length > 0))
@@ -175,7 +194,7 @@ function upgradeIdleLifecycle(checkpoint: CheckpointRecord): CheckpointRecord {
     if (error instanceof CheckpointRefusal) throw error;
     refuse("workflow tool run registry is incompatible");
   }
-  const approvals = state["eve.runtime.hitl.approvalState"];
+  const approvals = state[LEGACY_HITL_STATE_KEYS.approvals];
   if (
     approvals !== undefined &&
     (!isObject(approvals) ||
@@ -199,7 +218,6 @@ function upgradeIdleLifecycle(checkpoint: CheckpointRecord): CheckpointRecord {
       "eve.harness.emission",
       "eve.runtime.hitl.approvedTools",
       "eve.runtime.pendingInputBatches",
-      "eve.runtime.proxyInputRequests",
     ]),
     "eve.harness.sessionProjection": projection,
   };

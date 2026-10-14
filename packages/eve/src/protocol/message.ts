@@ -5,6 +5,7 @@ import {
   hasInternalRefScheme,
   isSerializedUrlFilePart,
 } from "#internal/attachments/url-refs.js";
+import { getKnownByteLength } from "#internal/attachments/data.js";
 import { decodeSandboxRef, isSandboxRefUrl } from "#internal/attachments/sandbox-refs.js";
 import { createEventId } from "#protocol/event-id.js";
 import {
@@ -118,6 +119,18 @@ export interface SubagentSessionInvocationMetadata {
 }
 
 /**
+ * The session this one replaced. Present on a session eve started in place of
+ * one whose deployment was retired, when the next ordinary channel message
+ * arrived before the earlier session timed out. This session has its own id,
+ * stream, auth, and state, and starts with no history from its predecessor;
+ * read the predecessor with `sessions.attach(sessionId)` from `eve/server`.
+ */
+export interface SessionPredecessor {
+  /** Id of the session this one replaced. Its recorded history stays readable. */
+  readonly sessionId: string;
+}
+
+/**
  * Runtime identity metadata attached to the `session.started` event.
  *
  * The server populates this at run time so remote eval processes and
@@ -176,6 +189,8 @@ export type HandleMessageRequestBody =
 export interface SessionStartedStreamEvent {
   data: {
     invocation?: SubagentSessionInvocationMetadata;
+    /** Present when this session replaced one that could no longer run. */
+    predecessor?: SessionPredecessor;
     runtime?: RuntimeIdentity;
     trace?: RuntimeTraceContext;
   };
@@ -459,7 +474,7 @@ export interface TaskSettledStreamEvent {
 }
 
 /**
- * Why the session cancelled a task call: the model called `task_cancel`,
+ * Why the session cancelled a task call: the model called `eve__task_cancel`,
  * someone cancelled the turn (or, between turns, the tasks still working), or
  * the turn ended while the task still worked.
  */
@@ -654,6 +669,12 @@ export interface TurnFailedStreamEvent {
     details?: JsonObject;
     message: string;
     sequence: number;
+    /**
+     * `true` when the failure ends the session and `session.failed` follows;
+     * `false` when `session.waiting` follows and the next message can retry.
+     * Absent on events from eve versions before it was added.
+     */
+    terminal?: boolean;
     turnId: string;
   };
   type: "turn.failed";
@@ -938,6 +959,7 @@ export function isTurnFailureEvent<TEvent extends UnstampedMessageStreamEvent>(
  */
 export function createSessionStartedEvent(input?: {
   readonly invocation?: SubagentSessionInvocationMetadata;
+  readonly predecessor?: SessionPredecessor;
   readonly runtime?: RuntimeIdentity;
   readonly trace?: RuntimeTraceContext;
 }): SessionStartedStreamEvent {
@@ -945,6 +967,10 @@ export function createSessionStartedEvent(input?: {
 
   if (input?.invocation !== undefined) {
     data.invocation = input.invocation;
+  }
+
+  if (input?.predecessor !== undefined) {
+    data.predecessor = input.predecessor;
   }
 
   if (input?.runtime !== undefined) {
@@ -1073,12 +1099,16 @@ function projectFileLikePart(
     return tagged;
   }
 
-  const size = byteLengthOf(data);
-  if (size !== undefined) {
-    return createProjectedFilePart({ filename, mediaType, size });
+  const link = clientUrlFragment(data);
+  if (link.url !== undefined) {
+    return createProjectedFilePart({ filename, mediaType, ...link });
   }
-
-  return createProjectedFilePart({ filename, mediaType, ...clientUrlFragment(data) });
+  // Inline payloads report their size only: this event is stored with the
+  // session stream, which must not keep attachment bytes.
+  const size = getKnownByteLength(data);
+  return size === null
+    ? createProjectedFilePart({ filename, mediaType })
+    : createProjectedFilePart({ filename, mediaType, size });
 }
 
 function projectTaggedFileData(
@@ -1172,10 +1202,6 @@ function clientUrlFragment(data: unknown): { readonly url?: string } {
     return {};
   }
 
-  if (data.startsWith("data:")) {
-    return { url: data };
-  }
-
   try {
     const url = new URL(data);
     return isClientResolvableUrl(url) ? { url: url.href } : {};
@@ -1185,7 +1211,7 @@ function clientUrlFragment(data: unknown): { readonly url?: string } {
 }
 
 function isClientResolvableUrl(url: URL): boolean {
-  return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "data:";
+  return url.protocol === "http:" || url.protocol === "https:";
 }
 
 function basenameOf(path: string): string {
@@ -1749,6 +1775,7 @@ export function createTurnFailedEvent(input: {
   readonly details?: JsonObject;
   readonly message: string;
   readonly sequence: number;
+  readonly terminal: boolean;
   readonly turnId: string;
 }): TurnFailedStreamEvent {
   return {
@@ -1757,6 +1784,7 @@ export function createTurnFailedEvent(input: {
       details: input.details,
       message: input.message,
       sequence: input.sequence,
+      terminal: input.terminal,
       turnId: input.turnId,
     },
     type: "turn.failed",

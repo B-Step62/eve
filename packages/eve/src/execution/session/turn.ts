@@ -12,10 +12,8 @@ import { renderTaskWaitResult } from "#execution/tasks/render.js";
 import {
   answerTaskCancel,
   cancelWorkingTasks,
-  isTaskRunMessage,
   sessionTaskTable,
 } from "#execution/tasks/session.js";
-import { applyTaskRunMessageStep } from "#execution/tasks/steps.js";
 import { taskWaitResult } from "#execution/tasks/table.js";
 import {
   sessionCommandHookToken,
@@ -25,10 +23,14 @@ import type { SessionInboxReader } from "#execution/session-inbox/inbox.js";
 import { publishTurnWaitingStep } from "#execution/session/turn-waiting-step.js";
 import type { SessionStateCursor } from "#execution/session/state-cursor.js";
 import {
-  batchAgentStarts,
   handleWorkflowToolRunMessage,
+  isAppliedRunMessage,
+  takeLeadingAppliedRunMessages,
 } from "#execution/session-workflow-tool-run.js";
-import { emitAgentStartedStep } from "#execution/tools/workflow/emit-workflow-tool-run-report-step.js";
+import {
+  applyRunMessagesStep,
+  type AppliedRunMessage,
+} from "#execution/tools/workflow/apply-run-messages-step.js";
 import { interruptWorkflowToolRun } from "#execution/tools/workflow/interrupt.js";
 import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
 import type {
@@ -136,23 +138,30 @@ export class SessionExecution {
 
   /**
    * Applies what runs reported while the model step ran, so the next step sees
-   * it. Consecutive `agent-started` messages, such as a fan-out's, share one step.
-   * An ending session drops them: its stream is closed, and finalizing the
-   * session terminates the children.
+   * it. Consecutive messages the session applies as it reads them, such as a
+   * fan-out's, share one step. An ending session drops `agent-started`: its
+   * stream is closed, and finalizing the session terminates the children.
    */
   private async handleBoundaryMessages(
     messages: readonly WorkflowToolRunMessage[],
     ending = false,
   ): Promise<void> {
-    for (const batch of batchAgentStarts(messages)) {
-      if (batch.kind === "message") {
-        await this.handleWorkflowMessage(batch.message);
-      } else if (!ending) {
-        await this.input.cursor.advance((state) =>
-          emitAgentStartedStep({ ...state, messages: batch.messages }),
-        );
+    let applied: AppliedRunMessage[] = [];
+    for (const message of messages) {
+      if (!isAppliedRunMessage(message)) {
+        await this.applyRunMessages(applied);
+        applied = [];
+        await handleWorkflowToolRunMessage({ cursor: this.input.cursor, message });
+      } else if (!ending || message.kind !== "agent-started") {
+        applied.push(message);
       }
     }
+    await this.applyRunMessages(applied);
+  }
+
+  private async applyRunMessages(messages: readonly AppliedRunMessage[]): Promise<void> {
+    if (messages.length === 0) return;
+    await this.input.cursor.advance((state) => applyRunMessagesStep({ ...state, messages }));
   }
 
   private async runTurnSteps(
@@ -266,11 +275,19 @@ export class SessionExecution {
     return dispatched.results;
   }
 
+  /**
+   * Handles a run message the session just read. One it applies as it reads
+   * it takes along those read after it, from `turn` while a turn runs, so a
+   * fan-out's messages share one step.
+   */
   async handleWorkflowMessage(
     message: WorkflowToolRunMessage,
+    turn?: ActiveTurn,
   ): Promise<RuntimeActionResult | undefined> {
-    if (isTaskRunMessage(message)) {
-      await this.input.cursor.advance((state) => applyTaskRunMessageStep({ ...state, message }));
+    if (isAppliedRunMessage(message)) {
+      const following =
+        turn?.takeAppliedRunMessages() ?? takeLeadingAppliedRunMessages(this.input.inbox);
+      await this.applyRunMessages([message, ...following]);
       return undefined;
     }
     return await handleWorkflowToolRunMessage({
@@ -305,7 +322,7 @@ export class SessionExecution {
 
   /**
    * The model tried to end the turn while its tasks work. The turn parks as
-   * `task_wait` would, until one of them settles or the turn is steered.
+   * `eve__task_wait` would, until one of them settles or the turn is steered.
    */
   private async waitForHeldTurn(turn: ActiveTurn): Promise<"cancelled" | "woke"> {
     let interrupted = false;
@@ -321,7 +338,7 @@ export class SessionExecution {
           interrupted = true;
           continue;
         case "workflow":
-          await this.handleWorkflowMessage(next.message);
+          await this.handleWorkflowMessage(next.message, turn);
           continue;
         case "input":
         case "runtime-action-result":
@@ -355,7 +372,7 @@ export class SessionExecution {
       if (steering !== undefined) return steering;
       const next = await turn.nextRuntimeEvent([]);
       if (next === "cancelled") return next;
-      if (next.kind === "workflow") await this.handleWorkflowMessage(next.message);
+      if (next.kind === "workflow") await this.handleWorkflowMessage(next.message, turn);
     }
   }
 
@@ -432,7 +449,7 @@ export class SessionExecution {
           continue;
         }
 
-        const result = await this.handleWorkflowMessage(next.message);
+        const result = await this.handleWorkflowMessage(next.message, input.turn);
         if (result === undefined) continue;
         accept(result);
         if (next.message.kind === "outcome" && next.message.usage !== undefined) {
@@ -444,7 +461,7 @@ export class SessionExecution {
     }
   }
 
-  /** Answers every `task_wait` that can return now; returns the ones still waiting. */
+  /** Answers every `eve__task_wait` that can return now; returns the ones still waiting. */
   private async resolveTaskWaits(
     waits: readonly TaskWait[],
     interrupted: boolean,
@@ -469,11 +486,11 @@ export class SessionExecution {
   }
 
   /**
-   * `task_cancel` is answered at once, and so is each `task_wait` that can
+   * `eve__task_cancel` is answered at once, and so is each `eve__task_wait` that can
    * return now: a timeout of 0, a result already waiting, or nothing working.
-   * Any other `task_wait` parks the open turn, reported once as
+   * Any other `eve__task_wait` parks the open turn, reported once as
    * `turn.waiting`, and the turn resolves it alongside the step's other
-   * deferred calls.
+   * workflow tool calls.
    */
   private async answerTaskToolCalls(
     calls: readonly TaskToolCall[],
@@ -482,7 +499,7 @@ export class SessionExecution {
     const waits: TaskWait[] = [];
     const startedAtMs = calls.length === 0 ? 0 : await startTaskToolCallsStep();
     for (const call of calls) {
-      if (call.kind === "task_wait") waits.push(startTaskWait(call, startedAtMs));
+      if (call.kind === TASK_WAIT_TOOL_NAME) waits.push(startTaskWait(call, startedAtMs));
       else {
         let result: RuntimeActionResult;
         try {
@@ -522,7 +539,7 @@ export class SessionExecution {
     await this.input.cursor.advance((state) =>
       traceTaskToolCallStep(state, {
         callId: wait.callId,
-        toolName: "task_wait",
+        toolName: TASK_WAIT_TOOL_NAME,
         startedAtMs: wait.startedAtMs,
         completedAtMs: Date.now(),
         input: wait.input,
@@ -549,7 +566,7 @@ export class SessionExecution {
 }
 
 /**
- * One `task_wait` call the turn is parked on. Its timeout is a durable sleep
+ * One `eve__task_wait` call the turn is parked on. Its timeout is a durable sleep
  * the turn races against the inbox; nothing polls.
  */
 interface TaskWait {
@@ -562,7 +579,7 @@ interface TaskWait {
 }
 
 function startTaskWait(
-  call: Extract<TaskToolCall, { readonly kind: "task_wait" }>,
+  call: Extract<TaskToolCall, { readonly kind: typeof TASK_WAIT_TOOL_NAME }>,
   startedAtMs: number,
 ): TaskWait {
   const { callId, timeoutMs } = call;

@@ -1,5 +1,7 @@
+import { AgentSpanIdGenerator } from "#compiled/@eve/tracing/index.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
-import type { ModelMessage } from "ai";
+import { jsonSchema, type ModelMessage } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAdapter, ChannelAdapterContext } from "#channel/adapter.js";
 import type {
@@ -28,21 +30,38 @@ import {
   TurnDynamicToolMetadataKey,
   TurnDeliveryIdsKey,
   HistoryStateKey,
+  OfferedCatalogToolsKey,
 } from "#context/keys.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { startWorkflowTask } from "#execution/tools/workflow/start.js";
 import { TurnCancelledError } from "#harness/turn-cancellation.js";
-import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
-import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { queuedInput, storedProjection } from "#harness/session-machine/view.js";
 import {
+  MAX_WORKING_TASKS,
+  readTaskTable,
+  writeTaskTable,
+  type TaskRecord,
+} from "#execution/tasks/table.js";
+import { applyValueDelta } from "#shared/value-delta.js";
+import { APPROVED_CALL_INTERRUPTED_MESSAGE } from "#harness/hitl/approved-calls.js";
+import { textStreamResult } from "#internal/testing/approval-resume.js";
+import { openInputs } from "#protocol/session-projection.js";
+import type { InputRequest } from "#shared/input.js";
+import { withSignIns } from "#harness/hitl/sign-ins.js";
+import { readHitlState, writeHitlState } from "#harness/hitl/requests.js";
+import {
+  parkedSteps,
   positionOf,
   positionState,
   withOpenTurn,
   withParkedStep,
+  withPublished,
   withQueuedInput,
+  withRelays,
 } from "#internal/testing/session-machine.js";
-import type { HarnessSession, StepFn, StepResult } from "#harness/types.js";
+import type { HarnessSession, StepFn, StepInput, StepResult } from "#harness/types.js";
 import { createRuntimeHookRegistry } from "#runtime/hooks/registry.js";
 import {
   createInputRequestedEvent,
@@ -59,6 +78,7 @@ import {
   createDurableSessionValues,
   type DurableSessionState,
   readDurableSession,
+  replaceDurableSessionSnapshot,
 } from "#execution/durable-session-store.js";
 import { buildRuntimeIdentity, createExecutionNodeStep } from "#execution/node-step.js";
 import { defineTool } from "#tools/definition.js";
@@ -70,8 +90,11 @@ import { turnStep as runTurnStep } from "#execution/session/turn-step.js";
 import { dispatchCoordinationStep } from "#execution/coordination-dispatch-step.js";
 import type { TurnStepInput, TurnStepPayload } from "#execution/session/turn-step-types.js";
 import type { DeliverHookPayload } from "#channel/types.js";
-import type { RuntimeActionResult } from "#shared/action-types.js";
+import type { RuntimeActionResult, RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import { setEveAttributes } from "#runtime/attributes/emit.js";
+import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
+import { isSandboxRefUrl } from "#internal/attachments/sandbox-refs.js";
+import { mockSandbox } from "#internal/testing/mocks/mock-sandbox.js";
 
 type LegacyStepPayload =
   | DeliverHookPayload
@@ -113,6 +136,12 @@ const REQUEST_EVENT = { sequence: 0, stepIndex: 0, turnId: "turn_0" };
 // be written; the attribute contract is covered by emit.test.ts.
 vi.mock("#runtime/attributes/emit.js", () => ({ setEveAttributes: vi.fn(async () => {}) }));
 
+// Real by default; a test hands a session a mock sandbox with `mockResolvedValueOnce`.
+vi.mock("#execution/sandbox/ensure.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("#execution/sandbox/ensure.js")>();
+  return { ...actual, ensureSandboxAccess: vi.fn(actual.ensureSandboxAccess) };
+});
+
 const bindSessionInstrumentationSpy = vi.hoisted(() => vi.fn());
 /** When set, `bindSessionInstrumentation` binds this runtime instead of the global one. */
 const instrumentationRuntimeOverride = vi.hoisted(() => ({
@@ -140,7 +169,8 @@ vi.mock("#instrumentation/runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("#execution/tools/workflow/start.js", () => ({
+vi.mock("#execution/tools/workflow/start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("#execution/tools/workflow/start.js")>()),
   startWorkflowTask: vi.fn(async ({ session }: { session: unknown }) => ({ session })),
 }));
 
@@ -223,7 +253,14 @@ vi.mock("../../runtime/sessions/compiled-agent-cache.js", () => ({
 }));
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
+  getHookByToken: async (token: string) => {
+    const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
+    if (!token.startsWith("eve:inbox:v1:")) throw new HookNotFoundError(token);
+    return currentSessionHook(token);
+  },
   getRun: (...args: unknown[]) => getRunMock(...args),
+  // Vercel-shaped: owners run on their own deployment, so ingress resumes by token.
+  getWorld: async () => ({ capabilities: { deploymentAffinity: true } }),
   resumeHook: (...args: unknown[]) => resumeHookMock(...args),
   start: (...args: unknown[]) => startMock(...args),
 }));
@@ -252,8 +289,8 @@ function createTurnStepTestBundle(modelCallsPerStep?: number) {
     },
     hookRegistry: createRuntimeHookRegistry([]),
     moduleMap: { nodes: {} },
-    resolvedAgent: { config },
-    subagentRegistry: {},
+    resolvedAgent: { config, dynamicSkillResolvers: [], dynamicToolResolvers: [] },
+    subagentRegistry: { dynamicResolvers: [] },
     toolRegistry: {},
     turnAgent: TestTurnAgent,
   } as never;
@@ -261,6 +298,9 @@ function createTurnStepTestBundle(modelCallsPerStep?: number) {
 
 const threadContextAdapter: ChannelAdapter = {
   kind: "thread-context",
+  async fetchFile() {
+    return Buffer.from("diagram-bytes");
+  },
   deliver(payload: DeliverPayload, adapterCtx: ChannelAdapterContext) {
     if (typeof payload.message === "string" && payload.message.startsWith("seed:")) {
       adapterCtx.ctx.set(ThreadKey, payload.message.slice(5));
@@ -350,24 +390,26 @@ afterEach(() => {
 
 describe("routeProxiedDeliverStep", () => {
   it("replies to the saved child inbox after its continuation alias changes", async () => {
-    const session = upsertProxyInputRequests({
-      entries: [
-        [
-          "request-1",
-          {
-            childContinuationToken: "stale-alias",
-            childSessionInbox: { sessionId: "original-child" },
-            event: REQUEST_EVENT,
-            kind: "question",
-          },
-        ],
-      ],
-      forChildContinuationToken: "stale-alias",
-      session: createStubSession({
+    const session = withRelays(
+      createStubSession({
         continuationToken: "parent-token",
         sessionId: "parent-session",
       }),
-    });
+      {
+        entries: [
+          [
+            "request-1",
+            {
+              childContinuationToken: "stale-alias",
+              childSessionInbox: { sessionId: "original-child" },
+              event: REQUEST_EVENT,
+              kind: "question",
+            },
+          ],
+        ],
+        forChildContinuationToken: "stale-alias",
+      },
+    );
     installSessionStoreMocks([session]);
 
     await routeProxiedDeliverStep({
@@ -414,12 +456,13 @@ describe("routeProxiedDeliverStep", () => {
   });
 
   it("answers a root question once when one delivery carries several messages", async () => {
-    const session = upsertProxyInputRequests({
+    const session = withRelays(createStubSession(), {
       entries: [
         [
           "ask-1",
           {
-            workflowAsk: { control: "control", question: { allowFreeform: true } },
+            workflowAsk: { control: "control" },
+            reply: { allowFreeform: true },
             runId: "run-1",
             childContinuationToken: "ask-1",
             event: REQUEST_EVENT,
@@ -428,7 +471,6 @@ describe("routeProxiedDeliverStep", () => {
         ],
       ],
       forChildContinuationToken: "ask-1",
-      session: createStubSession(),
     });
     installSessionStoreMocks([session]);
 
@@ -454,6 +496,132 @@ describe("routeProxiedDeliverStep", () => {
     });
   });
 
+  it("forwards a typed approve to a subagent's approval as its sender, once", async () => {
+    const auth = {
+      attributes: {},
+      authenticator: "test",
+      principalId: "alice",
+      principalType: "user",
+    };
+    const session = withRelays(createStubSession(), {
+      entries: [
+        [
+          "approval-1",
+          {
+            childContinuationToken: "child-token",
+            event: REQUEST_EVENT,
+            kind: "tool-approval",
+            reply: { options: [{ id: "approve", label: "Approve" }] },
+          },
+        ],
+      ],
+      forChildContinuationToken: "child-token",
+    });
+    installSessionStoreMocks([session]);
+
+    const result = await routeProxiedDeliverStep({
+      serializedContext: createSerializedContext(),
+      delivery: {
+        kind: "deliver",
+        auth,
+        payloads: [{ message: "approve" }, { message: "approve" }],
+      },
+      sessionWritable: createTestWritable(),
+      sessionState: createStubSessionState({ hasProxyInputRequests: true }),
+    });
+
+    expect(resumeHookMock).toHaveBeenCalledTimes(1);
+    expect(resumeHookMock).toHaveBeenCalledWith("eve:inbox:v1:child-token", {
+      auth,
+      deliveryMetadata: undefined,
+      kind: "deliver",
+      payloads: [{ inputResponses: [{ optionId: "approve", requestId: "approval-1" }] }],
+    });
+    expect(result).toMatchObject({
+      kind: "continue",
+      remainder: { payloads: [{ message: "approve" }] },
+    });
+  });
+
+  describe("a forwarded subagent approval", () => {
+    const auth = {
+      attributes: {},
+      authenticator: "test",
+      principalId: "bob",
+      principalType: "user",
+    };
+    const approvalRoute = {
+      childContinuationToken: "child-token",
+      event: REQUEST_EVENT,
+      kind: "tool-approval" as const,
+      reply: { options: [{ id: "approve", label: "Approve" }] },
+    };
+    function parkedOn(requestIds: readonly string[]) {
+      const relayed = createInputRequestedEvent({
+        ...REQUEST_EVENT,
+        callId: "child-call",
+        requests: requestIds.map((requestId) => ({
+          action: { callId: requestId, input: {}, kind: "tool-call", toolName: "deploy" },
+          kind: "tool-approval",
+          options: approvalRoute.reply.options,
+          prompt: "Approve deploy?",
+          requestId,
+        })),
+      });
+      const session = withRelays(
+        withPublished(withOpenTurn(createStubSession(), REQUEST_EVENT), [relayed]),
+        {
+          entries: requestIds.map((requestId) => [requestId, approvalRoute] as const),
+          forChildContinuationToken: "child-token",
+        },
+      );
+      // Read back what each step persists, so a later step sees the routes it left.
+      vi.mocked(readDurableSession).mockImplementation((state) => state.snapshot!.session);
+      return replaceDurableSessionSnapshot({ session, state: createStubSessionState() });
+    }
+    async function approveFirst(sessionState: DurableSessionState) {
+      workflowWritesByNamespace.clear();
+      const result = await runSessionStateStep(
+        {
+          serializedContext: createSerializedContext(),
+          delivery: { auth, kind: "deliver" as const, payloads: [{ message: "approve" }] },
+          sessionWritable: createTestWritable(),
+          sessionState,
+        },
+        routeProxiedDeliverStep,
+      );
+      const writes = workflowWritesByNamespace.get(DEFAULT_WORKFLOW_STREAM_NAMESPACE) ?? [];
+      const types = writes.map(
+        (chunk) => JSON.parse(new TextDecoder().decode(chunk as Uint8Array)).type,
+      );
+      return { result, types };
+    }
+
+    it("stays answerable until the subagent closes it", async () => {
+      // The child's response policy may refuse Bob, so a second reply still reaches it.
+      const first = await approveFirst(parkedOn(["approval-1"]));
+      await approveFirst(first.result.sessionState);
+
+      expect(resumeHookMock).toHaveBeenCalledTimes(2);
+      for (const [, delivery] of resumeHookMock.mock.calls) {
+        expect(delivery).toMatchObject({
+          payloads: [{ inputResponses: [{ optionId: "approve", requestId: "approval-1" }] }],
+        });
+      }
+      expect(first.types).not.toContain("input.resolved");
+    });
+
+    it("holds the open turn while another approval still waits on a person", async () => {
+      const { types } = await approveFirst(parkedOn(["approval-1", "approval-2"]));
+      expect(types).toContain("turn.waiting");
+    });
+
+    it("does not hold the open turn on the approval it just forwarded", async () => {
+      const { types } = await approveFirst(parkedOn(["approval-1"]));
+      expect(types).not.toContain("turn.waiting");
+    });
+  });
+
   it.each([
     ["local", { "eve.channel": { kind: "subagent" } }],
     [
@@ -468,17 +636,15 @@ describe("routeProxiedDeliverStep", () => {
       },
     ],
   ])("does not answer a delegated %s question from steering text", async (_, serializedContext) => {
-    const session = upsertProxyInputRequests({
+    const session = withRelays(createStubSession(), {
       entries: [
         [
           "ask-1",
           {
-            workflowAsk: {
-              control: "control",
-              question: {
-                allowFreeform: false,
-                options: [{ id: "approve", label: "Approve" }],
-              },
+            workflowAsk: { control: "control" },
+            reply: {
+              allowFreeform: false,
+              options: [{ id: "approve", label: "Approve" }],
             },
             runId: "run-1",
             childContinuationToken: "ask-1",
@@ -488,7 +654,6 @@ describe("routeProxiedDeliverStep", () => {
         ],
       ],
       forChildContinuationToken: "ask-1",
-      session: createStubSession(),
     });
     installSessionStoreMocks([session]);
 
@@ -513,23 +678,33 @@ describe("routeProxiedDeliverStep", () => {
       principalId: "user-1",
       principalType: "user",
     };
-    const session = upsertProxyInputRequests({
-      entries: [
-        [
-          "request-1",
-          { childContinuationToken: "child-token", event: REQUEST_EVENT, kind: "tool-approval" },
-        ],
-        [
-          "request-2",
-          { childContinuationToken: "child-token", event: REQUEST_EVENT, kind: "tool-approval" },
-        ],
-      ],
-      forChildContinuationToken: "child-token",
-      session: createStubSession({
+    const session = withRelays(
+      createStubSession({
         continuationToken: "parent-token",
         sessionId: "parent-session",
       }),
-    });
+      {
+        entries: [
+          [
+            "request-1",
+            {
+              childContinuationToken: "child-token",
+              event: REQUEST_EVENT,
+              kind: "tool-approval",
+            },
+          ],
+          [
+            "request-2",
+            {
+              childContinuationToken: "child-token",
+              event: REQUEST_EVENT,
+              kind: "tool-approval",
+            },
+          ],
+        ],
+        forChildContinuationToken: "child-token",
+      },
+    );
     installSessionStoreMocks([session]);
 
     const result = await routeProxiedDeliverStep({
@@ -572,19 +747,8 @@ describe("routeProxiedDeliverStep", () => {
       replyTo: { kind: "hook" as const, token: "parent-turn" },
       subagentName: "research",
     };
-    const session = upsertProxyInputRequests({
-      entries: [
-        [
-          "child-a",
-          { childContinuationToken: "child-token-a", event: REQUEST_EVENT, kind: "question" },
-        ],
-        [
-          "child-b",
-          { childContinuationToken: "child-token-b", event: REQUEST_EVENT, kind: "question" },
-        ],
-      ],
-      forChildContinuationToken: "child-token-a",
-      session: upsertProxyInputRequests({
+    const session = withRelays(
+      withRelays(createStubSession(), {
         entries: [
           [
             "child-b",
@@ -592,9 +756,21 @@ describe("routeProxiedDeliverStep", () => {
           ],
         ],
         forChildContinuationToken: "child-token-b",
-        session: createStubSession(),
       }),
-    });
+      {
+        entries: [
+          [
+            "child-a",
+            { childContinuationToken: "child-token-a", event: REQUEST_EVENT, kind: "question" },
+          ],
+          [
+            "child-b",
+            { childContinuationToken: "child-token-b", event: REQUEST_EVENT, kind: "question" },
+          ],
+        ],
+        forChildContinuationToken: "child-token-a",
+      },
+    );
     installSessionStoreMocks([session]);
 
     const delivery = {
@@ -817,6 +993,117 @@ describe("dispatchCoordinationStep", () => {
     expect(vi.mocked(startWorkflowTask).mock.calls[0]?.[0].agentContext.traceRoot).toEqual({
       kind: "inherited",
       sessionId: expected,
+    });
+  });
+
+  describe("when one batch starts several task runs", () => {
+    // The override below gives the real reader to a mock other tests configure themselves.
+    afterEach(() => vi.mocked(readDurableSession).mockReset());
+
+    function batchOfReviews(running: number): HarnessSession {
+      const call = (taskId: string): RuntimeWorkflowTaskRequest => ({
+        callId: `call-${taskId}`,
+        entry: { entryPoint: "serve", taskId },
+        executeInput: { message: "Bob asks for a review of the plan." },
+        input: { message: "Bob asks for a review of the plan." },
+        kind: "workflow-task",
+        toolName: "reviewer",
+        workflowId: "workflow//eve//reviewer",
+      });
+      const record = (id: string, run?: string): TaskRecord => ({
+        calls: [{ callId: `call-${id}`, turnId: "turn_3" }],
+        id,
+        kind: "agent",
+        name: "reviewer",
+        results: [],
+        resumable: true,
+        ...(run !== undefined && { run: { hookToken: `hook-${id}`, runId: run, started: true } }),
+      });
+      const busy = Array.from({ length: running }, (_, index) =>
+        record(`busy-${String(index)}`, `run-busy-${String(index)}`),
+      );
+      const parked = withParkedStep(createStubSession(), {
+        event: { sequence: 3, stepIndex: 2, turnId: "turn_3" },
+        messages: [],
+        tasks: [call("alice"), call("bob")],
+      });
+      return writeTaskTable(parked, { tasks: [...busy, record("alice"), record("bob")] });
+    }
+
+    async function dispatch(session: HarnessSession) {
+      mockCoordinationBundle();
+      // The step reads the parked session, then the state its own writes produce.
+      const actual = await vi.importActual<typeof import("../durable-session-store.js")>(
+        "../durable-session-store.js",
+      );
+      vi.mocked(readDurableSession)
+        .mockImplementation(actual.readDurableSession)
+        .mockImplementationOnce(() => session);
+      vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_current");
+      const sessionState = createStubSessionState();
+      const dispatched = await dispatchCoordinationStep({
+        action: "park",
+        workflowToolRunOwner: { inbox: "owner-inbox" },
+        sessionWritable: createTestWritable(),
+        serializedContext: createSerializedContext(),
+        sessionState,
+      });
+      const next = applyValueDelta(sessionState, dispatched.stateDelta.sessionState);
+      return { results: dispatched.results, table: readTaskTable(next.snapshot.session.state) };
+    }
+
+    it("starts them together and records each run on its task", async () => {
+      const starts = [
+        Promise.withResolvers<{ runId: string }>(),
+        Promise.withResolvers<{ runId: string }>(),
+      ];
+      startMock.mockImplementation(() => starts[startMock.mock.calls.length - 1]?.promise);
+
+      const dispatching = dispatch(batchOfReviews(0));
+      // Both runs start before either start returns.
+      await vi.waitFor(() => expect(startMock).toHaveBeenCalledTimes(2));
+      starts[1]?.resolve({ runId: "run-bob" });
+      starts[0]?.resolve({ runId: "run-alice" });
+      const { table } = await dispatching;
+
+      expect(table.tasks.map((task) => [task.id, task.run?.runId])).toEqual([
+        ["alice", "run-alice"],
+        ["bob", "run-bob"],
+      ]);
+    });
+
+    it("starts them one by one when the task cap could refuse one, so no run is left unrecorded", async () => {
+      startMock.mockResolvedValue({ runId: "run-alice" });
+
+      const { results, table } = await dispatch(batchOfReviews(MAX_WORKING_TASKS - 1));
+
+      expect(startMock).toHaveBeenCalledOnce();
+      expect(table.tasks.find((task) => task.id === "alice")?.run?.runId).toBe("run-alice");
+      expect(table.tasks.some((task) => task.id === "bob")).toBe(false);
+      expect(results.find((result) => result.callId === "call-bob")).toMatchObject({
+        isError: true,
+      });
+    });
+
+    it("fails only the call whose run did not start", async () => {
+      const alice = Promise.withResolvers<{ runId: string }>();
+      startMock
+        .mockImplementationOnce(() => alice.promise)
+        .mockRejectedValueOnce(new Error("Workflow start rejected"));
+
+      const dispatching = dispatch(batchOfReviews(0));
+      // Bob's start fails while Alice's is still on its way.
+      await vi.waitFor(() => expect(startMock).toHaveBeenCalledTimes(2));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      alice.resolve({ runId: "run-alice" });
+      const { results, table } = await dispatching;
+
+      expect(table.tasks.map((task) => [task.id, task.run?.runId])).toEqual([
+        ["alice", "run-alice"],
+      ]);
+      expect(results.find((result) => result.callId === "call-bob")).toMatchObject({
+        isError: true,
+      });
     });
   });
 });
@@ -1067,6 +1354,268 @@ describe("turnStep", () => {
     expect(result.history.at(-1)).toEqual({
       content: "model call 50",
       role: "assistant",
+    });
+  });
+
+  describe("an approval answered before a cancelled model call", () => {
+    const approvalRequest: InputRequest = {
+      action: {
+        callId: "approval-call",
+        input: { command: "pwd" },
+        kind: "tool-call",
+        toolName: "bash",
+      },
+      allowFreeform: false,
+      display: "confirmation",
+      kind: "tool-approval",
+      options: [
+        { id: "approve", label: "Yes" },
+        { id: "cancel", label: "No" },
+      ],
+      prompt: "Approve tool call: bash",
+      requestId: "approval-1",
+    };
+
+    /**
+     * Answers the parked approval, cancels the model call that follows (or, with `cutTool`, the
+     * approved call while it runs), then sends a message.
+     */
+    async function answerThenCancel(
+      optionId: "approve" | "cancel",
+      options: {
+        readonly cutTool?: boolean;
+        readonly message?: string;
+        /** The answer, or earlier input, waits in the queue instead of arriving with the delivery. */
+        readonly queued?: StepInput;
+      } = {},
+    ) {
+      const { cutTool = false, message, queued } = options;
+      const answered = queued?.inputResponses !== undefined;
+      const parked = withParkedStep(
+        createStubSession({ history: [{ content: "Run pwd.", kind: "user", role: "user" }] }),
+        {
+          event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
+          messages: [
+            {
+              content: [
+                {
+                  input: { command: "pwd" },
+                  toolCallId: "approval-call",
+                  toolName: "bash",
+                  type: "tool-call",
+                },
+                {
+                  approvalId: "approval-1",
+                  toolCallId: "approval-call",
+                  type: "tool-approval-request",
+                },
+              ],
+              role: "assistant",
+            },
+          ],
+          requests: [approvalRequest],
+        },
+      );
+      const start = queued === undefined ? parked : withQueuedInput(parked, queued);
+      const controller = new AbortController();
+      const events: UnstampedMessageStreamEvent[] = [];
+      const execute = vi.fn(async () => {
+        // The tool has started its side effect when the turn is cancelled.
+        if (cutTool && execute.mock.calls.length === 1) {
+          controller.abort(new TurnCancelledError());
+          throw controller.signal.reason;
+        }
+        return "/workspace";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: async () => {
+          if (cutTool || model.doStreamCalls.length > 1) return textStreamResult("Done.");
+          return {
+            stream: new ReadableStream({
+              start(stream) {
+                stream.enqueue({ type: "stream-start", warnings: [] });
+                stream.enqueue({ id: "answer", type: "text-start" });
+                stream.enqueue({ delta: "Interrupted.", id: "answer", type: "text-delta" });
+                controller.abort(new TurnCancelledError());
+              },
+            }),
+          };
+        },
+      });
+      vi.mocked(createExecutionNodeStep).mockImplementation((input) =>
+        createToolLoopHarness({
+          abortSignal: input.abortSignal,
+          handleEvent: async (event, messages) => {
+            events.push(event);
+            await input.handleEvent?.(event, messages);
+          },
+          resolveModel: async () => model,
+          tools: new Map([
+            [
+              "bash",
+              {
+                description: "Run a shell command.",
+                execute,
+                inputSchema: jsonSchema({ type: "object" }),
+                name: "bash",
+              },
+            ],
+          ]),
+        }),
+      );
+      // An adapter without `deliver` passes the answer through as an answer, not a message.
+      const adapter: ChannelAdapter = { kind: "answers" };
+      const bundle = Object.assign({}, createTurnStepTestBundle() as object, {
+        adapterRegistry: { adaptersByKind: new Map([[adapter.kind, adapter]]) },
+      }) as never;
+      vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(bundle);
+      const ctx = new ContextContainer();
+      ctx.set(AuthKey, null);
+      ctx.set(BundleKey, bundle);
+      ctx.set(ChannelKey, adapter);
+      ctx.set(ContinuationTokenKey, "answers");
+      ctx.set(SessionIdKey, "sess-test");
+      installSessionStoreMocks([start]);
+
+      const cancelled = await turnStep({
+        abortSignal: controller.signal,
+        history: parked.history,
+        input: {
+          kind: "deliver",
+          payloads: [
+            {
+              inputResponses: answered ? [] : [{ optionId, requestId: "approval-1" }],
+              message,
+            },
+          ],
+        },
+        sessionWritable: createTestWritable(),
+        serializedContext: serializeContext(ctx),
+        sessionState: createStubSessionState(),
+      });
+      const cancelledEvents = [...events];
+      const session = cancelled.sessionState.snapshot.session;
+
+      events.length = 0;
+      installSessionStoreMocks([session]);
+      const next = await turnStep({
+        history: cancelled.history,
+        input: { kind: "deliver", payloads: [{ message: "next" }] },
+        sessionWritable: createTestWritable(),
+        serializedContext: cancelled.serializedContext,
+        sessionState: cancelled.sessionState,
+      });
+      return { cancelled, cancelledEvents, execute, next, nextEvents: [...events], session };
+    }
+
+    const resolutions = (events: readonly UnstampedMessageStreamEvent[]) =>
+      events.filter((event) => event.type === "input.resolved");
+
+    it("keeps a denial the cancelled step published", async () => {
+      const { cancelled, cancelledEvents, nextEvents, session } = await answerThenCancel("cancel");
+
+      expect(cancelled.action).toBe("cancelled");
+      expect(resolutions(cancelledEvents)).toHaveLength(1);
+      expect(openInputs(storedProjection(session.state))).toEqual([]);
+      expect(parkedSteps(session)).toEqual([]);
+      expect(cancelled.history).toContainEqual({
+        content: [
+          {
+            output: { reason: "Tool execution was denied.", type: "execution-denied" },
+            toolCallId: "approval-call",
+            toolName: "bash",
+            type: "tool-result",
+          },
+        ],
+        role: "tool",
+      });
+      // The next message neither resolves the denied approval again nor asks it again.
+      expect(resolutions(nextEvents)).toEqual([]);
+      expect(nextEvents.map((event) => event.type)).not.toContain("input.requested");
+    });
+
+    it("keeps a message sent with the denial once, and doesn't queue it again", async () => {
+      const { cancelled, next, session } = await answerThenCancel("cancel", {
+        message: "do something else",
+      });
+      const sent = (history: readonly ModelMessage[]) =>
+        history.filter((entry) => entry.role === "user" && entry.content === "do something else");
+
+      expect(cancelled.action).toBe("cancelled");
+      expect(sent(cancelled.history)).toHaveLength(1);
+      expect(queuedInput(session.state)).toBeUndefined();
+      // The next message doesn't consume the preserved one a second time.
+      expect(sent(next.history)).toHaveLength(1);
+      expect(next.history).toContainEqual(
+        expect.objectContaining({ content: "next", role: "user" }),
+      );
+    });
+
+    it("doesn't restore a queued answer the cancelled step consumed", async () => {
+      const { cancelled, next, nextEvents, session } = await answerThenCancel("cancel", {
+        queued: { inputResponses: [{ optionId: "cancel", requestId: "approval-1" }] },
+      });
+
+      expect(cancelled.action).toBe("cancelled");
+      expect(queuedInput(session.state)).toBeUndefined();
+      expect(parkedSteps(session)).toEqual([]);
+      // The next message doesn't carry the answer again as a response to an earlier prompt.
+      expect(resolutions(nextEvents)).toEqual([]);
+      expect(JSON.stringify(next.history)).not.toContain("earlier interactive prompt");
+    });
+
+    it("keeps earlier queued input once, with the denial's message", async () => {
+      const { cancelled, next, session } = await answerThenCancel("cancel", {
+        message: "and this",
+        queued: { message: "earlier" },
+      });
+      const userText = (history: readonly ModelMessage[]) =>
+        JSON.stringify(history.filter((entry) => entry.role === "user"));
+      const count = (text: string, value: string) => text.split(value).length - 1;
+
+      expect(cancelled.action).toBe("cancelled");
+      expect(queuedInput(session.state)).toBeUndefined();
+      expect(count(userText(cancelled.history), "earlier")).toBe(1);
+      expect(count(userText(cancelled.history), "and this")).toBe(1);
+      expect(count(userText(next.history), "earlier")).toBe(1);
+      expect(count(userText(next.history), "and this")).toBe(1);
+    });
+
+    it("doesn't run an approved call again after the cancellation cut it short", async () => {
+      const { cancelled, execute, nextEvents, session } = await answerThenCancel("approve", {
+        cutTool: true,
+      });
+
+      expect(cancelled.action).toBe("cancelled");
+      expect(execute).toHaveBeenCalledOnce();
+      expect(parkedSteps(session)).toEqual([]);
+      expect(cancelled.history).toContainEqual({
+        content: [
+          {
+            output: { type: "error-text", value: APPROVED_CALL_INTERRUPTED_MESSAGE },
+            toolCallId: "approval-call",
+            toolName: "bash",
+            type: "tool-result",
+          },
+        ],
+        role: "tool",
+      });
+      expect(resolutions(nextEvents)).toEqual([]);
+    });
+
+    it("keeps the result of an approved call that ran before the cut", async () => {
+      const { cancelled, execute, nextEvents, session } = await answerThenCancel("approve");
+
+      expect(cancelled.action).toBe("cancelled");
+      expect(parkedSteps(session)).toEqual([]);
+      expect(cancelled.history).toContainEqual(
+        expect.objectContaining({
+          content: [expect.objectContaining({ toolCallId: "approval-call", type: "tool-result" })],
+          role: "tool",
+        }),
+      );
+      expect(resolutions(nextEvents)).toEqual([]);
+      expect(execute).toHaveBeenCalledOnce();
     });
   });
 
@@ -1561,7 +2110,13 @@ describe("turnStep", () => {
     expect(observedSchedule).toBeUndefined();
   });
 
-  it("keeps a session-scoped dynamic model selection when the first turn is cancelled", async () => {
+  it("keeps the dynamic model selection and offered catalog tools a cancelled first turn set", async () => {
+    const CATALOG_TOOLS = {
+      connections: false,
+      searchableSkills: false,
+      skills: false,
+      tools: true,
+    };
     const announcement = "Available skills\n- policy: Tenant policy";
     const session = createStubSession({
       history: [{ role: "user", content: announcement, kind: "user" }],
@@ -1593,6 +2148,7 @@ describe("turnStep", () => {
           id: "anthropic/claude-opus-4.6",
           contextWindowTokens: 1_000_000,
         });
+        ctx.set(OfferedCatalogToolsKey, CATALOG_TOOLS);
         ctx.set(ThreadKey, "discard this turn-scoped mutation");
         ctx.delete(HistoryStateKey);
         throw new TurnCancelledError();
@@ -1617,7 +2173,7 @@ describe("turnStep", () => {
       serializedContext: {
         ...createSerializedContext(),
         [TurnDeliveryIdsKey.name]: ["previous-delivery"],
-        [HistoryStateKey.name]: { availableSkills: announcement },
+        [HistoryStateKey.name]: { announcements: { skills: announcement } },
       },
       sessionState: createStubSessionState(),
     });
@@ -1626,7 +2182,8 @@ describe("turnStep", () => {
       action: "cancelled",
       serializedContext: {
         [TurnDeliveryIdsKey.name]: ["cancelled-delivery"],
-        [HistoryStateKey.name]: { availableSkills: announcement },
+        [HistoryStateKey.name]: { announcements: { skills: announcement } },
+        [OfferedCatalogToolsKey.name]: CATALOG_TOOLS,
         [SessionDynamicModelReferenceKey.name]: {
           id: "anthropic/claude-opus-4.6",
           contextWindowTokens: 1_000_000,
@@ -1640,39 +2197,19 @@ describe("turnStep", () => {
     ]);
   });
 
-  it("preserves a cancelled turn message that carries an attachment", async () => {
+  // #3419: a cancellation at step entry lands before the framework providers exist.
+  it("stages the attachment of a turn cancelled before its first model call", async () => {
     const session = createStubSession();
     installSessionStoreMocks([session]);
-    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue({
-      adapterRegistry: {
-        adaptersByKind: new Map([[threadContextAdapter.kind, threadContextAdapter]]),
-      },
-      compiledArtifactsSource: {},
-      graph: {
-        nodesByNodeId: new Map(),
-        root: {
-          sandboxRegistry: { sandbox: null },
-          turnAgent: TestTurnAgent,
-        },
-      },
-      moduleMap: { nodes: {} },
-      hookRegistry: createRuntimeHookRegistry([]),
-      resolvedAgent: { config: {} },
-      subagentRegistry: {},
-      toolRegistry: {},
-      turnAgent: TestTurnAgent,
-    } as never);
-    vi.mocked(createExecutionNodeStep).mockImplementation(() => {
-      return async (): Promise<StepResult> => {
-        throw new TurnCancelledError();
-      };
-    });
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(createTurnStepTestBundle());
+    const sandbox = mockSandbox({ id: "sbx_cancelled" });
+    vi.mocked(ensureSandboxAccess).mockResolvedValueOnce(sandbox.access as never);
+    const controller = new AbortController();
+    controller.abort(new TurnCancelledError());
 
     const result = await turnStep({
-      input: {
-        kind: "deliver",
-        payloads: [{ message: "attach:look at this" }],
-      },
+      abortSignal: controller.signal,
+      input: { kind: "deliver", payloads: [{ message: "attach:look at this" }] },
       sessionWritable: createTestWritable(),
       serializedContext: createSerializedContext(),
       sessionState: createStubSessionState(),
@@ -1683,12 +2220,15 @@ describe("turnStep", () => {
       {
         content: [
           { text: "thread=unset; user=look at this", type: "text" },
-          expect.objectContaining({ filename: "diagram.png", type: "file" }),
+          expect.objectContaining({ data: expect.any(URL), type: "file" }),
         ],
         kind: "user",
         role: "user",
       },
     ]);
+    const [, file] = result.history[0]!.content as [unknown, { data: URL }];
+    expect(isSandboxRefUrl(file.data)).toBe(true);
+    expect(sandbox.writes).toHaveLength(1);
   });
 
   it("prepares the session trace boundary before instrumenting a first-turn delivery", async () => {
@@ -1703,6 +2243,7 @@ describe("turnStep", () => {
     });
     instrumentationRuntimeOverride.current = {
       forceFlush: async () => undefined,
+      idGenerator: new AgentSpanIdGenerator(),
       hooks: {
         capturesContent: false,
         publish: async (event) => {
@@ -2185,19 +2726,22 @@ describe("turnStep", () => {
     const bob: SessionAuthContext = { ...alice, principalId: "slack:bob" };
     installSessionStoreMocks([
       createStubSession({
-        state: setPendingAuthorization(undefined, {
-          challenges: [
-            {
-              attemptId: "attempt-linear",
-              challenge: { url: "https://idp.example/authorize" },
-              hookUrl: "https://agent.example/callback",
-              name: "linear",
-              principal: { id: "slack:alice", issuer: "slack", type: "user" },
-              principalId: "slack:alice",
-              requester: alice,
-            },
-          ],
-        }),
+        state: writeHitlState(
+          { state: undefined },
+          {
+            signIns: [
+              {
+                attemptId: "attempt-linear",
+                challenge: { url: "https://idp.example/authorize" },
+                hookUrl: "https://agent.example/callback",
+                name: "linear",
+                principal: { id: "slack:alice", issuer: "slack", type: "user" },
+                principalId: "slack:alice",
+                requester: alice,
+              },
+            ],
+          },
+        ).state,
       }),
     ]);
     const ctx = new ContextContainer();
@@ -2241,20 +2785,23 @@ describe("turnStep", () => {
       name: "authorization",
       withPending: (session: HarnessSession): HarnessSession => ({
         ...session,
-        state: setPendingAuthorization(session.state, {
-          challenges: [
-            {
-              attemptId: "attempt-statuspage",
-              challenge: {
-                instructions: "Sign in to continue",
-                url: "https://idp.example/authorize",
+        state: writeHitlState(
+          { state: session.state },
+          {
+            signIns: withSignIns(readHitlState(session.state).signIns, [
+              {
+                attemptId: "attempt-statuspage",
+                challenge: {
+                  instructions: "Sign in to continue",
+                  url: "https://idp.example/authorize",
+                },
+                hookUrl: "https://app.example/callback",
+                name: "statuspage",
+                principal: { type: "app" },
               },
-              hookUrl: "https://app.example/callback",
-              name: "statuspage",
-              principal: { type: "app" },
-            },
-          ],
-        }),
+            ]),
+          },
+        ).state,
       }),
     },
     {
@@ -2609,8 +3156,8 @@ describe("turnStep", () => {
         config: {},
         dynamicToolResolvers: [dynamicToolResolver],
       },
-      subagentRegistry: {},
-      toolRegistry: {},
+      subagentRegistry: { dynamicResolvers: [], preparedTools: [] },
+      toolRegistry: { toolsByName: new Map() },
       turnAgent: TestTurnAgent,
     } as never;
     vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
@@ -2690,7 +3237,7 @@ describe("turnStep", () => {
       };
       const session = createStubSession({
         history: [{ content: "visible", kind: "user", role: "user" }],
-        state: setPendingAuthorization({ retained: "yes" }, { challenges: [challenge] }),
+        state: writeHitlState({ state: { retained: "yes" } }, { signIns: [challenge] }).state,
       });
       const turnInput = {
         context: ["Current context"],
@@ -2724,7 +3271,7 @@ describe("turnStep", () => {
       let observedStepInput: unknown = "not-called";
       vi.mocked(createExecutionNodeStep).mockImplementation(() => {
         return async (session, stepInput): Promise<StepResult> => {
-          observedPendingAuth = getPendingAuthorization(session.state);
+          observedPendingAuth = readHitlState(session.state).signIns;
           observedStepInput = stepInput;
           return { next: null, session };
         };
@@ -2750,7 +3297,7 @@ describe("turnStep", () => {
         sessionState: createStubSessionState(),
       });
 
-      expect(observedPendingAuth).toBeUndefined();
+      expect(observedPendingAuth).toEqual([]);
       expect(observedStepInput).toEqual(
         inputKind === "current"
           ? { message: `thread=unset; user=${turnInput.message}` }
@@ -2763,7 +3310,7 @@ describe("turnStep", () => {
       ]);
       const persistedSession = vi.mocked(createDurableSessionValues).mock.calls.at(-1)?.[0];
       expect(persistedSession?.state?.retained).toBe("yes");
-      expect(getPendingAuthorization(persistedSession?.state)).toBeUndefined();
+      expect(readHitlState(persistedSession?.state).signIns).toEqual([]);
     },
   );
 });

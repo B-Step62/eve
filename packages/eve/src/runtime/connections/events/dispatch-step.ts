@@ -1,7 +1,7 @@
 import { principalOf } from "#execution/session/principal.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { AuthKey, SessionIdKey } from "#context/keys.js";
-import { contextStorage } from "#context/container.js";
+import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import { createWorkflowRuntime } from "#execution/workflow-runtime.js";
 import { createAttachSessionFn } from "#channel/session.js";
@@ -73,15 +73,25 @@ export async function prepareConnectionEventStep(
     // A timeout may have hidden Connect's successful subscribe response. Reconcile
     // the saved intent with its original idempotency key before trusting the ID.
     if (binding.subscription === undefined) {
-      const adapter = await backend.createAdapter({
-        principal,
-        connection: { url: connection.url },
-        destination: { path: connectionEventDestination(connection.connectionName) },
-      });
-      const subscription = await adapter.subscribe({
-        ...binding.request,
-        options: { timeout: 30_000 },
-      });
+      const request = binding.request;
+      const subscription = await withConnectionEventSpan(
+        {
+          ctx,
+          connectionName: connection.connectionName,
+          operation: "recover",
+          bindingId: binding.id,
+          requestTraceContext: input.payload.requestTraceContext,
+          deliveryId: delivery.deliveryId,
+        },
+        async () => {
+          const adapter = await backend.createAdapter({
+            principal,
+            connection: { url: connection.url },
+            destination: { path: connectionEventDestination(connection.connectionName) },
+          });
+          return adapter.subscribe({ ...request, options: { timeout: 30_000 } });
+        },
+      );
       binding = { ...binding, subscription };
     }
     if (
@@ -124,32 +134,51 @@ export async function dispatchConnectionEventStep(
     )
       return { serializedContext: input.serializedContext };
     const bundle = ctx.require(BundleKey);
-    const common = {
-      auth: binding.auth,
-      deliveryId: delivery.deliveryId,
-      origin: {
-        sessionId: binding.sessionId,
-        connectionName: binding.connectionName,
-        subscriptionId: delivery.subscriptionId,
-      },
-      attachSession: createAttachSessionFn(
-        createWorkflowRuntime({ compiledArtifactsSource: bundle.compiledArtifactsSource }),
-        { turnPolicy: "queue" },
-      ),
-    };
     const callbacks = connection.experimental_events!;
     // The callback runs as its creator without replacing the last conversational caller.
     ctx.setVirtualContext(AuthKey, binding.auth);
-    await contextStorage.run(ctx, async () => {
-      if ("event" in delivery) await callbacks.onEvent({ ...common, event: delivery.event });
-      else if (delivery.control.type === "gap")
-        await callbacks.onGap?.({
-          ...common,
-          cursor: delivery.control.cursor,
-          truncated: delivery.control.truncated,
-        });
-      else await callbacks.onTerminated?.({ ...common, error: delivery.control.error });
-    });
+    const operation =
+      "event" in delivery ? "onEvent" : delivery.control.type === "gap" ? "onGap" : "onTerminated";
+    await withConnectionEventSpan(
+      {
+        ctx,
+        connectionName: connection.connectionName,
+        operation,
+        bindingId: binding.id,
+        subscriptionId: delivery.subscriptionId,
+        deliveryId: delivery.deliveryId,
+        requestTraceContext: input.payload.requestTraceContext,
+      },
+      async (reference) => {
+        const common = {
+          auth: binding.auth,
+          deliveryId: delivery.deliveryId,
+          origin: {
+            sessionId: binding.sessionId,
+            connectionName: binding.connectionName,
+            subscriptionId: delivery.subscriptionId,
+          },
+          attachSession: createAttachSessionFn(
+            createWorkflowRuntime({ compiledArtifactsSource: bundle.compiledArtifactsSource }),
+            {
+              turnPolicy: "queue",
+              channelKind: "mcp-events",
+              channelName: binding.connectionName,
+              requestId: delivery.deliveryId,
+              requestTraceContext: reference,
+            },
+          ),
+        };
+        if ("event" in delivery) await callbacks.onEvent({ ...common, event: delivery.event });
+        else if (delivery.control.type === "gap")
+          await callbacks.onGap?.({
+            ...common,
+            cursor: delivery.control.cursor,
+            truncated: delivery.control.truncated,
+          });
+        else await callbacks.onTerminated?.({ ...common, error: delivery.control.error });
+      },
+    );
     // Bound checkpoint size; durable external effects still use deliveryId as
     // their idempotency key when Connect redelivers beyond this recent window.
     const completed = Object.entries(state.receipts)

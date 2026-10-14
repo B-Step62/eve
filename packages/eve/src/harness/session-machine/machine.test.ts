@@ -146,6 +146,7 @@ async function respond(machine: Machine, input: StepInput) {
       approvalKey: () => undefined,
       delivery: typed,
       policy: noPolicy(typed),
+      searchable: () => false,
       takeQueued: delivered.takeQueued,
     }),
   );
@@ -535,6 +536,7 @@ describe("answers", () => {
         approvalKey: (request) => `deploy:${String(request.action.input.service)}`,
         delivery: { inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }] },
         policy: noPolicy(),
+        searchable: () => false,
         takeQueued: false,
       }),
     );
@@ -578,14 +580,10 @@ describe("answers", () => {
       return machine;
     }
 
-    it("asks whether to continue and ends the turn", async () => {
+    it("asks whether to continue and holds the turn", async () => {
       const machine = await exhausted();
 
-      expect(machine.events.slice(-3)).toEqual([
-        "input.requested",
-        "turn.completed",
-        "session.waiting",
-      ]);
+      expect(machine.events.slice(-2)).toEqual(["input.requested", "turn.waiting"]);
       expect(machine.projection.inputs[request.requestId]?.status).toBe("open");
     });
 
@@ -603,14 +601,14 @@ describe("answers", () => {
       }
     });
 
-    it("receives a message now, and queues only what waits for the answer", async () => {
+    it("queues a message until the budget answer", async () => {
       const machine = await exhausted();
 
       const decision = await respond(machine, { message: "Any update?" });
 
-      expect(decision.next).toBe("defer-message");
-      expect(decision.input?.message).toBe("Any update?");
-      expect(machine.view().turn.queued).toBeUndefined();
+      expect(decision.next).toBe("park");
+      expect(decision.input).toBeUndefined();
+      expect(machine.view().turn.queued?.message).toBe("Any update?");
     });
 
     it("takes the prompt's answer from text while an approval is also open", async () => {

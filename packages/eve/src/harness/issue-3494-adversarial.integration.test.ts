@@ -6,13 +6,17 @@ import {
   getApprovalAuditState,
   markApprovalCandidateAuthorizationRequired,
 } from "#harness/hitl/candidates.js";
-import { setPendingAuthorization } from "#harness/authorization.js";
+
+import { withSignIns } from "#harness/hitl/sign-ins.js";
+import { readHitlState, writeHitlState } from "#harness/hitl/requests.js";
+
 import { z } from "zod";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { SessionKey } from "#context/keys.js";
 import { createProjectionRecorder } from "#internal/testing/session-projection-recorder.js";
 import { runtimeWait, storedProjection, suspendedSteps } from "#harness/session-machine/view.js";
 import { openInputs } from "#protocol/session-projection.js";
+import { REPLY_TOOL_NAME } from "#protocol/reply-tool.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import type { HarnessSession, StepInput, StepResult } from "#harness/types.js";
@@ -286,9 +290,9 @@ for (const beside of ["workflow", "gateA"] as const) {
       type: "object",
     };
     const f = fixture(`final-output-beside-${beside}`, false, undefined, schema);
-    f.script.push([{ toolName: beside }, { toolName: "final_output", input: { title: "Early" } }]);
+    f.script.push([{ toolName: beside }, { toolName: REPLY_TOOL_NAME, input: { title: "Early" } }]);
     await f.drive({ message: "Run it, then report." });
-    f.script.push([{ toolName: "final_output", input: { title: "Done" } }]);
+    f.script.push([{ toolName: REPLY_TOOL_NAME, input: { title: "Done" } }]);
     const result =
       beside === "workflow" ? await f.finishRuntime() : await f.drive(f.respond("gateA"));
 
@@ -296,7 +300,7 @@ for (const beside of ["workflow", "gateA"] as const) {
     expect(suspendedSteps(f.session.state)).toEqual([]);
     const rereads = JSON.stringify(f.prompts.at(-1));
     expect(rereads).toContain(beside === "workflow" ? "runtime-RESULT" : "gateA-RESULT");
-    expect(rereads).toContain("Your final output wasn't delivered");
+    expect(rereads).toContain("Your reply wasn't delivered");
   });
 }
 
@@ -401,12 +405,8 @@ it("keeps a message waiting behind a budget prompt and runs it after the grant",
 
   const waitingStart = f.events.length;
   expect((await f.drive({ message: "Also say goodbye." })).held).toEqual({ kind: "request" });
-  // The message is received into a turn that holds on the prompt; the grant resumes it.
-  expect(f.events.slice(waitingStart).map((event) => event.type)).toEqual([
-    "turn.started",
-    "message.received",
-    "turn.waiting",
-  ]);
+  // The message waits for the grant in the held turn.
+  expect(f.events.slice(waitingStart).map((event) => event.type)).toEqual(["turn.waiting"]);
   expect(f.pending().map((r) => r.kind)).toEqual(["session-limit"]);
 
   f.script.push(calls("read"), "FINAL");
@@ -614,17 +614,15 @@ it("keeps the turn held while a responder signs in, and fails the sign-in on exp
       challenge: { url: "https://example.com/sign-in" },
     },
   ];
-  f.updateSession((session) => ({
-    ...session,
-    state: setPendingAuthorization(
-      markApprovalCandidateAuthorizationRequired({
-        state: session.state,
-        candidateId: candidate.candidateId,
-        authorizationChallenges: challenges,
-      }),
-      { challenges },
-    ),
-  }));
+  f.updateSession((session) => {
+    const state = markApprovalCandidateAuthorizationRequired({
+      state: session.state,
+      candidateId: candidate.candidateId,
+      authorizationChallenges: challenges,
+    });
+    const signIns = withSignIns(readHitlState(state).signIns, challenges);
+    return { ...session, state: writeHitlState({ state }, { signIns }).state };
+  });
   f.record(
     createAuthorizationRequiredEvent({
       attemptId: "notes-attempt",

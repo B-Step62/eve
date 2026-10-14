@@ -1,3 +1,4 @@
+import { eventTracing } from "#internal/testing/event-tracing.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { handleConnectionEventRequest } from "#internal/nitro/routes/connection-events.js";
 import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
@@ -105,4 +106,60 @@ it("does not expose a receiver when the connection has not opted in", async () =
   load.mockResolvedValue({ resolvedAgent: { connections: [] } });
   expect((await handleConnectionEventRequest(input, request())).status).toBe(404);
   expect(verify).not.toHaveBeenCalled();
+});
+
+it("traces verified acceptance and propagates a serializable request parent to the durable inbox", async () => {
+  const tracing = eventTracing();
+  tracing.enable();
+  try {
+    const req = request();
+    req.headers.set("traceparent", `00-${"1".repeat(32)}-${"2".repeat(16)}-01`);
+    expect((await handleConnectionEventRequest(input, req)).status).toBe(202);
+    const spans = tracing.exporter.getFinishedSpans();
+    expect(spans).toHaveLength(1);
+    const span = spans[0]!;
+    expect(span.name).toBe("agent.connection.event.request");
+    expect(span.parentSpanContext?.spanId).toBe("2".repeat(16));
+    expect(span.attributes).toMatchObject({
+      "http.response.status_code": 202,
+      "agent.connection.name": "issues",
+      "agent.run.id": "session-1",
+      "connect.delivery.id": "del_1",
+    });
+    expect(JSON.parse(JSON.stringify(resume.mock.calls[0]![1])).requestTraceContext).toEqual({
+      traceId: span.spanContext().traceId,
+      spanId: span.spanContext().spanId,
+      traceFlags: 1,
+    });
+    expect(JSON.stringify(span.attributes)).not.toContain("untouched-body");
+  } finally {
+    await tracing.close();
+  }
+});
+
+it("keeps unverified identifiers and error content out of request spans while preserving retry responses", async () => {
+  const tracing = eventTracing();
+  tracing.enable();
+  const logging = vi.spyOn(console, "error").mockImplementation(() => {});
+  verify.mockRejectedValue(
+    Object.assign(new Error("secret-provider-response"), { code: "ETIMEDOUT" }),
+  );
+  try {
+    const response = await handleConnectionEventRequest(input, request());
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("5");
+    expect(await response.text()).toBe("");
+    const span = tracing.exporter.getFinishedSpans()[0]!;
+    expect(span.status.code).toBe(2);
+    expect(JSON.stringify(logging.mock.calls)).toContain("ETIMEDOUT");
+    expect(JSON.stringify(logging.mock.calls)).toContain("verify");
+    expect(span.attributes["agent.connection.name"]).toBeUndefined();
+    expect(span.attributes["agent.run.id"]).toBeUndefined();
+    expect(
+      JSON.stringify([span.attributes, span.events, span.status, logging.mock.calls]),
+    ).not.toContain("secret-provider-response");
+  } finally {
+    logging.mockRestore();
+    await tracing.close();
+  }
 });
