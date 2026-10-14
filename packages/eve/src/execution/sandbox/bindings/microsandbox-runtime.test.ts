@@ -56,7 +56,7 @@ describe("microsandbox package compatibility", () => {
         options: resolveMicrosandboxOptions({}),
       }),
     ).rejects.toThrow(
-      "The installed `microsandbox` package is not compatible with eve, which supports microsandbox@0.5.5. Install it with `pnpm add -D microsandbox@0.5.5`.",
+      "The installed `microsandbox` package is not compatible with eve, which supports microsandbox@0.5.5. Install that version in your application (for example `pnpm add -D microsandbox@0.5.5`).",
     );
   });
 });

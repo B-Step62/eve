@@ -504,7 +504,7 @@ export async function loadMicrosandboxModule(input: {
   if (typeof module.isInstalled !== "function" || typeof module.setup !== "function") {
     throw new Error(
       `The installed \`microsandbox\` package is not compatible with eve, which supports ${MICROSANDBOX_INSTALL_SPECIFIER}. ` +
-        `Install it with \`pnpm add -D ${MICROSANDBOX_INSTALL_SPECIFIER}\`.`,
+        `Install that version in your application (for example \`pnpm add -D ${MICROSANDBOX_INSTALL_SPECIFIER}\`).`,
     );
   }
 
