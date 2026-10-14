@@ -43,6 +43,24 @@ describe("microsandbox package installation guidance", () => {
   });
 });
 
+describe("microsandbox package compatibility", () => {
+  it("rejects an installed package with an unsupported API", async () => {
+    // microsandbox 0.7 renamed `isInstalled`/`setup` to `isRuntimeInstalled`/`installRuntime`.
+    const loadOptionalPackage = vi.fn(async () => ({ isRuntimeInstalled: () => true }));
+    await expect(
+      loadMicrosandboxModule({
+        host: {
+          loadOptionalPackage: loadOptionalPackage as never,
+          resolveProjectPath: (path) => path,
+        },
+        options: resolveMicrosandboxOptions({}),
+      }),
+    ).rejects.toThrow(
+      "The installed `microsandbox` package is not compatible with eve, which supports microsandbox@0.5.5. Install it with `pnpm add -D microsandbox@0.5.5`.",
+    );
+  });
+});
+
 const metadataState = vi.hoisted(() => ({
   writeSessionMetadata: vi.fn(),
 }));

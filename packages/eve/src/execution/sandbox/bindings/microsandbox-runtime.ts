@@ -500,6 +500,14 @@ export async function loadMicrosandboxModule(input: {
     }),
   );
 
+  // An app can already have a newer microsandbox installed, whose API differs.
+  if (typeof module.isInstalled !== "function" || typeof module.setup !== "function") {
+    throw new Error(
+      `The installed \`microsandbox\` package is not compatible with eve, which supports ${MICROSANDBOX_INSTALL_SPECIFIER}. ` +
+        `Install it with \`pnpm add -D ${MICROSANDBOX_INSTALL_SPECIFIER}\`.`,
+    );
+  }
+
   input.log?.("checking microsandbox VM runtime");
   if (!module.isInstalled()) {
     if (!input.options.setup.autoInstall || !isEveDevEnvironment()) {
