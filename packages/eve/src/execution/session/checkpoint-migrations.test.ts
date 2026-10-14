@@ -158,7 +158,7 @@ describe("migrateSessionCheckpoint", () => {
     },
   );
 
-  it("moves a v13 checkpoint's task table and waiting runs into one record of running work", () => {
+  it("moves a v15 checkpoint's task table and waiting runs into one record of running work", () => {
     const run = {
       callId: "call",
       toolName: "report",
@@ -167,7 +167,7 @@ describe("migrateSessionCheckpoint", () => {
     };
     const task = { taskId: "task_1", status: "working" };
     const result = migrateSessionCheckpoint(
-      v13Checkpoint({
+      v15Checkpoint({
         "app.counter": 4,
         "eve.taskTable": { version: 1, tasks: [task] },
         "eve.workflowTool": { version: 4, runs: [run] },
@@ -180,9 +180,9 @@ describe("migrateSessionCheckpoint", () => {
     });
   });
 
-  it("drops a v13 checkpoint's empty stores of running work", () => {
+  it("drops a v15 checkpoint's empty stores of running work", () => {
     const result = migrateSessionCheckpoint(
-      v13Checkpoint({
+      v15Checkpoint({
         "app.counter": 4,
         "eve.taskTable": { version: 1, tasks: [] },
         "eve.workflowTool": { version: 4, runs: [] },
@@ -200,22 +200,22 @@ describe("migrateSessionCheckpoint", () => {
     ],
     [
       { "eve.taskTable": { version: 1, tasks: [] }, "eve.work": { version: 1 } },
-      "v13 checkpoint already holds the running-work record",
+      "v15 checkpoint already holds the running-work record",
     ],
-  ])("refuses v13 running work it cannot move (%j)", (state, detail) => {
-    expect(migrateSessionCheckpoint(v13Checkpoint(state))).toEqual({
+  ])("refuses v15 running work it cannot move (%j)", (state, detail) => {
+    expect(migrateSessionCheckpoint(v15Checkpoint(state))).toEqual({
       kind: "incompatible",
-      detail: `checkpoint version 13: ${detail}`,
+      detail: `checkpoint version 15: ${detail}`,
     });
   });
 
   it.each([
     [11, { "eve.tasks": {} }],
     [11, { "eve.runtime.workflowToolRuns": [] }],
-    [13, { "eve.tasks": {}, "eve.taskTable": { version: 1, tasks: [] } }],
-    [13, { "eve.runtime.workflowToolRuns": [] }],
+    [15, { "eve.tasks": {}, "eve.taskTable": { version: 1, tasks: [] } }],
+    [15, { "eve.runtime.workflowToolRuns": [] }],
   ])("refuses a v%s checkpoint holding running work in a retired store (%j)", (version, state) => {
-    const checkpoint = version === 11 ? v11Checkpoint(state) : v13Checkpoint(state);
+    const checkpoint = version === 11 ? v11Checkpoint(state) : v15Checkpoint(state);
     expect(migrateSessionCheckpoint(checkpoint)).toEqual({
       kind: "incompatible",
       detail: `checkpoint version ${version}: session holds running work in a retired store`,
@@ -372,9 +372,9 @@ function v11Checkpoint(state: Record<string, unknown>) {
   };
 }
 
-function v13Checkpoint(state: Record<string, unknown>) {
+function v15Checkpoint(state: Record<string, unknown>) {
   return {
-    version: 13,
+    version: 15,
     serializedContext: {},
     history: [{ role: "user", kind: "user", content: "Alice asks for a report." }],
     sessionTimeoutMs: false,

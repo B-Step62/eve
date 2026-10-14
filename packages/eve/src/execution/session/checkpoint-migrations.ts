@@ -110,7 +110,7 @@ const CHECKPOINT_UPGRADES: Readonly<
     };
   },
   // The task table and the workflow runs a turn waits on moved into one record of running work.
-  14: upgradeRunningWork,
+  15: upgradeRunningWork,
 };
 
 /**
@@ -228,7 +228,7 @@ function upgradeIdleLifecycle(checkpoint: CheckpointRecord): CheckpointRecord {
 }
 
 /**
- * Version 13 kept the task table (`eve.taskTable`, version 1) and the workflow runs a turn waits on
+ * Version 15 kept the task table (`eve.taskTable`, version 1) and the workflow runs a turn waits on
  * (`eve.workflowTool`, version 4) apart. Both move into the session's one record of running work.
  */
 function upgradeRunningWork(checkpoint: CheckpointRecord): CheckpointRecord {
@@ -242,7 +242,7 @@ function upgradeRunningWork(checkpoint: CheckpointRecord): CheckpointRecord {
     return checkpoint;
   }
   if (state["eve.work"] !== undefined)
-    refuse("v13 checkpoint already holds the running-work record");
+    refuse("v15 checkpoint already holds the running-work record");
   const calls = readWorkflowToolRuns(state);
   const tasks = readTasks(state);
   const nextState = omitKeys(state, ["eve.taskTable", "eve.workflowTool"]);
@@ -261,7 +261,7 @@ function upgradeRunningWork(checkpoint: CheckpointRecord): CheckpointRecord {
   };
 }
 
-/** The runs of a version-4 workflow tool run registry, as checkpoints 11 through 13 hold it. */
+/** The runs of a version-4 workflow tool run registry, as checkpoints 11 through 15 hold it. */
 function readWorkflowToolRuns(state: CheckpointRecord): unknown[] {
   refuseRetiredStores(state);
   const registry = state["eve.workflowTool"];
