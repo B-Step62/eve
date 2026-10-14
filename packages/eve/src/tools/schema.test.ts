@@ -378,6 +378,25 @@ describe("defineJsonSchema", () => {
 });
 
 describe("toModelSchema", () => {
+  it("accepts Standard Schemas implemented as callable functions", async () => {
+    // e.g. ArkType types are functions that carry `~standard`.
+    const source = Object.assign(function schema() {}, {
+      "~standard": {
+        version: 1 as const,
+        vendor: "test",
+        validate: (value: unknown) => ({ value }),
+        jsonSchema: { input: () => ({ type: "string" }), output: () => ({ type: "number" }) },
+      },
+    });
+
+    expect(isToolSchema(source)).toBe(true);
+    expect(serializeInputSchema(source)).toEqual({ type: "string" });
+    expect(serializeOutputSchema(source)).toEqual({ type: "number" });
+    const model = asSchema(toModelSchema(source, "input"));
+    expect(await model.jsonSchema).toEqual({ type: "string" });
+    await expect(model.validate?.("ok")).resolves.toEqual({ success: true, value: "ok" });
+  });
+
   it("lowers Standard Schemas onto AI SDK schemas the AI SDK uses as-is", async () => {
     const sources = [
       defineJsonSchema({ properties: { city: { type: "string" } }, type: "object" }),
