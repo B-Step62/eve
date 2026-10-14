@@ -75,7 +75,7 @@ export interface EveAgentStoreInit<TData> {
    * Keep the session stream open while the session is idle, so the store sees events that arrive
    * between turns from schedules, channels, or other clients. When false, the store closes the
    * stream once no turn, task, or sign-in is pending, and reopens it from the session cursor on
-   * the next send, answer, or resume.
+   * the next send, answer, or resume. Change it later with `setFollowIdle()`.
    *
    * @default true
    */

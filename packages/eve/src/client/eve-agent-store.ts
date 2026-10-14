@@ -71,7 +71,7 @@ export class EveAgentStore<TData> {
   #attached = false;
   readonly #conversationClient: ConversationClient<TData>;
   readonly #followChildStreams: boolean;
-  readonly #followIdle: boolean;
+  #followIdle: boolean;
   readonly #externalSession: boolean;
   readonly #subscribers = new Set<() => void>();
   #activeTurn: ActiveTurn | undefined;
@@ -134,6 +134,20 @@ export class EveAgentStore<TData> {
   subscribe(callback: () => void): () => void {
     this.#subscribers.add(callback);
     return () => void this.#subscribers.delete(callback);
+  }
+
+  /**
+   * Starts or stops following the session between turns. Turning it on opens the stream from the
+   * session cursor; turning it off closes the stream once the session is idle.
+   */
+  setFollowIdle(followIdle: boolean): void {
+    if (this.#followIdle === followIdle) return;
+    this.#followIdle = followIdle;
+    if (!followIdle) {
+      if (this.#activeTurn === undefined) this.#closeStreamWhenIdle();
+    } else if (this.#session !== undefined) {
+      this.#ensureStream();
+    }
   }
 
   /** Creates this store's owned session without starting a turn. */

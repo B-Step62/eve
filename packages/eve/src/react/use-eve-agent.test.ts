@@ -288,6 +288,41 @@ describe("useEveAgent", () => {
     expect(agent?.session?.sessionId).toBe("session_1");
   });
 
+  it("opens and closes the idle session stream as followIdle changes", async () => {
+    const streams: AbortSignal[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_request, init) => {
+      streams.push(init!.signal!);
+      return new Response(new ReadableStream<Uint8Array>(), {
+        headers: { [EVE_STREAM_VERSION_HEADER]: EVE_MESSAGE_STREAM_VERSION },
+      });
+    });
+    function Chat({ followIdle }: { readonly followIdle: boolean }) {
+      useEveAgent({ followIdle, initialSession: { sessionId: "session_1", streamIndex: 0 } });
+      return null;
+    }
+    let root: ReturnType<typeof create> | undefined;
+
+    await act(async () => {
+      root = create(createElement(Chat, { followIdle: false }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(streams).toHaveLength(0);
+
+    await act(async () => {
+      root?.update(createElement(Chat, { followIdle: true }));
+    });
+    await act(async () => {
+      await vi.waitFor(() => expect(streams).toHaveLength(1));
+    });
+    expect(streams[0]?.aborted).toBe(false);
+
+    await act(async () => {
+      root?.update(createElement(Chat, { followIdle: false }));
+    });
+    expect(streams[0]?.aborted).toBe(true);
+    expect(streams).toHaveLength(1);
+  });
+
   it("does not abort prewarming when the option changes to false", async () => {
     const accepted = createDeferred<Response>();
     const fetchMock = vi

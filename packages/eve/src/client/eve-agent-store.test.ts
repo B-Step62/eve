@@ -1151,6 +1151,57 @@ describe("EveAgentStore with followIdle disabled", () => {
     expect(store.snapshot.events).toHaveLength(9);
   });
 
+  it("opens the stream when followIdle turns on and closes it when it turns off", async () => {
+    const live = controlledStreamResponse();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(live.response);
+    const store = createStore({
+      followIdle: false,
+      initialSession: { sessionId: "session_1", streamIndex: 0 },
+      reducer: defaultMessageReducer(),
+    });
+
+    store.setFollowIdle(true);
+    await vi.waitFor(() => expect(streamRequests(fetchMock)).toHaveLength(1));
+    const stream = streamRequests(fetchMock)[0]!;
+    for (const event of turnEvents()) live.emit(event);
+    await vi.waitFor(() => expect(store.snapshot.events).toHaveLength(3));
+    expect(stream.init?.signal?.aborted).toBe(false);
+
+    store.setFollowIdle(false);
+
+    expect(stream.init?.signal?.aborted).toBe(true);
+    expect(store.snapshot.session?.streamIndex).toBe(3);
+  });
+
+  it("keeps a running turn's stream when followIdle turns off", async () => {
+    const live = controlledStreamResponse();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_request, init) =>
+        init?.method === "POST" ? startedResponse() : live.response,
+      );
+    const store = createStore({
+      initialSession: { sessionId: "session_1", streamIndex: 0 },
+      reducer: defaultMessageReducer(),
+    });
+    const events = turnEvents().map((event) => ({
+      ...event,
+      meta: { ...event.meta, deliveryIds: ["delivery_1"] },
+    }));
+
+    const send = store.send({ message: "Hello" });
+    await vi.waitFor(() => expect(streamRequests(fetchMock)).toHaveLength(1));
+    const stream = streamRequests(fetchMock)[0]!;
+    store.setFollowIdle(false);
+    expect(stream.init?.signal?.aborted).toBe(false);
+
+    for (const event of events) live.emit(event);
+    await send;
+
+    expect(store.snapshot.status).toBe("ready");
+    expect(stream.init?.signal?.aborted).toBe(true);
+  });
+
   it("closes the stream after resuming a settled session", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

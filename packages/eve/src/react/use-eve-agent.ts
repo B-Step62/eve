@@ -117,7 +117,10 @@ export interface UseEveAgentOptions<TData> extends EveAgentStoreCallbacks<TData>
   /**
    * Keep the session stream open between turns to show events that arrive from schedules,
    * channels, or other clients. Set to false to close it once the session is idle and reopen it
-   * on the next send, answer, or resume. @default true
+   * on the next send, answer, or resume. React observes this value across renders: changing it
+   * to true opens the stream, and changing it to false closes it once the session is idle.
+   *
+   * @default true
    */
   readonly followIdle?: boolean;
   /**
@@ -161,7 +164,7 @@ export function useEveAgent<TData>(
  *
  * Session-shaping options (`host`, `reducer`, `session`, `initialEvents`,
  * `initialSession`, `auth`, `headers`, `optimistic`, `resume`) are read once
- * when the store is created; remount to change them. `prewarm` and lifecycle
+ * when the store is created; remount to change them. `prewarm`, `followIdle`, and lifecycle
  * callbacks (`onError`, `onEvent`, `onFinish`, `onSessionChange`, `prepareSend`)
  * refresh on every render.
  */
@@ -174,6 +177,7 @@ export function useEveAgent<TData>(
   const [autoResumePending, setAutoResumePending] = useState(resumeOnMountRef.current);
   const [prewarmResetGeneration, setPrewarmResetGeneration] = useState(0);
   const shouldPrewarm = options.prewarm ?? false;
+  const followIdle = options.followIdle ?? true;
 
   if (!storeRef.current) {
     if (
@@ -192,7 +196,7 @@ export function useEveAgent<TData>(
       initialSession: options.initialSession,
       optimistic: options.optimistic,
       followSubagents: options.followSubagents,
-      followIdle: options.followIdle,
+      followIdle,
       reducer,
       session: options.session,
     });
@@ -229,6 +233,9 @@ export function useEveAgent<TData>(
       });
     };
   }, [store]);
+  useEffect(() => {
+    store.setFollowIdle(followIdle);
+  }, [followIdle, store]);
   useEffect(() => {
     if (!shouldPrewarm) return;
     const timeout = setTimeout(() => void store.prewarm().catch(() => {}), 0);
