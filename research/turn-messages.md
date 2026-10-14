@@ -27,6 +27,7 @@ Evals must judge what the agent sent. This proposal replaces the single `message
 | eval task result             | `finalMessage: string \| null` | last turn's `message`                      |
 | `eve invoke` JSON            | `outcome.message`              | same                                       |
 | MCP `agent_start/get/update` | `result?: JsonValue`           | same, always a string                      |
+| `ctx.agent(...).result()`    | `message: string \| undefined` | the child turn's task output, if a string  |
 
 A reply is a `message.completed` whose `finishReason` is not `"tool-calls"`. Child and schedule
 sessions report text written before a task wait as `"tool-calls"`, so it is narration there. Root
@@ -50,8 +51,9 @@ export interface TurnMessage {
 | eval task result               | `finalMessages: readonly TurnMessage[]` |
 | `eve invoke` JSON              | `outcome.messages`                      |
 | MCP `agent_start/get/update`   | `messages: TurnMessage[]`               |
+| `ctx.agent(...).result()`      | `messages: readonly TurnMessage[]`      |
 
-`message`, `finalMessage`, and MCP `result` are removed. No surface joins replies into one
+`message`, `finalMessage`, and MCP `result` are removed, including on `ctx.agent` results. No surface joins replies into one
 string: a join loses the boundary between replies, and any separator is arbitrary. A caller that
 needs one string joins the texts itself.
 
@@ -100,12 +102,25 @@ merges replies.
 - [AI SDK `generateText`](https://ai-sdk.dev/docs/reference/ai-sdk-core/generate-text) returns
   `steps`, each with its text and `finishReason`. Its top-level `text` is the final step only.
 
+## Child agent replies
+
+A child's reply reaches a `ctx.agent` caller as its settled turn's `output`, one JSON value.
+The same `output` is the tool result the parent model sees. The child's settled turn also carries
+its `messages`, next to `output`:
+
+```text
+child turn settles ── output ────▶ parent model's tool result (unchanged)
+                  └── messages ──▶ ctx.agent(...).result().messages
+```
+
+The model-visible tool result does not change. `ctx.agent` reads `messages` from the settled turn
+instead of narrowing `output` to a string, so a workflow tool sees every reply and can tell a
+cut-off reply from a complete one.
+
 ## Scope
 
-- `ctx.agent(...).result().message` is unchanged. A child's reply reaches the parent as task
-  output, a single string without a finish reason. Carrying records there needs the task transport
-  to change and is a separate proposal.
-- Stream events, channel delivery, and Slack rendering are unchanged.
+- Stream events, channel delivery, Slack rendering, and the model-visible tool result of an agent
+  call are unchanged.
 
 ## Open questions
 
