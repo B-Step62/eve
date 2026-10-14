@@ -64,6 +64,18 @@ describe("reserved channel identities", () => {
       expect((parseCreateBody({ message: "hello", sessionId }) as Response).status).toBe(400);
     },
   );
+  it("rejects a reserved session id combined with an operation id", () => {
+    expect(
+      (
+        parseCreateBody({
+          message: "hello",
+          sessionId,
+          deliveryId: "dlv_1",
+          operationId: "op",
+        }) as Response
+      ).status,
+    ).toBe(400);
+  });
   it("rejects a reserved session id without a delivery id", () => {
     expect((parseCreateBody({ message: "hello", sessionId }) as Response).status).toBe(400);
     expect((parseCreateBody({ sessionId }) as Response).status).toBe(400);

@@ -256,7 +256,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
                 auth: forwarded.auth,
                 operationId: body.operationId,
               });
-        if (operationToken !== undefined && body.sessionId === undefined) {
+        if (operationToken !== undefined) {
           const owner = await args.resolveSession(operationToken);
           if (owner !== undefined) {
             return Response.json(createdSessionBody(owner.id, body), {

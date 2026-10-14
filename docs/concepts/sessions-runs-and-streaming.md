@@ -60,7 +60,8 @@ the caller's abort signal. Do not wait
 for `session.waiting` on a prewarmed session: initialization and its first events require a message.
 
 A caller that reserves the `sessionId` in the create body must also send a `deliveryId`;
-a reserved `sessionId` without one is rejected with `400`. With both ids, the caller can
+a reserved `sessionId` without one is rejected with `400`. A reserved `sessionId` cannot be
+combined with `operationId` either (`400`): use one retry key per create. With both ids, the caller can
 re-send the same create safely. eve answers `202` only once run storage records the session for that
 delivery, so a re-send of an accepted create also gets `202`. If the session is recorded for a
 different delivery, the create returns `409 session_exists`: send the message to

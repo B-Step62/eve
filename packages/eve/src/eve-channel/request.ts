@@ -83,6 +83,14 @@ function validateReservedIds(
       { status: 400 },
     );
   }
+  // `operationId` names its session by a continuation alias; a reserved `sessionId` names it
+  // by run id. One create gets one acceptance authority, so the two cannot be combined.
+  if (create && input.sessionId !== undefined && input.operationId !== undefined) {
+    return Response.json(
+      { ok: false, error: "A reserved sessionId cannot be combined with operationId." },
+      { status: 400 },
+    );
+  }
   if (
     input.deliveryId !== undefined &&
     (typeof input.deliveryId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(input.deliveryId))

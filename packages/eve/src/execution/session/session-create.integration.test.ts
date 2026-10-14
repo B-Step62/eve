@@ -3,7 +3,7 @@ import { ThrottleError } from "#compiled/@workflow/errors/index.js";
 import type { MessageStreamEvent } from "#protocol/message.js";
 import { dispatchChannelRequest } from "#internal/nitro/routes/channel-dispatch.js";
 import { eveChannel } from "#public/channels/eve.js";
-import { none } from "#public/channels/auth.js";
+import { httpBasic } from "#public/channels/auth.js";
 import { getRun, getWorld } from "#internal/workflow/runtime.js";
 import { captureTurnEvents } from "#internal/testing/events.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
@@ -27,7 +27,10 @@ async function post(path: string, body: Record<string, unknown>) {
     {
       req: new Request(`https://example.com${path}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          authorization: `Basic ${btoa("ops:secret")}`,
+          "content-type": "application/json",
+        },
         body: JSON.stringify(body),
       }),
       context: { params: sessionId === undefined ? {} : { sessionId } },
@@ -69,7 +72,10 @@ function httpAgent(name: string) {
       {
         logicalPath: "channels/eve.ts",
         loadNamespace: async () => ({
-          default: eveChannel({ auth: [none()], turnPolicy: "queue" }),
+          default: eveChannel({
+            auth: [httpBasic({ username: "ops", password: "secret" })],
+            turnPolicy: "queue",
+          }),
         }),
       },
     ],
@@ -119,6 +125,45 @@ describe("session create with reserved ids over HTTP", () => {
       ]);
       expect(results.map((result) => result.status)).toEqual([400, 400]);
       expect(await runCreatedCount(sessionId)).toBe(0);
+    });
+  });
+
+  it("rejects a reserved session create that also carries an operation id", async () => {
+    const runtime = await httpAgent("session-create-operation-and-reserved");
+    await runtime.run(async () => {
+      const sessionIds = [reserveSessionId(), reserveSessionId()];
+      const results = await Promise.all(
+        sessionIds.map((sessionId, index) =>
+          post("/eve/v1/session", {
+            message: `from ${index}`,
+            sessionId,
+            deliveryId: `dlv_${index}`,
+            operationId: "op_shared",
+          }),
+        ),
+      );
+      expect(results.map((result) => result.status)).toEqual([400, 400]);
+      for (const sessionId of sessionIds) expect(await runCreatedCount(sessionId)).toBe(0);
+    });
+  });
+
+  it("keeps operation-only creates idempotent", async () => {
+    const runtime = await httpAgent("session-create-operation-only");
+    await runtime.run(async () => {
+      const first = await post("/eve/v1/session", { message: "hello", operationId: "op_only" });
+      expect(first.status).toBe(202);
+      const sessionId = first.body.sessionId as string;
+      const stream = captureTurnEvents(getRun(sessionId));
+      try {
+        const turn = await stream.nextTurn();
+        expect(answered(turn)).toContain("hello");
+        const second = await post("/eve/v1/session", { message: "hello", operationId: "op_only" });
+        expect(second.status).toBe(202);
+        expect(second.body.sessionId).toBe(sessionId);
+      } finally {
+        stream.dispose();
+        await getRun(sessionId).cancel();
+      }
     });
   });
 
