@@ -1,0 +1,20 @@
+diff --git a/dist/flushable-stream.js b/dist/flushable-stream.js
+index 2aa0ffb4092a0097fb35bbf3bcfe37ba3e587594..a9392c1b3503028ea8095b7bb3c9b0a8c8f850f2 100644
+--- a/dist/flushable-stream.js
++++ b/dist/flushable-stream.js
+@@ -308,6 +308,15 @@ export function trackFlushableWritable(writable, state, WritableStreamConstructo
+         })();
+         return settlement;
+     };
++    // The same durability barrier a group-commit sink exposes, at the producer
++    // boundary: resolves once every frame written through this handle is
++    // durable, rejects with the pipe's or sink's failure. A step can await it
++    // mid-body without releasing its writer lock. (vercel/workflow#4876)
++    Object.defineProperty(tracked, STREAM_DRAIN_SYMBOL, {
++        value: () => drainFlushableSnapshot(state),
++        enumerable: false,
++        writable: false,
++    });
+     return tracked;
+ }
+ /**

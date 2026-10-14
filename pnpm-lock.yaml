@@ -255,6 +255,9 @@ catalogs:
 overrides:
   '@vercel/cli-config>zod': 4.5.4
 
+patchedDependencies:
+  '@workflow/core@5.0.0-beta.57': 89abcd3fcded7cff3dd95fb8217e954fcb3c1bac62a195ccc6dfccbe01d4f102
+
 importers:
 
   .:
@@ -1697,7 +1700,7 @@ importers:
         version: 1.28.8
       '@workflow/core':
         specifier: 5.0.0-beta.57
-        version: 5.0.0-beta.57(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))
+        version: 5.0.0-beta.57(patch_hash=89abcd3fcded7cff3dd95fb8217e954fcb3c1bac62a195ccc6dfccbe01d4f102)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))
       '@workflow/errors':
         specifier: 5.0.0-beta.24
         version: 5.0.0-beta.24
@@ -21364,7 +21367,7 @@ snapshots:
 
   '@webgpu/types@0.1.72': {}
 
-  '@workflow/core@5.0.0-beta.57(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))':
+  '@workflow/core@5.0.0-beta.57(patch_hash=89abcd3fcded7cff3dd95fb8217e954fcb3c1bac62a195ccc6dfccbe01d4f102)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))':
     dependencies:
       '@aws-sdk/credential-provider-web-identity': 3.972.49
       '@jridgewell/trace-mapping': 0.3.31
