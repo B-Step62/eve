@@ -1,4 +1,3 @@
-import type { ConnectionEventInboxPayload } from "#runtime/connections/events/delivery.js";
 import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
 import { createHook, getWorkflowMetadata, type Hook } from "#compiled/@workflow/core/index.js";
 import { releaseSessionHooksStep } from "#execution/session-inbox/release-step.js";
@@ -24,7 +23,6 @@ export interface SessionFailurePayload {
 }
 
 export type SessionInboxPayload =
-  | ConnectionEventInboxPayload
   | SessionFailurePayload
   | HookPayload
   | SessionCommand

@@ -88,6 +88,7 @@ import {
   SESSION_TIMEOUT_WORKFLOW_NAME,
   WORKFLOW_TOOL_RUN_WORKFLOW_NAME,
   WORKFLOW_ENTRY_NAME,
+  CONNECTION_EVENT_WORKFLOW_NAME,
 } from "#execution/stable-workflow-names.js";
 const EVE_PACKAGE_INFO = resolveInstalledPackageInfo();
 
@@ -121,6 +122,10 @@ export const sessionTimeoutWorkflowReference = {
 /** Stable workflow reference for authored workflow tool runs. */
 export const workflowToolRunWorkflowReference = {
   workflowId: `workflow//${STABLE_ID_BASE}//${WORKFLOW_TOOL_RUN_WORKFLOW_NAME}`,
+};
+
+export const connectionEventWorkflowReference = {
+  workflowId: `workflow//${STABLE_ID_BASE}//${CONNECTION_EVENT_WORKFLOW_NAME}`,
 };
 
 /**

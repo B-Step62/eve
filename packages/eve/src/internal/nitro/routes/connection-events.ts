@@ -9,7 +9,8 @@ import type { NitroArtifactsConfig } from "#internal/nitro/routes/runtime-artifa
 import { resolveNitroCompiledArtifactsSource } from "#internal/nitro/routes/runtime-artifacts.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 import { connectionEventDestination } from "#runtime/connections/events/path.js";
-import { resumeSessionInbox } from "#execution/session-inbox/resume.js";
+import { resumeHook } from "#internal/workflow/runtime.js";
+import { connectionEventHookToken } from "#runtime/connections/events/workflow.js";
 import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
 import { isObject } from "#shared/guards.js";
 
@@ -59,20 +60,16 @@ export async function handleConnectionEventRequest(
         subscriptionId: delivery.subscriptionId,
       });
       for (const [key, value] of Object.entries(identifiers)) span?.setAttribute(key, value);
-      stage = "inbox";
+      stage = "handler";
       const requestTraceContext = connectionEventTraceContext(span?.spanContext());
-      // Context locates the inbox. The owner authorizes the stored binding after
-      // the subscribe step commits, before invoking any authored callback.
-      await resumeSessionInbox(
-        { sessionId: origin.sessionId },
-        {
-          kind: "connection-event",
-          connectionName: input.connectionName,
-          bindingId: origin.bindingId,
-          delivery,
-          requestTraceContext,
-        },
-      );
+      // Context locates the handler. Its saved binding authorizes execution.
+      await resumeHook(connectionEventHookToken(origin.bindingId), {
+        kind: "connection-event",
+        connectionName: input.connectionName,
+        bindingId: origin.bindingId,
+        delivery,
+        requestTraceContext,
+      });
       return new Response(null, { status: 202 });
     } catch (error) {
       if (HookNotFoundError.is(error)) return new Response(null, { status: 410 });

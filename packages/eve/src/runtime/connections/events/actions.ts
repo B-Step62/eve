@@ -1,4 +1,9 @@
 import { createMcpTraceFetch } from "#runtime/connections/mcp-tracing.js";
+import {
+  startConnectionEventOwner,
+  retireConnectionEventOwner,
+} from "#runtime/connections/events/owner.js";
+import { connectionEventStore } from "#runtime/connections/events/store.js";
 import { createMcpTracing } from "#tracing/eve/mcp.js";
 import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 import { principalOf } from "#execution/session/principal.js";
@@ -11,7 +16,7 @@ import {
   type Experimental_ManagedMCPEvents as ManagedEvents,
 } from "#compiled/@ai-sdk/mcp/index.js";
 import { contextStorage } from "#context/container.js";
-import { AuthKey, SessionIdKey } from "#context/keys.js";
+import { AuthKey, SessionIdKey, SessionTraceSeedKey } from "#context/keys.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import type { ResolvedConnectionDefinition } from "#runtime/types.js";
 import type {
@@ -23,7 +28,6 @@ import { parseJsonObject } from "#shared/json.js";
 import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
 import { connectionEventDestination } from "#runtime/connections/events/path.js";
 import {
-  ConnectionEventsStateKey,
   type ConnectionEventsState,
   type EventBinding,
 } from "#runtime/connections/events/state.js";
@@ -77,7 +81,6 @@ export class ConnectionEventActions {
     const executionPrincipal = principalOf(ctx.get(AuthKey));
     const connector = authorization.vercelConnect.connector;
     const owned = (binding: EventBinding) =>
-      binding.sessionId === sessionId &&
       binding.connectionName === this.connection.connectionName &&
       binding.instanceId === this.connection.instanceId &&
       binding.connector === connector &&
@@ -183,8 +186,7 @@ export class ConnectionEventActions {
 
   /** Existing watches must remain stoppable when upstream discovery fails. */
   recoveryMetadata(): ConnectionToolMetadata[] {
-    const { ctx, owned } = this.scope();
-    if (!Object.values(ctx.get(ConnectionEventsStateKey)?.bindings ?? {}).some(owned)) return [];
+    this.scope();
     return managementMetadata().map((tool) => ({
       ...tool,
       description: `MCP discovery is unavailable. ${tool.description}`,
@@ -199,19 +201,15 @@ export class ConnectionEventActions {
     const args = parseJsonObject(input);
     const { ctx, principal, connector, backend, sessionId, owner, executionPrincipal, owned } =
       this.scope();
-    const currentState = () =>
-      ctx.ensure(ConnectionEventsStateKey, (): ConnectionEventsState => ({
-        bindings: {},
-        receipts: {},
-      }));
-    const save = (binding: EventBinding): EventBinding => {
-      const state = currentState();
-      // A status refresh that began before stop must never reopen the binding.
-      const saved = { ...binding, retired: state.bindings[binding.id]?.retired ?? binding.retired };
-      ctx.set(ConnectionEventsStateKey, {
-        receipts: state.receipts,
-        bindings: { ...state.bindings, [binding.id]: saved },
-      });
+    const store = connectionEventStore(this.connection, {
+      principalKey: owner,
+      executionPrincipal,
+    });
+    let state: ConnectionEventsState = { bindings: await store.list(), receipts: {} };
+    const currentState = () => state;
+    const save = async (binding: EventBinding): Promise<EventBinding> => {
+      const saved = await store.save(binding);
+      state = { ...state, bindings: { ...state.bindings, [binding.id]: saved } };
       return saved;
     };
     if (name === LIST)
@@ -224,8 +222,11 @@ export class ConnectionEventActions {
           owned(binding) && (binding.subscription?.id === args.id || binding.id === args.id),
       );
       if (binding === undefined)
-        throw new Error("Unknown subscription for this session and account.");
-      if (name === STOP) binding = save({ ...binding, retired: true });
+        throw new Error("Unknown subscription for this caller and account.");
+      if (name === STOP) {
+        binding = await save({ ...binding, retired: true });
+        await retireConnectionEventOwner(binding.id);
+      }
       const events = await backend.createAdapter({
         principal,
         connection: { url: this.connection.url },
@@ -247,7 +248,7 @@ export class ConnectionEventActions {
           subscription,
           retired: name === STOP ? true : binding.retired,
         };
-        binding = save(binding);
+        binding = await save(binding);
       }
       const subscriptionId = binding.subscription!.id;
       const subscription = await withConnectionEventSpan(
@@ -264,7 +265,7 @@ export class ConnectionEventActions {
             : events.getSubscription({ id: subscriptionId, options: { timeout: 30_000 } }),
       );
       binding = { ...binding, retired: name === STOP ? true : binding.retired, subscription };
-      binding = save(binding);
+      binding = await save(binding);
       return subscriptionResult(binding);
     }
     return this.withClient(async (events) => {
@@ -305,7 +306,9 @@ export class ConnectionEventActions {
       let binding = currentState().bindings[id];
       if (binding === undefined) {
         if (Object.keys(currentState().bindings).length >= MAX_BINDINGS)
-          throw new Error("This session has reached its 100-subscription limit.");
+          throw new Error(
+            "This caller has reached its 100-subscription limit for this connection.",
+          );
         const request: ManagedEventSubscribeInput = {
           name: definition.name,
           arguments: structuredClone(eventArguments) as ManagedEventSubscribeInput["arguments"],
@@ -322,13 +325,15 @@ export class ConnectionEventActions {
           principalKey: owner,
           executionPrincipal,
           auth: structuredClone(ctx.get(AuthKey) ?? null),
+          traceSeed: ctx.get(SessionTraceSeedKey),
           request,
         };
-        binding = save(binding);
+        binding = await save(binding);
       }
       if (!owned(binding) || binding.retired)
         throw new Error("Subscription binding is no longer active.");
       if (binding.subscription !== undefined) return subscriptionResult(binding);
+      await startConnectionEventOwner(binding, ctx.require(BundleKey));
       const request = binding.request;
       const subscription = await withConnectionEventSpan(
         {
@@ -353,7 +358,7 @@ export class ConnectionEventActions {
           ) as ManagedEventSubscribeInput["arguments"],
         },
       };
-      binding = save(binding);
+      binding = await save(binding);
       return subscriptionResult(binding);
     });
   }
@@ -379,15 +384,15 @@ function managementMetadata(): ConnectionToolMetadata[] {
     {
       name: LIST,
       description:
-        "List this caller's event subscriptions created in this session. status is Connect's last-known state; retired=true means eve accepts no new event work for this subscription, regardless of status.",
+        "List this caller's event subscriptions for this connection. status is Connect's last-known state; retired=true means eve accepts no new event work for this subscription, regardless of status.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     ...[GET, STOP].map((name) => ({
       name,
       description:
         name === GET
-          ? "Get one of this caller's subscriptions in this session and refresh its Connect status. retired=true means eve accepts no new event work for this subscription, regardless of status."
-          : "Stop one of this caller's subscriptions in this session. eve retires it before requesting cancellation from Connect; retired=true does not confirm upstream cancellation.",
+          ? "Get one of this caller's subscriptions and refresh its Connect status. retired=true means eve accepts no new event work for this subscription, regardless of status."
+          : "Stop one of this caller's subscriptions. eve retires it before requesting cancellation from Connect; retired=true does not confirm upstream cancellation.",
       inputSchema: {
         type: "object",
         properties: { id: { type: "string" } },

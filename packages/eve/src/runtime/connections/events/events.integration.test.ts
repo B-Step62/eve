@@ -1,9 +1,18 @@
 import * as workflowRuntime from "#execution/workflow-runtime.js";
+import { inMemory } from "#public/memory/file/backends/in-memory.js";
+import { connectionEventStore } from "#runtime/connections/events/store.js";
+import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
+import { principalOf } from "#execution/session/principal.js";
+import {
+  connectionEventWorkflow,
+  connectionEventHookToken,
+} from "#runtime/connections/events/workflow.js";
+import { start, resumeHook } from "#internal/workflow/runtime.js";
+import { waitForHook } from "#internal/testing/workflow-test-helpers.js";
 import { eventTracing } from "#internal/testing/event-tracing.js";
 import { trace } from "@opentelemetry/api";
 import { connectionEntry } from "#execution/catalog/connection-entry.js";
 import { ConnectionRegistryImpl } from "#runtime/connections/registry.js";
-import { stopConnectionEventStep } from "#runtime/connections/events/cleanup-step.js";
 import { compileFromMemory } from "#internal/testing/compile-from-memory.js";
 import { resolveRuntimeAgentGraph } from "#runtime/resolve-agent-graph.js";
 import { createRuntimeAdapterRegistry } from "#runtime/channels/registry.js";
@@ -11,10 +20,6 @@ import { defineMcpClientConnection } from "#public/definitions/connections/mcp.j
 import { afterEach, beforeEach, expect, it, vi, onTestFinished } from "vitest";
 import { ContextContainer, contextStorage, loadContext } from "#context/container.js";
 import { defineState } from "#public/definitions/state.js";
-import { runPreparedSession, type SessionStart } from "#execution/session/program.js";
-import { SessionExecution } from "#execution/session/turn.js";
-import type { SessionInboxHandle, SessionInboxPayload } from "#execution/session-inbox/inbox.js";
-import { createTestSessionState } from "#internal/testing/session-state.js";
 import { AuthKey, SessionIdKey, SessionTraceSeedKey } from "#context/keys.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
@@ -25,22 +30,24 @@ import {
   prepareConnectionEventStep,
   dispatchConnectionEventStep,
 } from "#runtime/connections/events/dispatch-step.js";
-import type { ConnectionEventInboxPayload } from "#runtime/connections/events/delivery.js";
+import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
+import { listToolMetadata } from "#execution/catalog/connection-auth.js";
 import type { ResolvedConnectionDefinition } from "#runtime/types.js";
 import type {
   ConnectionEventsAdapter,
   ManagedEventSubscribeInput,
   ManagedEventSubscription,
 } from "#shared/connection-events.js";
-import type { SessionStepState } from "#execution/publish-session-events.js";
-import { applyValueDelta } from "#shared/value-delta.js";
-import { SessionInputQueue } from "#execution/session/input-queue.js";
 
 const { createClient, loadBundle } = vi.hoisted(() => ({
   createClient: vi.fn(),
   loadBundle: vi.fn(),
 }));
 vi.mock("#compiled/@ai-sdk/mcp/index.js", () => ({ createMCPClient: createClient }));
+vi.mock("#runtime/connections/events/owner.js", () => ({
+  startConnectionEventOwner: vi.fn(async () => {}),
+  retireConnectionEventOwner: vi.fn(async () => {}),
+}));
 vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
   getCompiledRuntimeAgentBundle: loadBundle,
 }));
@@ -57,7 +64,7 @@ let subscriber: ReturnType<typeof vi.fn<ConnectionEventsAdapter["subscribe"]>>;
 let callback: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<void>>>;
 let gap: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<void>>>;
 let terminated: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<void>>>;
-let initial: SessionStepState;
+let initial: { serializedContext: Record<string, unknown> };
 let eventSchema: Record<string, unknown>;
 const callbackState = defineState("events-test.receipts", () => [] as string[]);
 
@@ -113,7 +120,12 @@ beforeEach(async () => {
         experimental_events: { createAdapter: vi.fn(async () => adapter), verify: vi.fn() },
       },
     },
-    experimental_events: { onEvent: callback, onGap: gap, onTerminated: terminated },
+    experimental_events: {
+      storage: inMemory(),
+      onEvent: callback,
+      onGap: gap,
+      onTerminated: terminated,
+    },
   };
   const { manifest, moduleMap } = await compileFromMemory({
     model: "openai/gpt-5.4",
@@ -175,8 +187,6 @@ beforeEach(async () => {
   }));
   initial = {
     serializedContext: {},
-    sessionState: {} as SessionStepState["sessionState"],
-    sessionWritable: new WritableStream(),
   };
 });
 afterEach(() => {
@@ -256,61 +266,23 @@ it("discovers through the released AI SDK and subscribes through the backend wit
   );
 });
 
-it.each<SessionStart>([
-  { kind: "first-message" },
-  { kind: "turn", input: undefined },
-  { kind: "parked" },
-])(
-  "dispatches events through the session owner starting from $kind without starting a model turn",
-  async (start) => {
-    await watch();
-    const messages: SessionInboxPayload[] = [payload()];
-    const inbox: SessionInboxHandle = {
-      claimedTokens: [],
-      claimSessionHook: async () => {},
-      claimSessionHooks: async () => {},
-      next: async () => messages.shift(),
-      drain: () => messages.splice(0),
-      takeLeading: () => [],
-      hasPending: () => messages.length > 0,
-      whenPending: async () => {},
-      onDelivery: () => () => {},
-      onInterrupt: () => () => {},
-      restore: (values) => messages.push(...values),
-      dispose: async () => {},
-      release: async () => messages.splice(0),
-    };
-    const turn = vi
-      .spyOn(SessionExecution.prototype, "runTurn")
-      .mockResolvedValue({ kind: "park" });
-    await runPreparedSession(
-      {
-        anchor: { kind: "self" },
-        caller: undefined,
-        deploymentId: "deployment-1",
-        history: [],
-        start,
-        serializedContext: serializeContext(ctx),
-        sessionId: "session-1",
-        sessionState: createTestSessionState({ sessionId: "session-1" }),
-        sessionTimeoutMs: false,
-        sessionWritable: new WritableStream(),
-      },
-      inbox,
-    );
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(turn).toHaveBeenCalledTimes(start.kind === "turn" ? 1 : 0);
-  },
-);
-
-it.each(["available", "catalog unavailable", "connection unavailable"])(
+it.each(["available", "filtered", "catalog unavailable", "connection unavailable"])(
   "returns subscription results through eve's connection tool entry with MCP %s",
   async (availability) => {
     connection = { ...connection, headers: { account: "alice" } };
+    if (availability === "filtered")
+      connection = {
+        ...connection,
+        tools: { allow: [] },
+        toolCall: { providedArguments: { arguments: () => ({ project: "REMOTE_ONLY" }) } },
+      };
     const registry = new ConnectionRegistryImpl([connection]);
     try {
       await contextStorage.run(ctx, async () => {
-        const [tool] = await registry.getClient(connection.connectionName).getToolMetadata();
+        const [tool] = await listToolMetadata(
+          connection.connectionName,
+          registry.getClient(connection.connectionName),
+        );
         const execute = (name: string, input: unknown) =>
           connectionEntry(registry, connection, name).execute!(input, {
             toolCallId: name,
@@ -323,10 +295,11 @@ it.each(["available", "catalog unavailable", "connection unavailable"])(
           status: "active",
           retired: false,
         });
+        expect(requested[0]!.arguments).toEqual({ project: "ABC" });
         expect(await execute("events_list_subscriptions", {})).toMatchObject({
           subscriptions: [{ id: "sub_0" }],
         });
-        if (availability !== "available") {
+        if (availability.includes("unavailable")) {
           if (availability === "connection unavailable") await registry.dispose();
           createClient.mockRejectedValue(new Error("MCP unavailable"));
         }
@@ -339,11 +312,9 @@ it.each(["available", "catalog unavailable", "connection unavailable"])(
           status: "stopped",
           retired: true,
         });
-        if (availability !== "available") {
+        if (availability.includes("unavailable")) {
           setUser("bob");
-          await expect(
-            registry.getClient(connection.connectionName).getToolMetadata(),
-          ).rejects.toThrow("MCP unavailable");
+          expect(await execute("events_list_subscriptions", {})).toEqual({ subscriptions: [] });
         }
       });
     } finally {
@@ -389,14 +360,29 @@ function setUser(id: string) {
 async function watch(callId = "watch-1") {
   return contextStorage.run(ctx, async () => {
     const tools = await actions.metadata();
-    return await actions.execute(
-      tools[0]!.name,
-      { arguments: { project: "ABC" }, expiresAt: null },
-      { callId },
-    );
+    const authorization = connection.authorization;
+    if (authorization === undefined || typeof authorization === "function")
+      throw new Error("Static auth required");
+    try {
+      return await actions.execute(
+        tools[0]!.name,
+        { arguments: { project: "ABC" }, expiresAt: null },
+        { callId },
+      );
+    } finally {
+      // Build the handler context from the durable registry, not session state.
+      const owner = principalKey(
+        resolveConnectionPrincipal(connection.connectionName, authorization, ctx),
+      );
+      const store = connectionEventStore(connection, {
+        principalKey: owner,
+        executionPrincipal: principalOf(ctx.get(AuthKey)),
+      });
+      ctx.set(ConnectionEventsStateKey, { bindings: await store.list(), receipts: {} });
+    }
   });
 }
-function payload(): ConnectionEventInboxPayload {
+function payload(): ConnectionEventPayload {
   const binding = Object.values(ctx.require(ConnectionEventsStateKey).bindings)[0]!;
   return {
     kind: "connection-event",
@@ -418,25 +404,19 @@ function payload(): ConnectionEventInboxPayload {
     },
   };
 }
-async function prepare(message: ConnectionEventInboxPayload) {
+async function prepare(message: ConnectionEventPayload) {
   const result = await prepareConnectionEventStep({ ...initial, payload: message });
   initial = {
     ...initial,
-    serializedContext: applyValueDelta(
-      initial.serializedContext,
-      result.stateDelta.serializedContext,
-    ),
+    serializedContext: result.serializedContext,
   };
   return result;
 }
-async function dispatch(message: ConnectionEventInboxPayload) {
+async function dispatch(message: ConnectionEventPayload) {
   const result = await dispatchConnectionEventStep({ ...initial, payload: message });
   initial = {
     ...initial,
-    serializedContext: applyValueDelta(
-      initial.serializedContext,
-      result.stateDelta.serializedContext,
-    ),
+    serializedContext: result.serializedContext,
   };
 }
 
@@ -528,7 +508,7 @@ it("does not authorize delivery based on its context, connection name, or event 
       },
     },
   ])
-    expect((await prepare(candidate as ConnectionEventInboxPayload)).accepted).toBe(false);
+    expect((await prepare(candidate as ConnectionEventPayload)).accepted).toBe(false);
   expect(callback).not.toHaveBeenCalled();
 });
 
@@ -540,7 +520,7 @@ it("persists termination before its callback and does not execute later normal e
     typeof normal.delivery,
     { event: unknown }
   >;
-  const message: ConnectionEventInboxPayload = {
+  const message: ConnectionEventPayload = {
     ...normal,
     delivery: {
       ...envelope,
@@ -590,15 +570,31 @@ it("keeps failed callbacks pending for durable retry and prevents a duplicate su
   expect(callback).toHaveBeenCalledTimes(2);
 });
 
-it("queues verified events independently of steering and model-turn selection", async () => {
+it("registers and retires a durable event handler without a conversation session", async () => {
+  const bindingId = crypto.randomUUID();
+  const run = await start(connectionEventWorkflow, [{ bindingId, serializedContext: {} }]);
+  try {
+    await waitForHook(run, { token: connectionEventHookToken(bindingId) });
+    await resumeHook(connectionEventHookToken(bindingId), { kind: "retire" });
+    await run.returnValue;
+    expect(callback).not.toHaveBeenCalled();
+  } finally {
+    await run.cancel().catch(() => {});
+  }
+});
+
+it("lets the creator manage a watch from a later session without copying subscription state", async () => {
   await watch();
-  const queue = new SessionInputQueue();
-  queue.enqueueConnectionEvent(payload());
-  expect(
-    queue.takeSteering(new Set(), { principal: "alice", callerCallId: undefined }),
-  ).toBeUndefined();
-  expect(queue.takeNext()?.kind).toBe("connection-event");
-  expect(queue.takeNext()).toBeUndefined();
+  ctx.set(SessionIdKey, "session-2");
+  ctx.set(ConnectionEventsStateKey, { bindings: {}, receipts: {} });
+  await contextStorage.run(ctx, async () => {
+    expect(
+      await actions.execute("events_list_subscriptions", {}, { callId: "list" }),
+    ).toMatchObject({ subscriptions: [{ id: "sub_0", retired: false }] });
+    expect(
+      await actions.execute("events_unsubscribe", { id: "sub_0" }, { callId: "stop" }),
+    ).toMatchObject({ id: "sub_0", retired: true, status: "stopped" });
+  });
 });
 
 it("records a gap before dispatch and keeps the subscription available for later events", async () => {
@@ -609,7 +605,7 @@ it("records a gap before dispatch and keeps the subscription available for later
     typeof normal.delivery,
     { event: unknown }
   >;
-  const message: ConnectionEventInboxPayload = {
+  const message: ConnectionEventPayload = {
     ...normal,
     delivery: { ...envelope, control: { type: "gap", cursor: "cursor-2", truncated: true } },
   };
@@ -673,40 +669,6 @@ it("can stop an uncertain creation by its local ID without contacting the MCP se
   expect((await prepare(payload())).accepted).toBe(false);
 });
 
-it("reconciles pending creations during cleanup and surfaces cancellation failure", async () => {
-  const tracing = eventTracing();
-  tracing.enable();
-  onTestFinished(() => tracing.close());
-  const accepted = subscriber.getMockImplementation()!;
-  subscriber.mockImplementationOnce(async (input) => {
-    await accepted(input);
-    throw new Error("response lost");
-  });
-  await expect(watch()).rejects.toThrow("response lost");
-  const binding = Object.values(ctx.require(ConnectionEventsStateKey).bindings)[0]!;
-  const input = { serializedContext: serializeContext(ctx), bindingId: binding.id };
-  vi.mocked(adapter.unsubscribe).mockRejectedValueOnce(new Error("Connect unavailable"));
-  await expect(stopConnectionEventStep(input)).rejects.toThrow("Connect unavailable");
-  await stopConnectionEventStep(input);
-  expect(adapter.unsubscribe).toHaveBeenLastCalledWith({
-    id: "sub_0",
-    options: { timeout: 30_000 },
-  });
-  expect(new Set(requested.map((request) => request.idempotencyKey)).size).toBe(1);
-  const spans = tracing.exporter.getFinishedSpans();
-  expect(
-    spans
-      .filter((span) => span.name === "agent.connection.event.cleanup")
-      .map((span) => span.status.code),
-  ).toEqual([2, 1]);
-  expect(spans.filter((span) => span.name === "agent.connection.event.recover")).toHaveLength(2);
-  expect(
-    spans
-      .filter((span) => span.name === "agent.connection.event.unsubscribe")
-      .map((span) => span.attributes["connect.subscription.id"]),
-  ).toEqual(["sub_0", "sub_0"]);
-});
-
 it("bounds completed delivery history while retaining pending receipts", async () => {
   await watch();
   const state = ctx.require(ConnectionEventsStateKey);
@@ -742,7 +704,7 @@ it.each(["event", "gap", "terminated"] as const)(
       initial = { ...initial, serializedContext: serializeContext(ctx) };
       const message = payload();
       const delivery = message.delivery;
-      const tracedMessage: ConnectionEventInboxPayload = {
+      const tracedMessage: ConnectionEventPayload = {
         ...message,
         requestTraceContext: { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 },
         delivery:

@@ -1,5 +1,6 @@
 import type { Session } from "#channel/session.js";
 import type { SessionAuthContext } from "#channel/types.js";
+import type { MemoryDocumentBackend } from "#public/memory/file/backend.js";
 
 /** Framework-owned origin captured when the authorized caller subscribes. */
 export interface Experimental_ConnectionEventOrigin {
@@ -27,6 +28,8 @@ export interface Experimental_ConnectionEvent {
 
 /** Opts a static Connect-backed MCP connection into managed webhook events. */
 export interface Experimental_ConnectionEvents {
+  /** Durable subscription registry. Defaults to private Vercel Blob in production. */
+  readonly storage?: MemoryDocumentBackend;
   /** Called durably after verification and subscription binding checks. */
   readonly onEvent: (
     input: Experimental_ConnectionEventContext & {

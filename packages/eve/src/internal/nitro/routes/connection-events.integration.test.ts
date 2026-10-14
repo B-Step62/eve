@@ -8,7 +8,7 @@ const { verify, resume, load } = vi.hoisted(() => ({
   resume: vi.fn(),
   load: vi.fn(),
 }));
-vi.mock("#execution/session-inbox/resume.js", () => ({ resumeSessionInbox: resume }));
+vi.mock("#internal/workflow/runtime.js", () => ({ resumeHook: resume }));
 vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
   getCompiledRuntimeAgentBundle: load,
 }));
@@ -50,7 +50,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("verifies the untouched request against the configured public path and acknowledges only durable inbox acceptance", async () => {
+it("verifies the untouched request and acknowledges only durable handler acceptance", async () => {
   vi.stubEnv("EVE_PUBLIC_ROUTE_PREFIX", "/eve/support");
   let accepted!: () => void;
   let accepting!: () => void;
@@ -73,7 +73,7 @@ it("verifies the untouched request against the configured public path and acknow
   expect(settled).toBe(false);
   expect(verify).toHaveBeenCalledWith(req, { path: "/eve/support/v1/hooks/issues" });
   expect(resume).toHaveBeenCalledWith(
-    { sessionId: "session-1" },
+    `eve:connection-event:${"a".repeat(64)}`,
     expect.objectContaining({
       kind: "connection-event",
       bindingId: "a".repeat(64),

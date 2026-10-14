@@ -1,4 +1,3 @@
-import type { ConnectionEventInboxPayload } from "#runtime/connections/events/delivery.js";
 import type { DeliverHookPayload, DeliverPayload } from "#channel/types.js";
 import { coalesceDeliveries } from "#harness/messages.js";
 import { ANONYMOUS_PRINCIPAL, principalOf } from "#execution/session/principal.js";
@@ -27,16 +26,7 @@ interface QueuedAuthorization {
   readonly sequence: number;
 }
 
-type QueuedConnectionEvent = {
-  readonly kind: "connection-event";
-  readonly payload: ConnectionEventInboxPayload;
-  readonly sequence: number;
-};
-type QueuedSessionInput =
-  | QueuedDelivery
-  | QueuedControl
-  | QueuedAuthorization
-  | QueuedConnectionEvent;
+type QueuedSessionInput = QueuedDelivery | QueuedControl | QueuedAuthorization;
 
 export interface TurnSelection {
   readonly delivery: DeliverHookPayload;
@@ -53,7 +43,6 @@ export interface TurnSelection {
 
 export type SessionInputSelection =
   | TurnSelection
-  | { readonly kind: "connection-event"; readonly payload: ConnectionEventInboxPayload }
   | { readonly control: SessionControl; readonly kind: "control" };
 
 /**
@@ -73,10 +62,6 @@ export class SessionInputQueue {
     const admission = { delivery, sequence: this.nextSequence++ };
     this.entries.push({ ...admission, kind: "delivery" });
     return admission;
-  }
-
-  enqueueConnectionEvent(payload: ConnectionEventInboxPayload): void {
-    this.entries.push({ kind: "connection-event", payload, sequence: this.nextSequence++ });
   }
 
   enqueueControl(control: SessionControl): void {
@@ -172,14 +157,8 @@ export class SessionInputQueue {
     readonly freshSequence?: number;
   }): SessionInputSelection | undefined {
     this.retain((entry) => entry.kind !== "authorization");
-    const first = this.entries.shift() as
-      | QueuedDelivery
-      | QueuedControl
-      | QueuedConnectionEvent
-      | undefined;
+    const first = this.entries.shift() as QueuedDelivery | QueuedControl | undefined;
     if (first === undefined) return undefined;
-    if (first.kind === "connection-event")
-      return { kind: "connection-event", payload: first.payload };
     if (first.kind === "control") return { control: first.control, kind: "control" };
 
     const turnEntries = [first, ...this.takeFollowingDeliveriesFrom(first)];

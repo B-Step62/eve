@@ -61,16 +61,35 @@ export class McpConnectionClient implements ConnectionClient {
   #connection: ResolvedConnectionDefinition;
   /** Whether the current transport connected without a bearer because none was available yet. */
   #anonymous = false;
-  #events: ConnectionEventActions | undefined;
+  readonly eventActions: ConnectionClient["eventActions"];
 
   constructor(connection: ResolvedConnectionDefinition) {
     this.#connection = connection;
-    if (connection.experimental_events !== undefined)
-      this.#events = new ConnectionEventActions(
+    if (connection.experimental_events !== undefined) {
+      const events = new ConnectionEventActions(
         connection,
         () => resolveHeaders(connection),
         this.#forwardingFetch(),
       );
+      this.eventActions = {
+        ownsName: isEventAction,
+        recoveryMetadata: () => events.recoveryMetadata(),
+        metadata: async () => {
+          try {
+            return await events.metadata();
+          } catch (error) {
+            return await this.#rethrowClassified(error);
+          }
+        },
+        execute: async (name, args, options) => {
+          try {
+            return await events.execute(name, args, options);
+          } catch (error) {
+            return await this.#rethrowClassified(error);
+          }
+        },
+      };
+    }
   }
 
   /**
@@ -160,35 +179,7 @@ export class McpConnectionClient implements ConnectionClient {
    * promise.
    */
   async getToolMetadata(): Promise<readonly ConnectionToolMetadata[]> {
-    let cache: McpToolCache;
-    try {
-      cache = await this.#ensureTools();
-    } catch (error) {
-      const recovery = this.#eventRecoveryMetadata();
-      if (recovery.length > 0) return recovery;
-      throw error;
-    }
-    if (this.#events === undefined) return cache.metadata;
-    if (cache.metadata.some((tool) => isEventAction(tool.name)))
-      throw new Error("MCP server tools conflict with eve's reserved events_ actions.");
-    let events;
-    try {
-      events = await this.#events.metadata();
-    } catch (error) {
-      const recovery = this.#eventRecoveryMetadata();
-      if (recovery.length > 0) return [...cache.metadata, ...recovery];
-      return await this.#rethrowClassified(error);
-    }
-    return [
-      ...cache.metadata,
-      ...events.filter((tool) => passesToolFilter(tool.name, this.#connection.tools)),
-    ];
-  }
-
-  #eventRecoveryMetadata(): ConnectionToolMetadata[] {
-    return (this.#events?.recoveryMetadata() ?? []).filter((tool) =>
-      passesToolFilter(tool.name, this.#connection.tools),
-    );
+    return (await this.#ensureTools()).metadata;
   }
 
   /**
@@ -208,14 +199,6 @@ export class McpConnectionClient implements ConnectionClient {
   ): Promise<unknown> {
     let result: unknown;
     try {
-      if (this.#events !== undefined && isEventAction(toolName)) {
-        if (!passesToolFilter(toolName, this.#connection.tools))
-          throw new Error("Event action is blocked by this connection's tool filter.");
-        return {
-          content: [],
-          structuredContent: await this.#events.execute(toolName, args, options),
-        };
-      }
       const { tools } = await this.#ensureTools();
 
       const sdkTool = tools[toolName];

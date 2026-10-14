@@ -1,5 +1,6 @@
 import { ContextKey } from "#context/key.js";
 import type { SessionAuthContext } from "#channel/types.js";
+import type { SessionTraceSeed } from "#context/keys.js";
 import type {
   ManagedEventSubscribeInput,
   ManagedEventSubscription,
@@ -14,6 +15,7 @@ export interface EventBinding {
   readonly principalKey: string;
   readonly executionPrincipal: string;
   readonly auth: SessionAuthContext | null;
+  readonly traceSeed?: SessionTraceSeed;
   readonly request: ManagedEventSubscribeInput;
   readonly subscription?: ManagedEventSubscription;
   readonly retired?: true;

@@ -106,7 +106,6 @@ type EventOperation =
   | "get"
   | "unsubscribe"
   | "recover"
-  | "cleanup"
   | "onEvent"
   | "onGap"
   | "onTerminated";

@@ -1,7 +1,3 @@
-import {
-  prepareConnectionEventStep,
-  dispatchConnectionEventStep,
-} from "#runtime/connections/events/dispatch-step.js";
 import { STUB_CONTEXT_KEY, type StubScope } from "#tool-stubs/types.js";
 import { withStubPlayback } from "#execution/tool-stubs/playback.js";
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
@@ -233,7 +229,7 @@ async function runSessionLoop(
   const sessionTimeout = boot.sessionTimeoutControl;
 
   const nextParkedActivity = async (): Promise<
-    Exclude<NextTurnInstruction, { kind: "workflow" | "cancel-working-tasks" | "connection-event" }>
+    Exclude<NextTurnInstruction, { kind: "workflow" | "cancel-working-tasks" }>
   > => {
     while (true) {
       const next = await nextTurnDelivery({
@@ -248,16 +244,6 @@ async function runSessionLoop(
       }
       if (next.kind === "cancel-working-tasks") {
         await cancelWorkingTasks(cursor, "turn_cancelled");
-        continue;
-      }
-      if (next.kind === "connection-event") {
-        const prepared = await cursor.advance((state) =>
-          prepareConnectionEventStep({ ...state, payload: next.payload }),
-        );
-        if (prepared.accepted)
-          await cursor.advance((state) =>
-            dispatchConnectionEventStep({ ...state, payload: next.payload }),
-          );
         continue;
       }
       return next;

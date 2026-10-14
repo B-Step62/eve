@@ -110,8 +110,6 @@ const CHECKPOINT_UPGRADES: Readonly<
       sessionState: { ...sessionState, snapshot: { ...snapshot, session: { ...session, state } } },
     };
   },
-  // Managed event bindings must not move to an owner that discards their state.
-  15: (checkpoint) => checkpoint,
 };
 
 /**

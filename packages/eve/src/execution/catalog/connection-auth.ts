@@ -16,6 +16,7 @@ import type { ResolvedConnectionDefinition } from "#runtime/types.js";
 import {
   supportsInteractiveAuthorization,
   type ConnectionClient,
+  type ConnectionEventActionHandler,
   type ConnectionToolMetadata,
 } from "#shared/connection-types.js";
 import { toErrorMessage } from "#shared/errors.js";
@@ -110,7 +111,46 @@ export async function listToolMetadata(
     }, LISTING_TIMEOUT_MS);
   });
   try {
-    return await Promise.race([client.getToolMetadata(), timeout]);
+    return await Promise.race([listConnectionMetadata(client), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function listConnectionMetadata(
+  client: ConnectionClient,
+): Promise<readonly ConnectionToolMetadata[]> {
+  const actions = client.eventActions;
+  if (actions === undefined) return client.getToolMetadata();
+  const [remoteResult, actionResult] = await Promise.allSettled([
+    client.getToolMetadata(),
+    listEventActions(actions),
+  ]);
+  const generated = actionResult.status === "fulfilled" ? actionResult.value : [];
+  if (remoteResult.status === "rejected") {
+    if (generated.length > 0) return generated;
+    throw remoteResult.reason;
+  }
+  const remote = remoteResult.value;
+  if (remote.some((tool) => actions.ownsName(tool.name)))
+    throw new Error("Remote tool names conflict with eve's event action namespace.");
+  return [...remote, ...generated];
+}
+
+async function listEventActions(
+  actions: ConnectionEventActionHandler,
+): Promise<readonly ConnectionToolMetadata[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new ListingTimeoutError("Event discovery timed out.")),
+      LISTING_TIMEOUT_MS / 2,
+    );
+  });
+  try {
+    return await Promise.race([actions.metadata(), timeout]);
+  } catch {
+    return actions.recoveryMetadata();
   } finally {
     clearTimeout(timer);
   }
