@@ -900,6 +900,87 @@ describe("chatSdkChannel", () => {
     expect(state.anchorMessageId).toBeNull();
   });
 
+  // #4801: a failed final edit left the reply at its first streamed token.
+  it.fails("finishes a streamed reply when its final edit fails once", async () => {
+    const adapter = testAdapter();
+    const bridge = chatSdkChannel({
+      adapters: { test: adapter },
+      state: memoryState(),
+      streamingEditIntervalMs: 0,
+      userName: "bot",
+    });
+    const state: ChatSdkChannelState = { thread: serializedThread() };
+    const channelAdapter = withState(getAdapter(bridge.channel), state);
+    const ctx = buildAdapterContext(channelAdapter, stubAccessor());
+
+    await callEvent(
+      channelAdapter,
+      makeEvent("message.appended", {
+        messageDelta: "¡",
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+    vi.spyOn(adapter, "editMessage").mockRejectedValueOnce(
+      new Error("Network error calling Telegram editMessageText"),
+    );
+    await callEvent(
+      channelAdapter,
+      makeEvent("message.completed", {
+        finishReason: "stop",
+        message: "¡Hola!",
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+
+    expect(adapter.posted).toEqual([{ message: { markdown: "¡" }, threadId: THREAD_ID }]);
+    expect(adapter.edited).toEqual([
+      { message: { markdown: "¡Hola!" }, messageId: "posted-1", threadId: THREAD_ID },
+    ]);
+  });
+
+  // #4801: Telegram rejects an edit that changes nothing ("message is not modified").
+  it.fails("does not repeat an edit the streamed reply already shows", async () => {
+    const adapter = testAdapter();
+    const bridge = chatSdkChannel({
+      adapters: { test: adapter },
+      state: memoryState(),
+      streamingEditIntervalMs: 0,
+      userName: "bot",
+    });
+    const state: ChatSdkChannelState = { thread: serializedThread() };
+    const channelAdapter = withState(getAdapter(bridge.channel), state);
+    const ctx = buildAdapterContext(channelAdapter, stubAccessor());
+
+    for (const [sequence, messageDelta] of ["Hel", "lo"].entries()) {
+      await callEvent(
+        channelAdapter,
+        makeEvent("message.appended", { messageDelta, sequence, stepIndex: 0, turnId: "turn-1" }),
+        ctx,
+      );
+    }
+    await callEvent(
+      channelAdapter,
+      makeEvent("message.completed", {
+        finishReason: "stop",
+        message: "Hello",
+        sequence: 2,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+
+    expect(adapter.edited).toEqual([
+      { message: { markdown: "Hello" }, messageId: "posted-1", threadId: THREAD_ID },
+    ]);
+  });
+
   it("falls back to a fresh post when streaming edits are not implemented", async () => {
     const adapter = testAdapter();
     adapter.editError = new NotImplementedError("editMessage");
