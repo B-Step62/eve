@@ -279,6 +279,13 @@ catalogs:
 
 overrides:
   '@vercel/cli-config>zod': 4.5.4
+  '@workflow/core': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-core.tgz
+  '@workflow/errors': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz
+  '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
+  '@workflow/utils': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz
+  '@workflow/world': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
+  '@workflow/world-local': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz
+  '@workflow/world-vercel': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz
 
 importers:
 
@@ -1908,23 +1915,23 @@ importers:
         specifier: 1.28.8
         version: 1.28.8
       '@workflow/core':
-        specifier: 5.2.0
-        version: 5.2.0(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))
+        specifier: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-core.tgz
+        version: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-core.tgz(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))
       '@workflow/errors':
-        specifier: 5.0.3
-        version: 5.0.3
+        specifier: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz
+        version: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz
       '@workflow/serde':
-        specifier: 5.0.0
-        version: 5.0.0
+        specifier: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
+        version: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       '@workflow/world':
-        specifier: 5.0.3
-        version: 5.0.3
+        specifier: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
+        version: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
       '@workflow/world-local':
-        specifier: 5.1.0
-        version: 5.1.0(@opentelemetry/api@1.9.1)
+        specifier: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz
+        version: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz(@opentelemetry/api@1.9.1)
       '@workflow/world-vercel':
-        specifier: 5.2.0
-        version: 5.2.0(@aws-sdk/credential-provider-web-identity@3.972.49)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)
+        specifier: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz
+        version: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz(@aws-sdk/credential-provider-web-identity@3.972.49)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)
       ai:
         specifier: 'catalog:'
         version: 7.0.137(zod@4.5.4)
@@ -8197,31 +8204,30 @@ packages:
   '@webgpu/types@0.1.72':
     resolution: {integrity: sha512-0cF7RFM2edNoiIS1ODJp0/Gzv4/xSXhwoR0YCza+OWpJWtn4wmo9DvK91aLlH9+uUnwIriP7ZiC3WitmyhuzBw==}
 
-  '@workflow/core@5.2.0':
-    resolution: {integrity: sha512-vwXrT0TLxpycwKxZZSDROiKcHIJXRlLzTybEppM8fRl73bVvKiCVmHZ2tM70xe/smvsWiYNT7Uia8x8OaJSy2Q==}
+  '@workflow/core@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-core.tgz':
+    resolution: {integrity: sha512-SDi7IUVE6gy5O4lIZjQTWQmXSkYwGP3pvxHvCsBDoVxtRU/DAvCJw/VoZnO/vcO00BGCy5N5d5gCgGUkk0/PRw==, tarball: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-core.tgz}
+    version: 5.2.2-c161629
     peerDependencies:
       '@opentelemetry/api': '1'
     peerDependenciesMeta:
       '@opentelemetry/api':
         optional: true
 
-  '@workflow/errors@5.0.3':
-    resolution: {integrity: sha512-mzpphB/R1fiAlANz6+ZFOjtu9EHQyFp3zs5FLxEU+I6eNbdWsqMZbi37PI53bQ9QBOS6u8+aHajp6IVAcTqOSQ==}
+  '@workflow/errors@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz':
+    resolution: {integrity: sha512-LXne8cPeNq6zwbDqICH4VdyMfnKPiLkgz/uao3ltGKWz3LJm7fbdp5uEY/fXSjbjy7fM/5uPjT1YF3gUasQ/Mg==, tarball: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz}
+    version: 5.0.4-c161629
 
-  '@workflow/serde@4.1.0':
-    resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
+  '@workflow/serde@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz':
+    resolution: {integrity: sha512-bZiDKUZCsCr+BBX4pXdJWsiNRFyiiyRAm/4SLpW1PKOoj3zdRcH850A0+CkpFPRPs7OiMVPl+ZympqwiZgfW9A==, tarball: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz}
+    version: 5.0.0-c161629
 
-  '@workflow/serde@4.1.0-beta.2':
-    resolution: {integrity: sha512-8kkeoQKLDaKXefjV5dbhBj2aErfKp1Mc4pb6tj8144cF+Em5SPbyMbyLCHp+BVrFfFVCBluCtMx+jjvaFVZGww==}
+  '@workflow/utils@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz':
+    resolution: {integrity: sha512-f3oKSiOA1amhrm1qzPUvwEHXOLQhYM/CfhMIF4YPA1HasEbOxiMCjRnUXXB/0hFXpfP08w71nh4SBVGmMDEyEg==, tarball: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz}
+    version: 5.0.2-c161629
 
-  '@workflow/serde@5.0.0':
-    resolution: {integrity: sha512-78smVK/ejx/MIrjOwqAH14jGZkGBIO3u3B6u6WhWOyfjBJWl21xyHdsh0gFsncD96HlavCTbsWg/pN7MLSnrbw==}
-
-  '@workflow/utils@5.0.1':
-    resolution: {integrity: sha512-s/32vojtP1qYDPINp9wfE5JZRkjdhXI8lyg4l+QNrKjMwiaXv6vNRpsuGQrcdj2Nfnnvz3L4DOxdNyPW3MG+Jg==}
-
-  '@workflow/world-local@5.1.0':
-    resolution: {integrity: sha512-lNdroOV8eLLIu+gibNAtawqemjr5nxSkEKuixhm2EzDadMpoKjQscvQaFKmhkAtX1s1IRPXud1RGTQfCa2soKw==}
+  '@workflow/world-local@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz':
+    resolution: {integrity: sha512-y9TgXB7mcXKFiCPR3wBsl+iT5j8rFvcUsx+sCFuTypFkxzfMGV8xVnrN4IK0VoDc+orHlNU4F+UZLswQDqzSqQ==, tarball: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz}
+    version: 5.1.1-c161629
     peerDependencies:
       '@opentelemetry/api': '1'
     peerDependenciesMeta:
@@ -8232,16 +8238,18 @@ packages:
     resolution: {integrity: sha512-5ricjfGDFZo6zChlq+0gSP+eSEk6B4qt/L9wQEFg2tjM+kqodK/N8cY+PyC7DGxcmkz1u19ljUnHmJwmwmuK2g==}
     hasBin: true
 
-  '@workflow/world-vercel@5.2.0':
-    resolution: {integrity: sha512-+Fc8pe1388eHD7dwm2xeG61dMYPiHVbF7wEH/QAIaaZPqpN2zIccWvNW1/2AEGkBkK3k5Cw57uGtrqy6+xPv0A==}
+  '@workflow/world-vercel@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz':
+    resolution: {integrity: sha512-y/FZ45kyXyHNgu7G6z0dk/4zDYdr1PkjtI0moEVrsHWSyXlumSd274DY89THpY1nBY/cXKSNTNfU45YdKM69hQ==, tarball: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz}
+    version: 5.2.2-c161629
     peerDependencies:
       '@opentelemetry/api': '1'
     peerDependenciesMeta:
       '@opentelemetry/api':
         optional: true
 
-  '@workflow/world@5.0.3':
-    resolution: {integrity: sha512-/V2rxExhLgTwrho3VOZSdz2VdB5b1TaaybZI4oNbFb1KIhwGlZIxEsW+eKA+UAmYxJdmnh28yxkGIVS5ry7n2w==}
+  '@workflow/world@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz':
+    resolution: {integrity: sha512-62cGxpcPf87bKv8XixwtaV6A/0q/va409QiuH9ue7DkAt1fkvdWn+P52cnGpnxvDhFRmZ//iyaAenv+LIhW9mw==, tarball: https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz}
+    version: 5.0.4-c161629
 
   '@zernio/chat-sdk-adapter@0.5.0':
     resolution: {integrity: sha512-YYcnbCqUhJOymTd3UPaKd1H6Kn8atFE075I5vDETYkTjToIeZd90as/JvShB7OurMdDLLSmJRMJs3RWVqAGW9w==}
@@ -9568,6 +9576,10 @@ packages:
 
   devalue@5.9.2:
     resolution: {integrity: sha512-po4PAY5c53tw5XMocSnf8A/5OHhbbUftpr93aEN6BBoAdntUmK7vu7wOATqvt7cXO7m1Cl4gMVn6p7n6n4mj0w==}
+
+  devalue@6.0.3:
+    resolution: {integrity: sha512-3woMEITftG1wKeO/4d/QXH1DVKctTSZg3jNGPpjp9hNr5Hos8MCFF5McTML5ZtgKDObm2R591B0spRp2IVernA==}
+    engines: {node: '>=18'}
 
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
@@ -15710,7 +15722,7 @@ snapshots:
     dependencies:
       '@ai-sdk/provider': 4.0.22
       '@standard-schema/spec': 1.1.0
-      '@workflow/serde': 4.1.0
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       eventsource-parser: 3.1.0
       undici: 7.30.0
       zod: 4.5.4
@@ -15720,7 +15732,7 @@ snapshots:
     dependencies:
       '@ai-sdk/provider': 4.0.26
       '@standard-schema/spec': 1.1.0
-      '@workflow/serde': 4.1.0
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       eventsource-parser: 3.1.0
       undici: 7.30.0
       zod: 4.5.4
@@ -15729,7 +15741,7 @@ snapshots:
     dependencies:
       '@ai-sdk/provider': 4.0.26
       '@standard-schema/spec': 1.1.0
-      '@workflow/serde': 4.1.0
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       eventsource-parser: 3.1.0
       undici: 7.30.0
       zod: 4.6.5
@@ -22106,7 +22118,7 @@ snapshots:
   '@vercel/sandbox@1.10.2':
     dependencies:
       '@vercel/oidc': 3.2.0
-      '@workflow/serde': 4.1.0-beta.2
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       async-retry: 1.3.3
       jsonlines: 0.1.1
       ms: 2.1.3
@@ -22122,7 +22134,7 @@ snapshots:
   '@vercel/sandbox@3.3.0':
     dependencies:
       '@vercel/oidc': 3.2.0
-      '@workflow/serde': 4.1.0-beta.2
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       async-retry: 1.3.3
       jose: 6.2.3
       jsonlines: 0.1.1
@@ -22349,22 +22361,22 @@ snapshots:
 
   '@webgpu/types@0.1.72': {}
 
-  '@workflow/core@5.2.0(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))':
+  '@workflow/core@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-core.tgz(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)(supports-color@10.2.2)(ws@8.21.3(bufferutil@4.1.0))':
     dependencies:
       '@aws-sdk/credential-provider-web-identity': 3.972.49
       '@jridgewell/trace-mapping': 0.3.31
       '@standard-schema/spec': 1.0.0
       '@types/ms': 2.1.0
       '@vercel/functions': 3.9.8(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.21.3)
-      '@workflow/errors': 5.0.3
-      '@workflow/serde': 5.0.0
-      '@workflow/utils': 5.0.1
-      '@workflow/world': 5.0.3
-      '@workflow/world-local': 5.1.0(@opentelemetry/api@1.9.1)
-      '@workflow/world-vercel': 5.2.0(@aws-sdk/credential-provider-web-identity@3.972.49)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)
+      '@workflow/errors': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
+      '@workflow/utils': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz
+      '@workflow/world': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
+      '@workflow/world-local': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz(@opentelemetry/api@1.9.1)
+      '@workflow/world-vercel': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz(@aws-sdk/credential-provider-web-identity@3.972.49)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)
       acorn: 8.15.0
       debug: 4.4.3(supports-color@10.2.2)
-      devalue: 5.9.2
+      devalue: 6.0.3
       ms: 2.1.3
       nanoid: 5.1.6
       quickjs-wasi: 3.4.0
@@ -22380,28 +22392,24 @@ snapshots:
       - utf-8-validate
       - ws
 
-  '@workflow/errors@5.0.3':
+  '@workflow/errors@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz':
     dependencies:
-      '@workflow/utils': 5.0.1
-      '@workflow/world': 5.0.3
+      '@workflow/utils': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz
+      '@workflow/world': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
       ms: 2.1.3
 
-  '@workflow/serde@4.1.0': {}
+  '@workflow/serde@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz': {}
 
-  '@workflow/serde@4.1.0-beta.2': {}
-
-  '@workflow/serde@5.0.0': {}
-
-  '@workflow/utils@5.0.1':
+  '@workflow/utils@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz':
     dependencies:
       ms: 2.1.3
 
-  '@workflow/world-local@5.1.0(@opentelemetry/api@1.9.1)':
+  '@workflow/world-local@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz(@opentelemetry/api@1.9.1)':
     dependencies:
       '@vercel/queue': 0.8.0(@opentelemetry/api@1.9.1)
-      '@workflow/errors': 5.0.3
-      '@workflow/utils': 5.0.1
-      '@workflow/world': 5.0.3
+      '@workflow/errors': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz
+      '@workflow/utils': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz
+      '@workflow/world': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
       async-sema: 3.1.1
       proper-lockfile: 4.1.2
       ulid: 3.0.2
@@ -22413,10 +22421,10 @@ snapshots:
   '@workflow/world-postgres@5.0.3(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(@upstash/redis@1.38.4)(sql.js@1.14.2)(supports-color@10.2.2)(typescript@7.0.2)':
     dependencies:
       '@vercel/queue': 0.8.0(@opentelemetry/api@1.9.1)
-      '@workflow/errors': 5.0.3
-      '@workflow/utils': 5.0.1
-      '@workflow/world': 5.0.3
-      '@workflow/world-local': 5.1.0(@opentelemetry/api@1.9.1)
+      '@workflow/errors': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz
+      '@workflow/utils': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz
+      '@workflow/world': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
+      '@workflow/world-local': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz(@opentelemetry/api@1.9.1)
       cbor-x: 1.6.0
       dotenv: 17.3.1
       drizzle-orm: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.23.1)(@upstash/redis@1.38.4)(pg@8.20.0)(sql.js@1.14.2)
@@ -22457,14 +22465,14 @@ snapshots:
       - supports-color
       - typescript
 
-  '@workflow/world-vercel@5.2.0(@aws-sdk/credential-provider-web-identity@3.972.49)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)':
+  '@workflow/world-vercel@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz(@aws-sdk/credential-provider-web-identity@3.972.49)(@opentelemetry/api@1.9.1)(bufferutil@4.1.0)':
     dependencies:
       '@vercel/functions': 3.9.8(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.21.3)
       '@vercel/oidc': 3.2.0
       '@vercel/queue': 0.8.0(@opentelemetry/api@1.9.1)
-      '@workflow/errors': 5.0.3
-      '@workflow/utils': 5.0.1
-      '@workflow/world': 5.0.3
+      '@workflow/errors': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz
+      '@workflow/utils': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz
+      '@workflow/world': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz
       cbor-x: 1.6.0
       ulid: 3.0.2
       undici: 7.30.0
@@ -22477,7 +22485,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@workflow/world@5.0.3':
+  '@workflow/world@https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz':
     dependencies:
       ulid: 3.0.2
       zod: 4.5.4
@@ -23146,7 +23154,7 @@ snapshots:
 
   chat@4.30.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4):
     dependencies:
-      '@workflow/serde': 4.1.0-beta.2
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       mdast-util-to-string: 4.0.0
       remark-gfm: 4.0.1(supports-color@10.2.2)
       remark-parse: 11.0.0(supports-color@10.2.2)
@@ -23161,7 +23169,7 @@ snapshots:
 
   chat@4.34.0(ai@7.0.128(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4):
     dependencies:
-      '@workflow/serde': 4.1.0-beta.2
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       mdast-util-to-string: 4.0.0
       remark-gfm: 4.0.1(supports-color@10.2.2)
       remark-parse: 11.0.0(supports-color@10.2.2)
@@ -23177,7 +23185,7 @@ snapshots:
 
   chat@4.34.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4):
     dependencies:
-      '@workflow/serde': 4.1.0-beta.2
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       mdast-util-to-string: 4.0.0
       remark-gfm: 4.0.1(supports-color@10.2.2)
       remark-parse: 11.0.0(supports-color@10.2.2)
@@ -23193,7 +23201,7 @@ snapshots:
 
   chat@4.41.0(ai@7.0.128(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4):
     dependencies:
-      '@workflow/serde': 4.1.0-beta.2
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       mdast-util-to-string: 4.0.0
       remark-gfm: 4.0.1(supports-color@10.2.2)
       remark-parse: 11.0.0(supports-color@10.2.2)
@@ -23209,7 +23217,7 @@ snapshots:
 
   chat@4.41.0(ai@7.0.137(zod@4.5.4))(supports-color@10.2.2)(zod@4.5.4):
     dependencies:
-      '@workflow/serde': 4.1.0-beta.2
+      '@workflow/serde': https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz
       mdast-util-to-string: 4.0.0
       remark-gfm: 4.0.1(supports-color@10.2.2)
       remark-parse: 11.0.0(supports-color@10.2.2)
@@ -23964,6 +23972,8 @@ snapshots:
   detect-node-es@1.1.0: {}
 
   devalue@5.9.2: {}
+
+  devalue@6.0.3: {}
 
   devlop@1.1.0:
     dependencies:

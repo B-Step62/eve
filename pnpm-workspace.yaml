@@ -65,6 +65,17 @@ overrides:
   # @vercel/cli-config, which @vercel/oidc uses, pins its own Zod 4 release,
   # and the vendor build fails on a second copy.
   "@vercel/cli-config>zod": "catalog:"
+  # Preview of vercel/workflow#4876 until a @workflow/core release ships it.
+  "@workflow/core": "https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-core.tgz"
+  "@workflow/errors": "https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-errors.tgz"
+  "@workflow/serde": "https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-serde.tgz"
+  "@workflow/utils": "https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-utils.tgz"
+  "@workflow/world": "https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world.tgz"
+  "@workflow/world-local": "https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-local.tgz"
+  "@workflow/world-vercel": "https://workflow-tarballs-mqg10luum.labs.vercel.dev/workflow-world-vercel.tgz"
+
+# The #4876 preview tarballs depend on each other by URL.
+blockExoticSubdeps: false
 
 minimumReleaseAge: 2880 # 2 days
 
@@ -87,3 +98,4 @@ minimumReleaseAgeExclude:
   - "@stripe/link-integrations-eve@0.2.0"
   - "@stripe/link-sdk@0.9.0"
   - "chat@4.41.0"
+  - "devalue@6.0.3"
