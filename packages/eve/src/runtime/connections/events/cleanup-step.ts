@@ -1,3 +1,4 @@
+import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 import { deserializeContext } from "#context/serialize.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import { ConnectionEventsStateKey } from "#runtime/connections/events/state.js";
@@ -19,35 +20,63 @@ export async function stopConnectionEventStep(input: {
   const bundle = ctx.require(BundleKey);
   const binding = state.bindings[input.bindingId];
   if (binding === undefined) return;
-  const connection = bundle.resolvedAgent.connections.find(
-    (connection) =>
-      connection.connectionName === binding.connectionName &&
-      connection.instanceId === binding.instanceId,
+  await withConnectionEventSpan(
+    {
+      ctx,
+      connectionName: binding.connectionName,
+      bindingId: binding.id,
+      subscriptionId: binding.subscription?.id,
+      operation: "cleanup",
+    },
+    async () => {
+      const connection = bundle.resolvedAgent.connections.find(
+        (connection) =>
+          connection.connectionName === binding.connectionName &&
+          connection.instanceId === binding.instanceId,
+      );
+      const authorization = connection?.authorization;
+      if (
+        connection === undefined ||
+        authorization === undefined ||
+        typeof authorization === "function" ||
+        authorization.vercelConnect?.connector !== binding.connector ||
+        authorization.vercelConnect.experimental_events === undefined
+      )
+        throw new Error("Cannot resolve the event subscription provider for session cleanup.");
+      const principal = resolveConnectionPrincipalFromAuth(
+        connection.connectionName,
+        authorization,
+        binding.auth,
+      );
+      if (principalKey(principal) !== binding.principalKey)
+        throw new Error("Event subscription principal changed before cleanup.");
+      const adapter = await authorization.vercelConnect.experimental_events.createAdapter({
+        principal,
+        connection: { url: connection.url },
+        destination: { path: connectionEventDestination(connection.connectionName) },
+      });
+      // Resolve an uncertain creation with the original key before cancellation.
+      const subscription =
+        binding.subscription ??
+        (await withConnectionEventSpan(
+          {
+            ctx,
+            connectionName: binding.connectionName,
+            bindingId: binding.id,
+            operation: "recover",
+          },
+          () => adapter.subscribe({ ...binding.request, options: { timeout: 30_000 } }),
+        ));
+      await withConnectionEventSpan(
+        {
+          ctx,
+          connectionName: binding.connectionName,
+          bindingId: binding.id,
+          subscriptionId: subscription.id,
+          operation: "unsubscribe",
+        },
+        () => adapter.unsubscribe({ id: subscription.id, options: { timeout: 30_000 } }),
+      );
+    },
   );
-  const authorization = connection?.authorization;
-  if (
-    connection === undefined ||
-    authorization === undefined ||
-    typeof authorization === "function" ||
-    authorization.vercelConnect?.connector !== binding.connector ||
-    authorization.vercelConnect.experimental_events === undefined
-  )
-    throw new Error("Cannot resolve the event subscription provider for session cleanup.");
-  const principal = resolveConnectionPrincipalFromAuth(
-    connection.connectionName,
-    authorization,
-    binding.auth,
-  );
-  if (principalKey(principal) !== binding.principalKey)
-    throw new Error("Event subscription principal changed before cleanup.");
-  const adapter = await authorization.vercelConnect.experimental_events.createAdapter({
-    principal,
-    connection: { url: connection.url },
-    destination: { path: connectionEventDestination(connection.connectionName) },
-  });
-  // Resolve an uncertain creation with the original key before cancellation.
-  const subscription =
-    binding.subscription ??
-    (await adapter.subscribe({ ...binding.request, options: { timeout: 30_000 } }));
-  await adapter.unsubscribe({ id: subscription.id, options: { timeout: 30_000 } });
 }

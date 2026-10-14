@@ -1,3 +1,6 @@
+import { createMcpTraceFetch } from "#runtime/connections/mcp-tracing.js";
+import { createMcpTracing } from "#tracing/eve/mcp.js";
+import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 import { principalOf } from "#execution/session/principal.js";
 import { z } from "zod";
 import { toInputSchema } from "#tools/schema.js";
@@ -100,17 +103,22 @@ export class ConnectionEventActions {
       destination: { path: connectionEventDestination(this.connection.connectionName) },
     });
     // A fresh authenticated transport keeps catalogs isolated between people sharing a session.
+    let client: Awaited<ReturnType<typeof createMCPClient>> | undefined;
     const config = {
       transport: {
         type: "http" as const,
-        fetch: this.transportFetch,
+        fetch: createMcpTraceFetch({
+          connectionName: this.connection.connectionName,
+          fetcher: this.transportFetch,
+          getProtocolVersion: () => client?.initializeResult?.protocolVersion,
+        }),
         url: this.connection.url,
         headers: await this.headers(),
       },
       protocolVersionDiscovery: this.connection.protocolVersionDiscovery,
       experimental_events: { adapter: { createAdapter: () => adapter } },
     };
-    const client = await createMCPClient(config);
+    client = await createMCPClient(config);
     try {
       return await run(client.experimental_events);
     } finally {
@@ -124,7 +132,19 @@ export class ConnectionEventActions {
     let cursor: string | undefined;
     let discovered = 0;
     for (let pageIndex = 0; pageIndex < 20; pageIndex++) {
-      const page = await events.list({ params: { cursor }, options: { timeout: 15_000 } });
+      const page = await withConnectionEventSpan(
+        {
+          ctx: this.scope().ctx,
+          connectionName: this.connection.connectionName,
+          operation: "catalog",
+        },
+        () =>
+          createMcpTracing().list({
+            connectionName: this.connection.connectionName,
+            method: "events/list",
+            execute: () => events.list({ params: { cursor }, options: { timeout: 15_000 } }),
+          }),
+      );
       discovered += page.events.length;
       if (discovered > 1000) throw new Error("MCP event catalog exceeds the 1000-event limit.");
       result.push(...page.events.filter((event) => event.delivery.includes("webhook")));
@@ -212,10 +232,16 @@ export class ConnectionEventActions {
         destination: { path: connectionEventDestination(this.connection.connectionName) },
       });
       if (binding.subscription === undefined) {
-        const subscription = await events.subscribe({
-          ...binding.request,
-          options: { timeout: 30_000 },
-        });
+        const request = binding.request;
+        const subscription = await withConnectionEventSpan(
+          {
+            ctx,
+            connectionName: this.connection.connectionName,
+            bindingId: binding.id,
+            operation: "recover",
+          },
+          () => events.subscribe({ ...request, options: { timeout: 30_000 } }),
+        );
         binding = {
           ...binding,
           subscription,
@@ -223,9 +249,20 @@ export class ConnectionEventActions {
         };
         binding = save(binding);
       }
-      const subscription = await (name === STOP
-        ? events.unsubscribe({ id: binding.subscription!.id, options: { timeout: 30_000 } })
-        : events.getSubscription({ id: binding.subscription!.id, options: { timeout: 30_000 } }));
+      const subscriptionId = binding.subscription!.id;
+      const subscription = await withConnectionEventSpan(
+        {
+          ctx,
+          connectionName: this.connection.connectionName,
+          bindingId: binding.id,
+          subscriptionId,
+          operation: name === STOP ? "unsubscribe" : "get",
+        },
+        () =>
+          name === STOP
+            ? events.unsubscribe({ id: subscriptionId, options: { timeout: 30_000 } })
+            : events.getSubscription({ id: subscriptionId, options: { timeout: 30_000 } }),
+      );
       binding = { ...binding, retired: name === STOP ? true : binding.retired, subscription };
       binding = save(binding);
       return subscriptionResult(binding);
@@ -292,10 +329,20 @@ export class ConnectionEventActions {
       if (!owned(binding) || binding.retired)
         throw new Error("Subscription binding is no longer active.");
       if (binding.subscription !== undefined) return subscriptionResult(binding);
-      const subscription = await events.subscribe({
-        ...binding.request,
-        options: { signal: options.abortSignal, timeout: 30_000 },
-      });
+      const request = binding.request;
+      const subscription = await withConnectionEventSpan(
+        {
+          ctx,
+          connectionName: this.connection.connectionName,
+          bindingId: binding.id,
+          operation: "subscribe",
+        },
+        () =>
+          events.subscribe({
+            ...request,
+            options: { signal: options.abortSignal, timeout: 30_000 },
+          }),
+      );
       binding = {
         ...binding,
         subscription: {

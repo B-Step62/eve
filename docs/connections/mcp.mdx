@@ -323,6 +323,15 @@ redeliveries can invoke the callback again; use durable application idempotency
 for effects that must remain deduplicated beyond that window. Callback code explicitly decides when to queue
 a new model turn through `attachSession(...).send(...)`.
 
+With OpenTelemetry configured, event discovery, subscription operations, callback
+attempts, and session-end cancellation emit spans. Callback and subscription spans
+follow the session's trace policy and sampling decision. They record bounded
+identifiers, timing, and outcomes, without event bodies, subscription arguments,
+credentials, or provider error text. HTTP receiver spans use the existing
+`traceChannelRequests` setting. Verified deliveries carry the receiver's trace
+identity through the durable inbox; callbacks that call `attachSession(...).send(...)`
+link the consuming turn to their callback span. Each retried callback gets a new span.
+
 When a session ends, eve attempts to cancel its managed subscriptions through
 durable cleanup. An unavailable provider or Connect API can delay or fail that
 cleanup; inspect the workflow's failed step before treating the upstream watch

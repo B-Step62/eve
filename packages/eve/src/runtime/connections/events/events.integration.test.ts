@@ -1,3 +1,6 @@
+import * as workflowRuntime from "#execution/workflow-runtime.js";
+import { eventTracing } from "#internal/testing/event-tracing.js";
+import { trace } from "@opentelemetry/api";
 import { connectionEntry } from "#execution/catalog/connection-entry.js";
 import { ConnectionRegistryImpl } from "#runtime/connections/registry.js";
 import { stopConnectionEventStep } from "#runtime/connections/events/cleanup-step.js";
@@ -5,14 +8,14 @@ import { compileFromMemory } from "#internal/testing/compile-from-memory.js";
 import { resolveRuntimeAgentGraph } from "#runtime/resolve-agent-graph.js";
 import { createRuntimeAdapterRegistry } from "#runtime/channels/registry.js";
 import { defineMcpClientConnection } from "#public/definitions/connections/mcp.js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, onTestFinished } from "vitest";
 import { ContextContainer, contextStorage, loadContext } from "#context/container.js";
 import { defineState } from "#public/definitions/state.js";
 import { runPreparedSession, type SessionStart } from "#execution/session/program.js";
 import { SessionExecution } from "#execution/session/turn.js";
 import type { SessionInboxHandle, SessionInboxPayload } from "#execution/session-inbox/inbox.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
-import { AuthKey, SessionIdKey } from "#context/keys.js";
+import { AuthKey, SessionIdKey, SessionTraceSeedKey } from "#context/keys.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import type { CompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
@@ -183,6 +186,10 @@ afterEach(() => {
 });
 
 it("discovers through the released AI SDK and subscribes through the backend without an event store", async () => {
+  const tracing = eventTracing();
+  tracing.enable();
+  onTestFinished(() => tracing.close());
+  const traceparents: string[] = [];
   const { createMCPClient } = await vi.importActual<
     typeof import("#compiled/@ai-sdk/mcp/index.js")
   >("#compiled/@ai-sdk/mcp/index.js");
@@ -201,6 +208,7 @@ it("discovers through the released AI SDK and subscribes through the backend wit
         capabilities: { events: {} },
       };
     } else if (request.method === "events/list") {
+      traceparents.push(request.params?._meta?.traceparent);
       result = {
         events: [
           {
@@ -224,6 +232,22 @@ it("discovers through the released AI SDK and subscribes through the backend wit
   await watch();
   expect(methods.filter((method) => method === "events/list")).toHaveLength(2);
   expect(methods).not.toContain("events/subscribe");
+  const catalogSpans = tracing.exporter
+    .getFinishedSpans()
+    .filter((span) => span.name === "events/list");
+  expect(catalogSpans).toHaveLength(2);
+  expect(traceparents).toEqual(
+    catalogSpans.map((span) => `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`),
+  );
+  expect(catalogSpans.map((span) => span.attributes["mcp.method.name"])).toEqual([
+    "events/list",
+    "events/list",
+  ]);
+  expect(
+    tracing.exporter
+      .getFinishedSpans()
+      .find((span) => span.name === "agent.connection.event.subscribe")?.attributes,
+  ).toMatchObject({ "connect.subscription.id": "sub_0", "connect.subscription.status": "active" });
   expect(subscriber).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ name: "issue.created", arguments: { project: "ABC" } }),
   );
@@ -650,6 +674,9 @@ it("can stop an uncertain creation by its local ID without contacting the MCP se
 });
 
 it("reconciles pending creations during cleanup and surfaces cancellation failure", async () => {
+  const tracing = eventTracing();
+  tracing.enable();
+  onTestFinished(() => tracing.close());
   const accepted = subscriber.getMockImplementation()!;
   subscriber.mockImplementationOnce(async (input) => {
     await accepted(input);
@@ -666,6 +693,18 @@ it("reconciles pending creations during cleanup and surfaces cancellation failur
     options: { timeout: 30_000 },
   });
   expect(new Set(requested.map((request) => request.idempotencyKey)).size).toBe(1);
+  const spans = tracing.exporter.getFinishedSpans();
+  expect(
+    spans
+      .filter((span) => span.name === "agent.connection.event.cleanup")
+      .map((span) => span.status.code),
+  ).toEqual([2, 1]);
+  expect(spans.filter((span) => span.name === "agent.connection.event.recover")).toHaveLength(2);
+  expect(
+    spans
+      .filter((span) => span.name === "agent.connection.event.unsubscribe")
+      .map((span) => span.attributes["connect.subscription.id"]),
+  ).toEqual(["sub_0", "sub_0"]);
 });
 
 it("bounds completed delivery history while retaining pending receipts", async () => {
@@ -690,4 +729,162 @@ it("bounds completed delivery history while retaining pending receipts", async (
   expect(next.receipts.waiting).toBe("pending");
   expect(next.receipts["old-0"]).toBeUndefined();
   expect(next.receipts["delivery-1"]).toBe("complete");
+});
+
+it.each(["event", "gap", "terminated"] as const)(
+  "traces each durable %s callback attempt under its saved receipt context",
+  async (kind) => {
+    const tracing = eventTracing();
+    tracing.enable();
+    const logging = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await watch();
+      initial = { ...initial, serializedContext: serializeContext(ctx) };
+      const message = payload();
+      const delivery = message.delivery;
+      const tracedMessage: ConnectionEventInboxPayload = {
+        ...message,
+        requestTraceContext: { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 },
+        delivery:
+          kind === "event"
+            ? delivery
+            : {
+                version: delivery.version,
+                subscriptionId: delivery.subscriptionId,
+                deliveryId: delivery.deliveryId,
+                source: delivery.source,
+                context: delivery.context,
+                ...(kind === "gap"
+                  ? { control: { type: "gap" as const, cursor: null } }
+                  : {
+                      control: {
+                        type: "terminated" as const,
+                        error: { code: 1, message: "private" },
+                      },
+                    }),
+              },
+      };
+      await prepare(tracedMessage);
+      const handler = kind === "event" ? callback : kind === "gap" ? gap : terminated;
+      const active: string[] = [];
+      handler
+        .mockImplementationOnce(async () => {
+          active.push(trace.getActiveSpan()!.spanContext().spanId);
+          throw new Error("secret-callback-payload");
+        })
+        .mockImplementationOnce(async () => {
+          active.push(trace.getActiveSpan()!.spanContext().spanId);
+        });
+      await expect(dispatch(tracedMessage)).rejects.toThrow("secret-callback-payload");
+      await dispatch(JSON.parse(JSON.stringify(tracedMessage)));
+      const spans = tracing.exporter
+        .getFinishedSpans()
+        .filter((span) => span.name.startsWith("agent.connection.event.on"));
+      expect(spans).toHaveLength(2);
+      expect(active).toEqual(spans.map((span) => span.spanContext().spanId));
+      expect(new Set(active).size).toBe(2);
+      expect(spans.map((span) => span.parentSpanContext?.spanId)).toEqual([
+        "2".repeat(16),
+        "2".repeat(16),
+      ]);
+      expect(spans.map((span) => span.status.code)).toEqual([2, 1]);
+      expect(spans[1]!.attributes).toMatchObject({
+        "agent.run.id": "session-1",
+        "connect.subscription.id": "sub_0",
+        "connect.delivery.id": "delivery-1",
+      });
+      expect(
+        JSON.stringify([spans.map((s) => [s.attributes, s.events, s.status]), logging.mock.calls]),
+      ).not.toContain("secret-callback-payload");
+    } finally {
+      logging.mockRestore();
+      await tracing.close();
+    }
+  },
+);
+
+it("honors disabled tracing and a dropped session policy without preventing event callbacks", async () => {
+  const tracing = eventTracing();
+  try {
+    for (const enabled of [false, true]) {
+      if (enabled) tracing.enable(() => false);
+      await watch();
+      initial = { ...initial, serializedContext: serializeContext(ctx) };
+      await prepare(payload());
+      await dispatch(payload());
+    }
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(tracing.exporter.getFinishedSpans()).toEqual([]);
+  } finally {
+    await tracing.close();
+  }
+});
+
+it("links callback sends to the callback span through durable channel delivery metadata", async () => {
+  const tracing = eventTracing();
+  tracing.enable();
+  onTestFinished(() => tracing.close());
+  await watch();
+  initial = { ...initial, serializedContext: serializeContext(ctx) };
+  const runtime = workflowRuntime.createWorkflowRuntime({
+    compiledArtifactsSource: ctx.require(BundleKey).compiledArtifactsSource,
+  });
+  const send = vi.fn().mockResolvedValue({ status: "accepted" });
+  vi.spyOn(workflowRuntime, "createWorkflowRuntime").mockReturnValue({
+    ...runtime,
+    dispatchSession: send,
+  });
+  callback.mockImplementation(async (args) => {
+    const event = args as Parameters<
+      NonNullable<typeof connection.experimental_events>["onEvent"]
+    >[0];
+    await event
+      .attachSession(event.origin.sessionId)
+      .send("check this event", { auth: event.auth });
+  });
+  await prepare(payload());
+  await dispatch(payload());
+  const span = tracing.exporter
+    .getFinishedSpans()
+    .find((span) => span.name === "agent.connection.event.onEvent")!;
+  expect(JSON.parse(JSON.stringify(send.mock.calls[0]![0]))).toMatchObject({
+    sessionId: "session-1",
+    command: {
+      turnPolicy: "queue",
+      requestId: "delivery-1",
+      delivery: {
+        channelKind: "mcp-events",
+        channelName: "issues",
+        requestId: "delivery-1",
+        requestTraceContext: {
+          traceId: span.spanContext().traceId,
+          spanId: span.spanContext().spanId,
+          traceFlags: 1,
+        },
+      },
+    },
+  });
+});
+
+it("does not let a sampled webhook override the session's saved sampling decision", async () => {
+  const tracing = eventTracing();
+  tracing.enable();
+  onTestFinished(() => tracing.close());
+  await watch();
+  tracing.exporter.reset();
+  ctx.set(SessionTraceSeedKey, {
+    traceId: "3".repeat(32),
+    spanId: "4".repeat(16),
+    traceFlags: 0,
+    decision: { action: "record", recordInputs: false, recordOutputs: false },
+  });
+  initial = { ...initial, serializedContext: serializeContext(ctx) };
+  const message = {
+    ...payload(),
+    requestTraceContext: { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 },
+  };
+  await prepare(message);
+  await dispatch(message);
+  expect(callback).toHaveBeenCalledOnce();
+  expect(tracing.exporter.getFinishedSpans()).toEqual([]);
 });
