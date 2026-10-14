@@ -320,6 +320,26 @@ it("holds the outcome of a body that returns right after replying until its with
   await expect(started.outcome).resolves.toEqual({ output: null, status: "completed" });
 });
 
+it("replies and settles with a selected ctx.ask() answer as JSON, without its undefined text (#3836)", async () => {
+  mocks.deliver.mockReset();
+  const answer = { optionId: "yes", status: "answered", text: undefined };
+  mocks.serve.mockImplementation(
+    async (receive: WorkflowServeReceive<JsonValue>, ctx: WorkflowServeContext<JsonValue>) => {
+      await receive();
+      ctx.reply(answer as unknown as JsonValue);
+      return answer as unknown as JsonValue;
+    },
+  );
+  const started = startServeBody(input);
+
+  const outcome = await started.outcome;
+  expect(outcome).toEqual({ output: { optionId: "yes", status: "answered" }, status: "completed" });
+  const output = outcome.status === "completed" ? outcome.output : null;
+  expect(Object.hasOwn(output as object, "text")).toBe(false);
+  const [reply] = sent("reply");
+  expect(Object.hasOwn(reply?.output as object, "text")).toBe(false);
+});
+
 it.each([
   {
     body: "ignores the cancel",
