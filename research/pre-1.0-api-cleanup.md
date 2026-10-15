@@ -22,11 +22,14 @@ This plan commits 1.0 to about 1,350 names and one shape per concept, with three
 Anything an app can build from what remains, or that eve's users ask for later, can be added
 after 1.0. A removal can't.
 
+Changes to the session stream itself (facts, the fold, instrumentation's vocabulary) land in the
+v27 stack (#4855) before it merges; the rest lands on top of it, before 1.0.
+
 ## Rules
 
 - **No thin APIs.** An API that only saves an app a few lines, such as a callback derivable from
   the snapshot or a wrapper around `send`, is easy to add later and hard to remove. Leave it out
-  unless it does something an app can't. `calledTool` stays on that test: 340 uses.
+  unless it does something an app can't.
 - **Expose facts, not interpretations.** Names like `onFinish` commit eve to one meaning of "done".
   Expose the stream and the view, and let apps decide.
 - **One home per name.** A type or value is exported from the entry point that documents it, and
@@ -63,57 +66,42 @@ cleanup lands.
 
 Exported names by group, measured with the TypeScript checker over the 84 entry points it
 resolves at #4855 (types and values; the eight generated extension entries need a build).
-After-counts apply this plan's decisions, rounded where a decision was sized rather than listed:
+After-counts apply this plan's decisions, rounded where a decision was sized rather than listed.
+The bar shows the share of each group's names that goes.
 
-```mermaid
-xychart-beta
-  title "Exported names by group (today vs after)"
-  x-axis ["Platform channels", "Clients and hooks", "Authoring", "eve/events", "Channel framework", "Setup", "Instrumentation", "Evals", "Built-in tools", "Extensions"]
-  y-axis "Names" 0 --> 600
-  bar [559, 333, 288, 219, 139, 131, 100, 92, 61, 61]
-  bar [397, 129, 266, 201, 132, 0, 41, 64, 47, 48]
-```
+| Group                          | Today     | After      | Removed           | Mostly through                                               |
+| ------------------------------ | --------- | ---------- | ----------------- | ------------------------------------------------------------ |
+| Clients and hooks              | 333       | ~130       | `██████░░░░` 61%  | one home: `eve/client`'s 175 re-exports of `eve/events`      |
+| Platform channels (10 entries) | 559       | ~400       | `███░░░░░░░` 28%  | internal: API wrappers, rendering and verification helpers   |
+| Setup wizard                   | 131       | 0          | `██████████` 100% | internal: `eve/setup` removed, scaffold to `eve/internal`    |
+| Instrumentation                | 100       | ~40        | `██████░░░░` 60%  | one generic event type instead of ~18 named ones             |
+| Agent authoring (26 entries)   | 288       | ~265       | `█░░░░░░░░░` 8%   | approval families, duplicates                                |
+| Evals                          | 92        | ~72        | `██░░░░░░░░` 22%  | judge and mock field types, duplicates                       |
+| `eve/events`                   | 219       | ~200       | `█░░░░░░░░░` 9%   | internal: writer helpers, extra folds, the fact zod schemas  |
+| Built-in tools (13 entries)    | 61        | ~47        | `██░░░░░░░░` 23%  | internal: schema constants duplicating each definition's own |
+| Experimental and extensions    | 61        | ~48        | `██░░░░░░░░` 21%  | self-modification's legacy entry points                      |
+| Channel framework              | 139       | ~130       | `█░░░░░░░░░` 6%   | control result types, one CORS type                          |
+| Framework adapters             | 22        | 21         | `░░░░░░░░░░` 5%   | one constant                                                 |
+| **Total**                      | **2,005** | **~1,350** | `███░░░░░░░` 33%  |                                                              |
 
-| Group                          | Today     | After      | Mostly through                                                        |
-| ------------------------------ | --------- | ---------- | --------------------------------------------------------------------- |
-| Platform channels (10 entries) | 559       | ~400       | internal: API wrappers, rendering and verification helpers, constants |
-| Clients and hooks              | 333       | ~130       | one home: `eve/client`'s 175 re-exports of `eve/events`               |
-| Agent authoring (26 entries)   | 288       | ~265       | consolidation: approval families, sandbox types, duplicates           |
-| `eve/events`                   | 219       | ~200       | internal: writer helpers, extra folds, the fact zod schemas           |
-| Channel framework              | 139       | ~130       | consolidation: control results, one CORS type                         |
-| Setup wizard                   | 131       | 0          | internal: `eve/setup` removed, `eve/setup/scaffold` to `eve/internal` |
-| Instrumentation                | 100       | ~40        | consolidation: one generic event type instead of ~18 named ones       |
-| Evals                          | 92        | ~65        | consolidation: call types and matchers; judge and mock field types    |
-| Built-in tools (13 entries)    | 61        | ~47        | internal: schema constants duplicating each definition's own          |
-| Experimental and extensions    | 61        | ~48        | self-modification's legacy entry points                               |
-| Framework adapters             | 22        | 21         | one constant                                                          |
-| **Total**                      | **2,005** | **~1,350** |                                                                       |
-
-Names undercount consolidation, which mostly removes variants and members rather than exports:
-
-```mermaid
-xychart-beta
-  title "Shapes per concept (today vs after)"
-  x-axis ["Request statuses", "Command results", "Approval returns", "Call assertions", "Interaction types", "Payload types", "Instrumentation keys", "Frontend callbacks"]
-  y-axis "Shapes" 0 --> 15
-  bar [5, 12, 10, 11, 8, 5, 14, 5]
-  bar [1, 3, 5, 6, 3, 1, 9, 1]
-```
+Names undercount consolidation, which mostly removes variants rather than exports: one request
+status instead of five vocabularies, one result type for every command instead of twelve, four
+approval decisions instead of ten forms.
 
 ## 1. Consolidate
 
 ### Session commands and handles
 
-Every send, answer, and control is a delivery in v27, but only sends report one, and each control
-returns its own type twice (client and channel). Every command on every side now returns one
-result: a `Delivery` you can follow, or a rejection.
+In v27 every send, answer, and control is a delivery, but only sends say so. Each control returns
+its own result type, once for the client and once for channels, with its own way of saying
+nothing happened (`no_active_turn`, `no_active_session`, `session_not_active`). A cancel resolves
+when it's queued, and nothing tells you when it took effect.
+
+Every command now returns a `Delivery`, and a session that can't accept one throws, as a stranded
+session already does:
 
 ```ts
-type CommandResult<TOutput = unknown> =
-  Delivery<TOutput> | { readonly status: "not-active"; readonly retryable?: true };
-
 interface Delivery<TOutput = unknown> extends AsyncIterable<SessionStreamEvent> {
-  readonly status: "accepted";
   readonly sessionId: string;
   readonly deliveryId: string;
   result(): Promise<DeliveryResult<TOutput>>; // { status: RequestStatus, sessionEnded, reply?, data?, interactions }
@@ -123,18 +111,23 @@ interface Delivery<TOutput = unknown> extends AsyncIterable<SessionStreamEvent> 
 ```ts
 // before
 const response = await session.send("Summarize the thread"); // MessageResponse
-const { status } = await response.result(); // "completed" | "failed" | "waiting"
-const cancelled = await session.cancel(); // CancelSessionResult, "no_active_turn"
+const { status } = await response.result(); // "waiting", whether the turn completed or was cancelled
+
+const cancelled = await session.cancel(); // { status: "accepted" } | { status: "no_active_turn" }
+const reset = await session.reset(); // { status: "reset", previousSessionId } | { status: "no_active_session" }
 
 // after
-const sent = await session.send("Summarize the thread");
-if (sent.status === "not-active") return retryLater(sent.retryable);
-const { status, reply } = await sent.result(); // status: RequestStatus
+const delivery = await session.send("Summarize the thread");
+const { status, reply } = await delivery.result(); // "completed", "cancelled", "awaiting-input", …
 
-const cancel = await session.cancel(); // a CommandResult, like every command
-if (cancel.status === "accepted") await cancel.result(); // once the cancel took effect
+const cancel = await session.cancel(); // a Delivery, like every command
+await cancel.result(); // resolves once the cancel took effect
 ```
 
+- A session that has ended, or whose inbox isn't ready yet, throws `SessionNotActiveError`
+  (`retryable` when retrying can help; narrow with `SessionNotActiveError.is`). The client already
+  retries an inbox that isn't ready, and throws today; channels now behave the same way. A live
+  session accepts a cancel even when nothing runs, and the stream records what it did.
 - Handles share two interfaces. `SessionReader` (`id`, `stream()`) is what `eve/server`'s
   `sessions.attach(id)` and a client's child-agent handle get. `SessionOperations` adds the
   commands, only where an authenticated principal is already in hand: channel routes, schedules,
@@ -143,8 +136,8 @@ if (cancel.status === "accepted") await cancel.result(); // once the cancel took
   read checks the session, so a route that awaits the first event can still answer a stranded
   session with an error status. `getEventStream()`, `getLineStream()`, and `getChildBinding()`
   go.
-- `ChannelSource.send()` returns the result, not a handle; `attachSession(sent.sessionId)` makes
-  one without I/O. A `Delivery`'s data fields are its own properties, so
+- `ChannelSource.send()` returns the `Delivery`, not a handle; `attachSession(delivery.sessionId)`
+  makes one without I/O. A `Delivery`'s data fields are its own properties, so
   `Response.json(await from(id).cancel())` serializes the receipt.
 - The frontend store's local clear is `newSession()`, and `reset()` means the server-side retire,
   as on every other handle. `eve/context`'s data-only `Session` is renamed `SessionInfo`.
@@ -167,8 +160,15 @@ current turn.
 
 ### Request statuses
 
-"How did my request end" has five vocabularies today. One type and selector in `eve/events`
-replace them, and every surface projects it:
+"How did my request end" has five vocabularies today, and the one most apps read is the least
+clear. `MessageResult.status` is `"waiting"` when a turn completed, when it was cancelled, and when
+it stopped for an approval, because it describes the session ("open for the next message"), not
+the request. `"completed"` means the session ended. An app that wants to know whether its message
+got an answer has to read `interactions` and the stream to find out. MCP, `eve invoke`, and
+`invokeTool` each answer the same question with their own words, so a tool that wraps one of them
+translates statuses by hand.
+
+One type and selector in `eve/events` describe the request, and every surface projects it:
 
 ```ts
 type RequestStatus = "working" | "awaiting-input" | "completed" | "failed" | "cancelled";
@@ -177,7 +177,7 @@ function requestStatus(view: SessionView, deliveryId: string): RequestStatus;
 
 | Surface                               | Today                                                                                     | After                                                                |
 | ------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `MessageResult`, `AgentMessageResult` | `completed \| failed \| waiting`; `completed` when the session ended                      | `RequestStatus` and a separate `sessionEnded`                        |
+| `MessageResult`, `AgentMessageResult` | `completed \| failed \| waiting`; `waiting` for a completed, cancelled, or paused turn    | `RequestStatus` and a separate `sessionEnded`                        |
 | MCP `agent_*`                         | `working \| input_required \| authorization_required \| completed \| failed \| cancelled` | the same without `authorization_required`; sign-ins are interactions |
 | `eve invoke`                          | `running \| input-required \| ready \| failed \| authentication-required`                 | `RequestStatus`; a deployment sign-in failure is a CLI error         |
 
@@ -198,8 +198,15 @@ type InvokeToolResult =
 
 ### Approval policies
 
-`ApprovalStatus` accepts ten forms, read by three normalizers. `"approved"` behaves like
-`"not-applicable"`, its reason is dropped, and a policy approval records nothing on the stream.
+An approval policy can return ten different values today: `undefined`, `true`, `false`, four
+strings, and four objects. Several read the opposite of what they do. Returning `true` from
+`approval` doesn't approve the call, it asks a person; `"not-applicable"` is how a policy lets a
+call run. `"approved"` and `{ type: "approved", reason }` behave exactly like `"not-applicable"`:
+the reason is dropped, though the docs say the model receives it. A call a policy let through
+leaves nothing on the stream, so an audit can't tell it from a call that needed no approval.
+Tools, connections, and `invokeTool` each normalize these forms with their own copy of the logic.
+The response policy speaks a third vocabulary, `{ status: "allowed" | "rejected" }`, while the
+stream records responses as admitted or refused.
 
 ```ts
 // before
@@ -223,7 +230,9 @@ approval: ({ session, toolInput }) => {
 response: ({ responder }) => (isApprover(responder) ? "admit" : { refuse: "Not an approver." }),
 ```
 
-- A request policy returns `"allow" | "ask" | "deny" | { deny: string }`; booleans go. A response
+- A request policy returns `"allow" | "ask" | "deny" | { deny: string }`; booleans go, and one
+  normalizer serves tools, connections, and `invokeTool`. An allowed call records
+  `clearedBy: { policy }`, and a denial's reason reaches the model. A response
   policy returns `"admit" | { refuse: string }`, in different words on purpose: refusing a
   responder keeps the approval open for someone else and decides nothing about the call.
 - `approvalKey` and `approvedTools` go. `once()` stays, keyed by tool name. Scoped memory
@@ -235,21 +244,23 @@ response: ({ responder }) => (isApprover(responder) ? "admit" : { refuse: "Not a
 
 ### Evals
 
-Eval sessions, turns, and results carry the session's `view`, and calls are read from
-`view.calls` instead of three parallel extractions.
+Eval assertions keep their shape. Names that describe calls in v26 words move to v27's, so each
+kind of call reads the same way, and sessions gain the `view` every other reader has:
 
 ```ts
 // before
+t.calledTool("search", { count: 1 });
+t.loadedSkill("triage");
 t.calledSubagent("researcher");
-t.usedNoTools();
 t.noFailedActions();
 turn.parked();
 const turn = await t.target.attachSession(id, { startIndex: session.state!.streamIndex });
 const live = t.target.watchTurn(id, { startIndex });
 
 // after
-t.called("researcher", { kind: "agent" });
-t.called({ kind: ["tool", "agent", "control"], count: 0 }); // every call but skill loads
+t.calledTool("search", { count: 1 });
+t.calledSkill("triage");
+t.calledAgent("researcher");
 t.noFailedCalls();
 turn.awaitingInput();
 const session = t.target.attach(id); // no I/O, tracks its own cursor
@@ -257,12 +268,15 @@ const turn = await session.nextTurn();
 const live = session.watch();
 ```
 
-- `calledTool` stays as a shim over `called` with `kind: "tool"`. `loadedSkill` (28 uses) and
-  `calledSubagent` (35) don't earn one.
-- `toolCalls`, `skillLoads`, `subagentCalls`, `toolCallsOf`, their types and matchers, and
-  `EveEvalActionStatus` go. `derived` becomes `summary`. Results use `RequestStatus`,
-  `sessionEnded`, `reply`, and `data`.
-- `eventsSatisfy`, `respondAll`, and `transcript` stay: each is documented and widely used.
+- `loadedSkill` → `calledSkill` and `calledSubagent` → `calledAgent`, with the options they take
+  today. `calledTool`, `notCalledTool`, `usedNoTools`, `maxToolCalls`, `toolOrder`,
+  `requireToolCall`, and `waitForToolCall` keep their names and meanings.
+- `noFailedActions` → `noFailedCalls` and `parked` → `awaitingInput`: v27 has calls and
+  interactions, not actions and parking.
+- `t.target.attachSession` consumed a turn before returning; `attach` is I/O-free, as a channel's
+  `attachSession` is, and the session tracks its own cursor. `watchTurn` becomes `session.watch()`.
+- Eval sessions, turns, and results carry `view`. Results use `RequestStatus`, `sessionEnded`,
+  `reply`, and `data`; `toolCallsOf` goes, since `view.calls` holds every call.
 - `JudgeContext`, `JudgeBatch`, `JudgeInput`, `ScoreInput`, and five `MockModel…` field types lose
   their names; the request, response, responder, and tool-call types stay, since users build
   responders and rubrics as standalone values.
@@ -273,8 +287,30 @@ const live = session.watch();
 ### Channel delivery and identity
 
 A channel's `deliver()` hook receives an open bag (`[key: string]: unknown`) that carries the
-documented per-delivery `state` beside eve's internal keys, and returns the harness's `StepInput`.
-One typed payload replaces the five overlapping types:
+documented per-delivery `state` beside eve's internal keys, and must return the harness's
+`StepInput`. Five overlapping payload types stand behind it, none of them exported by name. One
+typed payload replaces them:
+
+```ts
+// before: Teams merges per-delivery state into channel state
+deliver(payload, channel) {
+  const state = payload.state as Partial<TeamsChannelState> | undefined; // unknown, cast
+  const cards = state?.pendingPromptCards;
+  if (cards !== undefined) {
+    channel.state.pendingPromptCards = { ...cards, ...channel.state.pendingPromptCards };
+  }
+  return defaultDeliverResult(payload); // the harness's StepInput
+},
+
+// after
+deliver(payload, channel) {
+  const cards = payload.state?.pendingPromptCards; // typed by the channel's state
+  if (cards !== undefined) {
+    channel.state.pendingPromptCards = { ...cards, ...channel.state.pendingPromptCards };
+  }
+  // return nothing to deliver the payload unchanged, or a ChannelDelivery to change it
+},
+```
 
 ```ts
 interface ChannelDelivery<TState = undefined> {
@@ -284,17 +320,22 @@ interface ChannelDelivery<TState = undefined> {
   readonly outputSchema?: JsonObject;
   readonly state?: Partial<TState>;
 }
-
-deliver(payload, channel) {
-  const cards = payload.state?.pendingPromptCards; // typed, no cast
-  // return nothing to deliver the payload unchanged
-}
 ```
 
-Channel identity gets one value everywhere: `channel:<name>` for authored channels, and `http`,
-`schedule`, or `subagent` for eve's own. Today a hook's `ctx.channel.kind` stays `"http"` for an
-authored channel with no behavior, so `isChannel(ctx.channel, myChannel)` never matches it.
-`kindHint`, which registration overwrites, and the deprecated `metadata().audience` projector go.
+A channel also has several identities: its adapter kind (`"http"` for an authored channel with no
+behavior, `channel:<name>` otherwise), a `kindHint` that registration overwrites, and an
+instrumentation kind. A hook comparing channels reads the first, so it can miss:
+
+```ts
+// before: never true for an authored channel with no behavior
+if (isChannel(ctx.channel, supportChannel)) await notifySupport(event);
+
+// after: ctx.channel.kind is "channel:support" on every surface, so the check holds
+if (isChannel(ctx.channel, supportChannel)) await notifySupport(event);
+```
+
+Every surface uses one identity: `channel:<name>` for authored channels, and `http`, `schedule`,
+or `subagent` for eve's own. `kindHint` and the deprecated `metadata().audience` projector go.
 
 ### Smaller consolidations
 
@@ -402,55 +443,6 @@ installs. eve exposes its own copies instead:
 
 Two exceptions stay, deliberately: the Slack card builders (pure data factories from the vendored
 chat SDK), and OTel's `SpanExporter` and `SpanProcessor`, which OTel integrations implement.
-
-## Delivery
-
-Everything merges with v27 as one break. Anything on the stream, or a shape the v27 stack
-introduced, retcons into the stack PR that introduced it:
-
-| PR                       | Changes                                                                                                                                                    |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| #4564 contract           | `label` on the wire, kebab-case reasons, one `RuntimeIdentity` and `TraceContext`, `eve/events`' explicit exports, `Interaction`                           |
-| #4567 sessions write v27 | `eve/client` stops re-exporting `eve/events`, delivery ids minted at dispatch, approval option ids, `EveToolPart` with a `state` union, one event-key list |
-| #4574 docs               | the remote-agents guide matches the code for protocol 1 and 2 callers                                                                                      |
-| #4602 HITL               | a typed reply answers the shown prompt only; policy approvals record `clearedBy: { policy }`                                                               |
-| #4691 MessageContent     | `ctx.agent().send()` takes a limited `MessageContent`                                                                                                      |
-| #4693 / #4694            | kebab-case cascade reasons; `protocol/message.ts` dissolved                                                                                                |
-| #4695 instrumentation    | provider keys follow the facts; `invokeTool` always emits its call pair; `InstrumentationEvent<K>`                                                         |
-| #4854 frontend           | a flat snapshot with `status`, only `onEvent`, pending answers from the view                                                                               |
-
-The rest is a stack on top, one PR per concept:
-
-1. Session commands and handles
-2. Request statuses
-3. Approval policies
-4. Evals
-5. Memory providers, coordinated with #4616
-6. Channel delivery and identity
-7. Entry points: one home per name, internals internal, and the smaller consolidations
-8. Owned types: `HistoryMessage`, `SandboxSession`, and the agent and subagent naming
-
-## Documentation to update
-
-APIs the docs teach today that change. Each needs its replacement shown, not just the old name
-deleted:
-
-| API                                                       | Pages                                                                                                                       | Replacement                                                       |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `getEventStream()`                                        | `channels/custom.mdx` (route example and stranded-session notes)                                                            | `stream()`; the example encodes events with `ReadableStream.from` |
-| `foldReceivedEvent`                                       | `guides/frontend/overview.mdx`, `concepts/upgrade-to-v27-events.md`                                                         | the snapshot's `view` in a component; `foldEvents` elsewhere      |
-| `isChannel` from `eve/instrumentation`                    | `guides/instrumentation/otel.mdx`, `reference/typescript-api.md`                                                            | import from `eve/channels`                                        |
-| fact and view types from `eve/client`                     | `guides/client/streaming.mdx`                                                                                               | import from `eve/events`                                          |
-| memory provider keys                                      | `memory/custom-provider.md`                                                                                                 | `beforeTurn`, `afterCompaction`, `beforeCompaction`, `afterTurn`  |
-| `onFinish`, `onError`, `onSessionChange`, `prepareSend`   | `guides/frontend/overview.mdx`, `use-eve-agent-vue.mdx`, `use-eve-agent-svelte.mdx`                                         | the snapshot, `send()`'s `sessionId`, a wrapped `send`            |
-| `openConversationInteractions`, `ConversationInteraction` | the same three frontend pages, the v27 upgrade guide                                                                        | `openInteractions(view)`, `Interaction`                           |
-| `"user-approval"`, `"not-applicable"`, booleans           | `tools/human-in-the-loop.md`, `connections/mcp.mdx`, `tutorial/guard-the-spend.mdx`, `patterns/multi-tenant-approvals.md`   | `"ask"`, `"allow"` or nothing                                     |
-| `approvedTools`, `approvalKey`                            | `tools/human-in-the-loop.md`, `patterns/multi-tenant-approvals.md`, `connections/mcp.mdx`, `guides/dynamic-capabilities.md` | the scoped-approval recipe                                        |
-| `MessageResponse`, `MessageResult`                        | `guides/client/messages.mdx`, `guides/client/streaming.mdx`                                                                 | `Delivery`, `DeliveryResult`                                      |
-| `calledSubagent`, `loadedSkill`, other call assertions    | `evals/assertions.mdx`, `evals/tool-stubs.mdx`, `evals/cases.mdx`                                                           | `called`; `calledTool` stays                                      |
-| `attachSession`, `watchTurn` (evals)                      | `evals/targets.mdx`, `evals/cases.mdx`, `evals/assertions.mdx`                                                              | `attach`, `nextTurn`, `watch`                                     |
-| `eve/self-modification`                                   | the registry item `apps/docs/registry/eve/self-modification`                                                                | `eve/self-modification/local`                                     |
-| entry-point stability                                     | `reference/typescript-api.md`                                                                                               | `experimental/*` and `internal/*` carry no promise                |
 
 ## Follow-ups
 
