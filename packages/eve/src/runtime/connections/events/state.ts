@@ -38,6 +38,14 @@ export interface ConnectionEventHandlerState {
   readonly receipts: ConnectionEventReceipts;
 }
 
+/** What a handler run passes to the successor that took its hook, once it has processed every delivery it received. */
+export interface ConnectionEventHandover {
+  readonly serializedContext: Record<string, unknown>;
+  readonly state: ConnectionEventHandlerState;
+  /** The watch was stopped or terminated before the takeover: the successor ends too. */
+  readonly ended: boolean;
+}
+
 export function eventOwner(binding: EventOwner): EventOwner {
   return {
     connectionName: binding.connectionName,

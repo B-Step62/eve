@@ -1,5 +1,8 @@
 import * as workflowRuntime from "#execution/workflow-runtime.js";
-import { connectionEventHookToken } from "#runtime/connections/events/path.js";
+import {
+  connectionEventHandoverToken,
+  connectionEventHookToken,
+} from "#runtime/connections/events/path.js";
 import { start, resumeHook, getHookByToken, getRun } from "#internal/workflow/runtime.js";
 import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
 import { waitForHook } from "#internal/testing/workflow-test-helpers.js";
@@ -25,7 +28,7 @@ import {
   type ConnectionEventHandlerState,
   type EventBinding,
 } from "#runtime/connections/events/state.js";
-import { handOverConnectionEventStep } from "#runtime/connections/events/lifecycle-step.js";
+import { startConnectionEventSuccessorStep } from "#runtime/connections/events/lifecycle-step.js";
 import {
   prepareConnectionEventStep,
   dispatchConnectionEventStep,
@@ -601,12 +604,7 @@ it("keeps failed callbacks pending for durable retry and prevents a duplicate su
 
 // Real handler runs execute outside this module's mocks, so these runs carry no
 // agent bundle: anything that needs one fails the way a rejected subscribe does.
-async function startHandler(input: {
-  handover?: {
-    subscription: ManagedEventSubscription;
-    receipts: ConnectionEventHandlerState["receipts"];
-  };
-}) {
+async function startHandler(generation?: number) {
   await watch();
   const bindingId = crypto.randomUUID();
   const binding: EventBinding = {
@@ -615,7 +613,7 @@ async function startHandler(input: {
     request: { ...initial.state!.binding.request, idempotencyKey: bindingId },
   };
   const run = await start(workflowRuntime.connectionEventWorkflowReference, [
-    { binding, serializedContext: {}, ...(input.handover && { handover: input.handover }) },
+    { binding, serializedContext: {}, ...(generation !== undefined && { generation }) },
   ]);
   onTestFinished(() => run.cancel().catch(() => {}));
   return { run, binding, token: connectionEventHookToken(bindingId) };
@@ -640,33 +638,42 @@ async function publishedOutcome(runId: string) {
 }
 
 it("ends the handler run when its subscribe fails, leaving no hook behind", async () => {
-  const { run, token } = await startHandler({});
+  const { run, token } = await startHandler();
   await run.returnValue;
   expect(await publishedOutcome(run.runId)).toMatchObject({ error: expect.any(String) });
   expect(await hookOwner(token)).toBeUndefined();
 });
 
-it("hands a live watch to a fresh run that takes its hook without a gap", async () => {
+it("passes a watch to the next run once that run has taken its hook", async () => {
   const subscription = { ...saved.values().next().value!, id: "sub_handover" };
-  const first = await startHandler({
-    handover: { subscription, receipts: { "delivery-1": "complete" } },
-  });
-  await waitForHook(first.run, { token: first.token, timeout: 10_000 });
-  expect(await publishedOutcome(first.run.runId)).toEqual({ subscription });
-  const subscribes = subscriber.mock.calls.length;
-  await handOverConnectionEventStep({
-    serializedContext: {},
+  const first = await startHandler(1);
+  const state: ConnectionEventHandlerState = {
     binding: first.binding,
     subscription,
-    receipts: { "delivery-1": "complete", "delivery-2": "complete" },
+    receipts: { "delivery-1": "complete" },
+  };
+  // Stands in for a predecessor: the run waits for its state before taking deliveries.
+  await waitForHook(first.run, {
+    token: connectionEventHandoverToken(first.binding.id, 1),
+    timeout: 10_000,
   });
-  // The predecessor ends once the successor has taken the hook.
+  await resumeHook(connectionEventHandoverToken(first.binding.id, 1), {
+    serializedContext: {},
+    state,
+    ended: false,
+  });
+  await waitForHook(first.run, { token: first.token, timeout: 10_000 });
+  const subscribes = subscriber.mock.calls.length;
+  await startConnectionEventSuccessorStep({
+    serializedContext: {},
+    binding: first.binding,
+    generation: 2,
+  });
+  // The first run sends its state on and ends once the successor holds the hook.
   await first.run.returnValue;
   const successor = await hookOwner(first.token);
   expect(successor).toBeDefined();
   expect(successor).not.toBe(first.run.runId);
-  // The successor republishes the inherited subscription instead of subscribing again.
-  expect(await publishedOutcome(successor!)).toEqual({ subscription });
   expect(subscriber.mock.calls.length).toBe(subscribes);
   await resumeHook(first.token, { kind: "retire" });
   await getRun(successor!).returnValue;
