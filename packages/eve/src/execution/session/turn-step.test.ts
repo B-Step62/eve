@@ -4,8 +4,10 @@ import { jsonSchema, type ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAdapter, ChannelAdapterContext } from "#channel/adapter.js";
+import { createChannelAddress } from "#channel/channel-address.js";
 import type {
   DeliverPayload,
+  Runtime,
   SessionAuthContext,
   SubagentInputRequestHookPayload,
 } from "#channel/types.js";
@@ -74,6 +76,7 @@ import {
 import { setLogRecordSubscriber, type LogRecord } from "#internal/logging.js";
 import type { HookContext } from "#public/definitions/hook.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
+import { decodeSessionInboxPayload } from "#execution/session-inbox/protocol.js";
 import {
   createDurableSessionValues,
   type DurableSessionState,
@@ -2959,6 +2962,57 @@ describe("turnStep", () => {
       expect(second.output).toBe("thread=alpha; user=follow up");
     }
     expect(second.serializedContext[ThreadKey.name]).toBe("alpha");
+  });
+
+  // https://github.com/vercel/eve/issues/1554
+  it.fails("applies the channel state a send carries to an existing session", async () => {
+    const adapter: ChannelAdapter = {
+      kind: "head-state",
+      state: { headSha: "commit-A" },
+      deliver: (payload, adapterCtx) => ({
+        message: `head=${String(adapterCtx.state.headSha)}; user=${String(payload.message)}`,
+      }),
+    };
+    const bundle = Object.assign({}, createTurnStepTestBundle() as object, {
+      adapterRegistry: { adaptersByKind: new Map([[adapter.kind, adapter]]) },
+    }) as never;
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(bundle);
+    const session = createStubSession();
+    installSessionStoreMocks([session]);
+    const seenMessages: string[] = [];
+    vi.mocked(createExecutionNodeStep).mockImplementation(
+      () =>
+        async (current, input): Promise<StepResult> => {
+          seenMessages.push(String(input?.message));
+          return { next: { done: true, output: "ok" }, session: current };
+        },
+    );
+    const dispatchContinuation = vi.fn().mockResolvedValue({ sessionId: "s", status: "accepted" });
+    const runtime = { dispatchContinuation } as unknown as Runtime;
+    await createChannelAddress<{ headSha: string }>({
+      adapter,
+      channelName: "head-state",
+      continuationToken: "pr-42",
+      runtime,
+    }).send("synchronize", { auth: null, state: { headSha: "commit-B" } });
+    const ctx = new ContextContainer();
+    ctx.set(AuthKey, null);
+    ctx.set(BundleKey, bundle);
+    ctx.set(ChannelKey, adapter);
+    ctx.set(ContinuationTokenKey, "head-state:pr-42");
+    ctx.set(SessionIdKey, "sess-test");
+
+    const result = await turnStep({
+      input: decodeSessionInboxPayload(dispatchContinuation.mock.calls[0]?.[0].command) as never,
+      sessionWritable: createTestWritable(),
+      serializedContext: serializeContext(ctx),
+      sessionState: createStubSessionState(),
+    });
+
+    expect(seenMessages).toEqual(["head=commit-B; user=synchronize"]);
+    expect(
+      (result.serializedContext[ChannelKey.name] as ChannelAdapter | undefined)?.state,
+    ).toEqual({ headSha: "commit-B" });
   });
 
   it("carries session-total usage on the done result, not the final turn's", async () => {
