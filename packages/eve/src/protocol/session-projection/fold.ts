@@ -447,7 +447,7 @@ function foldProgress(view: SessionView, previews: MutablePreviews, raw: unknown
       return;
     }
     case "call.progress": {
-      const { callId, output, title } = progress.data;
+      const { callId, output, label } = progress.data;
       const call = view.calls[callId];
       if (call === undefined || call.status === "settled") return;
       const preview: CallPreview | undefined = previews.calls[callId];
@@ -457,7 +457,7 @@ function foldProgress(view: SessionView, previews: MutablePreviews, raw: unknown
         name: call.capability.name,
         output,
         runId: "runId" in call.owner ? call.owner.runId : undefined,
-        ...(title !== undefined && { title }),
+        ...(label !== undefined && { label }),
       };
       return;
     }

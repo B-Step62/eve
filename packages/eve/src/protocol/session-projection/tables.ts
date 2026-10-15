@@ -135,8 +135,8 @@ export interface CallRow extends Introduced, Ended {
   readonly error?: ErrorInfo;
   readonly reason?: string;
   readonly cause?: Cause;
-  /** The call's label once it settled, from the tool; `capability.title` labels it before. */
-  readonly title?: string;
+  /** The call's label once it settled, from the tool; `capability.label` labels it before. */
+  readonly label?: string;
   /** What the call delegated, such as a child session's model use. */
   readonly usage?: Usage;
 }
@@ -244,5 +244,5 @@ export interface CallPreview {
   /** The latest output snapshot, while the call runs. */
   readonly output?: JsonValue;
   /** The call's label for that output, from the tool. */
-  readonly title?: string;
+  readonly label?: string;
 }

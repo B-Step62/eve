@@ -210,27 +210,6 @@ export function askedCall(view: SessionView, row: InteractionRow): AskedCall | u
     : { callId: call.callId, input: call.input, name: call.capability.name };
 }
 
-/**
- * An interaction as a reader renders it: what its row asks, under the request's own field names,
- * with its id and the call it asks about, such as the tool an approval would run. A sign-in
- * carries its challenge in `signIn`.
- */
-export type AskedInteraction = InteractionRequest & {
-  readonly interactionId: string;
-  readonly call?: AskedCall;
-};
-
-export function askedInteraction(
-  view: SessionView,
-  rowOrId: InteractionRow | string,
-): AskedInteraction | undefined {
-  const row = typeof rowOrId === "string" ? view.interactions[rowOrId] : rowOrId;
-  if (row === undefined) return undefined;
-  const call = askedCall(view, row);
-  const asked = { ...row.request, interactionId: row.interactionId };
-  return call === undefined ? asked : { ...asked, call };
-}
-
 /** Where an interaction opened: the turn it holds, its step then, and the task whose run asks. */
 export interface InteractionPlace {
   readonly turnId: string;
@@ -251,30 +230,37 @@ export function interactionPlace(view: SessionView, row: InteractionRow): Intera
 }
 
 /** An interaction as a conversation reader shows it: what it asks, where, and how it stands. */
-export interface ReaderInteraction extends InteractionPlace {
-  readonly request: AskedInteraction;
+export interface Interaction extends InteractionPlace {
+  readonly interactionId: string;
+  readonly request: InteractionRequest;
+  readonly call?: AskedCall;
   readonly status: "open" | "settled";
   readonly outcome?: InteractionOutcome;
   readonly reason?: string;
-  /** The answer that decided it. */
+  /** The deciding answer once settled; while open, the latest unsettled submitted answer. */
   readonly answer?: Answer;
 }
 
-export function readerInteraction(
-  view: SessionView,
-  interactionId: string,
-): ReaderInteraction | undefined {
+export function interaction(view: SessionView, interactionId: string): Interaction | undefined {
   const row = view.interactions[interactionId];
-  const request = row === undefined ? undefined : askedInteraction(view, row);
-  if (row === undefined || request === undefined) return undefined;
-  const shown: Mutable<ReaderInteraction> = {
+  if (row === undefined) return undefined;
+  const shown: Mutable<Interaction> = {
     ...interactionPlace(view, row),
-    request,
+    interactionId,
+    request: row.request,
     status: row.status,
   };
+  const call = askedCall(view, row);
+  if (call !== undefined) shown.call = call;
   if (row.outcome !== undefined) shown.outcome = row.outcome;
   if (row.reason !== undefined) shown.reason = row.reason;
-  const answer = decidingAnswer(row);
+  let answer = decidingAnswer(row);
+  if (row.status === "open") {
+    for (const response of Object.values(view.responses)) {
+      if (response.interactionId !== interactionId || response.status === "settled") continue;
+      if (response.value !== undefined) answer = { ...response.value, interactionId };
+    }
+  }
   if (answer !== undefined) shown.answer = answer;
   return shown;
 }

@@ -22,7 +22,7 @@ export type CapabilityKind = "tool" | "agent" | "skill";
 export interface Capability {
   readonly kind: CapabilityKind;
   readonly name: string;
-  readonly title?: string;
+  readonly label?: string;
 }
 
 /** A preview of a call's input as the model writes it. The first record announces the call. */
@@ -61,7 +61,7 @@ export interface CallProgressData {
   readonly callId: string;
   readonly output: JsonValue;
   /** The call's label for this output, from the tool. */
-  readonly title?: string;
+  readonly label?: string;
 }
 
 export type CallOutcome = "completed" | "failed" | "rejected" | "interrupted" | "abandoned";
@@ -79,7 +79,7 @@ export interface CallSettledData {
   /** Who rejected the call: `{interactionId}` or `{policy}`. */
   readonly cause?: Cause;
   /** The call's label once it settled, from the tool. */
-  readonly title?: string;
+  readonly label?: string;
 }
 
 export type CallInput = Envelope<"call.input", CallInputData>;
@@ -109,7 +109,7 @@ export const callSchemas = {
         capability: z.object({
           kind: known<CapabilityKind>(),
           name: z.string(),
-          title: z.string().optional(),
+          label: z.string().optional(),
         }),
         input: jsonValue.optional(),
         inputError: errorInfo.optional(),
@@ -130,7 +130,7 @@ export const callSchemas = {
         outputOf: z.object({ callId: id }).optional(),
         outputRef: valueReference.optional(),
         reason: z.string().optional(),
-        title: z.string().optional(),
+        label: z.string().optional(),
       }),
     ),
   ),
@@ -152,7 +152,7 @@ export const callProgressSchemas = {
   "call.progress": envelopeOf(
     "call.progress",
     conforming<CallProgressData>()(
-      z.object({ callId: id, output: jsonValue, title: z.string().optional() }),
+      z.object({ callId: id, output: jsonValue, label: z.string().optional() }),
     ),
   ),
 };

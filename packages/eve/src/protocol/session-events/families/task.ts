@@ -17,12 +17,13 @@ export type TaskOutcome = "completed" | "failed" | "cancelled";
 export interface TaskEndedData {
   readonly taskId: string;
   readonly outcome: TaskOutcome;
-  /** Open: why a task was cancelled, such as `task_cancel`, `turn_cancelled`, or `session-ended`. */
+  /** Open: why a task was cancelled, such as `task-cancel`, `turn-cancelled`, or `session-ended`. */
   readonly reason?: string;
   readonly error?: ErrorInfo;
 }
 
 export type TaskStarted = Envelope<"task.started", TaskStartedData>;
+/** A task ends once; individual calls it serves settle separately with `call.settled`. */
 export type TaskEnded = Envelope<"task.ended", TaskEndedData>;
 export type TaskFact = TaskStarted | TaskEnded;
 

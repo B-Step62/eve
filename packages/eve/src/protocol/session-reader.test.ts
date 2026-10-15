@@ -5,6 +5,7 @@ import { emptySessionView, foldLines } from "#protocol/session-projection/fold.j
 import { activeTurn } from "#protocol/session-projection/selectors.js";
 import {
   callPlace,
+  interaction,
   readerTasks,
   readerTurns,
   waitingOn,
@@ -105,6 +106,74 @@ describe("waitingOn", () => {
       [{ data: { interactionId: "i_0", outcome: "declined" }, type: "interaction.settled" }],
     );
     expect(waitingOn(declined, "c_0")).toBeUndefined();
+  });
+});
+
+describe("interaction", () => {
+  it("shows the latest unsettled answer without closing the prompt, then the deciding answer", () => {
+    const view = viewOf(started, [
+      turn("turn_0"),
+      run("run_0", "turn_0"),
+      call("c_0", "run_0"),
+      approval("i_0", "c_0"),
+    ]);
+    expect(interaction(view, "missing")).toBeUndefined();
+    expect(interaction(view, "i_0")).toMatchObject({
+      interactionId: "i_0",
+      request: { kind: "approval", prompt: "Approve c_0?" },
+      call: { callId: "c_0", name: "tool-c_0", input: {} },
+      status: "open",
+      turnId: "turn_0",
+      stepIndex: 0,
+    });
+    const submit = (responseId: string, optionId: string) => ({
+      type: "response.submitted",
+      data: { responseId, interactionId: "i_0", deliveryId: "d_0", value: { optionId } },
+    });
+    foldLines(
+      view,
+      [{ at, facts: [submit("r_0", "deny"), submit("r_1", "approve")] }],
+      view.position,
+    );
+    expect(interaction(view, "i_0")).toMatchObject({
+      status: "open",
+      answer: { interactionId: "i_0", optionId: "approve" },
+    });
+    foldLines(
+      view,
+      [
+        {
+          at,
+          facts: [{ type: "response.settled", data: { responseId: "r_1", outcome: "refused" } }],
+        },
+      ],
+      view.position,
+    );
+    expect(interaction(view, "i_0")?.answer).toEqual({ interactionId: "i_0", optionId: "deny" });
+    foldLines(
+      view,
+      [
+        {
+          at,
+          facts: [
+            {
+              type: "interaction.settled",
+              data: {
+                interactionId: "i_0",
+                outcome: "accepted",
+                response: { optionId: "approve" },
+              },
+            },
+          ],
+        },
+      ],
+      view.position,
+    );
+    expect(interaction(view, "i_0")).toMatchObject({
+      status: "settled",
+      outcome: "accepted",
+      answer: { interactionId: "i_0", optionId: "approve" },
+    });
   });
 });
 

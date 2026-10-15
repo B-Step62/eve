@@ -290,7 +290,7 @@ export function activity(view: SessionView, filter: { readonly turnId?: string }
     if (working.length > 0) return { kind: "waiting-on-tasks", tasks: working };
     return {
       kind: "calling",
-      names: waits.calls.map((entry) => entry.capability.title ?? entry.capability.name),
+      names: waits.calls.map((entry) => entry.capability.label ?? entry.capability.name),
     };
   }
   return { kind: "thinking" };

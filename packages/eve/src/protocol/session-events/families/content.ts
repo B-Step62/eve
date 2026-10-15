@@ -3,6 +3,7 @@ import { z } from "#compiled/zod/index.js";
 import { conforming, envelopeOf, id, jsonValue, valueReference } from "../common.js";
 import type { Envelope, JsonValue, ValueReference } from "../envelope.js";
 
+/** Wire parts use `kind`: `type` names the event. Authoring and UI parts use `type`. */
 /** A content part's kind. Open: `text`, `reasoning`, `result`, and `file` today. */
 export type ContentKind = "text" | "reasoning" | "result" | "file" | (string & {});
 

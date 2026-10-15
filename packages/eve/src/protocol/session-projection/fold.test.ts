@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { StoredLine } from "#protocol/session-events/envelope.js";
 import {
   emptySessionView,
+  emptyPreviews,
   foldEvents,
   foldLines,
   type ReceivedEvent,
@@ -79,6 +80,63 @@ describe("the shared fold", () => {
     expect(idle(view)).toBe(true);
     expect(view.usage.total).toMatchObject(spent);
     expect(view.position).toBe(lines.length);
+  });
+
+  it("preserves authored call labels through progress and settlement", () => {
+    const view = emptySessionView();
+    const previews = emptyPreviews();
+    foldLines(
+      view,
+      [
+        ...turnLines(0, { opensSession: true }).slice(0, 2),
+        {
+          at,
+          facts: [
+            {
+              type: "call.requested",
+              data: {
+                callId: "c_0",
+                owner: { runId: "run_0" },
+                capability: { kind: "tool", name: "search", label: "Search the archive" },
+              },
+            },
+          ],
+        },
+        {
+          progress: {
+            type: "call.progress",
+            data: { callId: "c_0", output: "partial", label: "Searching" },
+          },
+        },
+      ],
+      0,
+      { previews },
+    );
+    expect(view.calls.c_0?.capability.label).toBe("Search the archive");
+    expect(previews.calls.c_0).toMatchObject({ output: "partial", label: "Searching" });
+    foldLines(
+      view,
+      [
+        {
+          at,
+          facts: [
+            {
+              type: "call.settled",
+              data: {
+                callId: "c_0",
+                outcome: "completed",
+                output: "found",
+                label: "Found the document",
+              },
+            },
+          ],
+        },
+      ],
+      view.position,
+      { previews },
+    );
+    expect(view.calls.c_0).toMatchObject({ label: "Found the document", output: "found" });
+    expect(previews.calls.c_0).toBeUndefined();
   });
 
   it("records a run's current attempt, each retry's start moving it on", () => {
