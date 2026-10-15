@@ -205,6 +205,102 @@ An MCP tool call returns the tool's `structuredContent` when the server sends it
 
 When a remote tool returns more data than the model needs, narrow the result at the MCP server. Prefer a purpose-built search or summary tool, or return a stable handle that another call can use to fetch a smaller slice. If you do not control the server and an equivalent upstream API is available, replace only that operation with an authored tool that stores the full payload outside model context and projects the needed fields through `toModelOutput`. Block the original MCP operation through [`tools.block`](#tool-filters) so the model does not see duplicate tools.
 
+## Events (experimental)
+
+An MCP connection can watch the server's events and run your code when one arrives. Vercel Connect holds the upstream subscription and forwards each event to your agent; eve runs your callback.
+
+Requirements:
+
+- A statically authored MCP connection with a static `connect()` auth provider. Dynamic connections and auth resolvers are not supported.
+- `@vercel/connect@2.5.2` or later.
+- An MCP server that supports events over Streamable HTTP.
+
+### Handle events
+
+Add `experimental_events` to the connection. This example forwards every Bird email event to the conversation that started the watch:
+
+```ts title="agent/connections/bird.ts"
+import { connect } from "@vercel/connect/eve";
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://mcp.bird.com/",
+  description: "Bird: email, SMS, and contacts. Can watch for new messages.",
+  auth: connect("bird/bird"),
+  experimental_events: {
+    async onEvent({ event, origin, auth, attachSession }) {
+      await attachSession(origin.sessionId).send(
+        `New ${event.name}: ${JSON.stringify(event.data)}`,
+        { auth, turnPolicy: "queue" },
+      );
+    },
+  },
+});
+```
+
+`onEvent` is required. Defining it does not subscribe to anything: the model subscribes at runtime.
+
+Callbacks run outside any conversation, as the user who subscribed (`auth`). Nothing enters a session unless you call `attachSession(sessionId).send(...)`, and `attachSession` never creates a session.
+
+Each delivery runs in its own durable workflow, so callbacks can run concurrently, out of order, and more than once. Use `deliveryId` to deduplicate side effects:
+
+```ts
+async onEvent({ event, deliveryId }) {
+  await fetch("https://crm.example/notes", {
+    method: "POST",
+    headers: { "Idempotency-Key": deliveryId },
+    body: JSON.stringify(event.data),
+  });
+},
+```
+
+### Handle missed events and ended subscriptions
+
+```ts
+experimental_events: {
+  async onEvent({ event }) {
+    // ...
+  },
+  async onGap({ origin, auth, attachSession }) {
+    // The server could not deliver every event. Re-read the source.
+    await attachSession(origin.sessionId).send(
+      "Some Bird events were missed. Re-check the mailbox.",
+      { auth },
+    );
+  },
+  async onTerminated({ origin, auth, error, attachSession }) {
+    // The upstream subscription ended. The watch ends when this returns.
+    await attachSession(origin.sessionId).send(
+      `The Bird watch ended: ${error.message}`,
+      { auth },
+    );
+  },
+},
+```
+
+### What the model can call
+
+`eve__search` lists three kinds of actions for the connection:
+
+| Action                    | Input                  | Result                                  |
+| ------------------------- | ---------------------- | --------------------------------------- |
+| `events_subscribe_<hash>` | `{ arguments, ttlMs }` | `{ id, status, expiresAt, ... }`        |
+| `events_get_subscription` | `{ id }`               | The subscription, or unknown once ended |
+| `events_unsubscribe`      | `{ id }`               | `{ id, status: "stopping" }`            |
+
+There is one subscribe action per event the server offers; its description names the event. `ttlMs` is required: an integer from `120000` (2 minutes) to `31536000000` (365 days), or `null` to watch until stopped. `expiresAt` is the resulting deadline, or `null`.
+
+- **Pending.** If Connect has not confirmed in time, subscribe returns the `id` with `status: "pending"`. Call get with that `id` later.
+- **Repeats.** Subscribing again to the same event with the same arguments from the same session returns the existing watch. Another session gets its own watch.
+- **Stopping.** Get and stop accept the `id` from any of the creator's sessions. After stop, eve keeps retrying Connect's unsubscribe until cleanup completes; until then get still reports the watch and stop can be called again.
+- **Lifetime.** A watch outlives the session that created it. It ends on stop, at `expiresAt`, or when the upstream subscription terminates.
+
+`tools.allow` and `tools.block` apply to these actions. An allow list hides any event action it does not name, so copy the exact `events_subscribe_<hash>` names from `eve__search`. `toolCall.providedArguments` does not apply to event actions.
+
+### Receiver
+
+eve mounts `POST /eve/v1/hooks/:connectionName`, under any configured agent or public prefix. It accepts only Connect's delivery token and only deliveries for a live watch's subscription; it answers `410` once the watch has ended. The callback's identity always comes from the saved watch, never from the event payload.
+
 ## Troubleshooting
 
 | Symptom                                    | Check                                                                                                                                     |
@@ -220,128 +316,3 @@ When a remote tool returns more data than the model needs, narrow the result at 
 - [OpenAPI connections](./openapi): generate tools from OpenAPI operations.
 - [Authentication](../guides/auth-and-route-protection): establish the caller identity required by user-scoped auth.
 - [Security model](../concepts/security-model): how connection credentials stay out of the model's reach.
-
-## Events (experimental)
-
-The experimental connection event contract accepts separate callbacks:
-
-```ts
-import { defineMcpClientConnection } from "eve/connections";
-import { connect } from "@vercel/connect/eve";
-
-export default defineMcpClientConnection({
-  url: "https://issues.example/mcp",
-  description: "Search and watch issues",
-  auth: connect("oauth/issues"),
-  experimental_events: {
-    async onEvent({ event, origin, auth, attachSession }) {
-      await attachSession(origin.sessionId).send(
-        `Review this issue event: ${JSON.stringify(event.data)}`,
-        { auth, turnPolicy: "queue" },
-      );
-    },
-    async onGap({ origin, cursor }) {
-      // Events were missed: reconcile the source.
-    },
-    async onTerminated({ origin, error }) {
-      // Decide whether to notify the session or request another subscription.
-    },
-  },
-});
-```
-
-This contract is experimental and requires the matching managed-events runtime
-and Connect SDK releases. Defining callbacks does not create a subscription or
-start a model turn. `onEvent` is required; lifecycle callbacks are optional.
-`experimental_events` opts this connection into event handling. The `connect()`
-auth provider supplies the backend that manages subscriptions and verifies
-deliveries using the same authorized account. Using `connect()` alone does not
-enable event handling or create subscriptions.
-Use a statically authored MCP connection and a static `connect()` auth provider
-that exposes the events bridge. Dynamic connections and auth resolvers are not
-supported by this first version because the receiver must be mounted at build
-time. The provider still resolves the current authorized user or app for each
-subscription operation.
-
-`origin` and `auth` come from eve's subscription binding, saved with its watch. Provider event
-payloads never select the execution principal. Callback code chooses whether
-to send input to an existing session. A session attachment never creates a
-replacement session.
-
-### Subscription and delivery flow
-
-`eve__search` exposes subscribe actions from the event catalog, plus get and
-stop actions. `eve__tool` applies the connection's approval and auth gates.
-eve uses AI SDK for authenticated catalog discovery and calls the Connect events
-bridge directly for subscription operations.
-Supply event arguments and an explicit `ttlMs`: an integer from 120,000
-(2 minutes) to 31,536,000,000 (365 days), or `null` to watch until stopped.
-Creation does not accept `expiresAt`. Connect returns the calculated deadline in
-`expiresAt`, or `null` for an indefinite watch. Retries reuse the saved duration
-and idempotency key, so they do not extend the original deadline.
-Registration mounts the receiver; it does not create a subscription.
-
-Each subscription is owned by one durable watch workflow. Subscribing starts it:
-the watch registers its hook, which carries the binding (the creator, their auth
-and the request), then calls Connect. If Connect rejects the subscription, the
-action fails and the watch ends. A timeout or server error is retried with the
-same idempotency key, so a subscription Connect already created is reused.
-eve keeps no other copy of the binding. Connect owns the subscription's status
-and lifetime; the watch ends at its expiry.
-
-Subscribe is idempotent per intent within the session that subscribed: the
-watch `id` is derived from that session, the creator, the connection, the event
-name and its arguments, not from the tool call. Watching the same event with the
-same arguments again from that session, for example after a cancelled or
-timed-out call, returns the existing watch instead of creating a second
-subscription. The same request from another session creates its own watch,
-because callbacks name the session they came from. Once a watch has ended, the
-same request starts a new one.
-
-Subscriptions belong to their creator and connection, not a conversation session.
-Get and stop take the `id` the subscribe action returned, and accept it from any
-of the creator's sessions. There is no list action yet. If Connect has not
-answered by the time the subscribe action stops waiting, it returns
-`status: "pending"` with the watch's `id`; get reports the subscription once it
-exists. Ending the originating session does not stop the watch. Stop, expiry, or
-upstream termination ends it. Stop returns `status: "stopping"` and hands the
-cancellation to the watch, which calls Connect's unsubscribe and, while Connect
-answers `cleanupStatus: "pending"`, repeats it with a growing durable delay.
-A failed unsubscribe, such as a Connect outage or refused credentials, is
-repeated the same way. The watch ends only once Connect's cleanup completes or
-Connect no longer has the subscription; until then get reports it and stop can
-be called again. An ended watch is not found:
-get and stop report an unknown subscription.
-
-The receiver verifies Connect's delivery and checks that it names the
-subscription its watch created. It then starts a durable workflow for that one
-delivery under the watch's binding, and responds with `202` once that run is
-accepted, or `410` once the watch has ended. A delivery that arrives before the
-subscribe response waits in the watch's hook; the watch starts its run once it
-knows its subscription. The delivery run checks the binding against the deployed
-connection before running your callback. Raw events never
-enter the session inbox.
-Only an explicit `attachSession(...).send(...)` enters a conversation session.
-Connect owns upstream verification, renewal, and cancellation.
-
-Callbacks run as their creator, each delivery in its own run, so callbacks can
-run concurrently and out of order. `defineState()` lasts for one delivery.
-Use `deliveryId` to deduplicate external effects: a callback can run again after a
-crash or a redelivery. `onTerminated` ends the watch once it returns.
-Exhausted callback retries fail that delivery's run, not the watch or the
-conversation session.
-
-### Runtime requirements
-
-This experimental integration supports static root-agent connections with Streamable
-HTTP event discovery. Generated event actions are eve-owned actions, not remote MCP
-tools, so `toolCall.providedArguments` does not apply to them. `tools.allow` and
-`tools.block` do: the model finds and calls an event action only if its name passes the
-filter. The actions are `events_get_subscription`, `events_unsubscribe`, and one
-`events_subscribe_<hash>` per event, as listed by search. Event discovery failures leave ordinary MCP tools available. Remote tools must
-not use the generated `events_` action names.
-
-It requires `@vercel/connect@2.5.2` or later for the Connect events bridge. The receiver mounts at
-`POST /eve/v1/hooks/:connectionName`, including any configured agent or public prefix.
-It authenticates Connect's delivery-purpose OIDC token over HTTPS; the body is not
-separately signed. Saved bindings determine execution identity, not delivery context.
