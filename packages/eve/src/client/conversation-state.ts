@@ -1,7 +1,7 @@
 import { conversationView } from "#client/conversation.js";
 import type { EveMessage } from "#client/message-types.js";
 import {
-  type ReaderInteraction,
+  type Interaction,
   type ConversationTask,
   type ConversationTaskCall,
   openSignIns,
@@ -21,8 +21,8 @@ export interface ConversationTurn {
  * client sent an answer the stream hasn't settled yet. `answer` is the deciding answer, or the
  * one this client sent.
  */
-export type ConversationInteraction = Omit<ReaderInteraction, "status"> & {
-  readonly status: ReaderInteraction["status"] | "responded";
+export type ConversationInteraction = Omit<Interaction, "status"> & {
+  readonly status: Interaction["status"] | "responded";
 };
 
 export type AgentObservation =

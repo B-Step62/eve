@@ -111,9 +111,9 @@ export type * from "#protocol/session-events/index.js";
 export { endsTurn, failureOf } from "#client/session-utils.js";
 
 export type { Answer } from "#shared/input.js";
-export type { AskedInteraction, AskedCall, ReaderInteraction } from "#protocol/session-reader.js";
+export type { Interaction, AskedCall } from "#protocol/session-reader.js";
 export { signInEnding } from "#protocol/session-reader.js";
 export { isAnswer, parseAnswer, parseAnswers } from "#shared/input.js";
 
-export { resolveTextToResponse, resolveTextToResponses } from "#channel/resolve-text.js";
+export { answerFromText, answerFromTexts } from "#channel/resolve-text.js";
 export type { ToolStub, ToolStubOutcome } from "#tool-stubs/types.js";

@@ -21,7 +21,7 @@ import { maxBytesOf } from "#internal/attachments/limited-read.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { attachInputText } from "#internal/input-text.js";
 import type { Answer, StrictAnswers, ValidatedAnswer } from "#shared/input.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 import {
   buildSlackBinding,
   buildSlackWorkspaceHandle,
@@ -601,7 +601,7 @@ export type SlackChannelInternalEvents = {
 export type SlackApprovalChannel = "direct-message" | "thread";
 
 /** Input request passed to a {@link SlackApprovalChannelResolver}. */
-export type SlackApprovalRequest = AskedInteraction;
+export type SlackApprovalRequest = Interaction;
 
 /** Chooses the Slack destination for one input request. */
 export type SlackApprovalChannelResolver = (

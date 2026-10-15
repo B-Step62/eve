@@ -5,7 +5,7 @@ import type {
   InteractionSettledData,
 } from "#protocol/session-events/families/interaction.js";
 import type { ResponseAdmittedData } from "#protocol/session-events/families/response.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
 /**
  * Channel state for showing a session's open requests one at a time. A typed
@@ -25,7 +25,7 @@ export interface PromptQueueState {
  * returns `false` when it could not show the request.
  */
 export function promptQueueEvents<TChannel extends { state: PromptQueueState }>(
-  show: (channel: TChannel, request: AskedInteraction) => Promise<boolean | void>,
+  show: (channel: TChannel, request: Interaction) => Promise<boolean | void>,
 ) {
   async function refresh(channel: TChannel, view: SessionView) {
     const first = firstOpenRequest(view);

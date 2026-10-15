@@ -14,7 +14,7 @@ type ApprovalCandidateStatus =
   | "stale";
 
 /** What a responder submitted: a candidate settles its request this way once allowed. */
-export type ApprovalCandidateDecision = "approve" | "cancel";
+export type ApprovalCandidateDecision = "approve" | "deny";
 
 interface ApprovalCandidateAuditRecord {
   readonly candidateId: string;
@@ -240,7 +240,7 @@ export function settleAllowedCandidate(input: {
   return settleRequest({
     candidateId: candidate.candidateId,
     revisionPending: input.revisionPending,
-    outcome: candidate.decision === "cancel" ? "cancelled" : "allowed",
+    outcome: candidate.decision === "deny" ? "cancelled" : "allowed",
     requestId: candidate.requestId,
     responder: candidate.responder,
     settledAt: input.settledAt,

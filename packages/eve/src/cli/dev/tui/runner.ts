@@ -20,7 +20,6 @@ import type {
   AgentInfoResult,
   Client,
   InteractionOption,
-  AskedInteraction,
   Answer,
   SessionStreamEvent,
 } from "#client/index.js";
@@ -959,7 +958,7 @@ export class EveTUIRunner {
     // A sign-in completes by its callback, not an answer typed here.
     return openConversationInteractions(this.#store.snapshot.data).filter(
       (input) =>
-        input.request.kind !== "sign-in" && !this.#dismissedInputs.has(input.request.interactionId),
+        input.request.kind !== "sign-in" && !this.#dismissedInputs.has(input.interactionId),
     );
   }
 
@@ -973,11 +972,11 @@ export class EveTUIRunner {
       const input = inputs[0];
       if (input === undefined) return;
       const context = inputContext(input, answered + 1, answered + inputs.length);
-      const response = await this.#readAnswer(input.request, context, title);
+      const response = await this.#readAnswer(input, context, title);
       if (response === undefined) {
         // A skipped question stays open; the server decides whether the
         // user's next message answers, dismisses, or leaves it.
-        this.#dismissedInputs.add(input.request.interactionId);
+        this.#dismissedInputs.add(input.interactionId);
         continue;
       }
       void this.#store.send({ answers: [response] }).catch((error: unknown) => {
@@ -988,11 +987,11 @@ export class EveTUIRunner {
   }
 
   async #readAnswer(
-    request: AskedInteraction,
+    request: ConversationInteraction,
     context: AgentTUIInputContext | undefined,
     title: string,
   ): Promise<Answer | undefined> {
-    if (request.kind === "approval") {
+    if (request.request.kind === "approval") {
       if (!this.#renderer.readToolApproval) {
         throw new Error(
           "Tool approval was requested, but the renderer does not support tool approval input.",
@@ -1733,14 +1732,14 @@ function inputContext(
 }
 
 function toAgentTUIToolApprovalRequest(
-  request: AskedInteraction,
+  request: ConversationInteraction,
   context: AgentTUIInputContext | undefined,
 ): AgentTUIToolApprovalRequest {
   const approval: AgentTUIToolApprovalRequest = {
     approvalId: request.interactionId,
     toolCallId: request.call?.callId ?? request.interactionId,
-    toolName: request.call?.name ?? request.kind,
-    prompt: request.prompt,
+    toolName: request.call?.name ?? request.request.kind,
+    prompt: request.request.prompt,
     input: request.call?.input ?? {},
   };
   if (context !== undefined) approval.context = context;
@@ -1748,26 +1747,26 @@ function toAgentTUIToolApprovalRequest(
 }
 
 function toAgentTUIInputQuestion(
-  request: AskedInteraction,
+  request: ConversationInteraction,
   context: AgentTUIInputContext | undefined,
 ): AgentTUIInputQuestion {
   const display: "select" | "text" =
-    request.display === "text"
+    request.request.display === "text"
       ? "text"
-      : request.display === "select"
+      : request.request.display === "select"
         ? "select"
-        : request.options !== undefined && request.options.length > 0
+        : request.request.options !== undefined && request.request.options.length > 0
           ? "select"
           : "text";
 
   const question: AgentTUIInputQuestion = {
     requestId: request.interactionId,
-    prompt: request.prompt,
+    prompt: request.request.prompt,
     display,
   };
 
-  if (request.options !== undefined) {
-    question.options = request.options.map((option: InteractionOption) => {
+  if (request.request.options !== undefined) {
+    question.options = request.request.options.map((option: InteractionOption) => {
       const out: AgentTUIInputOption = { id: option.id, label: option.label };
       if (option.description !== undefined) out.description = option.description;
       const style = optionStyle(option);
@@ -1776,8 +1775,8 @@ function toAgentTUIInputQuestion(
     });
   }
 
-  if (request.allowFreeform !== undefined) {
-    question.allowFreeform = request.allowFreeform;
+  if (request.request.allowFreeform !== undefined) {
+    question.allowFreeform = request.request.allowFreeform;
   }
   if (context !== undefined) question.context = context;
 

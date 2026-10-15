@@ -14,7 +14,7 @@ import type {
   SendTurnOptions,
 } from "#client/types.js";
 import type { Answer } from "#shared/input.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { AgentModelOptionsDefinition } from "#shared/agent-definition.js";
 import type { EvalReporter } from "#evals/runner/reporters/types.js";
@@ -103,7 +103,7 @@ export interface EveEvalDerivedFacts {
   readonly subagentCalls: readonly EveEvalSubagentCall[];
   readonly subagentCallCount: number;
   /** Every HITL input request raised during the run (`interaction.opened`). */
-  readonly interactions: readonly AskedInteraction[];
+  readonly interactions: readonly Interaction[];
   /** True when the run ended parked on unanswered HITL input requests. */
   readonly parked: boolean;
   readonly messageCount: number;
@@ -358,7 +358,7 @@ interface EveEvalSessionDriver {
    */
   readonly transcript: string;
   /** Input requests left pending by the last parked turn. */
-  readonly pendingInteractions: readonly AskedInteraction[];
+  readonly pendingInteractions: readonly Interaction[];
   /** Serializable cursor for resuming this session. */
   readonly state: ClientSessionState;
   /** Durable session id, available when the session is returned. */
@@ -372,7 +372,7 @@ interface EveEvalSessionDriver {
    */
   compact(): Promise<EveEvalTurn>;
   /** Require exactly one pending input request matching `filter`, or abort dependent control flow. */
-  requireInteraction(filter?: EveEvalInteractionMatchOptions): AskedInteraction;
+  requireInteraction(filter?: EveEvalInteractionMatchOptions): Interaction;
   /** Resolve specific pending requests and run the resumed turn. */
   respond(responses: readonly Answer[], options?: SendTurnOptions): Promise<EveEvalTurn>;
   /** Start a response turn without waiting for its boundary. */
@@ -409,7 +409,7 @@ export interface EveEvalSession
 export interface EveEvalTurn extends EveEvalAssertions, EveEvalOutputAssertions {
   readonly data: unknown;
   readonly events: readonly SessionStreamEvent[];
-  readonly interactions: readonly AskedInteraction[];
+  readonly interactions: readonly Interaction[];
   readonly message: string | undefined;
   /** Session that owns this turn; use it for follow-up messages. */
   readonly session: EveEvalSession;

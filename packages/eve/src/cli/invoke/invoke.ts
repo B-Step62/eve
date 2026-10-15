@@ -98,7 +98,7 @@ export function resolveInvokeOperation(input: {
   // An answer resumes with a prompt; a sign-in, which completes elsewhere, resumes without one.
   const signingIn =
     previous.status === "input-required" &&
-    previous.interactions.every((interaction) => interaction.kind === "sign-in");
+    previous.interactions.every((interaction) => interaction.request.kind === "sign-in");
   if (previous.status === "input-required" && !signingIn) {
     if (!prompt) throw new Error("This invocation is waiting for an answer.");
     return { kind: "send", payload: { message: prompt }, resume: previous.resume };

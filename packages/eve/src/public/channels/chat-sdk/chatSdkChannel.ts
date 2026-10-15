@@ -21,7 +21,7 @@ import type { RequestSettlement } from "#channel/interaction-prompts.js";
 import type { FetchFileResult } from "#shared/channel-definition.js";
 import { isTaskControlTool } from "#protocol/task-tools.js";
 import { displayTitle } from "#shared/display-name.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 import { type Answer, parseAnswers, type StrictAnswers } from "#shared/input.js";
 import type {
   ActionEvent,
@@ -97,7 +97,7 @@ export interface ChatSdkChannelState extends Record<string, unknown>, PromptQueu
 
 /** One posted card's requests and the resolutions eve has reported for them so far. */
 export interface ChatSdkPendingInputCard {
-  readonly requests: readonly AskedInteraction[];
+  readonly requests: readonly Interaction[];
   readonly resolved: Readonly<Record<string, RequestSettlement>>;
 }
 
@@ -386,7 +386,7 @@ function defaultEvents<TAdapters extends ChatSdkAdapters>(
     NonNullable<ChatSdkChannelEvents<TAdapters>["interaction.opened"]>
   >[1]["channel"];
 
-  async function showPrompt(channel: EventChannel, request: AskedInteraction) {
+  async function showPrompt(channel: EventChannel, request: Interaction) {
     if (!channel.thread) return false;
     const posted = await channel.thread.post(renderInteractions([request], inputActionPrefix));
     if (!posted.id || channel.state.editSupported === false) return;
@@ -453,7 +453,7 @@ function defaultEvents<TAdapters extends ChatSdkAdapters>(
       }
       // eve's own task controls stay out of view.
       if (isTaskControlTool(data.capability.name)) return;
-      const label = data.capability.title ?? displayTitle(data.capability.name);
+      const label = data.capability.label ?? displayTitle(data.capability.name);
       await safeStartTyping(channel.thread, truncate(`${label}...`));
     },
     async "content.delta"({ data }, { channel }) {

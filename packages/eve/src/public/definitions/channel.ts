@@ -1,3 +1,7 @@
+import {
+  authoringEventTypes,
+  type AuthoringEventType,
+} from "#protocol/session-events/authoring.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import type { ChannelAdapter, ChannelInstrumentationMetadata } from "#channel/adapter.js";
 import {
@@ -218,38 +222,9 @@ export type ChannelEventHandler<T extends SessionEvent["type"], TCtx = void> = (
  * event and a {@link ChannelEventContext} whose `channel` is the channel's own context. Handlers
  * run after the event is written, so they observe it and never shape it.
  */
-export interface ChannelEvents<TCtx = void> {
-  readonly "session.started"?: ChannelEventHandler<"session.started", TCtx>;
-  readonly "session.ended"?: ChannelEventHandler<"session.ended", TCtx>;
-  readonly "delivery.admitted"?: ChannelEventHandler<"delivery.admitted", TCtx>;
-  readonly "delivery.consumed"?: ChannelEventHandler<"delivery.consumed", TCtx>;
-  readonly "delivery.settled"?: ChannelEventHandler<"delivery.settled", TCtx>;
-  readonly "turn.started"?: ChannelEventHandler<"turn.started", TCtx>;
-  readonly "turn.paused"?: ChannelEventHandler<"turn.paused", TCtx>;
-  readonly "turn.settled"?: ChannelEventHandler<"turn.settled", TCtx>;
-  readonly "model.requested"?: ChannelEventHandler<"model.requested", TCtx>;
-  readonly "model.started"?: ChannelEventHandler<"model.started", TCtx>;
-  readonly "model.retried"?: ChannelEventHandler<"model.retried", TCtx>;
-  readonly "model.settled"?: ChannelEventHandler<"model.settled", TCtx>;
-  readonly "content.delta"?: ChannelEventHandler<"content.delta", TCtx>;
-  readonly "content.completed"?: ChannelEventHandler<"content.completed", TCtx>;
-  readonly "call.input"?: ChannelEventHandler<"call.input", TCtx>;
-  readonly "call.requested"?: ChannelEventHandler<"call.requested", TCtx>;
-  readonly "call.started"?: ChannelEventHandler<"call.started", TCtx>;
-  readonly "call.progress"?: ChannelEventHandler<"call.progress", TCtx>;
-  readonly "call.settled"?: ChannelEventHandler<"call.settled", TCtx>;
-  readonly "usage.recorded"?: ChannelEventHandler<"usage.recorded", TCtx>;
-  readonly "context.started"?: ChannelEventHandler<"context.started", TCtx>;
-  readonly "context.settled"?: ChannelEventHandler<"context.settled", TCtx>;
-  readonly "interaction.opened"?: ChannelEventHandler<"interaction.opened", TCtx>;
-  readonly "interaction.settled"?: ChannelEventHandler<"interaction.settled", TCtx>;
-  readonly "response.submitted"?: ChannelEventHandler<"response.submitted", TCtx>;
-  readonly "response.admitted"?: ChannelEventHandler<"response.admitted", TCtx>;
-  readonly "response.settled"?: ChannelEventHandler<"response.settled", TCtx>;
-  readonly "child.opened"?: ChannelEventHandler<"child.opened", TCtx>;
-  readonly "task.started"?: ChannelEventHandler<"task.started", TCtx>;
-  readonly "task.ended"?: ChannelEventHandler<"task.ended", TCtx>;
-}
+export type ChannelEvents<TCtx = void> = {
+  readonly [T in AuthoringEventType]?: ChannelEventHandler<T, TCtx>;
+};
 
 /**
  * Input passed to a channel's `receive` callback when another channel or
@@ -334,42 +309,7 @@ export function defineChannel<
   return compiled;
 }
 
-// The Record type fails to compile if this map drifts from the ChannelEvents
-// keys in either direction.
-const channelEventTypes: Record<keyof ChannelEvents, null> = {
-  "session.started": null,
-  "session.ended": null,
-  "delivery.admitted": null,
-  "delivery.consumed": null,
-  "delivery.settled": null,
-  "turn.started": null,
-  "turn.paused": null,
-  "turn.settled": null,
-  "model.requested": null,
-  "model.started": null,
-  "model.retried": null,
-  "model.settled": null,
-  "content.delta": null,
-  "content.completed": null,
-  "call.input": null,
-  "call.requested": null,
-  "call.started": null,
-  "call.progress": null,
-  "call.settled": null,
-  "usage.recorded": null,
-  "context.started": null,
-  "context.settled": null,
-  "interaction.opened": null,
-  "interaction.settled": null,
-  "response.submitted": null,
-  "response.admitted": null,
-  "response.settled": null,
-  "child.opened": null,
-  "task.started": null,
-  "task.ended": null,
-};
-
-const eventTypes = Object.keys(channelEventTypes) as readonly (keyof ChannelEvents)[];
+const eventTypes = authoringEventTypes;
 
 function buildAdapter<TState, TCtx, TReceiveTarget, TMetadata extends Record<string, unknown>>(
   definition: ChannelDefinition<TState, TCtx, TReceiveTarget, TMetadata>,

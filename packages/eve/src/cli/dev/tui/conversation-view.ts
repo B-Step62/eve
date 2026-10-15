@@ -85,8 +85,8 @@ function toolLabels(
   callId: string,
 ): ToolLabels | undefined {
   const row = view.calls[callId];
-  const start = previews.calls[callId]?.title ?? row?.capability.title;
-  const complete = row?.title;
+  const start = previews.calls[callId]?.label ?? row?.capability.label;
+  const complete = row?.label;
   if (start === undefined && complete === undefined) return undefined;
   return { ...(start !== undefined && { start }), ...(complete !== undefined && { complete }) };
 }

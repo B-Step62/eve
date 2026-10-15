@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 import {
   buildAnsweredBlocks,
   buildFreeformModalView,
@@ -15,8 +15,8 @@ import {
   isHitlAction,
 } from "#public/channels/slack/hitl.js";
 import {
-  deriveHitlResponse,
-  HITL_ACTION_PREFIX,
+  answerFromSlackAction,
+  ANSWER_ACTION_PREFIX,
   renderInteractionBlocks,
 } from "#public/channels/slack/index.js";
 import {
@@ -24,13 +24,22 @@ import {
   SLACK_SECTION_TEXT_MAX_LENGTH,
 } from "#public/channels/slack/limits.js";
 
-function makeRequest(overrides: Partial<AskedInteraction>): AskedInteraction {
+function makeRequest(
+  overrides: Partial<Interaction["request"]> &
+    Partial<Pick<Interaction, "interactionId" | "call">> = {},
+): Interaction {
+  const {
+    interactionId = "call_abc123",
+    call = { callId: "call_abc123", name: "ask_question", input: {} },
+    ...request
+  } = overrides;
   return {
-    call: { callId: "call_abc123", name: "ask_question", input: {} },
-    prompt: "Pick one",
-    interactionId: "call_abc123",
-    ...overrides,
-    kind: overrides.kind ?? "question",
+    interactionId,
+    call,
+    status: "open",
+    turnId: "turn_0",
+    stepIndex: 0,
+    request: { prompt: "Pick one", kind: "question", ...request },
   };
 }
 
@@ -55,7 +64,7 @@ describe("private HITL routes", () => {
       requestId: "approval_abc123",
       route: { channelId: "C123", threadTs: "111.222" },
     });
-    expect(deriveHitlResponse({ actionId, value: "approve" })).toMatchObject({
+    expect(answerFromSlackAction({ actionId, value: "approve" })).toMatchObject({
       kind: "tool-approval",
       response: { optionId: "approve", interactionId: "approval_abc123" },
       route: { channelId: "C123", threadTs: "111.222" },
@@ -63,9 +72,9 @@ describe("private HITL routes", () => {
   });
 });
 
-describe("deriveHitlResponse", () => {
+describe("answerFromSlackAction", () => {
   it("keeps Slack classification outside the durable input response type", () => {
-    const derived: NonNullable<ReturnType<typeof deriveHitlResponse>> = {
+    const derived: NonNullable<ReturnType<typeof answerFromSlackAction>> = {
       kind: "tool-approval",
       response: {
         // @ts-expect-error Slack classification is not part of Answer.
@@ -83,8 +92,8 @@ describe("deriveHitlResponse", () => {
     // with `call_…` and contains underscores. The old encoding
     // split the action id on `_`, silently producing `requestId =
     // "call"`. The suffix-based encoding survives any requestId shape.
-    const response = deriveHitlResponse({
-      actionId: `${HITL_ACTION_PREFIX}call_abc123:button:0`,
+    const response = answerFromSlackAction({
+      actionId: `${ANSWER_ACTION_PREFIX}call_abc123:button:0`,
       value: "approve",
     });
 
@@ -94,8 +103,8 @@ describe("deriveHitlResponse", () => {
   });
 
   it("decodes a radio / select click from selectedOptionValue", () => {
-    const response = deriveHitlResponse({
-      actionId: `${HITL_ACTION_PREFIX}call_xyz`,
+    const response = answerFromSlackAction({
+      actionId: `${ANSWER_ACTION_PREFIX}call_xyz`,
       selectedOptionValue: "weekly",
     });
 
@@ -103,8 +112,8 @@ describe("deriveHitlResponse", () => {
   });
 
   it("preserves tool-approval metadata from a button action id", () => {
-    const response = deriveHitlResponse({
-      actionId: `${HITL_ACTION_PREFIX}tool-approval:approval_abc123:button:0`,
+    const response = answerFromSlackAction({
+      actionId: `${ANSWER_ACTION_PREFIX}tool-approval:approval_abc123:button:0`,
       value: "approve",
     });
 
@@ -118,27 +127,27 @@ describe("deriveHitlResponse", () => {
   });
 
   it("returns null when neither value nor selectedOptionValue is set", () => {
-    expect(deriveHitlResponse({ actionId: `${HITL_ACTION_PREFIX}call_abc` })).toBeNull();
+    expect(answerFromSlackAction({ actionId: `${ANSWER_ACTION_PREFIX}call_abc` })).toBeNull();
   });
 
   it("returns null for button clicks without the required Slack-unique suffix", () => {
     expect(
-      deriveHitlResponse({ actionId: `${HITL_ACTION_PREFIX}call_abc`, value: "approve" }),
+      answerFromSlackAction({ actionId: `${ANSWER_ACTION_PREFIX}call_abc`, value: "approve" }),
     ).toBeNull();
   });
 
   it("returns null when the action id does not match the HITL prefix", () => {
-    expect(deriveHitlResponse({ actionId: "feedback_button_thumbs_up", value: "y" })).toBeNull();
+    expect(answerFromSlackAction({ actionId: "feedback_button_thumbs_up", value: "y" })).toBeNull();
   });
 
   it("returns null when the request id slice is empty", () => {
-    expect(deriveHitlResponse({ actionId: HITL_ACTION_PREFIX, value: "approve" })).toBeNull();
+    expect(answerFromSlackAction({ actionId: ANSWER_ACTION_PREFIX, value: "approve" })).toBeNull();
   });
 });
 
 describe("isHitlAction", () => {
   it("matches the framework HITL prefix", () => {
-    expect(isHitlAction(`${HITL_ACTION_PREFIX}r1`)).toBe(true);
+    expect(isHitlAction(`${ANSWER_ACTION_PREFIX}r1`)).toBe(true);
   });
 
   it("does not match arbitrary action ids", () => {
@@ -173,14 +182,14 @@ describe("renderInteractionBlocks", () => {
     expect(new Set(actionIds).size).toBe(actionIds.length);
     expect(card.actions[0]).toMatchObject({
       type: "button",
-      action_id: `${HITL_ACTION_PREFIX}call_abc123:button:0`,
+      action_id: `${ANSWER_ACTION_PREFIX}call_abc123:button:0`,
       value: "approve",
       style: "primary",
       text: { type: "plain_text", text: "Approve", emoji: false },
     });
     expect(card.actions[1]).toMatchObject({
       type: "button",
-      action_id: `${HITL_ACTION_PREFIX}call_abc123:button:1`,
+      action_id: `${ANSWER_ACTION_PREFIX}call_abc123:button:1`,
       value: "cancel",
       style: "danger",
       text: { type: "plain_text", text: "Cancel", emoji: false },
@@ -223,12 +232,12 @@ describe("renderInteractionBlocks", () => {
     });
     expect(card.actions).toMatchObject([
       {
-        action_id: `${HITL_ACTION_PREFIX}tool-approval:approval_1:button:0`,
+        action_id: `${ANSWER_ACTION_PREFIX}tool-approval:approval_1:button:0`,
         text: { text: "Cancel" },
         value: "cancel",
       },
       {
-        action_id: `${HITL_ACTION_PREFIX}tool-approval:approval_1:button:1`,
+        action_id: `${ANSWER_ACTION_PREFIX}tool-approval:approval_1:button:1`,
         style: "primary",
         text: { text: "Approve" },
         value: "approve",
@@ -331,7 +340,7 @@ describe("renderInteractionBlocks", () => {
       options: Array<Record<string, unknown>>;
     };
     expect(widget.type).toBe("radio_buttons");
-    expect(widget.action_id).toBe(`${HITL_ACTION_PREFIX}call_abc123`);
+    expect(widget.action_id).toBe(`${ANSWER_ACTION_PREFIX}call_abc123`);
     expect(widget.options[0]).toEqual({
       text: { type: "plain_text", text: "Daily" },
       value: "daily",
@@ -362,7 +371,7 @@ describe("renderInteractionBlocks", () => {
       options: unknown[];
     };
     expect(widget.type).toBe("static_select");
-    expect(widget.action_id).toBe(`${HITL_ACTION_PREFIX}call_abc123`);
+    expect(widget.action_id).toBe(`${ANSWER_ACTION_PREFIX}call_abc123`);
     expect(widget.options).toHaveLength(8);
   });
 
@@ -397,7 +406,7 @@ describe("renderInteractionBlocks", () => {
     const card = blocks[0] as { actions: Array<{ action_id: string }> };
     const ids = card.actions.map((e) => e.action_id);
     for (const id of ids) {
-      expect(id.startsWith(HITL_ACTION_PREFIX)).toBe(true);
+      expect(id.startsWith(ANSWER_ACTION_PREFIX)).toBe(true);
     }
   });
 
@@ -411,7 +420,7 @@ describe("renderInteractionBlocks", () => {
     const button = (blocks[0] as { actions: Array<{ action_id: string; value: string }> })
       .actions[0]!;
 
-    const response = deriveHitlResponse({ actionId: button.action_id, value: button.value });
+    const response = answerFromSlackAction({ actionId: button.action_id, value: button.value });
     expect(response).toEqual({
       response: {
         interactionId: "call_with_many_underscores_99",
@@ -422,7 +431,7 @@ describe("renderInteractionBlocks", () => {
 
   it("isFreeformAction recognizes only the freeform prefix", () => {
     expect(isFreeformAction(`${HITL_FREEFORM_ACTION_PREFIX}call_abc`)).toBe(true);
-    expect(isFreeformAction(`${HITL_ACTION_PREFIX}call_abc`)).toBe(false);
+    expect(isFreeformAction(`${ANSWER_ACTION_PREFIX}call_abc`)).toBe(false);
   });
 
   it("preserves the return route on a freeform question", () => {
@@ -457,7 +466,7 @@ describe("renderInteractionBlocks", () => {
       blocks[1] as { elements: Array<{ action_id: string; options: Array<{ value: string }> }> }
     ).elements[0]!;
 
-    const response = deriveHitlResponse({
+    const response = answerFromSlackAction({
       actionId: widget.action_id,
       selectedOptionValue: widget.options[0]!.value,
     });

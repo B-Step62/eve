@@ -2,14 +2,14 @@ import { createLogger, logError } from "#internal/logging.js";
 import type { SlackHandle } from "#public/channels/slack/api.js";
 import { renderInteractionPostParts, type SlackHitlRoute } from "#public/channels/slack/hitl.js";
 import type { SlackPendingApprovalCard } from "#public/channels/slack/slackChannel.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
 const log = createLogger("slack.private-approval-delivery");
 type PrivateApprovalSlack = Pick<SlackHandle, "channelId" | "request" | "threadTs">;
 
 export async function deliverPrivateInteraction(input: {
   readonly previewMessageTs: string;
-  readonly request: AskedInteraction;
+  readonly request: Interaction;
   readonly reviewer: string;
   readonly slack: PrivateApprovalSlack;
 }): Promise<SlackPendingApprovalCard> {

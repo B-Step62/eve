@@ -168,6 +168,11 @@ export async function sendAgentSessionMessageStep(
         subagentName: address.name,
       },
       kind: "send",
+      delivery: {
+        channelKind: "subagent",
+        channelName: "subagent",
+        deliveryId: agentDeliveryId("send", address.sessionId),
+      },
       payload: { message: input.message, outputSchema: input.outputSchema },
     },
   ).catch((error: unknown) => {
@@ -192,7 +197,10 @@ export async function cancelAgentSessionTurnStep(input: OpenedAgentSession): Pro
       await cancelRemoteAgentTurn({ remote, sessionId: address.sessionId });
       return;
     }
-    await commandLocalSession({ ...input, address }, { kind: "cancel" });
+    await commandLocalSession(
+      { ...input, address },
+      { kind: "cancel", deliveryId: agentDeliveryId("cancel", address.sessionId) },
+    );
   } catch (error) {
     logError(log, "failed to cancel an agent session turn", error, {
       name: address.name,
@@ -224,7 +232,11 @@ async function endAgentSession(opened: OpenedAgentSession): Promise<void> {
     }
     await commandLocalSession(
       { ...opened, address },
-      { kind: "reset", reason: RUN_FINISHED_REASON },
+      {
+        kind: "reset",
+        reason: RUN_FINISHED_REASON,
+        deliveryId: agentDeliveryId("reset", address.sessionId),
+      },
     );
   } catch (error) {
     logError(log, "failed to end an agent session", error, {
@@ -310,6 +322,11 @@ async function startLocalSession(
     () =>
       childRuntime.createSession({
         ...runInput,
+        delivery: {
+          channelKind: "subagent",
+          channelName: "subagent",
+          deliveryId: `agent-session:${input.key}:initial`,
+        },
         toolStubs: childToolStubs,
       }),
   );
@@ -404,4 +421,8 @@ async function loadAgentSessionBundle(context: AgentSessionContext): Promise<Com
     compiledArtifactsSource: resolveDurableCompiledArtifactsSource(context.bundle.source),
     nodeId: context.bundle.nodeId,
   });
+}
+
+function agentDeliveryId(kind: string, sessionId: string): string {
+  return `agent-session:${getWorkflowMetadata().workflowRunId}:${getStepMetadata().stepId}:${sessionId}:${kind}`;
 }

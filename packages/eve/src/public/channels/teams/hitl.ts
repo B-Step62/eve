@@ -3,7 +3,7 @@
  */
 
 import { parseAnswer, type ValidatedAnswer } from "#shared/input.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 import type {
   TeamsActivity,
   TeamsInvokeActivity,
@@ -39,7 +39,7 @@ export const TEAMS_HITL_PROMPT_KEY = "prompt";
 
 /** Renders one input request as a Teams message body containing an Adaptive Card. */
 export function renderInteractionMessage(
-  request: AskedInteraction,
+  request: Interaction,
   options: {
     readonly adaptiveCardVersion?: string;
     readonly replyToActivityId?: string;
@@ -49,7 +49,9 @@ export function renderInteractionMessage(
   const renderedDetails = details ? truncate(details, TEAMS_ADAPTIVE_CARD_TEXT_MAX_LENGTH) : null;
   return {
     attachments: [renderInteractionAttachment(request, options)],
-    text: renderedDetails ? `${request.prompt}\n\nTool input:\n${renderedDetails}` : request.prompt,
+    text: renderedDetails
+      ? `${request.request.prompt}\n\nTool input:\n${renderedDetails}`
+      : request.request.prompt,
   };
 }
 
@@ -59,7 +61,7 @@ export function renderInteractionMessage(
  * Long prompt, choice, and action text is truncated to Teams card limits.
  */
 export function renderInteractionAttachment(
-  request: AskedInteraction,
+  request: Interaction,
   options: {
     readonly adaptiveCardVersion?: string;
     readonly replyToActivityId?: string;
@@ -71,7 +73,7 @@ export function renderInteractionAttachment(
     actions: renderActions(request, options.replyToActivityId),
     body: [
       {
-        text: truncate(request.prompt, TEAMS_ADAPTIVE_CARD_TEXT_MAX_LENGTH),
+        text: truncate(request.request.prompt, TEAMS_ADAPTIVE_CARD_TEXT_MAX_LENGTH),
         type: "TextBlock",
         wrap: true,
       },
@@ -207,11 +209,15 @@ export function teamsInvokeResponse(
   };
 }
 
-function renderInputs(request: AskedInteraction): readonly Record<string, unknown>[] {
-  if (request.display === "select" && request.options && request.options.length > 0) {
+function renderInputs(request: Interaction): readonly Record<string, unknown>[] {
+  if (
+    request.request.display === "select" &&
+    request.request.options &&
+    request.request.options.length > 0
+  ) {
     return [
       {
-        choices: request.options.map((option) => ({
+        choices: request.request.options.map((option) => ({
           title: truncate(option.label, TEAMS_ADAPTIVE_CARD_CHOICE_TITLE_MAX_LENGTH),
           value: option.id,
         })),
@@ -223,7 +229,11 @@ function renderInputs(request: AskedInteraction): readonly Record<string, unknow
     ];
   }
 
-  if (request.allowFreeform === true || !request.options || request.options.length === 0) {
+  if (
+    request.request.allowFreeform === true ||
+    !request.request.options ||
+    request.request.options.length === 0
+  ) {
     return [
       {
         id: TEAMS_HITL_FREEFORM_INPUT_ID,
@@ -238,21 +248,21 @@ function renderInputs(request: AskedInteraction): readonly Record<string, unknow
 }
 
 function renderActions(
-  request: AskedInteraction,
+  request: Interaction,
   replyToActivityId: string | undefined,
 ): readonly Record<string, unknown>[] {
   const payload = (optionId?: string): Record<string, unknown> => {
     const value: Record<string, unknown> = { requestId: request.interactionId };
-    if (request.kind === "approval") {
+    if (request.request.kind === "approval") {
       value[TEAMS_HITL_REQUEST_KIND_KEY] = "tool-approval";
-      value[TEAMS_HITL_PROMPT_KEY] = request.prompt;
+      value[TEAMS_HITL_PROMPT_KEY] = request.request.prompt;
     }
     if (replyToActivityId !== undefined) value.replyToActivityId = replyToActivityId;
     if (optionId !== undefined) value.optionId = optionId;
     return value;
   };
-  const options = request.options;
-  if (options && options.length > 0 && request.display !== "select") {
+  const options = request.request.options;
+  if (options && options.length > 0 && request.request.display !== "select") {
     return options.slice(0, TEAMS_ADAPTIVE_CARD_ACTION_LIMIT).map((option) => ({
       data: {
         [TEAMS_HITL_DATA_KEY]: payload(option.id),
@@ -300,8 +310,8 @@ function readHitlPayload(value: Record<string, unknown>): Record<string, unknown
   return isObject(nested) ? nested : null;
 }
 
-function formatApprovalInput(request: AskedInteraction): string | null {
-  if (request.kind !== "approval") {
+function formatApprovalInput(request: Interaction): string | null {
+  if (request.request.kind !== "approval") {
     return null;
   }
   const json = JSON.stringify(request.call?.input ?? {}, null, 2);

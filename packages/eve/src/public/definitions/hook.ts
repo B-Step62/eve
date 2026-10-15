@@ -1,3 +1,4 @@
+import type { AuthoringEventType } from "#protocol/session-events/authoring.js";
 import type { SessionEvent } from "../../protocol/session-event.js";
 import type { FactPosition } from "../../protocol/session-events/envelope.js";
 import type { SessionView } from "../../protocol/session-projection/tables.js";
@@ -13,38 +14,9 @@ type ProtocolEvent<TType extends SessionEvent["type"]> = Extract<SessionEvent, {
  * The explicit map keeps hook compatibility independent from the internal protocol union: new
  * protocol events do not become extension hook events until eve exposes them here.
  */
-export interface HookEventMap {
-  readonly "session.started": ProtocolEvent<"session.started">;
-  readonly "session.ended": ProtocolEvent<"session.ended">;
-  readonly "delivery.admitted": ProtocolEvent<"delivery.admitted">;
-  readonly "delivery.consumed": ProtocolEvent<"delivery.consumed">;
-  readonly "delivery.settled": ProtocolEvent<"delivery.settled">;
-  readonly "turn.started": ProtocolEvent<"turn.started">;
-  readonly "turn.paused": ProtocolEvent<"turn.paused">;
-  readonly "turn.settled": ProtocolEvent<"turn.settled">;
-  readonly "model.requested": ProtocolEvent<"model.requested">;
-  readonly "model.started": ProtocolEvent<"model.started">;
-  readonly "model.retried": ProtocolEvent<"model.retried">;
-  readonly "model.settled": ProtocolEvent<"model.settled">;
-  readonly "content.delta": ProtocolEvent<"content.delta">;
-  readonly "content.completed": ProtocolEvent<"content.completed">;
-  readonly "call.input": ProtocolEvent<"call.input">;
-  readonly "call.requested": ProtocolEvent<"call.requested">;
-  readonly "call.started": ProtocolEvent<"call.started">;
-  readonly "call.progress": ProtocolEvent<"call.progress">;
-  readonly "call.settled": ProtocolEvent<"call.settled">;
-  readonly "usage.recorded": ProtocolEvent<"usage.recorded">;
-  readonly "context.started": ProtocolEvent<"context.started">;
-  readonly "context.settled": ProtocolEvent<"context.settled">;
-  readonly "interaction.opened": ProtocolEvent<"interaction.opened">;
-  readonly "interaction.settled": ProtocolEvent<"interaction.settled">;
-  readonly "response.submitted": ProtocolEvent<"response.submitted">;
-  readonly "response.admitted": ProtocolEvent<"response.admitted">;
-  readonly "response.settled": ProtocolEvent<"response.settled">;
-  readonly "child.opened": ProtocolEvent<"child.opened">;
-  readonly "task.ended": ProtocolEvent<"task.ended">;
-  readonly "task.started": ProtocolEvent<"task.started">;
-}
+export type HookEventMap = {
+  readonly [T in AuthoringEventType]: ProtocolEvent<T>;
+};
 
 /** Event type discriminators available to authored hooks. */
 export type HookEventType = keyof HookEventMap;

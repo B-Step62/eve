@@ -17,12 +17,17 @@ describe("renderTelegramInteraction", () => {
     const rendered = renderTelegramInteraction(
       {
         call: { callId: "call_1", input: {}, name: "ask_question" },
-        kind: "question",
-        options: [
-          { id: "approve", label: "Approve" },
-          { id: "cancel", label: "Cancel" },
-        ],
-        prompt: "Approve?",
+        request: {
+          kind: "question",
+          options: [
+            { id: "approve", label: "Approve" },
+            { id: "cancel", label: "Cancel" },
+          ],
+          prompt: "Approve?",
+        },
+        status: "open",
+        turnId: "turn_0",
+        stepIndex: 0,
         interactionId: "very-long-request-id-that-would-not-fit-comfortably-in-callback-data",
       },
       state,
@@ -44,9 +49,10 @@ describe("renderTelegramInteraction", () => {
     const rendered = renderTelegramInteraction(
       {
         call: { callId: "call_1", input: {}, name: "ask_question" },
-        allowFreeform: true,
-        kind: "question",
-        prompt: "Explain",
+        request: { allowFreeform: true, kind: "question", prompt: "Explain" },
+        status: "open",
+        turnId: "turn_0",
+        stepIndex: 0,
         interactionId: "call_1",
       },
       {},

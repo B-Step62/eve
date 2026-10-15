@@ -55,11 +55,20 @@ export function transcriptOf(
     );
   }
   let messages: TranscriptMessage[] = [];
+  let resetDeliveryId: string | undefined;
   const append = (message: TranscriptMessage) => {
     if (message.text.trim().length > 0) messages.push(message);
   };
   for (const event of events) {
     switch (event.type) {
+      case "delivery.admitted":
+        if (
+          event.data.source !== undefined &&
+          "control" in event.data.source &&
+          event.data.source.control === "reset"
+        )
+          resetDeliveryId = event.data.deliveryId;
+        break;
       case "delivery.consumed":
         append({ role: "user", text: textOf(event.data.parts) });
         break;
@@ -78,8 +87,8 @@ export function transcriptOf(
       case "session.ended":
         if (
           event.data.cause !== undefined &&
-          "policy" in event.data.cause &&
-          event.data.cause.policy === "stranded-reset"
+          "deliveryId" in event.data.cause &&
+          event.data.cause.deliveryId === resetDeliveryId
         )
           messages = [];
         break;

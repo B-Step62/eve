@@ -12,7 +12,7 @@ import type {
   DiscordComponentInteraction,
   DiscordModalSubmitInteraction,
 } from "#public/channels/discord/inbound.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 
 const BASE_COMPONENT: Omit<
   DiscordComponentInteraction,
@@ -26,13 +26,22 @@ const BASE_COMPONENT: Omit<
   user: { id: "U01", isBot: false, username: "ada" },
 };
 
-function request(overrides?: Partial<AskedInteraction>): AskedInteraction {
+function request(
+  overrides: Partial<Interaction["request"]> &
+    Partial<Pick<Interaction, "interactionId" | "call">> = {},
+): Interaction {
+  const {
+    interactionId = "call_1",
+    call = { callId: "call_1", name: "ask_question", input: {} },
+    ...request
+  } = overrides;
   return {
-    call: { callId: "call_1", input: {}, name: "ask_question" },
-    prompt: "Choose one",
-    interactionId: "call_1",
-    ...overrides,
-    kind: overrides?.kind ?? "question",
+    interactionId,
+    call,
+    status: "open",
+    turnId: "turn_0",
+    stepIndex: 0,
+    request: { prompt: "Choose one", kind: "question", ...request },
   };
 }
 

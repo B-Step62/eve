@@ -13,7 +13,7 @@ export { toolCallsOf } from "#evals/tool-calls.js";
 // ---------------------------------------------------------------------------
 
 export type { RuntimeIdentity, TraceContext } from "#protocol/message.js";
-export type { AskedInteraction } from "#protocol/session-reader.js";
+export type { Interaction } from "#protocol/session-reader.js";
 export type { CancelSessionResult } from "#client/types.js";
 
 export type {

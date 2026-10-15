@@ -1,3 +1,4 @@
+import type { Principal } from "#protocol/session-events/envelope.js";
 import type { ModelMessage, ToolExecutionOptions } from "ai";
 import type {
   StandardJSONSchemaV1,
@@ -128,13 +129,6 @@ export interface ToolQuestion {
   readonly prompt: string;
 }
 
-/** Public identity fields for the authenticated person who answered a question. */
-export interface ToolResponder {
-  readonly authenticator: string;
-  readonly principalId: string;
-  readonly principalType: string;
-}
-
 /**
  * The outcome of a {@link ToolQuestion}.
  *
@@ -151,7 +145,7 @@ export type ToolAnswer =
       /** The selected option's `id`, when the user picked one. */
       readonly optionId?: string;
       /** Authenticated identity of the responder, without channel attributes. */
-      readonly responder?: ToolResponder;
+      readonly responder?: Principal;
       /** Free text, when the user typed an answer. */
       readonly text?: string;
     }

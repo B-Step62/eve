@@ -176,7 +176,7 @@ async function consumeStreamContent(
     emittedActionCallIds.add(action.callId);
     actionInputs.set(action.callId, action.input);
     await emitFn(
-      callRequested({ action, owner: { runId }, scope, title: projection.presentationLabel }),
+      callRequested({ action, owner: { runId }, scope, label: projection.presentationLabel }),
     );
   };
 
@@ -249,7 +249,7 @@ async function consumeStreamContent(
             result.output,
           );
     await emitFn(
-      callSettledFrom(result, { scope, title: resultPresentation?.[result.callId]?.label }),
+      callSettledFrom(result, { scope, label: resultPresentation?.[result.callId]?.label }),
     );
   };
 

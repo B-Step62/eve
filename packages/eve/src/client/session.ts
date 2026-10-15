@@ -154,19 +154,12 @@ export class ClientSession {
     if (responseSessionId !== this.#state.sessionId) {
       throw new Error("Message route returned a different session id.");
     }
-    if (input.message !== undefined && deliveryId === undefined) {
+    if (deliveryId === undefined) {
       throw new Error(
         "Message route did not return a delivery id. Update the server before sending with this client.",
       );
     }
-    // A message's response ends at the boundary that lists its delivery. An answer's ends at its
-    // first turn boundary: not every path that publishes an answer's events attributes them.
-    return this.#messageResponse<TOutput>(
-      response,
-      input,
-      initialStreamIndex,
-      input.message === undefined ? undefined : deliveryId,
-    );
+    return this.#messageResponse<TOutput>(response, input, initialStreamIndex, deliveryId);
   }
 
   /** Requests cooperative cancellation of this session's active turn. */

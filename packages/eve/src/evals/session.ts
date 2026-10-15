@@ -17,7 +17,7 @@ import type { TraceContext } from "#protocol/message.js";
 import type { ChildOpened } from "#protocol/session-events/families/child.js";
 import { failureOf, ResponseSegment, summarizeTurnEvents } from "#client/session-utils.js";
 import type { Answer } from "#shared/input.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 import { deriveRunFacts } from "#evals/runner/derive-run-facts.js";
 import { formatEvalTranscript, inferMediaType } from "#evals/session-content.js";
 import { AssertionCollector } from "#evals/assertions/collector.js";
@@ -89,7 +89,7 @@ export class EvalSessionDriver implements EveEvalSession {
   readonly #traceKeys = new Set<string>();
   #lastTurn: EvalTurn | undefined;
   #sessionStartReported = false;
-  #pendingInteractions: readonly AskedInteraction[] = [];
+  #pendingInteractions: readonly Interaction[] = [];
 
   constructor(input: {
     readonly collector: AssertionCollector;
@@ -137,7 +137,7 @@ export class EvalSessionDriver implements EveEvalSession {
     return this.#lastTurn;
   }
 
-  get pendingInteractions(): readonly AskedInteraction[] {
+  get pendingInteractions(): readonly Interaction[] {
     return this.#pendingInteractions;
   }
 
@@ -181,7 +181,7 @@ export class EvalSessionDriver implements EveEvalSession {
     await this.#session.reset({ reason: "Eval timed out", signal });
   }
 
-  requireInteraction(filter: EveEvalInteractionMatchOptions = {}): AskedInteraction {
+  requireInteraction(filter: EveEvalInteractionMatchOptions = {}): Interaction {
     if (this.#pendingInteractions.length === 0) {
       this.#failRequirement(
         "requireInteraction",
@@ -347,7 +347,7 @@ export class EvalSessionDriver implements EveEvalSession {
   #recordTurn(input: {
     readonly data: unknown;
     readonly events: readonly SessionStreamEvent[];
-    readonly interactions: readonly AskedInteraction[];
+    readonly interactions: readonly Interaction[];
     readonly message: string | undefined;
     readonly sessionId: string;
     readonly status: "completed" | "failed" | "waiting";
@@ -573,7 +573,7 @@ interface EvalTurn extends EveEvalAssertions, EveEvalOutputAssertions {}
 class EvalTurn implements EveEvalTurn {
   readonly data: unknown;
   readonly events: readonly SessionStreamEvent[];
-  readonly interactions: readonly AskedInteraction[];
+  readonly interactions: readonly Interaction[];
   readonly message: string | undefined;
   readonly session: EveEvalSession;
   readonly sessionId: string;
@@ -587,7 +587,7 @@ class EvalTurn implements EveEvalTurn {
     readonly data: unknown;
     readonly derived: EveEvalDerivedFacts;
     readonly events: readonly SessionStreamEvent[];
-    readonly interactions: readonly AskedInteraction[];
+    readonly interactions: readonly Interaction[];
     readonly message: string | undefined;
     readonly session: EveEvalSession;
     readonly sessionId: string;
@@ -674,12 +674,12 @@ function outputOf(turn: EveEvalTurn | undefined): unknown {
   return turn.data === undefined ? (turn.message ?? null) : turn.data;
 }
 
-function assertRequestHasOption(request: AskedInteraction, optionId: string): void {
-  if (request.options === undefined || request.options.length === 0) {
+function assertRequestHasOption(request: Interaction, optionId: string): void {
+  if (request.request.options === undefined || request.request.options.length === 0) {
     throw new Error(`Input request "${request.interactionId}" has no selectable options.`);
   }
 
-  if (!request.options.some((option) => option.id === optionId)) {
+  if (!request.request.options.some((option) => option.id === optionId)) {
     throw new Error(
       `Input request "${request.interactionId}" does not offer option "${optionId}".`,
     );

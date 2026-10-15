@@ -49,7 +49,6 @@ import {
 import {
   currentProjection,
   enterSessionProjection,
-  nextLinePosition,
   saveSessionProjection,
 } from "#harness/session-machine/current.js";
 import { saveTransition, dropClosedRecords, sessionView } from "#harness/session-machine/commit.js";
@@ -348,7 +347,6 @@ async function runSessionStepBody(
         admitted: (deliveryId) =>
           publicViewOf(currentProjection(ctx)).deliveries[deliveryId] !== undefined,
         payloads: delivered,
-        position: nextLinePosition(ctx),
       });
     }
     // A delivery without auth acts as the session's current identity, so

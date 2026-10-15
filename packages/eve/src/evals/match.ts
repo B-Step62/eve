@@ -1,6 +1,6 @@
 import type { SessionStreamEvent } from "#protocol/session-event.js";
 import type { Scope } from "#protocol/session-events/envelope.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { EveEvalSubagentCall, EveEvalToolCall } from "#evals/types.js";
 
@@ -74,7 +74,7 @@ export interface EveEvalSubagentCallMatchOptions {
 /** Constraints accepted by `requireInteraction`. */
 export interface EveEvalInteractionMatchOptions {
   /** Matcher over the request's display hint. */
-  readonly display?: EveEvalValueMatcher<AskedInteraction["display"]>;
+  readonly display?: EveEvalValueMatcher<Interaction["request"]["display"]>;
   /** Partial-deep matcher over a tool-call action's input. */
   readonly input?: EveEvalValueMatcher<JsonObject>;
   /** Matcher over the complete option-id list in request order. */
@@ -82,7 +82,7 @@ export interface EveEvalInteractionMatchOptions {
   /** Matcher over the request prompt. */
   readonly prompt?: EveEvalValueMatcher<string>;
   /** Required kind: `approval`, `question`, or `budget`. */
-  readonly kind?: AskedInteraction["kind"];
+  readonly kind?: Interaction["request"]["kind"];
   /** Required name of the tool the request asks about. */
   readonly toolName?: string;
 }
@@ -174,15 +174,16 @@ export function subagentCallMatches(
 
 /** Returns true when one HITL request satisfies every supplied constraint. */
 export function interactionMatches(
-  request: AskedInteraction,
+  request: Interaction,
   options: EveEvalInteractionMatchOptions,
 ): boolean {
-  if (options.display !== undefined && !matchesValue(options.display, request.display))
+  if (options.display !== undefined && !matchesValue(options.display, request.request.display))
     return false;
-  if (options.prompt !== undefined && !matchesValue(options.prompt, request.prompt)) return false;
-  if (options.kind !== undefined && request.kind !== options.kind) return false;
+  if (options.prompt !== undefined && !matchesValue(options.prompt, request.request.prompt))
+    return false;
+  if (options.kind !== undefined && request.request.kind !== options.kind) return false;
   if (options.optionIds !== undefined) {
-    const optionIds = (request.options ?? []).map((option) => option.id);
+    const optionIds = (request.request.options ?? []).map((option) => option.id);
     if (!matchesValue(options.optionIds, optionIds)) return false;
   }
   if (options.toolName !== undefined) {

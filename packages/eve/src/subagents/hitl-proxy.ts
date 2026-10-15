@@ -6,9 +6,9 @@ import { readHitlState } from "#harness/hitl/index.js";
 import type { Relay, WorkflowAskRoute } from "#harness/hitl/relays.js";
 import type { SessionStateMap } from "#harness/types.js";
 import type { Answer } from "#shared/input.js";
-import { resolveTextToResponse } from "#channel/resolve-text.js";
+import { answerFromText } from "#channel/resolve-text.js";
 import { inputTextKey, readAnswerText } from "#internal/input-text.js";
-import { SESSION_LIMIT_STOP_OPTION_ID } from "#harness/hitl/budget-request.js";
+import { DENY_OPTION_ID } from "#shared/input.js";
 import { publicViewOf } from "#protocol/session-projection.js";
 
 // ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ export function routeDeliverPayload(input: {
     if (routed.has(answer.interactionId)) continue;
     routed.add(answer.interactionId);
     const kind = publicViewOf(projection).interactions[answer.interactionId]?.request.kind;
-    if (kind === "budget" && answer.optionId === SESSION_LIMIT_STOP_OPTION_ID) {
+    if (kind === "budget" && answer.optionId === DENY_OPTION_ID) {
       parentAction = { answer, kind: "cancel-turn" };
     }
     const key = JSON.stringify([
@@ -142,6 +142,6 @@ function resolveMessageAgainstFirstRequest(input: {
   // is the one the person sees: a reply answers it only when a child asked it.
   const first = firstOpenInteraction(input.projection, input.taken);
   if (first === undefined || input.routeOf(first.interactionId) === undefined) return none;
-  const answer = resolveTextToResponse(text, first);
+  const answer = answerFromText(text, first);
   return answer === undefined ? none : { answers: [answer], consumed: true };
 }

@@ -185,7 +185,10 @@ function httpAddress(runtime: Runtime, continuationToken: string) {
 
 async function resetSession(runtime: Runtime, sessionId: string | undefined): Promise<void> {
   if (sessionId === undefined) return;
-  await runtime.dispatchSession({ command: { kind: "reset" }, sessionId });
+  await runtime.dispatchSession({
+    command: { deliveryId: "reset-delivery", kind: "reset" },
+    sessionId,
+  });
 }
 
 describe("stranded sessions", () => {
@@ -389,13 +392,40 @@ describe("stranded sessions", () => {
       try {
         // Clear keeps the session, which cannot run, so the caller must choose reset.
         await expect(
-          runtime.dispatchSession({ command: { kind: "clear" }, sessionId: stranded.runId }),
+          runtime.dispatchSession({
+            command: { deliveryId: "clear-delivery", kind: "clear" },
+            sessionId: stranded.runId,
+          }),
         ).rejects.toBeInstanceOf(SessionStrandedError);
         await expect(stranded.status).resolves.toBe("running");
 
+        const reader = readSessionEventStream(stranded.runId).getReader();
+        const admitted = reader.read();
         await expect(
-          runtime.dispatchSession({ command: { kind: "reset" }, sessionId: stranded.runId }),
+          runtime.dispatchSession({
+            command: { deliveryId: "reset-delivery", kind: "reset" },
+            sessionId: stranded.runId,
+          }),
         ).resolves.toEqual({ previousSessionId: stranded.runId, status: "reset" });
+        await expect(admitted).resolves.toMatchObject({
+          value: {
+            type: "delivery.admitted",
+            data: { deliveryId: "reset-delivery", source: { control: "reset" } },
+          },
+        });
+        await expect(reader.read()).resolves.toMatchObject({
+          value: {
+            type: "delivery.settled",
+            data: { deliveryId: "reset-delivery", outcome: "applied" },
+          },
+        });
+        await expect(reader.read()).resolves.toMatchObject({
+          value: {
+            type: "session.ended",
+            data: { cause: { deliveryId: "reset-delivery" } },
+          },
+        });
+        await reader.cancel();
         await expect(stranded.status).resolves.toBe("cancelled");
         await expect(runtime.resolveContinuation(continuationToken)).resolves.toBeUndefined();
       } finally {

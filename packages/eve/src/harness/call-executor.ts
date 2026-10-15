@@ -290,7 +290,7 @@ export async function executeToolCall(
         createRuntimeToolResultFromValue({ callId, isError: failed, output, toolName }),
         {
           scope: at,
-          title: failed
+          label: failed
             ? undefined
             : projectResultPresentation(definition, callId, parseJsonObject(args), output)?.[callId]
                 ?.label,
@@ -621,7 +621,7 @@ function approvalRequest(
       kind: "approval",
       options: [
         { id: "approve", label: "Approve" },
-        { id: "cancel", label: "Cancel" },
+        { id: "deny", label: "Deny" },
       ],
       prompt: prompt ?? `Approve ${label}?`,
     },

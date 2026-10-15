@@ -275,9 +275,9 @@ describe("SessionExecution checkpoints", () => {
         .mockImplementationOnce(
           turnStepWork(async (input) => {
             const correction = { kind: "deliver", payloads: [{ message: "Correction" }] } as const;
-            pending.push(correction, { kind });
+            pending.push(correction, { kind, deliveryId: `${kind}-delivery` });
             deliver(correction);
-            interrupt({ kind });
+            interrupt({ kind, deliveryId: `${kind}-delivery` });
             expect(input.steeringSignal?.aborted).toBe(true);
             expect(input.abortSignal?.aborted).toBe(true);
             return {
@@ -547,7 +547,7 @@ describe("SessionExecution checkpoints", () => {
       claimSessionHooks: vi.fn(),
       drain: vi
         .fn()
-        .mockReturnValueOnce([{ kind: "cancel" }])
+        .mockReturnValueOnce([{ deliveryId: "cancel-delivery", kind: "cancel" }])
         .mockReturnValue([]),
       hasPending: vi.fn(() => false),
       whenPending: () => new Promise<void>(() => {}),
@@ -603,7 +603,7 @@ describe("SessionExecution checkpoints", () => {
       claimSessionHooks: vi.fn(),
       drain: vi
         .fn()
-        .mockReturnValueOnce([followUp, { kind: "cancel" }])
+        .mockReturnValueOnce([followUp, { deliveryId: "cancel-delivery", kind: "cancel" }])
         .mockReturnValue([]),
       hasPending: vi.fn(() => false),
       whenPending: () => new Promise<void>(() => {}),
@@ -618,7 +618,7 @@ describe("SessionExecution checkpoints", () => {
     const execution = createExecution({ inbox, queue, sessionState });
     vi.mocked(turnStep).mockImplementationOnce(
       turnStepWork(async (input) => {
-        interrupt?.({ kind: "cancel" });
+        interrupt?.({ deliveryId: "cancel-delivery", kind: "cancel" });
         await vi.waitFor(() => expect(input.abortSignal?.aborted).toBe(true));
         return {
           action: "cancelled",
@@ -864,7 +864,7 @@ describe("SessionExecution checkpoints", () => {
       kind: "deliver",
       payloads: [{ message: "Follow up after completion." }],
     };
-    const cancel = { kind: "cancel", turnId: "turn_0" } as const;
+    const cancel = { deliveryId: "cancel-delivery", kind: "cancel", turnId: "turn_0" } as const;
     let interrupt: (payload: SessionInboxPayload) => void = () => {};
     const queue = new SessionInputQueue();
     const inbox: SessionInbox = {
@@ -915,7 +915,7 @@ describe("SessionExecution checkpoints", () => {
       kind: "deliver",
       payloads: [{ answers: [{ interactionId: "child-request", text: "blue" }] }],
     };
-    const runtimePayloads = [answer, { kind: "cancel" as const }];
+    const runtimePayloads = [answer, { kind: "cancel" as const, deliveryId: "cancel-delivery" }];
     const queue = new SessionInputQueue();
     const inbox: SessionInbox = {
       claimedTokens: [],
@@ -991,7 +991,10 @@ describe("SessionExecution checkpoints", () => {
         { message: "Also include Bob's service." },
       ],
     };
-    const runtimePayloads: SessionInboxPayload[] = [answerAndCorrection, { kind: "cancel" }];
+    const runtimePayloads: SessionInboxPayload[] = [
+      answerAndCorrection,
+      { deliveryId: "cancel-delivery", kind: "cancel" },
+    ];
     const inbox: SessionInbox = {
       claimedTokens: [],
       takeLeading: () => [],
@@ -1074,7 +1077,7 @@ describe("SessionExecution checkpoints", () => {
     // An unrelated result keeps the wait going for a second pass before the cancel.
     const runtimePayloads: SessionInboxPayload[] = [
       { kind: "runtime-action-result", results: [] },
-      { kind: "cancel" },
+      { deliveryId: "cancel-delivery", kind: "cancel" },
     ];
     const inbox: SessionInbox = {
       claimedTokens: [],
@@ -1157,7 +1160,7 @@ describe("SessionExecution checkpoints", () => {
         kind: "usage",
         usage: { cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 250, outputTokens: 25 },
       },
-      { kind: "cancel" },
+      { deliveryId: "cancel-delivery", kind: "cancel" },
     ];
     const inbox: SessionInbox = {
       claimedTokens: [],
@@ -1248,7 +1251,7 @@ describe("SessionExecution checkpoints", () => {
       opened("child-1"),
       opened("child-2"),
       { from: from(), kind: "report", update: "Two reviewers started." },
-      { kind: "cancel" },
+      { deliveryId: "cancel-delivery", kind: "cancel" },
     ];
     const inbox: SessionInbox = {
       claimedTokens: [],
@@ -1613,7 +1616,7 @@ describe("SessionExecution checkpoints", () => {
     };
     // Bob cancels while the turn waits, just as Alice's run opens a planner.
     inbox.next = vi.fn(async () => {
-      interrupt({ kind: "cancel" });
+      interrupt({ deliveryId: "cancel-delivery", kind: "cancel" });
       return planner;
     });
     publishIntoContext();

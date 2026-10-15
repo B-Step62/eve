@@ -1,3 +1,4 @@
+import { APPROVE_OPTION_ID, DENY_OPTION_ID } from "#shared/input.js";
 /**
  * Deterministic HITL continuation prompt for session usage limits.
  *
@@ -16,12 +17,6 @@ export interface LimitAsk {
   readonly interactionId: string;
   readonly request: InteractionRequest;
 }
-
-/** Option id that grants a fresh token budget window. */
-export const SESSION_LIMIT_CONTINUE_OPTION_ID = "continue";
-
-/** Option id that declines continuation and ends the session. */
-export const SESSION_LIMIT_STOP_OPTION_ID = "stop";
 
 /**
  * Builds the deterministic continuation prompt for one session usage-limit
@@ -53,13 +48,13 @@ export function createSessionLimitContinuationRequest(input: {
             violation.kind === "token-cost"
               ? "Grant a fresh model token-cost budget"
               : "Grant a fresh token budget",
-          id: SESSION_LIMIT_CONTINUE_OPTION_ID,
+          id: APPROVE_OPTION_ID,
           label: "Approve",
           style: "primary",
         },
         {
           description: "Stop now",
-          id: SESSION_LIMIT_STOP_OPTION_ID,
+          id: DENY_OPTION_ID,
           label: "Stop",
           style: "danger",
         },
@@ -120,11 +115,11 @@ export function isSessionLimitContinuationRequestId(requestId: string): boolean 
 }
 
 /**
- * What an answer to the budget prompt decides: "continue" grants a fresh budget, "stop" declines
+ * What an answer to the budget prompt decides: "approve" grants a fresh budget, "deny" declines
  * it, and anything else decides nothing, so the prompt asks again while the violation holds.
  */
 export function limitDecision(answer: ResponseValue): { readonly granted: boolean } | undefined {
-  if (answer.optionId === SESSION_LIMIT_CONTINUE_OPTION_ID) return { granted: true };
-  if (answer.optionId === SESSION_LIMIT_STOP_OPTION_ID) return { granted: false };
+  if (answer.optionId === APPROVE_OPTION_ID) return { granted: true };
+  if (answer.optionId === DENY_OPTION_ID) return { granted: false };
   return undefined;
 }

@@ -426,7 +426,7 @@ export const defaultEvents: SlackChannelInternalEvents = {
     if (!narration && !counts) return;
     if (!("runId" in owner)) return;
     const stream = stepStream(channel.state, owner.runId);
-    const label = capability.title ?? displayTitle(capability.name);
+    const label = capability.label ?? displayTitle(capability.name);
     const calls =
       !narration && stream.calls
         ? { ...stream.calls, count: stream.calls.count + 1 }
@@ -439,7 +439,7 @@ export const defaultEvents: SlackChannelInternalEvents = {
   },
 
   async "call.progress"({ data }, { channel }) {
-    const label = data.title;
+    const label = data.label;
     if (!label || heldWithin(channel.state.threadStatus?.atMs, Date.now())) return;
     await showStatus(channel, label);
   },
@@ -456,7 +456,7 @@ export const defaultEvents: SlackChannelInternalEvents = {
       const name = task?.kind === "agent" ? task.name : null;
       channel.state.pendingTaskResults = { names: [...names, name], turnId };
     }
-    if (data.title) await showStatus(channel, data.title);
+    if (data.label) await showStatus(channel, data.label);
   },
 
   async "content.completed"({ data }, ctx) {

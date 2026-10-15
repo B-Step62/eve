@@ -1,15 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import { linearInteractionSignal, renderLinearInteractions } from "#public/channels/linear/hitl.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
-function makeRequest(overrides: Partial<AskedInteraction> = {}): AskedInteraction {
+function makeRequest(
+  overrides: Partial<Interaction["request"]> &
+    Partial<Pick<Interaction, "interactionId" | "call">> = {},
+): Interaction {
+  const {
+    interactionId = "call_1",
+    call = { callId: "call_1", name: "ask_question", input: {} },
+    ...request
+  } = overrides;
   return {
-    call: { callId: "call_1", input: {}, name: "ask_question" },
-    prompt: "Approve deployment?",
-    interactionId: "call_1",
-    ...overrides,
-    kind: overrides.kind ?? "question",
+    interactionId,
+    call,
+    status: "open",
+    turnId: "turn_0",
+    stepIndex: 0,
+    request: { prompt: "Approve deployment?", kind: "question", ...request },
   };
 }
 

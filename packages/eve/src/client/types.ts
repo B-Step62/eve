@@ -8,7 +8,7 @@ import type { CompactStatus } from "#protocol/compact-session.js";
 import type { ResetStatus } from "#protocol/reset-session.js";
 import type { TurnPolicy } from "#channel/types.js";
 import type { Answer } from "#shared/input.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 import type { JsonObject } from "#shared/json.js";
 import type { ToolStub } from "#tool-stubs/types.js";
 export type { HealthResult } from "#client/health-schema.js";
@@ -304,7 +304,7 @@ export interface MessageResult<TOutput = unknown> {
    * HITL input requests emitted in this response and still open at its boundary.
    * Earlier requests may remain open in the same session.
    */
-  readonly interactions: readonly AskedInteraction[];
+  readonly interactions: readonly Interaction[];
 
   /**
    * The session ID for this turn. Always populated; the post-turn handler

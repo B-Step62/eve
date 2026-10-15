@@ -216,7 +216,7 @@ function trackTurnEvent(
           ...call,
           settledAt: at,
           status,
-          title: event.data.title ?? call.title,
+          title: event.data.label ?? call.title,
         };
         if (call.task !== undefined) {
           const task: {
@@ -336,7 +336,7 @@ function requestedCall(
     kind: capability.kind === "agent" ? "agent" : "tool",
     startedAt: at,
     status: "working",
-    title: capability.title ?? displayTitle(capability.name),
+    title: capability.label ?? displayTitle(capability.name),
   };
   const bounded = boundedInput(input);
   if (bounded !== undefined) call.input = bounded;
