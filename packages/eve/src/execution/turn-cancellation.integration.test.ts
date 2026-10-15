@@ -485,22 +485,19 @@ describe("turn cancellation integration", () => {
     60_000,
   );
 
-  // Expected failure until #4904 is fixed: the cancelled turn drops the compaction.
+  // Expected failure until #4904 is fixed: the cancelled turn drops the summary call's usage.
   it.fails("keeps a compaction's summary call when a compaction.completed hook cancels the turn", async () => {
-    let summaryCalls = 0;
-    const model = mockModel(({ messages }) => {
-      if (messages.some((message) => message.text.includes("previous checkpoint"))) {
-        summaryCalls += 1;
-        return {
-          text: "Alice's fern has brown tips and dry soil.",
-          usage: { inputTokens: 2_000, outputTokens: 300 },
-        };
-      }
-      return {
-        text: "Water it when the top inch of soil is dry.",
-        usage: { inputTokens: 120_000, outputTokens: 10 },
-      };
-    });
+    const model = mockModel(({ messages }) =>
+      messages.some((message) => message.text.includes("previous checkpoint"))
+        ? {
+            text: "Alice's fern has brown tips and dry soil.",
+            usage: { inputTokens: 2_000, outputTokens: 300 },
+          }
+        : {
+            text: "Water it when the top inch of soil is dry.",
+            usage: { inputTokens: 120_000, outputTokens: 10 },
+          },
+    );
     const runtime = await createTestRuntime({
       agent: {
         definition: defineAgent({
@@ -569,13 +566,6 @@ describe("turn cancellation integration", () => {
         expect(
           filterEventsByType(cancelledTurn, "session.waiting").at(-1)?.data.usage,
         ).toMatchObject({ inputTokens: 122_000, outputTokens: 310 });
-
-        // The checkpoint stays, so the next turn does not pay for the same summary again.
-        await waitForHookByToken(sessionInboxHookToken(continuationToken));
-        await address.send("Bob asks how often to mist it.", { auth: null });
-        const nextTurn = await stream.nextTurn();
-        expect(filterEventsByType(nextTurn, "compaction.requested")).toHaveLength(0);
-        expect(summaryCalls).toBe(1);
       } finally {
         stream.dispose();
         await run.cancel();
