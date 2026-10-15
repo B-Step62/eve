@@ -79,6 +79,11 @@ export type ValidatedInputResponse = InputResponse & {
  */
 export const inputResponseSchema = z
   .object({
+    /**
+     * The person declined to answer a question. A declined response carries no `optionId` or
+     * `text`; the asker reads it as `{ status: "declined" }`.
+     */
+    decline: z.literal(true).optional(),
     optionId: z.string().optional(),
     requestId: z.string(),
     text: z.string().optional(),
