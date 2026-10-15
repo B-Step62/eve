@@ -6,6 +6,7 @@ import {
 } from "#compiler/manifest.js";
 import type { CompiledModuleMap } from "#compiler/module-map.js";
 import type { ConnectionToolCallDefinition } from "#public/definitions/connections/tool-call.js";
+import { defineMcpClientConnection } from "#public/definitions/connections/mcp.js";
 import { defineOpenAPIConnection } from "#public/definitions/connections/openapi.js";
 import { toolResultFrom } from "#public/tools/result.js";
 import { resolveConnectionDefinition } from "#runtime/resolve-connection.js";
@@ -137,5 +138,73 @@ describe("toolResultFrom identity for connections sharing a host (#202)", () => 
       define(),
     );
     expect(match?.connectionToolName).toBe("list");
+  });
+});
+
+describe("toolResultFrom identity for connections sharing an endpoint (#3085)", () => {
+  const result = (toolName: string): RuntimeActionResult => ({
+    callId: "call_1",
+    kind: "tool-result",
+    output: {},
+    toolName,
+  });
+
+  async function load(connectionName: string, loaded: { description: string; url: string }) {
+    const sourceId = `connections/${connectionName}`;
+    await resolveConnectionDefinition(
+      {
+        connectionName,
+        description: loaded.description,
+        logicalPath: `${sourceId}.ts`,
+        protocol: "mcp",
+        sourceId,
+        sourceKind: "module",
+        url: loaded.url,
+      },
+      {
+        nodes: { [ROOT_COMPILED_AGENT_NODE_ID]: { modules: { [sourceId]: { default: loaded } } } },
+      },
+      undefined,
+    );
+  }
+
+  it("stays quiet for read and write connections with different descriptions", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const url = "https://api.githubcopilot.example/mcp/";
+    const defineRead = () => defineMcpClientConnection({ url, description: "GitHub (read)" });
+    const defineWrite = () => defineMcpClientConnection({ url, description: "GitHub (write)" });
+    await load("github", defineRead());
+    await load("githubwrite", defineWrite());
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(toolResultFrom(result("github__get_issue"), defineRead())).toBeDefined();
+    expect(toolResultFrom(result("githubwrite__create_issue"), defineWrite())).toBeDefined();
+    warn.mockRestore();
+  });
+
+  it("warns only when a copy falls back to an identity shared by two connections", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const url = "https://shared-endpoint.example/mcp/";
+    const define = () => defineMcpClientConnection({ url, description: "GitHub" });
+    const read = define();
+    const write = define();
+    await load("github", read);
+    await load("githubwrite", write);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(toolResultFrom(result("github__get_issue"), read)).toBeDefined();
+    expect(toolResultFrom(result("githubwrite__create_issue"), write)).toBeDefined();
+    expect(warn).not.toHaveBeenCalled();
+
+    // A hook bundled separately imports its own copy, which only has the shared fallback.
+    expect(toolResultFrom(result("github__get_issue"), define())).toBeUndefined();
+    expect(toolResultFrom(result("github__get_issue"), define())).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Conflicting definitions: connection "github" from "connections/github.ts" and connection "githubwrite" from "connections/githubwrite.ts".',
+      ),
+    );
+    warn.mockRestore();
   });
 });

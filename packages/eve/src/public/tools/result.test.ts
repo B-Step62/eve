@@ -159,10 +159,24 @@ describe("toolResultFrom", () => {
       "tool:Run the shared action.",
     );
 
+    expect(toolResultFrom(toolResult("first_tool", { source: "first" }), first)).toEqual({
+      callId: "call_1",
+      output: { source: "first" },
+      toolName: "first_tool",
+    });
+    expect(toolResultFrom(toolResult("first_tool", { source: "first" }), second)).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+
+    const copy = defineTool({
+      description: "Run the shared action.",
+      execute: async (): Promise<{ source: string }> => ({ source: "copy" }),
+      inputSchema: z.object({}),
+    });
+    expect(toolResultFrom(toolResult("first_tool", { source: "first" }), copy)).toBeUndefined();
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(
-        'eve could not assign a unique toolResultFrom identity for "tool:Run the shared action."',
+        'eve could not match a toolResultFrom definition through "tool:Run the shared action."',
       ),
     );
     expect(warn).toHaveBeenCalledWith(
@@ -170,12 +184,6 @@ describe("toolResultFrom", () => {
         'Conflicting definitions: tool "first_tool" from "tools/first.ts" and tool "second_tool" from "tools/second.ts".',
       ),
     );
-    expect(toolResultFrom(toolResult("first_tool", { source: "first" }), first)).toEqual({
-      callId: "call_1",
-      output: { source: "first" },
-      toolName: "first_tool",
-    });
-    expect(toolResultFrom(toolResult("first_tool", { source: "first" }), second)).toBeUndefined();
   });
 
   it("does not use a colliding description fallback to narrow the wrong tool", () => {
@@ -197,8 +205,8 @@ describe("toolResultFrom", () => {
       "tool:Run the fallback action.",
     );
 
-    expect(warn).toHaveBeenCalledOnce();
     expect(toolResultFrom(toolResult("first_tool", { source: "first" }), copy)).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
   });
 
   it("matches a connection tool result with qualified name", () => {
@@ -244,17 +252,6 @@ describe("toolResultFrom", () => {
       connectionDefinitionKey("https://mcp.example.test", "Shared"),
     );
 
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `eve could not assign a unique toolResultFrom identity for ${JSON.stringify(connectionDefinitionKey("https://mcp.example.test", "Shared"))}`,
-      ),
-    );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Conflicting definitions: connection "first" from "connections/first.ts" and connection "second" from "connections/second.ts".',
-      ),
-    );
     expect(toolResultFrom(toolResult("first__search", []), first)).toEqual({
       callId: "call_1",
       connectionToolName: "search",
@@ -262,5 +259,6 @@ describe("toolResultFrom", () => {
       toolName: "first__search",
     });
     expect(toolResultFrom(toolResult("first__search", []), second)).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 });

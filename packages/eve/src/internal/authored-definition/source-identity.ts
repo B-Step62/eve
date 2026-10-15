@@ -16,7 +16,11 @@ type FallbackDefinitionSource =
       readonly definitions: WeakSet<object>;
       readonly firstEntry: DefinitionSourceEntry;
     })
-  | { readonly kind: "ambiguous" };
+  | {
+      readonly kind: "ambiguous";
+      readonly conflict: readonly [DefinitionSourceEntry, DefinitionSourceEntry];
+      warned: boolean;
+    };
 
 export type RegisteredDefinitionSource =
   | { readonly kind: DefinitionSourceKind; readonly names: ReadonlySet<string> }
@@ -81,7 +85,10 @@ export function readDefinitionSource(definition: object): RegisteredDefinitionSo
   const resolved = resolvedSources.get(definition);
   if (resolved !== undefined) return resolved;
   const key = readDefinitionKey(definition);
-  return key === undefined ? undefined : fallbackSources.get(key);
+  if (key === undefined) return undefined;
+  const fallback = fallbackSources.get(key);
+  if (fallback?.kind === "ambiguous") warnAmbiguousFallback(key, fallback);
+  return fallback;
 }
 
 function registerFallbackSource(
@@ -108,15 +115,30 @@ function registerFallbackSource(
     existing.names.add(entry.name);
     return;
   }
+  // Definitions eve loaded still resolve by object, so only warn once a copy
+  // actually falls back to this shared key.
+  fallbackSources.set(key, {
+    conflict: [existing.firstEntry, entry],
+    kind: "ambiguous",
+    warned: false,
+  });
+}
+
+function warnAmbiguousFallback(
+  key: string,
+  fallback: Extract<FallbackDefinitionSource, { kind: "ambiguous" }>,
+): void {
+  if (fallback.warned) return;
+  fallback.warned = true;
+  const [first, second] = fallback.conflict;
   console.warn(
     [
-      `eve could not assign a unique toolResultFrom identity for ${JSON.stringify(key)}.`,
-      `Conflicting definitions: ${formatDefinitionSourceForWarning(existing.firstEntry)} and ${formatDefinitionSourceForWarning(entry)}.`,
-      "Multiple authored definitions share that fallback identity, so toolResultFrom will not match through it.",
-      "Use the original definition object loaded by eve so source-derived identity can be used instead.",
+      `eve could not match a toolResultFrom definition through ${JSON.stringify(key)}.`,
+      `Conflicting definitions: ${formatDefinitionSourceForWarning(first)} and ${formatDefinitionSourceForWarning(second)}.`,
+      "This definition is a copy eve did not load, and multiple authored definitions share its fallback identity.",
+      "Pass the original definition object loaded by eve, or give the definitions distinct descriptions.",
     ].join(" "),
   );
-  fallbackSources.set(key, { kind: "ambiguous" });
 }
 
 function readDefinitionKey(definition: object): string | undefined {
