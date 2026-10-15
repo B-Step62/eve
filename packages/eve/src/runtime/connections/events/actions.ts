@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import {
   createMCPClient,
   type Experimental_MCPEventDefinition as EventDefinition,
-  type Experimental_ManagedMCPEvents as ManagedEvents,
+  type Experimental_MCPEvents as MCPEvents,
 } from "#compiled/@ai-sdk/mcp/index.js";
 import { contextStorage } from "#context/container.js";
 import { AuthKey, SessionIdKey, SessionTraceSeedKey } from "#context/keys.js";
@@ -36,6 +36,7 @@ import type { ManagedEventSubscription } from "#shared/connection-events.js";
 const GET = "events_get_subscription";
 const STOP = "events_unsubscribe";
 const PREFIX = "events_subscribe_";
+type EventCatalog = Pick<MCPEvents, "list">;
 
 export function isEventAction(name: string): boolean {
   return name === GET || name === STOP || name.startsWith(PREFIX);
@@ -93,13 +94,8 @@ export class ConnectionEventActions {
     };
   }
 
-  private async withClient<T>(run: (events: ManagedEvents) => Promise<T>): Promise<T> {
-    const { backend, principal } = this.scope();
-    const adapter = await backend.createAdapter({
-      principal,
-      connection: { url: this.connection.url },
-      destination: { path: connectionEventDestination(this.connection.connectionName) },
-    });
+  private async withClient<T>(run: (events: EventCatalog) => Promise<T>): Promise<T> {
+    this.scope();
     // A fresh authenticated transport keeps catalogs isolated between people sharing a session.
     let client: Awaited<ReturnType<typeof createMCPClient>> | undefined;
     const config = {
@@ -114,7 +110,6 @@ export class ConnectionEventActions {
         headers: await this.headers(),
       },
       protocolVersionDiscovery: this.connection.protocolVersionDiscovery,
-      experimental_events: { adapter: { createAdapter: () => adapter } },
     };
     client = await createMCPClient(config);
     try {
@@ -124,7 +119,7 @@ export class ConnectionEventActions {
     }
   }
 
-  private async catalog(events: ManagedEvents): Promise<EventDefinition[]> {
+  private async catalog(events: EventCatalog): Promise<EventDefinition[]> {
     const result: EventDefinition[] = [];
     const seen = new Set<string>();
     let cursor: string | undefined;
