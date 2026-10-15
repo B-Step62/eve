@@ -17,7 +17,7 @@ import {
 import { contextStorage } from "#context/container.js";
 import { AuthKey, SessionIdKey, SessionTraceSeedKey } from "#context/keys.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
-import type { ResolvedConnectionDefinition } from "#runtime/types.js";
+import type { ResolvedConnectionDefinition, ResolvedConnectionEvents } from "#runtime/types.js";
 import type {
   ConnectionToolExecuteOptions,
   ConnectionToolMetadata,
@@ -43,14 +43,17 @@ export function isEventAction(name: string): boolean {
 
 export class ConnectionEventActions {
   private readonly connection: ResolvedConnectionDefinition;
+  private readonly events: ResolvedConnectionEvents;
   private readonly headers: () => Promise<Record<string, string>>;
   private readonly transportFetch: typeof fetch | undefined;
   constructor(
     connection: ResolvedConnectionDefinition,
+    events: ResolvedConnectionEvents,
     headers: () => Promise<Record<string, string>>,
     transportFetch?: typeof fetch,
   ) {
     this.connection = connection;
+    this.events = events;
     this.headers = headers;
     this.transportFetch = transportFetch;
   }
@@ -62,14 +65,7 @@ export class ConnectionEventActions {
       throw new Error(
         "Experimental event subscriptions currently require a root-agent connection.",
       );
-    const authorization = this.connection.authorization;
-    if (
-      authorization === undefined ||
-      typeof authorization === "function" ||
-      authorization.vercelConnect?.experimental_events === undefined
-    ) {
-      throw new Error("Event subscriptions require a static Connect events provider.");
-    }
+    const { authorization, backend, connector } = this.events;
     const principal = resolveConnectionPrincipal(
       this.connection.connectionName,
       authorization,
@@ -78,7 +74,6 @@ export class ConnectionEventActions {
     const sessionId = ctx.require(SessionIdKey);
     const owner = principalKey(principal);
     const executionPrincipal = principalOf(ctx.get(AuthKey));
-    const connector = authorization.vercelConnect.connector;
     const caller: EventOwner = {
       connectionName: this.connection.connectionName,
       instanceId: this.connection.instanceId,
@@ -93,7 +88,7 @@ export class ConnectionEventActions {
       owner,
       executionPrincipal,
       caller,
-      backend: authorization.vercelConnect.experimental_events,
+      backend,
       connector,
     };
   }

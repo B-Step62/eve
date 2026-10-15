@@ -68,6 +68,7 @@ export class McpConnectionClient implements ConnectionClient {
     if (connection.experimental_events !== undefined) {
       const events = new ConnectionEventActions(
         connection,
+        connection.experimental_events,
         () => resolveHeaders(connection),
         this.#forwardingFetch(),
       );

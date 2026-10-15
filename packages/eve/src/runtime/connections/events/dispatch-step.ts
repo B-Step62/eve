@@ -22,28 +22,21 @@ export function resolveBinding(ctx: AlsContext, binding: EventBinding) {
     .resolvedAgent.connections.find(
       (connection) => connection.connectionName === binding.connectionName,
     );
-  if (connection?.experimental_events === undefined || binding.instanceId !== connection.instanceId)
-    return undefined;
-  const authorization = connection.authorization;
+  const events = connection?.experimental_events;
   if (
-    authorization === undefined ||
-    typeof authorization === "function" ||
-    authorization.vercelConnect?.connector !== binding.connector ||
-    authorization.vercelConnect.experimental_events === undefined
+    connection === undefined ||
+    events === undefined ||
+    binding.instanceId !== connection.instanceId ||
+    events.connector !== binding.connector
   )
     return undefined;
   const principal = resolveConnectionPrincipalFromAuth(
-    connection.connectionName,
-    authorization,
+    binding.connectionName,
+    events.authorization,
     binding.auth,
   );
   if (principalKey(principal) !== binding.principalKey) return undefined;
-  return {
-    binding,
-    connection,
-    principal,
-    backend: authorization.vercelConnect.experimental_events,
-  };
+  return { binding, connection, events, principal };
 }
 
 /** The hook token already routed this delivery to its binding; the subscription decides acceptance. */
@@ -81,7 +74,7 @@ export async function dispatchConnectionEventStep(input: {
     return { accepted: false, serializedContext: input.serializedContext, state };
   const { binding, connection } = resolved;
   const bundle = ctx.require(BundleKey);
-  const callbacks = connection.experimental_events!;
+  const { callbacks } = resolved.events;
   // The callback runs as its creator without replacing the last conversational caller.
   ctx.setVirtualContext(AuthKey, binding.auth);
   const operation =

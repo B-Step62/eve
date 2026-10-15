@@ -48,7 +48,7 @@ export async function subscribeConnectionEvent(
   const resolved = resolveBinding(ctx, binding);
   if (resolved === undefined)
     return { error: "This connection no longer accepts the subscription's binding." };
-  const { connection, principal, backend } = resolved;
+  const { connection, principal, events } = resolved;
   try {
     const subscription = await withConnectionEventSpan(
       {
@@ -58,7 +58,7 @@ export async function subscribeConnectionEvent(
         operation: "subscribe",
       },
       async () => {
-        const adapter = await backend.createAdapter({
+        const adapter = await events.backend.createAdapter({
           principal,
           connection: { url: connection.url },
           destination: { path: connectionEventDestination(connection.connectionName) },

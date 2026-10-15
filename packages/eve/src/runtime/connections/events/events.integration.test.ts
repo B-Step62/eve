@@ -154,11 +154,6 @@ beforeEach(async () => {
         experimental_events: { createAdapter: vi.fn(async () => adapter), verify: vi.fn() },
       },
     },
-    experimental_events: {
-      onEvent: callback,
-      onGap: gap,
-      onTerminated: terminated,
-    },
   };
   const { manifest, moduleMap } = await compileFromMemory({
     model: "openai/gpt-5.4",
@@ -170,7 +165,7 @@ beforeEach(async () => {
             url: connection.url,
             description: connection.description,
             auth: connection.authorization,
-            experimental_events: connection.experimental_events,
+            experimental_events: { onEvent: callback, onGap: gap, onTerminated: terminated },
           }),
         }),
       },
@@ -215,7 +210,7 @@ beforeEach(async () => {
   ctx.set(BundleKey, bundle);
   ctx.set(SessionIdKey, "session-1");
   setUser("alice");
-  actions = new ConnectionEventActions(connection, async () => ({
+  actions = new ConnectionEventActions(connection, connection.experimental_events!, async () => ({
     account: ctx.require(AuthKey)!.principalId,
   }));
   initial = {
@@ -270,6 +265,7 @@ it("discovers through the released AI SDK and subscribes through the backend wit
   };
   actions = new ConnectionEventActions(
     connection,
+    connection.experimental_events!,
     async () => ({ Authorization: "Bearer test" }),
     transportFetch,
   );
@@ -478,14 +474,20 @@ it.each(["user", "app"] as const)(
   async (principalType) => {
     const auth = connection.authorization;
     if (auth === undefined || typeof auth === "function") throw new Error("Missing fixture auth");
+    const authorization = {
+      principalType,
+      getToken: auth.getToken,
+      vercelConnect: auth.vercelConnect,
+    };
     connection = {
       ...connection,
-      authorization: { principalType, getToken: auth.getToken, vercelConnect: auth.vercelConnect },
+      authorization,
+      experimental_events: { ...connection.experimental_events!, authorization },
     };
     // The handler re-checks its binding against the deployed connection.
     (ctx.require(BundleKey).resolvedAgent.connections as ResolvedConnectionDefinition[])[0] =
       connection;
-    actions = new ConnectionEventActions(connection, async () => ({
+    actions = new ConnectionEventActions(connection, connection.experimental_events!, async () => ({
       account: ctx.require(AuthKey)!.principalId,
     }));
     const { id } = await watch();
@@ -885,7 +887,7 @@ it("links callback sends to the callback span through durable channel delivery m
   });
   callback.mockImplementation(async (args) => {
     const event = args as Parameters<
-      NonNullable<typeof connection.experimental_events>["onEvent"]
+      NonNullable<typeof connection.experimental_events>["callbacks"]["onEvent"]
     >[0];
     await event
       .attachSession(event.origin.sessionId)
