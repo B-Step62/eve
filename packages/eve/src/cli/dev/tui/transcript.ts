@@ -548,7 +548,7 @@ export class ConversationTranscript {
   }
 
   #signInBlock(part: EveInteractionPart, signIn: SignInChallenge): Block {
-    return this.#memoize(`connection-auth:${part.request.interactionId}`, [part], () => {
+    return this.#memoize(`connection-auth:${part.interactionId}`, [part], () => {
       const state = part.outcome ?? "required";
       const terminalMessage = authorizationTerminalMessage(state);
       return {
@@ -680,8 +680,8 @@ export function turnActivity(view: AgentTUIConversationView, tasks: readonly Tas
   )
     return "Running";
   if (turn === undefined || turn.waiting === true) {
-    const signIns = openConversationInteractions(conversation).flatMap(({ request }) =>
-      request.signIn?.callbackUrl === undefined ? [] : [request.signIn],
+    const signIns = openConversationInteractions(conversation).flatMap((request) =>
+      request.request.signIn?.callbackUrl === undefined ? [] : [request.request.signIn],
     );
     if (signIns.length > 0)
       return signInLabel(signIns.map((signIn) => signIn.displayName ?? signIn.name));

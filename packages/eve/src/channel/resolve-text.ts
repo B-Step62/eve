@@ -12,7 +12,7 @@ interface TextResolvable {
 
 /**
  * Renders a request's prompt and numbered options as the plain text that
- * {@link resolveTextToResponse} parses, so a reply with the number, label, or
+ * {@link answerFromText} parses, so a reply with the number, label, or
  * id answers it. Channels append their own reply instructions.
  */
 export function renderTextInteraction(
@@ -41,10 +41,7 @@ export function renderTextInteraction(
  * 4. Freeform text when the request allows freeform answers or the
  *    request has no options
  */
-export function resolveTextToResponse(
-  text: string,
-  interaction: TextResolvable,
-): Answer | undefined {
+export function answerFromText(text: string, interaction: TextResolvable): Answer | undefined {
   const { interactionId, request } = interaction;
   const trimmed = text.trim();
   if (trimmed.length === 0) {
@@ -74,14 +71,14 @@ export function resolveTextToResponse(
  * Resolves text against all pending interactions, returning one
  * {@link Answer} for each it could match.
  */
-export function resolveTextToResponses(
+export function answerFromTexts(
   text: string,
   requests: readonly TextResolvable[],
 ): readonly Answer[] {
   const responses: Answer[] = [];
 
   for (const request of requests) {
-    const response = resolveTextToResponse(text, request);
+    const response = answerFromText(text, request);
     if (response !== undefined) {
       responses.push(response);
     }

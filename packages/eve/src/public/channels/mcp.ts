@@ -1,3 +1,4 @@
+import { interactionJsonSchema } from "#protocol/interaction-json.js";
 import { sessionAuthFromResult } from "#channel/auth/result.js";
 import { parseJsonObject } from "#shared/json.js";
 import { z } from "#compiled/zod/index.js";
@@ -673,35 +674,6 @@ const MCP_INPUT_RESPONSE_SCHEMA = answerSchema.safeExtend({
   text: utf8Bounded(MAX_RESPONSE_TEXT_BYTES).optional(),
 });
 
-// What an invocation shows of an interaction. Its own schema, so the stream's can change without
-// changing this contract; `kind` and `display` stay open strings.
-const MCP_INTERACTION_SCHEMA = z.strictObject({
-  allowFreeform: z.boolean().optional(),
-  call: z
-    .strictObject({ callId: z.string(), input: z.json().optional(), name: z.string() })
-    .optional(),
-  display: z.string().optional(),
-  kind: z.string(),
-  options: z
-    .array(
-      z.strictObject({ description: z.string().optional(), id: z.string(), label: z.string() }),
-    )
-    .optional(),
-  prompt: z.string(),
-  signIn: z
-    .strictObject({
-      callbackUrl: z.url().optional(),
-      displayName: z.string().optional(),
-      expiresAt: z.iso.datetime().optional(),
-      instructions: z.string().optional(),
-      name: z.string(),
-      url: z.url().optional(),
-      userCode: z.string().optional(),
-    })
-    .optional(),
-  title: z.string().optional(),
-});
-
 const AGENT_INVOCATION_BASE_SCHEMA = z.strictObject({
   createdAt: z.iso.datetime(),
   expiresAt: z.iso.datetime().optional(),
@@ -715,12 +687,12 @@ const AGENT_INVOCATION_OUTPUT_SCHEMA = z.discriminatedUnion("status", [
     status: z.literal("working"),
   }),
   AGENT_INVOCATION_BASE_SCHEMA.extend({
-    interactions: z.record(z.string(), MCP_INTERACTION_SCHEMA),
+    interactions: z.record(z.string(), interactionJsonSchema),
     result: z.json().optional(),
     status: z.literal("input_required"),
   }),
   AGENT_INVOCATION_BASE_SCHEMA.extend({
-    interactions: z.record(z.string(), MCP_INTERACTION_SCHEMA),
+    interactions: z.record(z.string(), interactionJsonSchema),
     pollAfterMs: z.number().int().nonnegative(),
     result: z.json().optional(),
     status: z.literal("authorization_required"),

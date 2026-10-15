@@ -9,14 +9,14 @@ import { callOutcomeOf } from "#harness/call-outcome.js";
 // it started, and how it settled. Calls never reach the wire any other way.
 
 /** What a call invokes: a tool, an agent, or the skill it loads, with its label. */
-export function capabilityOf(action: RuntimeActionRequest, title?: string): Capability {
+export function capabilityOf(action: RuntimeActionRequest, label?: string): Capability {
   const capability: { -readonly [K in keyof Capability]: Capability[K] } =
     action.kind === "load-skill"
       ? { kind: "skill", name: action.name }
       : action.kind === "subagent-call" || action.kind === "remote-agent-call"
         ? { kind: "agent", name: action.name }
         : { kind: "tool", name: action.toolName };
-  if (title !== undefined) capability.title = title;
+  if (label !== undefined) capability.label = label;
   return capability;
 }
 
@@ -25,7 +25,7 @@ export function callRequested(input: {
   readonly action: RuntimeActionRequest;
   readonly owner: CallOwner;
   readonly scope?: Scope;
-  readonly title?: string;
+  readonly label?: string;
   readonly inputError?: ErrorInfo;
 }): FactOf<"call.requested"> {
   const { action } = input;
@@ -33,7 +33,7 @@ export function callRequested(input: {
     -readonly [K in keyof FactOf<"call.requested">["data"]]: FactOf<"call.requested">["data"][K];
   } = {
     callId: action.callId,
-    capability: capabilityOf(action, input.title),
+    capability: capabilityOf(action, input.label),
     owner: input.owner,
   };
   if (input.inputError === undefined) data.input = toJsonValue(action.input);
@@ -62,7 +62,7 @@ export function callSettledFrom(
   result: RuntimeActionResult,
   options: {
     readonly scope?: Scope;
-    readonly title?: string;
+    readonly label?: string;
     readonly rejected?: boolean;
     readonly cause?: Cause;
   } = {},
@@ -81,19 +81,19 @@ export function callSettledFrom(
   if (error !== undefined) data.error = error;
   if (options.cause !== undefined) data.cause = options.cause;
   else if (rejected) data.cause = { policy: "approval" };
-  if (options.title !== undefined) data.title = options.title;
+  if (options.label !== undefined) data.label = options.label;
   return options.scope === undefined
     ? { data, type: "call.settled" }
     : { data, scope: options.scope, type: "call.settled" };
 }
 
 /** A call's partial output, as progress. */
-export function callProgress(callId: string, output: unknown, title?: string): SessionEvent {
-  const data: { callId: string; output: JsonValue; title?: string } = {
+export function callProgress(callId: string, output: unknown, label?: string): SessionEvent {
+  const data: { callId: string; output: JsonValue; label?: string } = {
     callId,
     output: toJsonValue(output),
   };
-  if (title !== undefined) data.title = title;
+  if (label !== undefined) data.label = label;
   return { data, type: "call.progress" };
 }
 

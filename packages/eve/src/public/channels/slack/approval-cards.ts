@@ -32,7 +32,7 @@ import type {
   SlackEventContext,
   SlackPendingApprovalCard,
 } from "#public/channels/slack/slackChannel.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
 const log = createLogger("slack.defaults");
 
@@ -51,8 +51,8 @@ export function defaultInteractionsHandler(
 ) => Promise<void> {
   return async (data, ctx) => {
     const { channel } = ctx;
-    const directMessageRequests: AskedInteraction[] = [];
-    const threadRequests: AskedInteraction[] = [];
+    const directMessageRequests: Interaction[] = [];
+    const threadRequests: Interaction[] = [];
     for (const request of data.requests) {
       const destination =
         approvalChannel === undefined ? "thread" : await approvalChannel(request, ctx);
@@ -79,7 +79,7 @@ export function defaultInteractionsHandler(
       recordApprovalCards(channel.state, [request], card);
       try {
         const announcement = await channel.thread.post(
-          `Waiting on ${request.kind === "approval" ? "approval" : "a response"} from <@${reviewer}>…`,
+          `Waiting on ${request.request.kind === "approval" ? "approval" : "a response"} from <@${reviewer}>…`,
         );
         if (announcement.id) {
           recordApprovalCards(channel.state, [request], {
@@ -98,7 +98,7 @@ export function defaultInteractionsHandler(
 }
 
 async function postPublicInteractions(
-  requests: readonly AskedInteraction[],
+  requests: readonly Interaction[],
   channel: SlackEventContext,
 ): Promise<void> {
   const detailsByRequest = new Map<string, string>();
@@ -124,13 +124,13 @@ async function postPublicInteractions(
 
 function recordApprovalCards(
   state: SlackChannelState,
-  requests: readonly AskedInteraction[],
+  requests: readonly Interaction[],
   card: SlackPendingApprovalCard,
 ): void {
   if (!card.messageTs) return;
   const cards = { ...state.pendingApprovalCards };
   for (const request of requests) {
-    if (request.kind === "approval") cards[request.interactionId] = card;
+    if (request.request.kind === "approval") cards[request.interactionId] = card;
   }
   state.pendingApprovalCards = cards;
 }
@@ -221,14 +221,14 @@ async function settleRequest(
  * Slack's block-count cap. Tool input details are posted before interactive
  * approval controls so Slack's callback body cannot grow with the input.
  */
-function buildInteractionPosts(requests: readonly AskedInteraction[]): Array<{
+function buildInteractionPosts(requests: readonly Interaction[]): Array<{
   blocks: unknown[];
   kind: "controls" | "details";
-  requests: AskedInteraction[];
+  requests: Interaction[];
   text: string;
 }> {
-  const details: Array<SlackInteractionPostPart & { readonly request: AskedInteraction }> = [];
-  const controls: Array<SlackInteractionPostPart & { readonly request: AskedInteraction }> = [];
+  const details: Array<SlackInteractionPostPart & { readonly request: Interaction }> = [];
+  const controls: Array<SlackInteractionPostPart & { readonly request: Interaction }> = [];
   for (const request of requests) {
     const parts = renderInteractionPostParts(request);
     if (parts.details) details.push({ ...parts.details, request });
@@ -242,10 +242,9 @@ function buildInteractionPosts(requests: readonly AskedInteraction[]): Array<{
 }
 
 function groupInteractionPostParts(
-  parts: readonly (SlackInteractionPostPart & { readonly request: AskedInteraction })[],
-): Array<{ blocks: unknown[]; requests: AskedInteraction[]; text: string }> {
-  const groups: Array<{ blocks: unknown[]; fallbacks: string[]; requests: AskedInteraction[] }> =
-    [];
+  parts: readonly (SlackInteractionPostPart & { readonly request: Interaction })[],
+): Array<{ blocks: unknown[]; requests: Interaction[]; text: string }> {
+  const groups: Array<{ blocks: unknown[]; fallbacks: string[]; requests: Interaction[] }> = [];
   for (const part of parts) {
     const current = groups.at(-1);
     if (current && current.blocks.length + part.blocks.length <= SLACK_MAX_BLOCKS_PER_MESSAGE) {

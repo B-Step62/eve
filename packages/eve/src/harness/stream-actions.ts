@@ -49,7 +49,7 @@ export function createProviderStreamActionBatch(input: {
         action: request.action,
         owner: { runId },
         scope,
-        title: request.presentationLabel,
+        label: request.presentationLabel,
       }),
       callStarted(request.action.callId, { clearedBy: { policy: "provider" }, scope }),
     ]);

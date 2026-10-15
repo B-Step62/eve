@@ -29,7 +29,7 @@ import type {
 import { splitGitHubCommentBody } from "#public/channels/github/limits.js";
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import type { RuntimeSandboxSession } from "#shared/sandbox-session.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
 const log = createLogger("github.defaults");
 
@@ -94,7 +94,7 @@ interface GitHubDefaultEventOptions {
 
 /** Builds GitHub's built-in event handlers for acknowledgement and terminal output. */
 export function createDefaultEvents(options: GitHubDefaultEventOptions = {}): GitHubChannelEvents {
-  async function showPrompt(channel: GitHubEventContext, request: AskedInteraction): Promise<void> {
+  async function showPrompt(channel: GitHubEventContext, request: Interaction): Promise<void> {
     const sections = [renderInteraction(request)];
     const replyInstruction = renderReplyInstruction(request, await options.botName?.());
     if (replyInstruction !== undefined) sections.push(replyInstruction);
@@ -152,9 +152,9 @@ export function createDefaultEvents(options: GitHubDefaultEventOptions = {}): Gi
   };
 }
 
-function renderInteraction(request: AskedInteraction): string {
-  const body = renderTextInteraction(request);
-  return request.allowFreeform === true
+function renderInteraction(request: Interaction): string {
+  const body = renderTextInteraction(request.request);
+  return request.request.allowFreeform === true
     ? `${body}\n\nYou can also reply with a custom answer.`
     : body;
 }
@@ -162,12 +162,12 @@ function renderInteraction(request: AskedInteraction): string {
 // The default onComment hook only dispatches comments that @mention the bot,
 // so a prompt without this instruction invites replies that are silently ignored.
 function renderReplyInstruction(
-  request: AskedInteraction,
+  request: Interaction,
   botName: string | undefined,
 ): string | undefined {
   const name = botName?.trim();
   if (!name) return undefined;
-  const example = request.options?.[0]?.label ?? "<your answer>";
+  const example = request.request.options?.[0]?.label ?? "<your answer>";
   return `Answer by mentioning me in a reply, e.g. \`@${name} ${example}\`.`;
 }
 

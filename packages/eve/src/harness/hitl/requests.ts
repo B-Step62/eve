@@ -166,7 +166,7 @@ function readActiveCandidates(
   return Object.fromEntries(
     Object.entries(candidates).map(([candidateId, candidate]) => [
       candidateId,
-      { ...candidate, decision: candidate.decision === "cancel" ? "cancel" : "approve" },
+      { ...candidate, decision: candidate.decision === "deny" ? "deny" : "approve" },
     ]),
   );
 }

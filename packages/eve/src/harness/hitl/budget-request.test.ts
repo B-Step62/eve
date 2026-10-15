@@ -31,13 +31,13 @@ describe("createSessionLimitContinuationRequest", () => {
         options: [
           {
             description: "Grant a fresh token budget",
-            id: "continue",
+            id: "approve",
             label: "Approve",
             style: "primary",
           },
           {
             description: "Stop now",
-            id: "stop",
+            id: "deny",
             label: "Stop",
             style: "danger",
           },
@@ -113,9 +113,9 @@ describe("createSessionLimitContinuationRequest", () => {
 });
 
 describe("limitDecision", () => {
-  it("grants on continue, declines on stop, and decides nothing otherwise", () => {
-    expect(limitDecision({ optionId: "continue" })).toEqual({ granted: true });
-    expect(limitDecision({ optionId: "stop" })).toEqual({ granted: false });
+  it("grants on approve, declines on deny, and decides nothing otherwise", () => {
+    expect(limitDecision({ optionId: "approve" })).toEqual({ granted: true });
+    expect(limitDecision({ optionId: "deny" })).toEqual({ granted: false });
     expect(limitDecision({ text: "sure" })).toBeUndefined();
   });
 });

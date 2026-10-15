@@ -110,7 +110,7 @@ export interface ApprovalResponseAuth {
 
 /** Submitted response passed to an approval response policy. */
 export interface ApprovalResponse {
-  readonly decision: "approve" | "cancel";
+  readonly decision: "approve" | "deny";
   /**
    * Who submitted the response: the authenticated principal, including its
    * `principalId`, `principalType`, `authenticator`, and `attributes`.

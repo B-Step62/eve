@@ -8,12 +8,7 @@ export {
 } from "#react/use-eve-agent.js";
 
 export { openConversationInteractions } from "#client/conversation-state.js";
-export {
-  signInEnding,
-  type AskedCall,
-  type AskedInteraction,
-  type ReaderInteraction,
-} from "#protocol/session-reader.js";
+export { signInEnding, type AskedCall, type Interaction } from "#protocol/session-reader.js";
 
 export type {
   AgentObservation,

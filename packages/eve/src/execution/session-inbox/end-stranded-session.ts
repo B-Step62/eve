@@ -1,3 +1,5 @@
+import type { SessionControlIdentity } from "#channel/types.js";
+import { principalOf } from "#execution/session/delivery-facts.js";
 import { EVE_SESSION_ATTRIBUTE, EVE_TYPE_ATTRIBUTE } from "#execution/eve-workflow-attributes.js";
 import {
   logicalSessionInboxToken,
@@ -59,7 +61,10 @@ export async function endStrandedSession(
   /** The address the caller used; a session address names the session outright. */
   address: string | SessionInboxAddress,
   trigger: StrandedSessionEndTrigger,
+  control?: SessionControlIdentity,
 ): Promise<string> {
+  if (trigger === "reset" && control === undefined)
+    throw new Error("A stranded reset requires its control delivery identity.");
   const sessionId =
     typeof address === "string" ? await resolveStrandedSessionId(stranded) : address.sessionId;
   const { ownerRunId } = stranded;
@@ -68,7 +73,7 @@ export async function endStrandedSession(
   // Listed before cancelling: a cancelled run's hooks are disposed and no longer listed.
   const ownedTokens = await listOwnedSessionTokens(world, ownerRunId);
   // Publish before cancellation can expire zero-retention data.
-  await publishTerminalEvent(sessionId, trigger);
+  await publishTerminalEvent(sessionId, trigger, control);
   // The session id is the original run; after a handoff it parks as the stream anchor.
   await cancelRuns(world, [ownerRunId, sessionId], "Session ended: its deployment was retired");
   await waitForSessionHooksRelease(
@@ -110,20 +115,40 @@ async function assertStillServesSession(sessionId: string, ownerRunId: string): 
 async function publishTerminalEvent(
   sessionId: string,
   trigger: StrandedSessionEndTrigger,
+  control?: SessionControlIdentity,
 ): Promise<void> {
   const writer = getRun(sessionId).getWritable<Uint8Array>().getWriter();
   const publication = (async () => {
     // A replacement reading this history skips it when a reset ended the session.
     const ended: SessionEvent = {
       data: {
-        cause: { policy: strandedEndPolicy(trigger) },
+        cause:
+          control === undefined
+            ? { policy: strandedEndPolicy(trigger) }
+            : { deliveryId: control.deliveryId },
         error: { code: "session_stranded", message: "This session is no longer available." },
         outcome: "failed",
       },
       type: "session.ended",
     };
+    const facts: SessionEvent[] = [];
+    if (control !== undefined) {
+      const principal = principalOf(control.auth);
+      facts.push(
+        {
+          type: "delivery.admitted",
+          data: {
+            deliveryId: control.deliveryId,
+            source: { control: "reset" },
+            ...(principal !== undefined && { principal }),
+          },
+        },
+        { type: "delivery.settled", data: { deliveryId: control.deliveryId, outcome: "applied" } },
+      );
+    }
+    facts.push(ended);
     await writer.write(
-      new TextEncoder().encode(encodeLine({ at: new Date().toISOString(), facts: [ended] })),
+      new TextEncoder().encode(encodeLine({ at: new Date().toISOString(), facts })),
     );
     await writer.close();
     return true;

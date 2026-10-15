@@ -16,7 +16,7 @@ import { activeTurn, runTurn } from "#protocol/session-projection/selectors.js";
 import type { SessionPreviews, SessionView } from "#protocol/session-projection/tables.js";
 import {
   callPlace,
-  readerInteraction,
+  interaction,
   readerTasks,
   readerTurns,
   interactionPlace,
@@ -197,7 +197,7 @@ export class Conversation {
   #interactions(): Readonly<Record<string, ConversationInteraction>> {
     const interactions: Record<string, ConversationInteraction> = {};
     for (const interactionId of Object.keys(this.view.interactions)) {
-      const shown = readerInteraction(this.view, interactionId);
+      const shown = interaction(this.view, interactionId);
       if (shown === undefined) continue;
       const answer = this.#responded[interactionId];
       interactions[interactionId] =

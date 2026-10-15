@@ -51,7 +51,7 @@ export function assistantMessages(
   // An approval or a question about one of the session's calls shows on that call.
   const onCall = new Map<string, ConversationInteraction>();
   for (const interaction of Object.values(interactions)) {
-    const row = view.interactions[interaction.request.interactionId];
+    const row = view.interactions[interaction.interactionId];
     const callId = row !== undefined && "callId" in row.subject ? row.subject.callId : undefined;
     const kind = interaction.request.kind;
     if (
@@ -162,12 +162,12 @@ function toolPart(
   preview: CallPreview | undefined,
   interaction: ConversationInteraction | undefined,
 ): EveToolPart {
-  const { kind, name, title } = row.capability;
+  const { kind, name, label } = row.capability;
   const running = row.status !== "settled";
   const part: Mutable<EveToolPart> = {
     callId: row.callId,
     kind,
-    label: row.title ?? (running ? preview?.title : undefined) ?? title ?? displayTitle(name),
+    label: row.label ?? (running ? preview?.label : undefined) ?? label ?? displayTitle(name),
     name,
     status: row.status,
     type: "tool",

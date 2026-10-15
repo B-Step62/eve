@@ -52,14 +52,14 @@ describe("tuiSessionData", () => {
         type: "usage.recorded",
       },
       call("call_1", "run_1", "Searching"),
-      { data: { callId: "call_1", outcome: "completed", title: "Searched" }, type: "call.settled" },
+      { data: { callId: "call_1", outcome: "completed", label: "Searched" }, type: "call.settled" },
       call("call_2", "run_1"),
       {
         data: { callId: "call_2", cause: { policy: "task-limit" }, outcome: "rejected" },
         type: "call.settled",
       },
       call("call_3", "run_1", "Looking"),
-      { data: { callId: "call_3", output: {}, title: "Reading page 2" }, type: "call.progress" },
+      { data: { callId: "call_3", output: {}, label: "Reading page 2" }, type: "call.progress" },
       { data: { owner: { turnId: "turn_1" }, runId: "run_2" }, type: "model.requested" },
       {
         data: { kind: "model", owner: { runId: "run_2" }, usage: usage(25) },

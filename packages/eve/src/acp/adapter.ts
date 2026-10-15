@@ -21,7 +21,7 @@ import { Client, ClientError } from "#client/index.js";
 import type { ClientOptions, SendTurnInput, SendTurnPayload } from "#client/types.js";
 import { isFactType } from "#protocol/session-events/catalog.js";
 import { emptySessionView, foldReceivedEvent } from "#protocol/session-projection/fold.js";
-import { askedInteraction, waitingOn, type AskedInteraction } from "#protocol/session-reader.js";
+import { interaction, waitingOn, type Interaction } from "#protocol/session-reader.js";
 import { callOutputSource } from "#protocol/session-projection/selectors.js";
 import type { SessionView } from "#protocol/session-projection/tables.js";
 import { actionLabel } from "#shared/action-label.js";
@@ -230,7 +230,7 @@ export class EveAcpAdapter {
           await this.#cancelActive(session);
         }
 
-        const interactions: AskedInteraction[] = [];
+        const interactions: Interaction[] = [];
         let cancelled = false;
         let failure: ErrorInfo | undefined;
         let unsupportedEvent: RequestError | undefined;
@@ -250,8 +250,9 @@ export class EveAcpAdapter {
           await this.#projectEvent(params.sessionId, session, event, client);
           // The projection rebuilds the request with the call it's about.
           if (event.type === "interaction.opened") {
-            const request = askedInteraction(session.view, event.data.interactionId);
-            if (request !== undefined && request.kind !== "sign-in") interactions.push(request);
+            const request = interaction(session.view, event.data.interactionId);
+            if (request !== undefined && request.request.kind !== "sign-in")
+              interactions.push(request);
           }
         }
 
@@ -465,7 +466,7 @@ export class EveAcpAdapter {
         if (capability.kind === "tool" && isTaskControlTool(capability.name)) return;
         const toolCall: ToolCall = {
           toolCallId: callId,
-          title: capability.title ?? displayTitle(capability.name),
+          title: capability.label ?? displayTitle(capability.name),
           kind: "other",
           status: "pending",
           rawInput: input,
@@ -482,12 +483,12 @@ export class EveAcpAdapter {
   async #requestInput(
     sessionId: string,
     session: AcpSession,
-    request: AskedInteraction,
+    request: Interaction,
     client: AgentContext,
     signal: AbortSignal,
   ): Promise<Answer> {
     const cancellationSignal = AbortSignal.any([signal, session.active!.outboundController.signal]);
-    if (request.display === "confirmation") {
+    if (request.request.display === "confirmation") {
       const approveId = `${request.interactionId}:approve`;
       const denyId = `${request.interactionId}:deny`;
       const toolCall =
@@ -533,7 +534,7 @@ export class EveAcpAdapter {
       {
         mode: "form",
         sessionId,
-        message: request.prompt,
+        message: request.request.prompt,
         requestedSchema: {
           type: "object",
           properties: { [ANSWER_FIELD]: property },
@@ -554,8 +555,8 @@ export class EveAcpAdapter {
         "ACP elicitation response must contain a string answer",
       );
     }
-    if (request.display === "select") {
-      if (!request.options?.some((option) => option.id === answer)) {
+    if (request.request.display === "select") {
+      if (!request.request.options?.some((option) => option.id === answer)) {
         throw RequestError.invalidParams({ answer }, "Unknown eve question option");
       }
       return { interactionId: request.interactionId, optionId: answer };
@@ -597,8 +598,8 @@ function promptContent(params: PromptRequest): Array<{ type: "text"; text: strin
   return content;
 }
 
-function toolCallForAsked(request: AskedInteraction): ToolCall {
-  const name = request.call?.name ?? request.kind;
+function toolCallForAsked(request: Interaction): ToolCall {
+  const name = request.call?.name ?? request.request.kind;
   return {
     toolCallId: request.call?.callId ?? request.interactionId,
     title: actionLabel(
@@ -611,20 +612,24 @@ function toolCallForAsked(request: AskedInteraction): ToolCall {
   };
 }
 
-function elicitationProperty(request: AskedInteraction) {
-  if (request.display === "select" && request.allowFreeform !== true && request.options?.length) {
+function elicitationProperty(request: Interaction) {
+  if (
+    request.request.display === "select" &&
+    request.request.allowFreeform !== true &&
+    request.request.options?.length
+  ) {
     return {
       type: "string" as const,
-      title: request.prompt,
-      oneOf: request.options.map((option) => ({
+      title: request.request.prompt,
+      oneOf: request.request.options.map((option) => ({
         const: option.id,
         title: option.label,
         description: option.description,
       })),
     };
   }
-  if (request.display === "text" && request.allowFreeform !== false) {
-    return { type: "string" as const, title: request.prompt, minLength: 1 };
+  if (request.request.display === "text" && request.request.allowFreeform !== false) {
+    return { type: "string" as const, title: request.request.prompt, minLength: 1 };
   }
   throw unsupported("This eve question shape cannot be represented by ACP form elicitation.");
 }
@@ -668,7 +673,7 @@ function errorMessage(error: unknown): string {
 /** A result's completion label retitles its call, such as a search reporting what it found. */
 function resultTitle(event: SessionStreamEvent, callId: string): { title?: string } {
   const title =
-    event.type === "call.settled" && event.data.callId === callId ? event.data.title : undefined;
+    event.type === "call.settled" && event.data.callId === callId ? event.data.label : undefined;
   return title === undefined ? {} : { title };
 }
 

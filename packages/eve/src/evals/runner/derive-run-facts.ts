@@ -3,7 +3,7 @@ import { emptySessionView, foldReceivedEvent } from "#protocol/session-projectio
 import { callOutputSource } from "#protocol/session-projection/selectors.js";
 import type { CallRow } from "#protocol/session-projection/tables.js";
 import { ownerOf } from "#protocol/session-projection/tree.js";
-import { askedInteraction, type AskedInteraction } from "#protocol/session-reader.js";
+import { interaction, type Interaction } from "#protocol/session-reader.js";
 import { isJsonObjectValue } from "#shared/json.js";
 import type {
   EveEvalDerivedFacts,
@@ -36,7 +36,7 @@ export function deriveRunFacts(
   // The turn each call happened in, in the order the segment first reports it.
   const callTurns = new Map<string, number>();
   const agentCalls = new Map<string, number>();
-  const interactions: AskedInteraction[] = [];
+  const interactions: Interaction[] = [];
   const turnIndexes = new Map<string, number>();
   const models = new Set<string>();
   let messageCount = 0;
@@ -67,7 +67,7 @@ export function deriveRunFacts(
         break;
       }
       case "interaction.opened": {
-        const request = askedInteraction(view, event.data.interactionId);
+        const request = interaction(view, event.data.interactionId);
         if (request !== undefined) interactions.push(request);
         break;
       }

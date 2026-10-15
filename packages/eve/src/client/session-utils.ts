@@ -2,15 +2,15 @@ import type { SessionEvent } from "#protocol/session-event.js";
 import type { ErrorInfo } from "#protocol/session-events/envelope.js";
 import { emptySessionView, foldReceivedEvent } from "#protocol/session-projection/fold.js";
 import { openInteractions } from "#protocol/session-projection/selectors.js";
-import { askedInteraction } from "#protocol/session-reader.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import { interaction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 
 /** What one response's events say, for a reader that wants the outcome. */
 interface TurnEventSummary {
   readonly boundary: SessionEvent | undefined;
   readonly failure: ErrorInfo | undefined;
   /** What the response leaves open for people: answers it asks for, and sign-ins. */
-  readonly interactions: readonly AskedInteraction[];
+  readonly interactions: readonly Interaction[];
   /** The reply's text, from the parts `turn.settled.reply` lists. */
   readonly message: string | undefined;
   /** The value of the latest `result` part, whatever its phase. */
@@ -116,8 +116,10 @@ export class ResponseSegment {
     this.#deliveryId = options.deliveryId;
   }
 
-  get interactions(): readonly AskedInteraction[] {
-    return openInteractions(this.#view).flatMap((row) => askedInteraction(this.#view, row) ?? []);
+  get interactions(): readonly Interaction[] {
+    return openInteractions(this.#view).flatMap(
+      (row) => interaction(this.#view, row.interactionId) ?? [],
+    );
   }
 
   get boundary(): SessionEvent | undefined {

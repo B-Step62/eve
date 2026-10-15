@@ -113,8 +113,8 @@ export {
 } from "#public/channels/slack/blocks.js";
 
 export {
-  deriveHitlResponse,
-  HITL_ACTION_PREFIX,
+  answerFromSlackAction,
+  ANSWER_ACTION_PREFIX,
   renderInteractionBlocks,
   type DerivedHitlResponse,
   type SlackHitlAction,

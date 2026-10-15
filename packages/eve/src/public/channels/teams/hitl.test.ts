@@ -11,7 +11,7 @@ import {
   TEAMS_HITL_REQUEST_KIND_KEY,
 } from "#public/channels/teams/hitl.js";
 import { parseTeamsActivity } from "#public/channels/teams/inbound.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 
 describe("Teams HITL helpers", () => {
   it("renders approval tool input in the card and fallback text", () => {
@@ -95,17 +95,22 @@ describe("Teams HITL helpers", () => {
   });
 });
 
-function request(): AskedInteraction {
+function request(): Interaction {
   return {
     call: { callId: "TC", input: {}, name: "deploy" },
-    display: "confirmation",
-    kind: "approval",
-    options: [
-      { id: "approve", label: "Approve", style: "primary" },
-      { id: "cancel", label: "Cancel", style: "danger" },
-    ],
-    prompt: "Approve deploy?",
     interactionId: "REQ",
+    status: "open",
+    turnId: "turn_0",
+    stepIndex: 0,
+    request: {
+      display: "confirmation",
+      kind: "approval",
+      prompt: "Approve deploy?",
+      options: [
+        { id: "approve", label: "Approve", style: "primary" },
+        { id: "cancel", label: "Cancel", style: "danger" },
+      ],
+    },
   };
 }
 

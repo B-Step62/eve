@@ -1,3 +1,4 @@
+import { interactionJson } from "#protocol/interaction-json.js";
 import { failureOf } from "#client/session-utils.js";
 import type { ErrorInfo } from "#protocol/session-events/envelope.js";
 import type { UserContent } from "ai";
@@ -21,16 +22,11 @@ import {
 import type { RouteSessionCreator } from "#internal/nitro/routes/channel-route-context.js";
 import { getRun, getWorld } from "#internal/workflow/runtime.js";
 import { emptySessionView, foldReceivedEvent } from "#protocol/session-projection/fold.js";
-import {
-  openRequests,
-  openSignIns,
-  askedInteraction,
-  readerInteraction,
-} from "#protocol/session-reader.js";
+import { openRequests, openSignIns, interaction } from "#protocol/session-reader.js";
 import { interactionBatches, reply, replyText } from "#protocol/session-projection/selectors.js";
 import type { InteractionRow, SessionView } from "#protocol/session-projection/tables.js";
 import { type Answer, parseAnswers } from "#shared/input.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 import type { JsonValue } from "#shared/json.js";
 
 export class WorkflowAgentInvocationExecution {
@@ -183,7 +179,7 @@ export class WorkflowAgentInvocationExecution {
  * The requests one commit opened, by `interactionId`. An id belongs to one interaction for the
  * session's life, so an answer naming one outside the pending batch can't reach a later one.
  */
-type InputBatch = ReadonlyMap<string, AskedInteraction>;
+type InputBatch = ReadonlyMap<string, Interaction>;
 
 interface InvocationFailure {
   readonly error: ErrorInfo;
@@ -234,7 +230,7 @@ async function readInvocationStream(invocationId: string): Promise<InvocationStr
     (batch): InputBatch =>
       new Map(
         batch.flatMap((row) => {
-          const asked = askedInteraction(view, row);
+          const asked = interaction(view, row.interactionId);
           return asked === undefined ? [] : [[row.interactionId, asked] as const];
         }),
       ),
@@ -261,29 +257,11 @@ function latestResult(view: SessionView): JsonValue | undefined {
   return structured !== undefined ? structured.value : replyText(view, turnId);
 }
 
-/** An open interaction as the invocation API reports it, from what readers render. */
-function invocationInteraction(asked: AskedInteraction): AgentInvocationInteraction {
-  const shown: {
-    -readonly [K in keyof AgentInvocationInteraction]: AgentInvocationInteraction[K];
-  } = { kind: asked.kind, prompt: asked.prompt };
-  if (asked.title !== undefined) shown.title = asked.title;
-  if (asked.options !== undefined)
-    shown.options = asked.options.map(({ description, id, label }) =>
-      description === undefined ? { id, label } : { description, id, label },
-    );
-  if (asked.allowFreeform !== undefined) shown.allowFreeform = asked.allowFreeform;
-  if (asked.display !== undefined) shown.display = asked.display;
-  if (asked.call !== undefined) shown.call = asked.call;
-  if (asked.signIn !== undefined) shown.signIn = asked.signIn;
-  return shown;
-}
-
 function invocationInteractions(
-  entries: Iterable<readonly [string, AskedInteraction | undefined]>,
+  entries: Iterable<readonly [string, Interaction | undefined]>,
 ): AgentInvocationInteractions {
   const shown: Record<string, AgentInvocationInteraction> = {};
-  for (const [id, asked] of entries)
-    if (asked !== undefined) shown[id] = invocationInteraction(asked);
+  for (const [id, asked] of entries) if (asked !== undefined) shown[id] = interactionJson(asked);
   return shown;
 }
 
@@ -296,7 +274,7 @@ function replaysSettledBatch(stream: InvocationStream, responses: readonly Answe
     const { interactionId } = response;
     if (!batch.has(interactionId) || seen.has(interactionId)) return false;
     seen.add(interactionId);
-    const input = readerInteraction(stream.view, interactionId);
+    const input = interaction(stream.view, interactionId);
     if (input?.status !== "settled" || input.answer === undefined) return false;
     if (input.answer.optionId !== response.optionId || input.answer.text !== response.text) {
       return false;
@@ -328,7 +306,9 @@ function projectInvocation(
   if (runStatus === "completed") return { ...base, result, status: "completed" };
   if (stream.signIns.length > 0) {
     const interactions = invocationInteractions(
-      stream.signIns.map((row) => [row.interactionId, askedInteraction(stream.view, row)] as const),
+      stream.signIns.map(
+        (row) => [row.interactionId, interaction(stream.view, row.interactionId)] as const,
+      ),
     );
     return { ...base, interactions, pollAfterMs: 1_000, result, status: "authorization_required" };
   }

@@ -1,4 +1,3 @@
-import type { SessionAuthContext } from "#channel/types.js";
 import type {
   WorkflowToolRunAnswer,
   WorkflowToolRunControlMessage,
@@ -6,19 +5,9 @@ import type {
 import type { WorkflowAskRoute } from "#harness/hitl/relays.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
 import type { Answer } from "#shared/input.js";
-import type { ToolResponder } from "#tools/definition.js";
+import type { Principal } from "#protocol/session-events/envelope.js";
 
-export function toToolResponder(
-  auth: SessionAuthContext | null | undefined,
-): ToolResponder | undefined {
-  return auth === null || auth === undefined
-    ? undefined
-    : {
-        authenticator: auth.authenticator,
-        principalId: auth.principalId,
-        principalType: auth.principalType,
-      };
-}
+export { principalOf } from "#execution/session/delivery-facts.js";
 
 /**
  * Sends the answers the session accepted to the asking run's control hook,
@@ -28,7 +17,7 @@ export function toToolResponder(
 export async function sendWorkflowAskAnswers(
   route: WorkflowAskRoute,
   responses: readonly Answer[] | undefined,
-  responder?: ToolResponder,
+  responder?: Principal,
 ): Promise<void> {
   for (const response of responses ?? []) {
     const { optionId, text } = response;

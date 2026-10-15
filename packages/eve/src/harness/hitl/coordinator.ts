@@ -529,7 +529,7 @@ function appendSettledResponses(
       // An unavailable request answers as cancel, so nothing runs; `answer` reports it unavailable.
       ...missingSettlements.map((settlement) => ({
         interactionId: settlement.requestId,
-        optionId: settlement.outcome === "allowed" ? "approve" : "cancel",
+        optionId: settlement.outcome === "allowed" ? "approve" : "deny",
       })),
     ],
   };
@@ -567,8 +567,7 @@ function deliveryResult(
 
 function toCandidateDecision(optionId: string | undefined): ApprovalCandidateDecision | undefined {
   if (optionId === "approve") return "approve";
-  // ACP's Deny button sends "deny" where eve's own prompts send "cancel".
-  if (optionId === "cancel" || optionId === "deny") return "cancel";
+  if (optionId === "deny") return "deny";
   return undefined;
 }
 

@@ -1,6 +1,6 @@
 import { resolvedPromptLabel } from "#channel/resolved-prompt.js";
 import { optionStyle, type RequestSettlement } from "#channel/interaction-prompts.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 import type { CardChild } from "#compiled/chat/index.js";
 import { Actions, Button, Card, CardText } from "#compiled/chat/index.js";
 
@@ -14,13 +14,15 @@ const FREEFORM_HINT = "Reply with your answer.";
  * request in `resolved` shows its outcome in place of its buttons.
  */
 export function renderInteractions(
-  requests: readonly AskedInteraction[],
+  requests: readonly Interaction[],
   inputActionPrefix: string,
   resolved: Readonly<Record<string, RequestSettlement>> = {},
 ) {
-  const outcome = (request: AskedInteraction) => {
+  const outcome = (request: Interaction) => {
     const resolution = resolved[request.interactionId];
-    return resolution === undefined ? undefined : resolvedPromptLabel(resolution, request.options);
+    return resolution === undefined
+      ? undefined
+      : resolvedPromptLabel(resolution, request.request.options);
   };
   return {
     card: Card({
@@ -28,7 +30,7 @@ export function renderInteractions(
         const label = outcome(request);
         return label === undefined
           ? renderInteraction(request, inputActionPrefix)
-          : [CardText(request.prompt), CardText(label)];
+          : [CardText(request.request.prompt), CardText(label)];
       }),
     }),
     fallbackText: requests
@@ -36,36 +38,36 @@ export function renderInteractions(
         const label = outcome(request);
         return label === undefined
           ? renderInteractionText(request)
-          : `${request.prompt}\n\n${label}`;
+          : `${request.request.prompt}\n\n${label}`;
       })
       .join("\n\n"),
   };
 }
 
 // The SDK's card fallback drops buttons, so the options are numbered instead.
-function renderInteractionText(request: AskedInteraction): string {
-  const options = request.options ?? [];
-  if (options.length === 0) return `${request.prompt}\n\n${FREEFORM_HINT}`;
+function renderInteractionText(request: Interaction): string {
+  const options = request.request.options ?? [];
+  if (options.length === 0) return `${request.request.prompt}\n\n${FREEFORM_HINT}`;
   return [
-    request.prompt,
+    request.request.prompt,
     "",
     ...options.map((option, index) => {
       const description = option.description ? ` - ${option.description}` : "";
       return `${index + 1}. ${option.label}${description}`;
     }),
     "",
-    request.allowFreeform === true
+    request.request.allowFreeform === true
       ? "Reply with a number, or with your own answer."
       : "Reply with a number to choose.",
   ].join("\n");
 }
 
-function renderInteraction(request: AskedInteraction, inputActionPrefix: string) {
-  const children: CardChild[] = [CardText(request.prompt)];
-  if (request.options && request.options.length > 0) {
+function renderInteraction(request: Interaction, inputActionPrefix: string) {
+  const children: CardChild[] = [CardText(request.request.prompt)];
+  if (request.request.options && request.request.options.length > 0) {
     children.push(
       Actions(
-        request.options.map((option) =>
+        request.request.options.map((option) =>
           Button({
             id: encodeInputAction(inputActionPrefix, request.interactionId, option.id),
             label: option.label,
@@ -75,7 +77,8 @@ function renderInteraction(request: AskedInteraction, inputActionPrefix: string)
         ),
       ),
     );
-    if (request.allowFreeform === true) children.push(CardText("Or reply with your own answer."));
+    if (request.request.allowFreeform === true)
+      children.push(CardText("Or reply with your own answer."));
     return children;
   }
   children.push(CardText(FREEFORM_HINT));

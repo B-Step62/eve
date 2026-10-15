@@ -54,6 +54,10 @@ export function decodeSessionInboxPayload(value: unknown): DecodedSessionInbox {
     case "clear":
     case "compact":
     case "reset":
+      if (typeof payload.deliveryId !== "string" || payload.deliveryId.length === 0) {
+        throw new SessionInboxPayloadError("Session controls require a nonempty deliveryId.");
+      }
+      return value as DecodedSessionInbox;
     case "session-timeout":
       return value as DecodedSessionInbox;
     default:

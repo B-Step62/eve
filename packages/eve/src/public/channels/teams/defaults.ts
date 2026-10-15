@@ -84,12 +84,15 @@ async function showTeamsRequests(event: RequestBatch, channel: TeamsHandlerChann
       }),
     );
     if (!posted.id) continue;
-    const card = { activityId: posted.id, prompt: request.prompt };
+    const card = { activityId: posted.id, prompt: request.request.prompt };
     channel.state.pendingPromptCards = {
       ...channel.state.pendingPromptCards,
       [request.interactionId]:
-        request.kind === "question"
-          ? { ...card, options: (request.options ?? []).map(({ id, label }) => ({ id, label })) }
+        request.request.kind === "question"
+          ? {
+              ...card,
+              options: (request.request.options ?? []).map(({ id, label }) => ({ id, label })),
+            }
           : card,
     };
   }

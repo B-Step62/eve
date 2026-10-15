@@ -6,7 +6,7 @@ import {
   signInSettlementOf,
   type RequestSettlement,
 } from "#channel/interaction-prompts.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
 import { createLogger, formatErrorHint } from "#internal/logging.js";
 import { errorHintOf, replyTextOf } from "#public/channels/reply.js";
@@ -89,7 +89,7 @@ export function isTelegramBotMentioned(
 }
 
 async function postTelegramRequests(
-  requests: readonly AskedInteraction[],
+  requests: readonly Interaction[],
   channel: Parameters<NonNullable<TelegramChannelEvents["interaction.opened"]>>[1]["channel"],
 ): Promise<void> {
   for (const request of requests) {

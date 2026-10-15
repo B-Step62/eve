@@ -13,7 +13,7 @@ import type { LinearAgentSessionEvent, LinearUser } from "#public/channels/linea
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import { isTaskControlTool } from "#protocol/task-tools.js";
 import { displayTitle } from "#shared/display-name.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 import type {
   LinearChannelEvents,
   LinearEventContext,
@@ -70,7 +70,7 @@ interface LinearDefaultEventOptions {
 
 /** Built-in Linear event handlers for Agent Activity progress, replies, HITL, and errors. */
 export function createDefaultEvents(options: LinearDefaultEventOptions = {}): LinearChannelEvents {
-  async function showPrompt(channel: LinearEventContext, request: AskedInteraction): Promise<void> {
+  async function showPrompt(channel: LinearEventContext, request: Interaction): Promise<void> {
     await postActivity(
       channel,
       options,
@@ -121,7 +121,7 @@ export function createDefaultEvents(options: LinearDefaultEventOptions = {}): Li
         channel,
         options,
         {
-          action: data.capability.title ?? displayTitle(data.capability.name),
+          action: data.capability.label ?? displayTitle(data.capability.name),
           parameter: actionParameter({ input: data.input }),
           type: "action",
         },

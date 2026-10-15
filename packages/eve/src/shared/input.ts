@@ -58,3 +58,5 @@ export type StrictAnswers<TAnswers extends readonly Answer[]> = TAnswers & {
 export function isAnswer(value: unknown): value is ValidatedAnswer {
   return z.validate(answerSchema, value);
 }
+
+export { APPROVE_OPTION_ID, DENY_OPTION_ID } from "#protocol/interaction-options.js";

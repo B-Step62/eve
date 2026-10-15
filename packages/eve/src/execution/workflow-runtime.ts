@@ -1,3 +1,4 @@
+import { createChannelDeliveryMetadata } from "#channel/delivery-metadata.js";
 import { readRemoteChildBinding } from "#execution/child-binding.js";
 import type { SessionStreamEvent } from "#protocol/session-event.js";
 import { validateToolStubTargets } from "#tool-stubs/validate-targets.js";
@@ -151,6 +152,16 @@ export function createWorkflowRuntime(config: {
     input: RunInput,
     predecessor?: SessionPredecessor,
   ): Promise<RunHandle> => {
+    if (input.input.message !== undefined && input.delivery === undefined) {
+      input = {
+        ...input,
+        delivery: createChannelDeliveryMetadata({
+          channelKind: input.adapter.kind,
+          channelName: input.channelName ?? input.adapter.kind,
+          requestId: input.requestId,
+        }),
+      };
+    }
     const bundle = await getCompiledRuntimeAgentBundle({
       compiledArtifactsSource: config.compiledArtifactsSource,
       nodeId: config.nodeId,
@@ -249,6 +260,7 @@ export function createWorkflowRuntime(config: {
         return getEvents();
       },
       sessionId: run.runId,
+      ...(input.delivery !== undefined && { deliveryId: input.delivery.deliveryId }),
     };
   };
 
@@ -260,7 +272,8 @@ export function createWorkflowRuntime(config: {
     async dispatchContinuation<TCommand extends SessionCommand>(
       input: DispatchContinuationInput<TCommand>,
     ): Promise<SessionCommandResult<TCommand>> {
-      const { command, continuationToken, successor } = input;
+      const { continuationToken, successor } = input;
+      const command = identifyCommand(input.command);
       try {
         return await dispatchWorkflowCommand(continuationToken, command);
       } catch (error) {
@@ -276,9 +289,13 @@ export function createWorkflowRuntime(config: {
           );
         }
         const previousSessionId = await endStrandedSession(error, continuationToken, "message");
-        const started = await startSession(successor, { sessionId: previousSessionId });
+        const started = await startSession(
+          { ...successor, delivery: command.delivery },
+          { sessionId: previousSessionId },
+        );
         return {
           sessionId: started.sessionId,
+          deliveryId: command.delivery?.deliveryId,
           status: "accepted",
         } as SessionCommandResult<TCommand>;
       }
@@ -413,7 +430,7 @@ async function settleStrandedCommand<TCommand extends SessionCommand>(
 ): Promise<SessionCommandResult<TCommand>> {
   switch (command.kind) {
     case "reset": {
-      const previousSessionId = await endStrandedSession(stranded, address, "reset");
+      const previousSessionId = await endStrandedSession(stranded, address, "reset", command);
       return { previousSessionId, status: "reset" } as SessionCommandResult<TCommand>;
     }
     case "send":
@@ -480,11 +497,12 @@ export async function dispatchWorkflowSessionCommand<TCommand extends SessionCom
   input: DispatchSessionInput<TCommand>,
 ): Promise<SessionCommandResult<TCommand>> {
   const address = { sessionId: input.sessionId };
+  const command = identifyCommand(input.command);
   try {
-    return await dispatchWorkflowCommand(address, input.command);
+    return await dispatchWorkflowCommand(address, command);
   } catch (error) {
     if (!(error instanceof StrandedSessionOwnerError)) throw error;
-    return await settleStrandedCommand(address, input.command, error);
+    return await settleStrandedCommand(address, command, error);
   }
 }
 
@@ -667,5 +685,24 @@ function normalizeWorkflowHook(value: unknown): WorkflowHookRecord {
 
   return {
     runId,
+  };
+}
+
+/** Assign the delivery before accepting it, so replay and the sender name the same facts. */
+function identifyCommand<T extends SessionCommand>(command: T): T {
+  if (command.kind !== "send" || command.delivery !== undefined) return command;
+  const channel =
+    command.caller === undefined
+      ? command.schedule === undefined
+        ? "http"
+        : "schedule"
+      : "subagent";
+  return {
+    ...command,
+    delivery: createChannelDeliveryMetadata({
+      channelKind: channel,
+      channelName: channel,
+      requestId: command.requestId,
+    }),
   };
 }

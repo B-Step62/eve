@@ -12,7 +12,7 @@ import {
 } from "#public/channels/discord/inbound.js";
 import { parseAnswer, type ValidatedAnswer } from "#shared/input.js";
 import type { InteractionOption } from "#protocol/session-events/families/interaction.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
 /** Maps Discord component kinds (ACTION_ROW, BUTTON, STRING_SELECT, TEXT_INPUT) to their wire `type` integers used in component payloads. */
 export const DISCORD_COMPONENT_TYPE = {
@@ -50,12 +50,13 @@ interface HitlCustomIdPayload {
  * control applies.
  */
 export function renderInteractionComponents(
-  request: AskedInteraction,
+  request: Interaction,
 ): readonly Readonly<Record<string, unknown>>[] {
-  const options = request.options;
-  const acceptsFreeform = request.allowFreeform === true || !options || options.length === 0;
+  const options = request.request.options;
+  const acceptsFreeform =
+    request.request.allowFreeform === true || !options || options.length === 0;
 
-  if (options && options.length > 0 && request.display === "select") {
+  if (options && options.length > 0 && request.request.display === "select") {
     return [
       {
         components: [

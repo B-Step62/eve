@@ -29,7 +29,7 @@ import {
 } from "#execution/agent-sessions/remote.js";
 import { routeDeliverPayload, type RoutedDeliverPayload } from "#subagents/hitl-proxy.js";
 import { resumeSessionInbox } from "#execution/session-inbox/resume.js";
-import { sendWorkflowAskAnswers, toToolResponder } from "#execution/tools/workflow/answer.js";
+import { sendWorkflowAskAnswers } from "#execution/tools/workflow/answer.js";
 import type { WorkflowAskRoute } from "#harness/hitl/relays.js";
 import { readHitlState } from "#harness/hitl/index.js";
 import { commitSessionStep } from "#execution/publish-session-events.js";
@@ -196,11 +196,7 @@ async function routeProxiedDeliver(
     if (child.workflowAsk !== undefined) {
       const responses = coalesceDeliverPayloads(child.payloads).answers ?? [];
       decided.push(...responses.map((answer) => ({ answer, outcome: "accepted" as const })));
-      await sendWorkflowAskAnswers(
-        child.workflowAsk,
-        responses,
-        toToolResponder(sourceDelivery.auth),
-      );
+      await sendWorkflowAskAnswers(child.workflowAsk, responses, principalOf(sourceDelivery.auth));
     } else {
       const childDelivery: DeliverHookPayload = {
         ...sourceDelivery,

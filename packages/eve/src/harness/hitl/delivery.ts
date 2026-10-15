@@ -2,7 +2,7 @@ import { openRequests } from "#protocol/session-reader.js";
 import { withTypedBindings } from "#harness/response-bindings.js";
 import type { UserContent } from "ai";
 
-import { resolveTextToResponse, resolveTextToResponses } from "#channel/resolve-text.js";
+import { answerFromText, answerFromTexts } from "#channel/resolve-text.js";
 import { coalesceTurnInputs } from "#harness/messages.js";
 import {
   convertStaleResponsesToUserMessage,
@@ -88,7 +88,7 @@ export function resolveTextInput(
   if (stepInput.answers?.some((answer) => batchRequestIds.has(answer.interactionId))) {
     return stepInput;
   }
-  const responses = resolveTextToResponses(text, batch.requests);
+  const responses = answerFromTexts(text, batch.requests);
   if (responses.length === 0) return stepInput;
   return compactInput({
     ...stepInput,
@@ -125,7 +125,7 @@ export function resolveTypedApproval(
     step.requests.some((ask) => ask.interactionId === first?.interactionId),
   );
   if (first === undefined || !parked || first.request.kind !== "approval") return stepInput;
-  const response = resolveTextToResponse(text, first);
+  const response = answerFromText(text, first);
   if (response === undefined) return stepInput;
   return {
     ...stepInput,

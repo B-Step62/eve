@@ -79,7 +79,8 @@ export const defaultEvents: DiscordChannelEvents = {
     const { channel } = ctx;
     const event = requestBatchOf(ctx.view, data);
     for (const request of event?.requests ?? []) {
-      const content = splitDiscordMessageContent(request.prompt)[0] ?? request.prompt;
+      const content =
+        splitDiscordMessageContent(request.request.prompt)[0] ?? request.request.prompt;
       const components = renderInteractionComponents(request);
       const posted = await channel.discord.post({ components, content });
       if (components.length === 0 || !posted.id) continue;
@@ -88,7 +89,7 @@ export const defaultEvents: DiscordChannelEvents = {
         [request.interactionId]: {
           content,
           messageId: posted.id,
-          options: (request.options ?? []).map(({ id, label }) => ({ id, label })),
+          options: (request.request.options ?? []).map(({ id, label }) => ({ id, label })),
         },
       };
     }

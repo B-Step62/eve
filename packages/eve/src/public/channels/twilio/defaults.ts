@@ -20,7 +20,7 @@ import type {
 } from "#public/channels/twilio/twilioChannel.js";
 import type { InteractionOutcome } from "#protocol/session-events/families/interaction.js";
 import { displayProperName } from "#shared/display-name.js";
-import type { AskedInteraction } from "#channel/interaction-prompts.js";
+import type { Interaction } from "#channel/interaction-prompts.js";
 
 /** Default phone-number auth projection for Twilio webhook actors. */
 function defaultTwilioAuth(input: {
@@ -77,7 +77,7 @@ export function defaultOnVoiceTranscription(
 }
 
 // SMS has no buttons, so a reply can only answer the request it sees.
-const prompts = promptQueueEvents((channel: TwilioEventContext, request: AskedInteraction) =>
+const prompts = promptQueueEvents((channel: TwilioEventContext, request: Interaction) =>
   showPrompt(channel, request),
 );
 
@@ -157,14 +157,14 @@ export const defaultEvents: TwilioChannelEvents = {
   },
 };
 
-async function showPrompt(channel: TwilioEventContext, request: AskedInteraction): Promise<void> {
-  const body = renderTextInteraction(request);
-  if ((request.options ?? []).length === 0) {
+async function showPrompt(channel: TwilioEventContext, request: Interaction): Promise<void> {
+  const body = renderTextInteraction(request.request);
+  if ((request.request.options ?? []).length === 0) {
     await channel.twilio.sendMessage(body);
     return;
   }
   const instruction =
-    request.allowFreeform === true
+    request.request.allowFreeform === true
       ? "Reply with a number, or with your own answer."
       : "Reply with a number to choose.";
   await channel.twilio.sendMessage(`${body}\n\n${instruction}`);

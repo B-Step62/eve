@@ -31,8 +31,6 @@ export function admitDeliveries(input: {
     readonly payload: DeliverPayload;
     readonly input: HarnessStepInput | undefined;
   }[];
-  /** The position of the line the admission takes, for ids a delivery arrived without. */
-  readonly position: number;
   /** Whether the session already admitted a delivery, as when it forwarded part of it. */
   readonly admitted?: (deliveryId: string) => boolean;
   readonly channelKind: string;
@@ -45,8 +43,11 @@ export function admitDeliveries(input: {
   for (const { input: stepInput, payload } of input.payloads) {
     const index = delivery.payloads.indexOf(payload);
     const metadata = delivery.deliveryMetadata?.find((entry) => entry.payloadIndex === index);
-    const deliveryId =
-      metadata?.deliveryId ?? `delivery_${String(input.position)}_${String(index)}`;
+    if (metadata === undefined)
+      throw new Error(
+        "Session delivery has no identity. Assign delivery metadata at dispatch before admission.",
+      );
+    const deliveryId = metadata.deliveryId;
     const source: {
       -readonly [K in keyof Extract<DeliverySource, { channel: string }>]: Extract<
         DeliverySource,

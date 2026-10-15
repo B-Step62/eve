@@ -128,3 +128,5 @@ export function isChannel<TChannel extends Channel<any, any, any>>(
 ): channel is InstrumentationChannelForChannel<TChannel> {
   return channel.kind === getChannelInstrumentationKind(target);
 }
+
+export { answerFromText } from "#channel/resolve-text.js";

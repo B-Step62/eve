@@ -78,9 +78,8 @@ export async function admitSessionInboxPayload(
   }
 }
 
-/** The delivery a control arrived as, when its sender named one. */
-export function controlOrigin(command: SessionControlIdentity): ControlOrigin | undefined {
-  if (typeof command.deliveryId !== "string" || command.deliveryId.length === 0) return undefined;
+/** The delivery a control arrived as. */
+export function controlOrigin(command: SessionControlIdentity): ControlOrigin {
   return command.auth === undefined
     ? { deliveryId: command.deliveryId }
     : { auth: command.auth, deliveryId: command.deliveryId };

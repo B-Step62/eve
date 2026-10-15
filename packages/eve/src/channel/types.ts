@@ -214,11 +214,10 @@ export type SessionCommand =
   | ({ readonly kind: "reset"; readonly reason?: string } & SessionControlIdentity);
 
 /**
- * A control is a delivery: its id, and who sent it, so the facts it causes name it. Both are
- * optional for callers that predate them; such a control changes the session without a delivery.
+ * A control is a delivery: its id, and who sent it, so the facts it causes name it.
  */
 export interface SessionControlIdentity {
-  readonly deliveryId?: string;
+  readonly deliveryId: string;
   readonly auth?: SessionAuthContext | null;
 }
 

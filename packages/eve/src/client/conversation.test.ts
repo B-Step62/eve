@@ -36,7 +36,7 @@ function text(partId: string, value: string): SessionEvent {
 const requested: SessionEvent = {
   data: {
     callId: "call_0",
-    capability: { kind: "tool", name: "deploy", title: "Deploying" },
+    capability: { kind: "tool", name: "deploy", label: "Deploying" },
     input: { env: "prod" },
     owner: { runId },
   },
@@ -120,7 +120,7 @@ describe("the conversation", () => {
       requested,
       { data: { callId: "call_0" }, scope, type: "call.started" },
       {
-        data: { callId: "call_0", output: { done: 1 }, title: "Deployed 1 of 2" },
+        data: { callId: "call_0", output: { done: 1 }, label: "Deployed 1 of 2" },
         scope,
         type: "call.progress",
       },
@@ -134,7 +134,7 @@ describe("the conversation", () => {
     observe(
       [
         {
-          data: { callId: "call_0", outcome: "completed", output: { done: 2 }, title: "Deployed" },
+          data: { callId: "call_0", outcome: "completed", output: { done: 2 }, label: "Deployed" },
           scope,
           type: "call.settled",
         },
@@ -178,12 +178,12 @@ describe("the conversation", () => {
       },
     ]);
     expect(tool(conversation)?.interaction).toMatchObject({
-      request: { interactionId: "approval_0" },
+      interactionId: "approval_0",
       status: "open",
     });
     expect(
       assistantParts(conversation).flatMap((part) =>
-        part.type === "interaction" ? [part.request.interactionId] : [],
+        part.type === "interaction" ? [part.interactionId] : [],
       ),
     ).toEqual(["budget_0"]);
   });
@@ -198,7 +198,7 @@ describe("the conversation", () => {
         interactionId: "approval_0",
       }),
     ]);
-    expect(tool(conversation)?.interaction?.request).toMatchObject({
+    expect(tool(conversation)?.interaction).toMatchObject({
       call: { callId: "child_call", name: "rm" },
       interactionId: "child:approval_0",
     });

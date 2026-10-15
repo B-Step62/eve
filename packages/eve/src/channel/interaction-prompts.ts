@@ -15,21 +15,17 @@ import {
   interactionOwner,
 } from "#protocol/session-projection/selectors.js";
 import type { SessionView } from "#protocol/session-projection/tables.js";
-import {
-  askedInteraction,
-  decidingAnswer,
-  type AskedInteraction,
-} from "#protocol/session-reader.js";
+import { interaction, decidingAnswer, type Interaction } from "#protocol/session-reader.js";
 import type { Answer } from "#shared/input.js";
 import { interactionBatches } from "#protocol/session-projection/selectors.js";
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
-export { askedInteraction, signInEnding, type AskedInteraction } from "#protocol/session-reader.js";
+export { interaction, signInEnding, type Interaction } from "#protocol/session-reader.js";
 
 /** One commit's requests: what a person is asked at once. */
 export interface RequestBatch {
-  readonly requests: readonly AskedInteraction[];
+  readonly requests: readonly Interaction[];
   readonly turnId: string;
   /** The task whose run asks. */
   readonly taskId?: string;
@@ -100,7 +96,7 @@ export function requestBatchOf(
   const row = view.interactions[data.interactionId];
   const batch = interactionBatches(view).find((entries) => entries[0] === row);
   if (row === undefined || batch === undefined) return undefined;
-  const requests = batch.flatMap((entry) => askedInteraction(view, entry) ?? []);
+  const requests = batch.flatMap((entry) => interaction(view, entry.interactionId) ?? []);
   if (requests.length === 0) return undefined;
   const owner = interactionOwner(view, row);
   const result: Mutable<RequestBatch> = { requests, turnId: owner.turnId ?? "" };
@@ -116,7 +112,7 @@ export function requestBatchOf(
  * session settles it before anything else; the rest follow the order they opened. Channels that
  * can only show text show this request alone, so a reply answers the request the person sees.
  */
-export function firstOpenRequest(view: SessionView): AskedInteraction | undefined {
+export function firstOpenRequest(view: SessionView): Interaction | undefined {
   // An answer that waits for the rest of its batch answered its request for now.
   const answered = answeredInteractionIds(view);
   const open = Object.values(view.interactions)
@@ -126,7 +122,7 @@ export function firstOpenRequest(view: SessionView): AskedInteraction | undefine
     )
     .sort((a, b) => a.introducedAt - b.introducedAt);
   const first = open.find((row) => row.request.kind === "budget") ?? open[0];
-  return first === undefined ? undefined : askedInteraction(view, first);
+  return first === undefined ? undefined : interaction(view, first.interactionId);
 }
 
 /** A sign-in's prompt, from its `interaction.opened`. */

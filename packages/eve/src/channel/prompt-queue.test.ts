@@ -4,7 +4,7 @@ import { firstOpenRequest } from "#channel/interaction-prompts.js";
 import { promptQueueEvents } from "#channel/prompt-queue.js";
 import type { StoredLine } from "#protocol/session-events/envelope.js";
 import { emptySessionView, foldLines } from "#protocol/session-projection/fold.js";
-import type { AskedInteraction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-reader.js";
 
 const at = "2026-10-09T00:00:00.000Z";
 const turnId = "turn_0";
@@ -85,7 +85,7 @@ describe("showing one request at a time", () => {
 
   it("moves a channel's shown request on when an answer is admitted", async () => {
     const shown: string[] = [];
-    const events = promptQueueEvents(async (_channel, request: AskedInteraction) => {
+    const events = promptQueueEvents(async (_channel, request: Interaction) => {
       shown.push(request.interactionId);
     });
     const channel = { state: {} };
