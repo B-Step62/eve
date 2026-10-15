@@ -17,7 +17,7 @@ export type ConnectionEventWatchMessage =
   /** A delivery that reached the receiver before this run published its subscription. */
   | { readonly kind: "delivery"; readonly payload: ConnectionEventPayload };
 
-/** Connect asks callers to repeat unsubscribe until its cleanup completes. */
+/** Unsubscribe repeats until Connect's cleanup completes, through outages and refusals. */
 const FIRST_UNSUBSCRIBE_RETRY_MS = 5_000;
 const LAST_UNSUBSCRIBE_RETRY_MS = 3_600_000;
 

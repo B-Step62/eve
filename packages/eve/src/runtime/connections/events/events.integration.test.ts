@@ -821,6 +821,12 @@ it.each([
   ["pending", { cleanupStatus: "pending" as const }, "pending"],
   ["complete", { cleanupStatus: "complete" as const }, "done"],
   ["already removed", Object.assign(new Error("Not found"), { status: 404 }), "done"],
+  ["gone", Object.assign(new Error("Gone"), { status: 410 }), "done"],
+  // Cleanup that has not happened keeps the watch, so a later attempt can finish it.
+  ["unauthorized", Object.assign(new Error("Unauthorized"), { status: 401 }), "pending"],
+  ["forbidden", Object.assign(new Error("Forbidden"), { status: 403 }), "pending"],
+  ["unavailable", Object.assign(new Error("Connect unavailable"), { status: 503 }), "pending"],
+  ["unreachable", new Error("fetch failed"), "pending"],
 ])(
   "reads Connect's unsubscribe answer for the watch's run: %s",
   async (_name, answer, expected) => {
@@ -841,21 +847,6 @@ it.each([
     );
   },
 );
-
-it("retries the unsubscribe step when Connect is unavailable", async () => {
-  await watch();
-  vi.mocked(adapter.unsubscribe).mockRejectedValueOnce(
-    Object.assign(new Error("Connect unavailable"), { status: 503 }),
-  );
-  const binding = initial.binding!;
-  await expect(
-    unsubscribeConnectionEventStep({
-      serializedContext: handlerContext(binding, ctx.require(BundleKey)),
-      binding,
-      subscriptionId: "sub_0",
-    }),
-  ).rejects.toThrow("Connect unavailable");
-});
 
 it("records a gap before dispatch and keeps the subscription available for later events", async () => {
   await watch();

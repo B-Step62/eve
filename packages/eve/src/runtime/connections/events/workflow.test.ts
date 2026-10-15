@@ -179,6 +179,21 @@ it("unsubscribes when stopped, and ends only once Connect finishes cleanup", asy
   expect(world.backoffs).toEqual([5_000, 10_000]);
 });
 
+it("keeps the watch through repeated failed unsubscribes until Connect's cleanup completes", async () => {
+  let attempts = 0;
+  world.unsubscribed.mockImplementation(async () => {
+    // Every failed attempt leaves the watch reachable for get and stop.
+    expect(world.owners.has(token)).toBe(true);
+    return ++attempts <= 5 ? "pending" : "done";
+  });
+  const run = connectionEventWorkflow({ binding, serializedContext: {} });
+  await watching();
+  world.resume(token, { kind: "retire" });
+  await run;
+  expect(world.unsubscribed).toHaveBeenCalledTimes(6);
+  expect(world.backoffs).toEqual([5_000, 10_000, 20_000, 40_000, 80_000]);
+});
+
 it("takes a stop that arrives before the subscribe response, then unsubscribes what it created", async () => {
   let respond!: () => void;
   world.subscribed = new Promise((resolve) => (respond = resolve));

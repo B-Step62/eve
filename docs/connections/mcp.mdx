@@ -289,11 +289,14 @@ same idempotency key, so a subscription Connect already created is reused.
 eve keeps no other copy of the binding. Connect owns the subscription's status
 and lifetime; the watch ends at its expiry.
 
-Subscribe is idempotent per intent: the watch `id` is derived from the creator,
-the connection, the event name and its arguments, not from the tool call.
-Watching the same event with the same arguments again, for example after a
-cancelled or timed-out call, returns the existing watch instead of creating a
-second subscription. Once that watch has ended, the same request starts a new one.
+Subscribe is idempotent per intent within the session that subscribed: the
+watch `id` is derived from that session, the creator, the connection, the event
+name and its arguments, not from the tool call. Watching the same event with the
+same arguments again from that session, for example after a cancelled or
+timed-out call, returns the existing watch instead of creating a second
+subscription. The same request from another session creates its own watch,
+because callbacks name the session they came from. Once a watch has ended, the
+same request starts a new one.
 
 Subscriptions belong to their creator and connection, not a conversation session.
 Get and stop take the `id` the subscribe action returned, and accept it from any
@@ -304,7 +307,10 @@ exists. Ending the originating session does not stop the watch. Stop, expiry, or
 upstream termination ends it. Stop returns `status: "stopping"` and hands the
 cancellation to the watch, which calls Connect's unsubscribe and, while Connect
 answers `cleanupStatus: "pending"`, repeats it with a growing durable delay.
-The watch ends once Connect's cleanup completes. An ended watch is not found:
+A failed unsubscribe, such as a Connect outage or refused credentials, is
+repeated the same way. The watch ends only once Connect's cleanup completes or
+Connect no longer has the subscription; until then get reports it and stop can
+be called again. An ended watch is not found:
 get and stop report an unknown subscription.
 
 The receiver verifies Connect's delivery and checks that it names the

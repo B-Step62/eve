@@ -80,9 +80,12 @@ export async function subscribeConnectionEvent(
 }
 
 /**
- * One unsubscribe attempt for a stopped watch. "pending" means Connect is
- * still cleaning up upstream and asks to be called again. A refusal, such as
- * a subscription Connect already removed, leaves nothing to repeat.
+ * One unsubscribe attempt for a stopped watch. "done" only once Connect has
+ * finished cleanup or no longer has the subscription. Anything else, whether
+ * Connect still cleaning up, an outage, refused credentials or a connection a
+ * redeploy removed, is "pending": the watch keeps its hook and repeats the
+ * attempt with its own durable backoff, so Workflow's step retries never
+ * decide when cleanup gives up.
  */
 export async function unsubscribeConnectionEventStep(input: {
   readonly serializedContext: Record<string, unknown>;
@@ -92,7 +95,7 @@ export async function unsubscribeConnectionEventStep(input: {
   "use step";
   const ctx = await deserializeContext(input.serializedContext);
   const resolved = resolveBinding(ctx, input.binding);
-  if (resolved === undefined) return "done";
+  if (resolved === undefined) return "pending";
   try {
     const subscription = await withConnectionEventSpan(
       {
@@ -111,8 +114,7 @@ export async function unsubscribeConnectionEventStep(input: {
     return subscription.cleanupStatus === "pending" ? "pending" : "done";
   } catch (error) {
     const status = readHttpStatus(error);
-    if (status === undefined || !isRefusal(status)) throw error;
-    return "done";
+    return status === 404 || status === 410 ? "done" : "pending";
   }
 }
 
