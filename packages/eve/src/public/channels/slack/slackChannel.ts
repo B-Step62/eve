@@ -1029,7 +1029,7 @@ async function receiveOnSlack(
   const continuationThreadTs = threadTs || crypto.randomUUID();
   const audience =
     receiveTarget.audience === undefined
-      ? await resolveSlackConversationPrivacy({ channelId, raw: undefined, request: slack.request })
+      ? await resolveSlackConversationPrivacy({ channelId, request: slack.request })
       : normalizeChannelAudience(receiveTarget.audience);
   const state = {
     audience,

@@ -1,16 +1,15 @@
 import type { SlackApiResponse } from "#public/channels/slack/api.js";
-
-type SlackConversationPrivacy = "private" | "public" | "unknown";
+import type { ChannelAudience } from "#shared/channel-audience.js";
 
 interface SlackConversationInput {
   readonly channelId: string;
-  readonly raw: Readonly<Record<string, unknown>> | undefined;
+  readonly raw?: Readonly<Record<string, unknown>>;
   readonly request: (operation: string, body: unknown) => Promise<SlackApiResponse>;
 }
 
 export function readSlackConversationPrivacy(
   raw: Readonly<Record<string, unknown>> | undefined,
-): SlackConversationPrivacy {
+): ChannelAudience {
   switch (raw?.channel_type) {
     case "im":
     case "mpim":
@@ -25,7 +24,7 @@ export function readSlackConversationPrivacy(
 
 export async function resolveSlackConversationPrivacy(
   input: SlackConversationInput,
-): Promise<SlackConversationPrivacy> {
+): Promise<ChannelAudience> {
   const eventPrivacy = readSlackConversationPrivacy(input.raw);
   if (eventPrivacy !== "unknown") return eventPrivacy;
 
@@ -42,7 +41,7 @@ export async function isPrivateSlackConversation(input: SlackConversationInput):
   return (await resolveSlackConversationPrivacy(input)) !== "public";
 }
 
-function readConversationInfoPrivacy(response: SlackApiResponse): SlackConversationPrivacy {
+function readConversationInfoPrivacy(response: SlackApiResponse): ChannelAudience {
   if (response.ok !== true || !isRecord(response.channel)) return "unknown";
 
   const channel = response.channel;

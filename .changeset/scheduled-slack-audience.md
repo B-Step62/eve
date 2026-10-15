@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Resolve Slack destination visibility for proactive sends, including static and dynamic schedules, before applying trace policy. Public-channel runs can now record inputs and outputs according to that policy without an explicit audience; failed visibility lookups remain unknown.
+Classify proactive Slack sends, including static and dynamic schedules, so trace policies can capture public-channel inputs and outputs; failed lookups remain unknown. Generated Slack app manifests now request `channels:read`; existing apps must grant that scope and reinstall to enable lookups.
