@@ -355,21 +355,20 @@ it.each([{ ttlMs: 1 }, { ttlMs: 120_000, expiresAt: null }])(
   },
 );
 
-it.each(["available", "filtered", "catalog unavailable", "connection unavailable"])(
+it.each(["available", "provided arguments", "catalog unavailable", "connection unavailable"])(
   "returns subscription results through eve's connection tool entry with MCP %s",
   async (availability) => {
     connection = { ...connection, headers: { account: "alice" } };
-    if (availability === "filtered")
+    if (availability === "provided arguments")
       connection = {
         ...connection,
-        tools: { allow: [] },
         toolCall: { providedArguments: { arguments: () => ({ project: "REMOTE_ONLY" }) } },
       };
     const registry = new ConnectionRegistryImpl([connection]);
     try {
       await contextStorage.run(ctx, async () => {
         const [tool] = await listToolMetadata(
-          connection.connectionName,
+          connection,
           registry.getClient(connection.connectionName),
         );
         const execute = (name: string, input: unknown) =>
@@ -404,6 +403,46 @@ it.each(["available", "filtered", "catalog unavailable", "connection unavailable
           status: "stopping",
         });
         expect(retired.has(created.id)).toBe(true);
+      });
+    } finally {
+      await registry.dispose();
+    }
+  },
+);
+
+it.each([
+  { filter: { block: ["events_unsubscribe"] }, hidden: ["events_unsubscribe"] },
+  { filter: { allow: ["events_get_subscription"] }, hidden: ["subscribe", "events_unsubscribe"] },
+])(
+  "hides and refuses event actions the connection's tool filter excludes: %j",
+  async ({ filter, hidden }) => {
+    connection = { ...connection, headers: { account: "alice" }, tools: filter };
+    const registry = new ConnectionRegistryImpl([connection]);
+    try {
+      await contextStorage.run(ctx, async () => {
+        const unfiltered = await listToolMetadata(
+          { connectionName: connection.connectionName },
+          registry.getClient(connection.connectionName),
+        );
+        const subscribe = unfiltered.find((tool) =>
+          tool.name.startsWith("events_subscribe_"),
+        )!.name;
+        const names = hidden.map((name) => (name === "subscribe" ? subscribe : name));
+        const listed = await listToolMetadata(
+          connection,
+          registry.getClient(connection.connectionName),
+        );
+        for (const name of names) {
+          expect(listed.some((tool) => tool.name === name)).toBe(false);
+          await expect(
+            connectionEntry(registry, connection, name).execute!(
+              { id: "watch", arguments: { project: "ABC" }, ttlMs: TTL_MS },
+              { toolCallId: name, messages: [] },
+            ),
+          ).rejects.toThrow(`has no tool named "${name}"`);
+        }
+        expect(subscriber).not.toHaveBeenCalled();
+        expect(retired.size).toBe(0);
       });
     } finally {
       await registry.dispose();

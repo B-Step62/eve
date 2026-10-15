@@ -329,8 +329,10 @@ conversation session.
 
 This experimental integration supports static root-agent connections with Streamable
 HTTP event discovery. Generated event actions are eve-owned actions, not remote MCP
-tools: `tools.allow`, `tools.block`, and `toolCall.providedArguments` do not apply to
-them. Event discovery failures leave ordinary MCP tools available. Remote tools must
+tools, so `toolCall.providedArguments` does not apply to them. `tools.allow` and
+`tools.block` do: the model finds and calls an event action only if its name passes the
+filter. The actions are `events_get_subscription`, `events_unsubscribe`, and one
+`events_subscribe_<hash>` per event, as listed by search. Event discovery failures leave ordinary MCP tools available. Remote tools must
 not use the generated `events_` action names.
 
 It requires `@vercel/connect@2.5.2` or later for the Connect events bridge. The receiver mounts at

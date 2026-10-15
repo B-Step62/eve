@@ -186,7 +186,7 @@ async function checkInput(
   const client = registry.getClient(connection.connectionName);
   let tools: readonly ConnectionToolMetadata[];
   try {
-    tools = await listToolMetadata(connection.connectionName, client);
+    tools = await listToolMetadata(connection, client);
   } catch (error) {
     // Only the call itself can start the sign-in that makes its tools listable.
     if (isConnectionAuthorizationRequiredError(error)) return { value: input };
@@ -319,10 +319,7 @@ async function toolAnnotations(
   toolName: string,
 ): Promise<ConnectionToolAnnotations | undefined> {
   try {
-    const tools = await listToolMetadata(
-      connection.connectionName,
-      registry.getClient(connection.connectionName),
-    );
+    const tools = await listToolMetadata(connection, registry.getClient(connection.connectionName));
     return tools.find((tool) => tool.name === toolName)?.annotations;
   } catch {
     // Input validation already reported a listing failure; a sign-in the call needs comes later.

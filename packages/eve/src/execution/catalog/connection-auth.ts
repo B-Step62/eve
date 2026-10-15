@@ -7,6 +7,7 @@ import {
 import { getAuthorizationResults } from "#harness/authorization.js";
 import { createLogger } from "#internal/logging.js";
 import type { ConnectionRegistry } from "#runtime/connections/registry-types.js";
+import { passesToolFilter } from "#runtime/connections/mcp-client.js";
 import { resolveConnectionAuthorization } from "#runtime/connections/resolve-authorization.js";
 import {
   createAuthorizationExecution,
@@ -65,7 +66,7 @@ export async function listConnectionTools(
 ): Promise<ConnectionListing> {
   const name = connection.connectionName;
   try {
-    return { tools: await listToolMetadata(name, client) };
+    return { tools: await listToolMetadata(connection, client) };
   } catch (error) {
     if (!isConnectionAuthorizationRequiredError(error)) {
       log.warn("failed to load connection tools", { connection: name, error });
@@ -95,11 +96,14 @@ class ListingTimeoutError extends Error {}
  * share one in-flight listing and take no signal, so this stops waiting rather
  * than cancelling: a late result fills only that client's cache, and the race
  * handles a late rejection. Event discovery runs under the same deadline.
+ * The connection's `tools` filter applies to everything listed, remote tools
+ * and eve's event actions alike, and a call only runs a listed tool.
  */
 export async function listToolMetadata(
-  connectionName: string,
+  connection: Pick<ResolvedConnectionDefinition, "connectionName" | "tools">,
   client: ConnectionClient,
 ): Promise<readonly ConnectionToolMetadata[]> {
+  const { connectionName } = connection;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -111,7 +115,8 @@ export async function listToolMetadata(
     }, LISTING_TIMEOUT_MS);
   });
   try {
-    return await listConnectionMetadata(connectionName, client, deadline);
+    const tools = await listConnectionMetadata(connectionName, client, deadline);
+    return tools.filter((tool) => passesToolFilter(tool.name, connection.tools));
   } finally {
     clearTimeout(timer);
   }
