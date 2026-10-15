@@ -215,7 +215,20 @@ Cancelling the parent turn or the agent task with `eve__task_cancel` also cancel
 
 When the workflow run that opened a remote child finishes, eve sends an authenticated `POST /eve/v1/session/:childSessionId/reset` for it. An agent task's run finishes when the parent session ends. Reset retires the parked remote session and recursively cleans up its descendants. The request uses freshly resolved `headers` and `auth`; failures are logged so an unreachable remote cannot block parent finalization.
 
-The parent names its eve remote agent protocol version when it creates the child, and the remote answers with the version it serves. A remote also serves parents on protocol 1 (eve 0.66 through 0.68), including their approvals and sign-in requests, so upgrade remote agents before their callers; see [Upgrade remote agents before their callers](../tools/tasks-upgrade#upgrade-remote-agents-before-their-callers). A parent accepts a protocol-1 remote's results and failures, but that remote's approvals and sign-in requests don't reach the parent. Any other mismatch fails the call at start with an error naming both versions. A failed _start_ fails the call immediately. After a remote starts, a terminal failure callback fails the call with the remote's error. Terminal callback delivery runs as a durable step on the underlying workflow engine (see [Execution model & durability](../concepts/execution-model-and-durability)). A failed callback POST is rethrown rather than completing the call, so the engine retries it.
+The parent names its remote agent protocol version when it creates the child, and the remote
+answers with the version it serves. This release serves protocols 1 through 3. A protocol-3 remote
+returns results and failures to callers on protocols 1 and 2, but cannot relay approvals,
+questions, or sign-ins to them. A turn that needs a person fails with upgrade guidance instead of
+waiting on an unreachable prompt. Upgrade remote agents before their callers; see
+[Upgrade remote agents before their callers](../tools/tasks-upgrade#upgrade-remote-agents-before-their-callers).
+A protocol-3 parent also accepts earlier remotes' results and failures, but cannot follow their
+live streams or receive their human-input requests. Unsupported versions fail at start with an
+error naming both versions.
+
+A failed start fails the call immediately. After a remote starts, a terminal failure callback
+fails the call with the remote's error. Terminal callback delivery runs as a durable step on the
+underlying workflow engine (see [Execution model & durability](../concepts/execution-model-and-durability)).
+A failed callback POST is rethrown so the engine retries it.
 
 If a remote accepts the create request but its response has an incompatible
 protocol or an unreadable body, the work may have completed. eve stops workflow
