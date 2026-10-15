@@ -1,5 +1,6 @@
 import { createHook, sleep, type HookOptions } from "#compiled/@workflow/core/index.js";
 import { claimHookOwnership, disposeHook, isHookConflictError } from "#execution/hook-ownership.js";
+import { parseJsonObject } from "#shared/json.js";
 import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
 import { connectionEventHookToken } from "#runtime/connections/events/path.js";
 import type { ConnectionEventWatch, EventBinding } from "#runtime/connections/events/state.js";
@@ -65,12 +66,9 @@ export async function connectionEventWorkflow(input: {
   }
 }
 
-/**
- * The binding is JSON, as in the run's input; Workflow's metadata type only
- * rejects it because its auth is declared as an interface.
- */
+/** Normalizes the saved binding before it crosses Workflow's serializable metadata boundary. */
 function watchMetadata(watch: ConnectionEventWatch): HookOptions["metadata"] {
-  return watch as unknown as HookOptions["metadata"];
+  return parseJsonObject(watch) as HookOptions["metadata"];
 }
 
 /** Runs one delivery's callback in its own short run. */

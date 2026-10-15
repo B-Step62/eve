@@ -37,13 +37,13 @@ const binding = {
 const token = connectionEventHookToken(binding.id);
 const bundle = {
   compiledArtifactsSource: { kind: "disk", appRoot: "/virtual/events" },
-} as unknown as CompiledBundle;
+} as CompiledBundle;
 const payload = {
   kind: "connection-event",
   connectionName: "issues",
   bindingId: binding.id,
   delivery: { deliveryId: "delivery-1" },
-} as unknown as ConnectionEventPayload;
+} as ConnectionEventPayload;
 const holdWatch = (ended: boolean) =>
   hooks.set(token, {
     runId: "watch-run",

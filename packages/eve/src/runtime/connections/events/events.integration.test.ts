@@ -203,95 +203,140 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("discovers through the released AI SDK and subscribes through the backend without an event store", async () => {
-  const tracing = eventTracing();
-  tracing.enable();
-  onTestFinished(() => tracing.close());
-  const traceparents: string[] = [];
-  const { createMCPClient } = await vi.importActual<
-    typeof import("#compiled/@ai-sdk/mcp/index.js")
-  >("#compiled/@ai-sdk/mcp/index.js");
-  createClient.mockImplementation(createMCPClient);
-  const methods: string[] = [];
-  const transportFetch: typeof fetch = async (_url, init) => {
-    if (init?.method !== "POST") return new Response(null, { status: 405 });
-    const request = JSON.parse(String(init.body));
-    methods.push(request.method);
-    if (request.id === undefined) return new Response(null, { status: 202 });
-    let result;
-    if (request.method === "initialize") {
-      result = {
-        protocolVersion: "2025-11-25",
-        serverInfo: { name: "test-events", version: "1" },
-        capabilities: { events: {} },
-      };
-    } else if (request.method === "events/list") {
-      traceparents.push(request.params?._meta?.traceparent);
-      result = {
-        events: [
-          {
-            name: "issue.created",
-            delivery: ["webhook"],
-            inputSchema: eventSchema,
-            payloadSchema: { type: "object" },
-          },
-        ],
-      };
-    } else {
-      throw new Error(`Unexpected upstream request: ${request.method}`);
-    }
-    return Response.json({ jsonrpc: "2.0", id: request.id, result });
-  };
-  actions = new ConnectionEventActions(
-    connection,
-    connection.experimental_events!,
-    async () => ({ Authorization: "Bearer test" }),
-    transportFetch,
-  );
-  await watch();
-  expect(methods.filter((method) => method === "events/list")).toHaveLength(2);
-  expect(methods).not.toContain("events/subscribe");
-  const catalogSpans = tracing.exporter
-    .getFinishedSpans()
-    .filter((span) => span.name === "events/list");
-  expect(catalogSpans).toHaveLength(2);
-  expect(traceparents).toEqual(
-    catalogSpans.map((span) => `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`),
-  );
-  expect(catalogSpans.map((span) => span.attributes["mcp.method.name"])).toEqual([
-    "events/list",
-    "events/list",
-  ]);
-  expect(
-    tracing.exporter
+it.each([3_600_000, null])(
+  "discovers through the released AI SDK and subscribes through the backend with ttlMs=%s",
+  async (ttlMs) => {
+    const tracing = eventTracing();
+    tracing.enable();
+    onTestFinished(() => tracing.close());
+    const traceparents: string[] = [];
+    const { createMCPClient } = await vi.importActual<
+      typeof import("#compiled/@ai-sdk/mcp/index.js")
+    >("#compiled/@ai-sdk/mcp/index.js");
+    createClient.mockImplementation(createMCPClient);
+    const methods: string[] = [];
+    const transportFetch: typeof fetch = async (_url, init) => {
+      if (init?.method !== "POST") return new Response(null, { status: 405 });
+      const request = JSON.parse(String(init.body));
+      methods.push(request.method);
+      if (request.id === undefined) return new Response(null, { status: 202 });
+      let result;
+      if (request.method === "initialize") {
+        result = {
+          protocolVersion: "2025-11-25",
+          serverInfo: { name: "test-events", version: "1" },
+          capabilities: { events: {} },
+        };
+      } else if (request.method === "events/list") {
+        traceparents.push(request.params?._meta?.traceparent);
+        result = {
+          events: [
+            {
+              name: "issue.created",
+              delivery: ["webhook"],
+              inputSchema: eventSchema,
+              payloadSchema: { type: "object" },
+            },
+          ],
+        };
+      } else {
+        throw new Error(`Unexpected upstream request: ${request.method}`);
+      }
+      return Response.json({ jsonrpc: "2.0", id: request.id, result });
+    };
+    actions = new ConnectionEventActions(
+      connection,
+      connection.experimental_events!,
+      async () => ({ Authorization: "Bearer test" }),
+      transportFetch,
+    );
+    await watch("watch-1", ttlMs);
+    expect(methods.filter((method) => method === "events/list")).toHaveLength(2);
+    expect(methods).not.toContain("events/subscribe");
+    const catalogSpans = tracing.exporter
       .getFinishedSpans()
-      .find((span) => span.name === "agent.connection.event.subscribe")?.attributes,
-  ).toMatchObject({ "connect.subscription.id": "sub_0", "connect.subscription.status": "active" });
-  expect(subscriber).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ name: "issue.created", arguments: { project: "ABC" } }),
+      .filter((span) => span.name === "events/list");
+    expect(catalogSpans).toHaveLength(2);
+    expect(traceparents).toEqual(
+      catalogSpans.map(
+        (span) => `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`,
+      ),
+    );
+    expect(catalogSpans.map((span) => span.attributes["mcp.method.name"])).toEqual([
+      "events/list",
+      "events/list",
+    ]);
+    expect(
+      tracing.exporter
+        .getFinishedSpans()
+        .find((span) => span.name === "agent.connection.event.subscribe")?.attributes,
+    ).toMatchObject({
+      "connect.subscription.id": "sub_0",
+      "connect.subscription.status": "active",
+    });
+    expect(subscriber).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: "issue.created", arguments: { project: "ABC" }, ttlMs }),
+    );
+    expect(handlers.get(initial.binding!.id)?.subscription.id).toBe("sub_0");
+  },
+);
+
+it.each([120_000, 31_536_000_000, null])(
+  "subscribes with the requested ttlMs=%s and preserves it in the handler's input",
+  async (ttlMs) => {
+    await watch("watch-1", ttlMs);
+    expect(requested[0]).toMatchObject({ ttlMs, idempotencyKey: initial.binding!.id });
+    expect(requested[0]).not.toHaveProperty("expiresAt");
+    expect(initial.binding!.request.ttlMs).toBe(ttlMs);
+    const [tool] = await contextStorage.run(ctx, () => actions.metadata());
+    const { toInputSchema } = await import("#tools/schema.js");
+    const schema = toInputSchema(tool!.inputSchema);
+    expect(
+      await schema["~standard"].validate({ arguments: { project: "ABC" }, ttlMs }),
+    ).not.toHaveProperty("issues");
+  },
+);
+
+it.each([
+  {},
+  { expiresAt: null },
+  { ttlMs: 119_999 },
+  { ttlMs: 120_000.5 },
+  { ttlMs: 31_536_000_001 },
+  { ttlMs: "120000" },
+  { ttlMs: 120_000, expiresAt: null },
+])("rejects invalid subscription input %j before starting a watch", async (lifetime) => {
+  const [tool] = await contextStorage.run(ctx, () => actions.metadata());
+  const input = { arguments: { project: "ABC" }, ...lifetime };
+  const { toInputSchema } = await import("#tools/schema.js");
+  expect(await toInputSchema(tool!.inputSchema)["~standard"].validate(input)).toHaveProperty(
+    "issues",
   );
-  expect(handlers.get(initial.binding!.id)?.subscription.id).toBe("sub_0");
+  await expect(
+    contextStorage.run(ctx, () => actions.execute(tool!.name, input, { callId: "invalid" })),
+  ).rejects.toThrow("Invalid subscription input");
+  expect(subscriber).not.toHaveBeenCalled();
+  expect(handlers.size).toBe(0);
 });
 
-it("subscribes with ttlMs, the lifetime Connect's API accepts", async () => {
-  await watch();
-  expect(requested[0]).toMatchObject({ ttlMs: TTL_MS, idempotencyKey: initial.binding!.id });
-  expect(requested[0]).not.toHaveProperty("expiresAt");
-  const [tool] = await contextStorage.run(ctx, () => actions.metadata());
-  expect(tool!.inputSchema).toMatchObject({ required: ["arguments", "ttlMs"] });
-  await expect(
-    contextStorage.run(ctx, () =>
-      actions.execute(
-        tool!.name,
-        { arguments: { project: "ABC" }, expiresAt: null },
-        {
-          callId: "legacy",
-        },
+it.each([{ ttlMs: 1 }, { ttlMs: 120_000, expiresAt: null }])(
+  "rejects invalid subscription input %j even when the provider schema cannot be validated",
+  async (lifetime) => {
+    eventSchema = { type: "object", properties: { project: { type: "provider-specific" } } };
+    const [tool] = await contextStorage.run(ctx, () => actions.metadata());
+    await expect(
+      contextStorage.run(ctx, () =>
+        actions.execute(
+          tool!.name,
+          { arguments: { project: "ABC" }, ...lifetime },
+          { callId: "invalid" },
+        ),
       ),
-    ),
-  ).rejects.toThrow("ttlMs");
-  expect(subscriber).toHaveBeenCalledTimes(1);
-});
+    ).rejects.toThrow("Invalid subscription input");
+    expect(subscriber).not.toHaveBeenCalled();
+    expect(handlers.size).toBe(0);
+  },
+);
 
 it.each(["available", "filtered", "catalog unavailable", "connection unavailable"])(
   "returns subscription results through eve's connection tool entry with MCP %s",
@@ -365,9 +410,13 @@ it("runs callbacks in the creator's eve context", async () => {
 it("uses eve tool schema defaults and treats format as an annotation for event arguments", async () => {
   eventSchema = {
     type: "object",
-    properties: {
+    $defs: {
       project: { type: "string", format: "email" },
       includeArchived: { type: "boolean", default: false },
+    },
+    properties: {
+      project: { $ref: "#/$defs/project" },
+      includeArchived: { $ref: "#/$defs/includeArchived" },
     },
   };
   await watch();
@@ -383,13 +432,13 @@ function setUser(id: string) {
   });
 }
 const TTL_MS = 3_600_000;
-async function watch(callId = "watch-1") {
+async function watch(callId = "watch-1", ttlMs: number | null = TTL_MS) {
   return contextStorage.run(ctx, async () => {
     const tools = await actions.metadata();
     try {
       return (await actions.execute(
         tools[0]!.name,
-        { arguments: { project: "ABC" }, ttlMs: TTL_MS },
+        { arguments: { project: "ABC" }, ttlMs },
         { callId },
       )) as ManagedEventSubscription & { subscriptionId: string };
     } finally {
