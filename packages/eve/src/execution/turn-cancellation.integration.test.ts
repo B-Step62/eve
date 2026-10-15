@@ -485,8 +485,7 @@ describe("turn cancellation integration", () => {
     60_000,
   );
 
-  // Expected failure until #4904 is fixed: the cancelled turn drops the summary call's usage.
-  it.fails("keeps a compaction's summary call when a compaction.completed hook cancels the turn", async () => {
+  it("keeps a compaction's summary call when a compaction.completed hook cancels the turn", async () => {
     const model = mockModel(({ messages }) =>
       messages.some((message) => message.text.includes("previous checkpoint"))
         ? {
