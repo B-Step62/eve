@@ -1235,7 +1235,7 @@ describe("createToolLoopHarness", () => {
   // Anthropic defers a web search called beside a local tool: the search runs once the local
   // results are in, and its result opens the next response. A request that adds anything after
   // those results ends the turn early and fails with a 400.
-  it.fails("holds a steering message until a deferred web search result arrives", async () => {
+  it("holds a steering message until a deferred web search result arrives", async () => {
     const searchCall = {
       input: { query: "node lts" },
       providerExecuted: true,
