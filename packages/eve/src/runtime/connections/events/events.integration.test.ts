@@ -173,21 +173,17 @@ beforeEach(async () => {
     close: vi.fn(),
     listTools: async () => ({ tools: [] }),
     toolsFromDefinitions: () => ({}),
-    experimental_events:
-      config.experimental_events === undefined
-        ? undefined
-        : {
-            ...config.experimental_events.adapter.createAdapter({ transport: config.transport }),
-            list: async () => ({
-              events: [
-                {
-                  name: `${config.transport.headers.account}.issue.created`,
-                  delivery: ["webhook"],
-                  inputSchema: eventSchema,
-                },
-              ],
-            }),
+    experimental_events: {
+      list: async () => ({
+        events: [
+          {
+            name: `${config.transport.headers.account}.issue.created`,
+            delivery: ["webhook"],
+            inputSchema: eventSchema,
           },
+        ],
+      }),
+    },
   }));
   ctx = new ContextContainer();
   ctx.set(BundleKey, bundle);
