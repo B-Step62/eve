@@ -2,6 +2,12 @@ import type { SlackApiResponse } from "#public/channels/slack/api.js";
 
 type SlackConversationPrivacy = "private" | "public" | "unknown";
 
+interface SlackConversationInput {
+  readonly channelId: string;
+  readonly raw: Readonly<Record<string, unknown>> | undefined;
+  readonly request: (operation: string, body: unknown) => Promise<SlackApiResponse>;
+}
+
 export function readSlackConversationPrivacy(
   raw: Readonly<Record<string, unknown>> | undefined,
 ): SlackConversationPrivacy {
@@ -17,22 +23,23 @@ export function readSlackConversationPrivacy(
   }
 }
 
-export async function isPrivateSlackConversation(input: {
-  readonly channelId: string;
-  readonly raw: Readonly<Record<string, unknown>> | undefined;
-  readonly request: (operation: string, body: unknown) => Promise<SlackApiResponse>;
-}): Promise<boolean> {
+export async function resolveSlackConversationPrivacy(
+  input: SlackConversationInput,
+): Promise<SlackConversationPrivacy> {
   const eventPrivacy = readSlackConversationPrivacy(input.raw);
-  if (eventPrivacy !== "unknown") return eventPrivacy === "private";
+  if (eventPrivacy !== "unknown") return eventPrivacy;
 
   try {
-    const privacy = readConversationInfoPrivacy(
+    return readConversationInfoPrivacy(
       await input.request("conversations.info", { channel: input.channelId }),
     );
-    return privacy === "unknown" || privacy === "private";
   } catch {
-    return true;
+    return "unknown";
   }
+}
+
+export async function isPrivateSlackConversation(input: SlackConversationInput): Promise<boolean> {
+  return (await resolveSlackConversationPrivacy(input)) !== "public";
 }
 
 function readConversationInfoPrivacy(response: SlackApiResponse): SlackConversationPrivacy {

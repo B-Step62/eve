@@ -96,6 +96,14 @@ checks Slack and treats an ambiguous or failed lookup as `private`. The audience
 controls observability content capture, not access to the channel. See
 [Audience](./overview#audience) for the shared channel model.
 
+Proactive sessions, including static and dynamic schedule sends, also check
+Slack's `conversations.info` API before the session starts unless the target
+supplies an explicit `audience`. Your `tracePolicy` receives that audience.
+Public-channel lookups require the bot scope `channels:read`; add it and
+reinstall the app if scheduled public-channel runs omit trace inputs and outputs.
+A failed or ambiguous proactive lookup stays `unknown` without blocking the send;
+trace content and task-card error details remain omitted by default.
+
 ## How the channel handles inbound events
 
 ### Message hooks
@@ -734,7 +742,7 @@ Pass `{ channelId }` as the target to start a new thread. The agent's first post
 | `threadTs`           | Continue an existing thread instead of creating one.                                      |
 | `initialMessage`     | Post a card as the thread root before the agent runs. Cannot be combined with `threadTs`. |
 | `installationTeamId` | Select the app installation workspace when using a function-form bot token.               |
-| `audience`           | Set the destination's visibility when you know it. Defaults to `unknown`.                 |
+| `audience`           | Override the destination's visibility. When omitted, eve looks it up through Slack.       |
 
 The default mention handler lets teammates continue the session by mentioning the app in the thread. To accept replies without a mention, [configure an `onMessage` hook and the required Slack subscriptions and scopes](#continue-conversations-without-repeated-mentions).
 
