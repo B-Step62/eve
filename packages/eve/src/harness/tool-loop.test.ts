@@ -4724,8 +4724,10 @@ describe("createToolLoopHarness", () => {
     expect(events.map((event) => event.type)).not.toContain("session.waiting");
   });
 
-  // #4870: the text completes as tool-call narration, which channels never post.
-  it.fails("completes a root session's text written beside eve__task_wait", async () => {
+  it.each([
+    { delegated: false, finishReason: "stop", session: "completes a root session's" },
+    { delegated: true, finishReason: "tool-calls", session: "hides a delegated session's" },
+  ])("$session text written beside eve__task_wait", async ({ delegated, finishReason }) => {
     const reply = "I've asked for the draft; one moment.";
     const waitToolCall = {
       input: {},
@@ -4749,13 +4751,17 @@ describe("createToolLoopHarness", () => {
       { tasks: [] },
       { callId: "call-task", kind: "tool", name: "research", resumable: false, turnId: "turn_0" },
     );
+    const ctx = new ContextContainer();
+    if (delegated) setDelegatedParent(ctx);
 
-    await runStep(writeTaskTable(createTestSession(), table), { message: "Draft the notes." });
+    await contextStorage.run(ctx, () =>
+      runStep(writeTaskTable(createTestSession(), table), { message: "Draft the notes." }),
+    );
 
     // Channels post only a `message.completed` that isn't tool-call narration.
     expect(events.filter((event) => event.type === "message.completed")).toEqual([
       expect.objectContaining({
-        data: expect.objectContaining({ finishReason: "stop", message: reply }),
+        data: expect.objectContaining({ finishReason, message: reply }),
       }),
     ]);
   });
