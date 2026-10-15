@@ -6,16 +6,18 @@ last_updated: "2026-10-15"
 
 # A smaller public surface for 1.0
 
-eve 1.0 is a compatibility promise: after it, removing or reshaping anything eve exports needs a
-major version. This plan decides what that promise covers before it's made.
+After eve 1.0 releases, removing or reshaping anything eve exports needs a major version. This 
+plan proposes some targeted cleanup of these public exports before it gets hard to change things.
 
-Today eve exports 2,005 names from 84 entry points (`eve`, `eve/client`, `eve/channels/slack`, and
-so on). The docs, the apps in this repository, and the e2e suites use about 450 of them. Most of
-the rest weren't chosen as API. They got exported for one of three reasons:
+Today eve exports 2,005 names from 84 entry points (`eve`, `eve/client`, `eve/channels/slack`, etc). 
+The docs, the apps in this repository, and the e2e suites use about 450 of them. Most of
+the rest weren't deliberately intended as API surface area. They got exported for one of three 
+reasons:
 
 - **The same thing from several places.** `SessionView` can be imported from `eve/events` and
-  from `eve/client`, and `isChannel` from `eve/channels` and from `eve/instrumentation`. Each extra
-  path is another one eve has to keep working.
+  from `eve/client`, and `isChannel` from `eve/channels` and from `eve/instrumentation`. It's
+  not directly harmful but it's messy and confusing, especially as we have some cases where
+  we deliberately export different things with the same name from different paths (e.g. `auto`).
 - **Helpers eve uses internally.** `eve/channels/telegram` exports `editTelegramMessageText`,
   `renderTelegramInteraction`, and `TELEGRAM_HITL_CALLBACK_PREFIX` because the Telegram channel
   uses them, not because an app should.
@@ -24,7 +26,7 @@ the rest weren't chosen as API. They got exported for one of three reasons:
   has five vocabularies across the client, MCP, and the CLI.
 
 The plan cuts the surface to about 1,350 names and one shape per idea. Something left out can
-still be added after 1.0 if apps need it; something left in can't be taken back.
+still be added after 1.0 if apps need it, but we can't take something out retroactively.
 
 ## Background
 
@@ -43,46 +45,14 @@ ending at #4855):
   a budget request.
 
 Changes to the stream and its facts land in the v27 PRs themselves, so v27 never ships a shape
-that this plan changes. Everything else lands as PRs stacked on top of v27, released with it.
+that this plan changes. Everything else lands as PRs stacked on top of v27, released with 1.0.
 
 ## How to read this
 
-[The main changes](#the-main-changes) are the six that most apps will notice, or that are most
-likely to draw disagreement. Each explains what happens today, what changes, and why it's worth
-it. [Smaller changes](#smaller-changes) follow, collapsed. [What 1.0 promises](#what-10-promises)
-and [the numbers](#the-numbers) are at the end.
+[The main changes](#the-main-changes) are the ones that will have the most impact on user code.
+Each explains what happens today, what changes, and why it's useful.
 
-The plan applies a few rules throughout:
-
-- **No thin APIs.** If an API only saves an app a few lines, leave it out: it's easy to add later
-  and hard to remove.
-- **Report what happened, not an interpretation of it.** A field like "is the session waiting?"
-  commits eve to one reading of the facts forever. Expose the facts, and let apps decide.
-- **One import path per name**, the entry point whose docs describe it. The one exception: the
-  framework entries (`eve/react`, `eve/vue`, `eve/svelte`) also re-export the types their hooks
-  return, so a component imports from one place.
-- **Export what an app touches, not what eve uses.** Loader internals, wire constants, and
-  wrappers around platform APIs stay inside the package.
-- **Own the types in eve's signatures.** A public signature doesn't use a type from a peer
-  dependency, which changes with whatever version the app installed.
-
-<details>
-<summary>When a type keeps its exported name</summary>
-
-Unexporting a type doesn't remove it from the contract: any public function that returns it still
-exposes its shape. Only the name goes. That's worth doing when the name itself is the problem
-(it's duplicated, or misleading), but not when apps need to write it down. A type keeps its name
-when:
-
-- a public function returns it, so apps annotate variables with it;
-- apps build standalone values of it, such as shared options, rubrics, or responder functions;
-- a versioned protocol already fixes its shape (agent-info, `eve invoke`'s JSON, MCP).
-
-Without a name, an app that emits `.d.ts` files for a value whose inferred type contains it gets
-a non-portable import into eve's `dist`. Types an app only reads from a context, or writes
-inline, lose their names.
-
-</details>
+[Smaller changes](#smaller-changes) follow, collapsed.
 
 ## The main changes
 
@@ -121,8 +91,8 @@ That's about a dozen result types, each with its own way of saying nothing happe
 (`no_active_turn`, `no_active_session`, `session_not_active`). And once a cancel or reset is
 accepted, nothing tells you when it actually took effect.
 
-**The change.** Every command, on every handle, returns a `Delivery`: the id v27 already gives
-it, the session it went to, and a way to follow it to the end.
+**The change.** Every command, on every handle, returns a `Delivery`: an id, the session it 
+went to, and a way to follow it to the end.
 
 ```ts
 interface Delivery<TOutput = unknown> extends AsyncIterable<SessionStreamEvent> {
@@ -146,10 +116,9 @@ A session that can't accept a command (it has ended, or its inbox isn't ready ye
 throws in this situation, and retries when the inbox isn't ready; channel handles now behave the
 same way.
 
-**Why it's worth it.**
+**Why it's useful.**
 
-- One type to learn instead of a dozen, and the same code works on the client, in a channel
-  route, and in a schedule.
+- The same code works on the client, in a channel route, and in a schedule.
 - Controls become followable. A route that resets a session and then starts a new one can wait for
   the reset to finish instead of racing it.
 - Failure has one path. Today a channel handle throws for a stranded session but returns a status
@@ -165,10 +134,10 @@ same way.
 and a client's child-agent handle) are a `SessionReader`: an `id` and `stream()`. Handles that can
 also send are `SessionOperations`, and they exist only where an authenticated caller is already in
 hand: channel routes, schedules, and the client. No handle gains a power it doesn't have today.
-`ServerSession` goes.
+`ServerSession` is removed.
 
 **One way to read.** Every handle reads with `stream()`, an `AsyncIterable` of events.
-`getEventStream()`, `getLineStream()`, and `getChildBinding()` go. The first read checks the
+`getEventStream()`, `getLineStream()`, and `getChildBinding()` are removed. The first read checks the
 session, so a route can await the first event before it sends its HTTP response and still answer
 a stranded session with an error status.
 
@@ -200,8 +169,8 @@ same server-side retire on every handle. `eve/context`'s read-only `Session` is 
 
 ### 2. Request statuses describe the request
 
-**Today.** The status most apps read is `MessageResult.status`, and it describes the session, not
-your message:
+**Today.** The status most apps read is `MessageResult.status`, which describes the session's
+status, not the message's:
 
 ```ts
 const { status } = await response.result();
@@ -213,8 +182,7 @@ const { status } = await response.result();
 To find out whether your message actually got an answer, you have to inspect `interactions` and
 the stream. Other surfaces answer the same question in their own words: MCP's `agent_*` tools
 report `working`, `input_required`, `authorization_required`, and so on, and `eve invoke` reports
-`running`, `input-required`, `ready`, `failed`, and `authentication-required`. A tool that wraps
-one of them translates by hand.
+`running`, `input-required`, `ready`, `failed`, and `authentication-required`.
 
 **The change.** One status type describes how a request ended, and every surface uses it:
 
@@ -234,42 +202,16 @@ custom UI derives the same answer from the view. MCP keeps its wire names but dr
 `authorization_required`, since a sign-in is an interaction like any other; `eve invoke` uses the
 same five values.
 
-**Why it's worth it.**
+**Why it's useful.**
 
 - Apps get the answer to the question they actually ask ("what happened to my message?") without
   reading the stream.
 - One vocabulary everywhere, so code and docs for one surface apply to the others.
-- It reports what happened. "Is the session waiting?" is an interpretation, and it's why a
-  completed turn and a cancelled one look the same today.
 
 **The migration risk.** Code that compares with `"waiting"` stops compiling, so those spots are
 easy to find. `"completed"` is in both vocabularies with different meanings: today it means the
 session ended, afterwards that the request completed. The upgrade guide calls this out, and
 `sessionEnded` carries the old meaning.
-
-<details>
-<summary>invokeTool's result</summary>
-
-`invokeTool` runs one tool directly, outside any conversation, so it can't pause for a person and
-isn't a request in this sense. Its result uses the same words as a tool call does on the stream:
-
-```ts
-type InvokeToolResult =
-  | { outcome: "completed"; output: unknown; modelOutput: ToolModelOutput }
-  | { outcome: "failed"; error: ErrorInfo }
-  | {
-      outcome: "rejected";
-      reason: string;
-      connections?: readonly string[];
-      cause?: { policy: string };
-    };
-```
-
-`invokeTool` also always emits the call's `call.requested` and `call.settled` instrumentation
-events with the right outcome. Today a call stopped by a missing sign-in is reported as
-completed.
-
-</details>
 
 ### 3. One import path per name
 
@@ -294,10 +236,10 @@ import type { SessionStreamEvent } from "eve/client";
 import { isChannel } from "eve/channels";
 ```
 
-**Why it's worth it.** Each extra path is something eve has to keep working, and moving a type
-later would break every path at once. One path also means one way to write examples, and editors
-stop suggesting a different import in every file. The move is small in practice: across the docs,
-apps, and e2e suites, two imports change.
+**Why it's useful.** We currently intentionally have parts of our public API that export
+the same name with different definitions from different paths. That's totally fine, but
+if we also sometimes export the same object from different paths, it's hard to know when
+a symbol is identical or not.
 
 <details>
 <summary>The other duplicates</summary>
@@ -348,11 +290,10 @@ Helpers stay public when they're documented or useful outside a handler: Slack's
 answer helpers, and card builders; Linear's `callLinearGraphQL` and `createLinearAgentActivity`;
 and the Chat SDK channel's `messageContentOf` and `isNotImplemented`.
 
-**Why it's worth it.** Every exported helper is a signature eve can't change without a major
+**Why it's useful.** Every exported helper is a signature eve can't change without a major
 version, and platform plumbing is exactly what changes most: when Telegram's Bot API adds a
 parameter or Slack changes how it signs requests, eve should be free to follow. Raw-call helpers
-for Telegram, Teams, Discord, Twilio, and GitHub can come back if apps ask for them. Agent Builder
-pins an exact eve version, so its one import moves at its next upgrade.
+for Telegram, Teams, Discord, Twilio, and GitHub can come back if apps ask for them.
 
 <details>
 <summary>Smaller internals</summary>
@@ -407,14 +348,10 @@ defineInstrumentation({
 });
 ```
 
-**Why it's worth it.** A provider that already handles the stream's facts handles these the same
+**Why it's useful.** A provider that already handles the stream's facts handles these the same
 way, and the instrumentation entry goes from about 100 exported names to about 40. The built-in
 OpenTelemetry provider keeps its span names and trace schema 4, so dashboards built on its spans
 don't change; only hand-written providers update their event names.
-
-The provider API is two months old (#1863) and has had four breaking changes since (#2019, #2966,
-#3530, #4398). This one lands inside v27's own instrumentation change (#4695), so providers update
-once.
 
 <details>
 <summary>Every renamed event</summary>
@@ -465,10 +402,8 @@ integration implements by definition.
 
 ## Smaller changes
 
-Each of these is self-contained. Expand one for the details.
-
 <details>
-<summary>Approval policies: same return values, fixed behavior</summary>
+<summary>Approval policies: fixed behavior</summary>
 
 A tool's `approval` policy decides whether a call runs, waits for a person, or is refused. It
 returns the AI SDK 7 approval statuses, and this plan keeps all of them: `"not-applicable"`,
@@ -566,7 +501,7 @@ fact's `source.channel` records the same identity. The alternative, saving every
 its own name, would strand a route-only channel's sessions whenever its file is renamed.
 
 `kindHint`, which registration always overwrites, and the deprecated `metadata().audience`
-projector go.
+projector get removed.
 
 </details>
 
@@ -654,9 +589,7 @@ const live = session.watch();
 Eval sessions, turns, and results also carry the `view`, so `toolCallsOf` goes (`view.calls` has
 every call), and results report `RequestStatus`, `sessionEnded`, `reply`, and `data`. Reporters
 rename `eveParked` to `eveAwaitingInput`, add `eveSessionEnded`, and name agent-call metrics for
-agents; saved queries on the old names need a one-time edit. The judge and mock-model types apps
-only read from a context (`JudgeContext`, `JudgeBatch`, five `MockModel…` field types) lose their
-names; the ones apps write as standalone values, like responders and rubrics, keep them.
+agents; saved queries on the old names need a one-time edit.
 
 </details>
 
@@ -668,15 +601,6 @@ it: `AskedInteraction` from a message result, `ReaderInteraction` from the view,
 `ConversationInteraction` from the frontend store. One `Interaction` type, from
 `interaction(view, id)`, replaces them. Approval and budget prompts use exported `approve` and
 `deny` option ids.
-
-**Typed replies.** On text channels such as Slack or Telegram, a person can answer a prompt by
-typing a reply. #4411 made channels show one prompt at a time and answer them in order, but the
-code that matches typed text still answers every pending prompt the text fits. A "yes" now answers
-only the prompt on screen.
-
-**Tool parts.** `EveToolPart`, what UIs render for a tool call, copies the call's `status`,
-`outcome`, and `reason` next to its `state`. It keeps `state` only: `"streaming"` while the input
-arrives, then the call's own state.
 
 </details>
 
@@ -697,27 +621,11 @@ arrives, then the call's own state.
 
 </details>
 
-## What 1.0 promises
-
-- Every entry point except `eve/experimental/*` and `eve/internal/*` is covered. Those two prefixes
-  aren't, which `reference/typescript-api.md` states once.
-- The session stream's facts, agent-info, `eve invoke`'s JSON output, and the MCP schemas are
-  versioned protocols. Remote agents on older eve versions keep working: the 1.0 release serves
-  remote-agent protocols 1 to 3.
-- The surface stays this size on purpose. Each public entry point gets a committed list of the
-  names it exports, generated with the TypeScript checker, and `pnpm guard:invariants` fails when
-  the exports and the list differ. Adding a public name means changing the list, so it shows up in
-  review.
-
 ## The numbers
 
 The biggest reductions come from the duplicate exports in the client entries (333 names to about
 135), the setup wizard (131 to none), platform channel plumbing (559 to about 400), and the named
 instrumentation events (100 to about 40). Most other groups shrink by 5 to 20 percent.
-
-Names undercount the change, since consolidation mostly removes variants rather than names: one
-request status instead of five vocabularies, one command result instead of about a dozen, one
-interaction type instead of three, one delivery payload instead of five.
 
 <details>
 <summary>Exported names by group</summary>
@@ -743,14 +651,3 @@ lists turn them into measurements.
 | **Total**                      | **2,005** | **~1,355** |
 
 </details>
-
-## Follow-ups
-
-- Tell the teams whose code imports a removed or moved name: vercel-site's Agent Builder
-  (`eve/setup/scaffold`) and agent-factory (`parseLinearWebhookEvent`, in a test).
-- Check whether `withEve`'s path for manually configured Vercel services is still needed.
-- Test two answer paths not yet traced: an answer relayed to the child agent that asked, and an
-  answer to an interaction that already settled.
-- Have the dev checker enforce that every admitted delivery eventually settles.
-- Confirm with a test that the frontend's in-order fallback for unnamed remote sessions is
-  unreachable, then delete it.
