@@ -59,8 +59,8 @@ describe("resolveEvalClientOptions", () => {
     expect(options.headers).toBeUndefined();
   });
 
-  it("sends EVE_EVAL_TRUSTED_OIDC_TOKEN as a Vercel Trusted Sources token", () => {
-    vi.stubEnv("EVE_EVAL_TRUSTED_OIDC_TOKEN", " ci-oidc-token ");
+  it("sends EVE_EVAL_OIDC_TOKEN as a Vercel Trusted Sources token", () => {
+    vi.stubEnv("EVE_EVAL_OIDC_TOKEN", " ci-oidc-token ");
     const options = resolveEvalClientOptions({
       kind: "remote",
       url: "https://example.vercel.app",
@@ -69,12 +69,12 @@ describe("resolveEvalClientOptions", () => {
     expect(options.redirect).toBe("manual");
   });
 
-  it("rejects EVE_EVAL_AUTH_TOKEN and EVE_EVAL_TRUSTED_OIDC_TOKEN together", () => {
+  it("rejects EVE_EVAL_AUTH_TOKEN and EVE_EVAL_OIDC_TOKEN together", () => {
     vi.stubEnv("EVE_EVAL_AUTH_TOKEN", "static-token");
-    vi.stubEnv("EVE_EVAL_TRUSTED_OIDC_TOKEN", "ci-oidc-token");
+    vi.stubEnv("EVE_EVAL_OIDC_TOKEN", "ci-oidc-token");
     expect(() =>
       resolveEvalClientOptions({ kind: "remote", url: "https://example.vercel.app" }),
-    ).toThrow("Set either EVE_EVAL_AUTH_TOKEN or EVE_EVAL_TRUSTED_OIDC_TOKEN, not both");
+    ).toThrow("Set either EVE_EVAL_AUTH_TOKEN or EVE_EVAL_OIDC_TOKEN, not both");
   });
 
   it("ignores a blank EVE_EVAL_AUTH_TOKEN", () => {
@@ -180,7 +180,7 @@ describe("remote eval project verification", () => {
 
   beforeEach(() => {
     vi.stubEnv("EVE_EVAL_AUTH_TOKEN", "");
-    vi.stubEnv("EVE_EVAL_TRUSTED_OIDC_TOKEN", "");
+    vi.stubEnv("EVE_EVAL_OIDC_TOKEN", "");
     vi.stubEnv("VERCEL_ORG_ID", "");
     vi.stubEnv("VERCEL_PROJECT_ID", "");
     vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "bypass-secret");
@@ -282,7 +282,7 @@ describe("remote eval project verification", () => {
   });
 
   it("sends an explicit Trusted Sources token without resolving a Vercel project", async () => {
-    vi.stubEnv("EVE_EVAL_TRUSTED_OIDC_TOKEN", "ci-oidc-token");
+    vi.stubEnv("EVE_EVAL_OIDC_TOKEN", "ci-oidc-token");
 
     const client = await createRemoteClient();
     await client.health();
