@@ -1123,7 +1123,7 @@ describe("githubChannel", () => {
   });
 
   // https://github.com/vercel/eve/issues/1554
-  it.fails("turn.started checks out the head a later delivery brings", async () => {
+  it("turn.started checks out the head a later delivery brings", async () => {
     const oldHead = "a".repeat(40);
     const newHead = "b".repeat(40);
     let checkedOut = oldHead;

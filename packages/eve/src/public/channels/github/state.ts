@@ -198,6 +198,23 @@ export function stateFromReceiveTarget(input: {
   };
 }
 
+/** Refs a later delivery's event knows better than the session's stored state. */
+const DELIVERED_REF_FIELDS = ["baseRef", "baseSha", "defaultBranch", "headRef", "headSha"] as const;
+
+/**
+ * Applies the refs a later delivery brings to the session's state, so its turn
+ * checks out the pushed head. A ref the event does not carry (null) is kept.
+ */
+export function applyDeliveredGitHubRefs(
+  state: GitHubChannelState,
+  delivered: Partial<GitHubChannelState> | undefined,
+): void {
+  for (const field of DELIVERED_REF_FIELDS) {
+    const value = delivered?.[field];
+    if (value !== null && value !== undefined) state[field] = value;
+  }
+}
+
 /** Reconstructs the channel-local GitHub conversation reference from state. */
 export function conversationFromState(state: GitHubChannelState): GitHubConversationRef {
   return {
