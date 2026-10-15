@@ -11,14 +11,20 @@ export interface MessageTextPart {
  * A file a person sends. `data` is the file inline, as bytes, base64, or a `data:` URL; or a URL:
  * one the model provider can fetch itself, or one only the channel's `fetchFile` reads.
  */
-export interface MessageFilePart {
+export interface MessageFilePart<
+  TData extends Uint8Array | ArrayBuffer | string | URL = Uint8Array | ArrayBuffer | string | URL,
+> {
   readonly type: "file";
   readonly mediaType: string;
   readonly filename?: string;
-  readonly data: Uint8Array | ArrayBuffer | string | URL;
+  readonly data: TData;
 }
 
-export type MessagePart = MessageTextPart | MessageFilePart;
+export type MessagePart<TData extends MessageFilePart["data"] = MessageFilePart["data"]> =
+  | MessageTextPart
+  | MessageFilePart<TData>;
 
 /** What a person sends: text, or text and files. */
-export type MessageContent = string | readonly MessagePart[];
+export type MessageContent<TData extends MessageFilePart["data"] = MessageFilePart["data"]> =
+  | string
+  | readonly MessagePart<TData>[];
