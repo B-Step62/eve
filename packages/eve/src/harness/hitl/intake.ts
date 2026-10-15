@@ -109,7 +109,7 @@ export async function admitHumanInput(
 
   // A typed answer to the budget prompt is an answer like a press.
   const answered: ResolvedStepInput | undefined =
-    limit === undefined ? steered : resolveTextInput({ requests: [limit.row] }, steered);
+    limit === undefined ? steered : resolveTextInput(step.view().projection.view, steered);
   // Who gave each answer decides whether it stands now, waits for a response policy, or is
   // refused.
   const check = checkResponders(step.view(), answered, Date.now());
