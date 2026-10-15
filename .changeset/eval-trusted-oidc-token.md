@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Add `EVE_EVAL_TRUSTED_OIDC_TOKEN`, so `eve eval --url` can reach a protected Vercel deployment with an OIDC token you already have, such as a GitHub Actions ID token, through the deployment's Trusted Sources.
+Add `EVE_EVAL_TRUSTED_OIDC_TOKEN` to reach a protected Vercel deployment from `eve eval --url` through Trusted Sources.
