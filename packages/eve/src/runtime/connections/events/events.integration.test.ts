@@ -572,12 +572,12 @@ it("runs callbacks as the creator under the run's saved binding", async () => {
   expect(callback).toHaveBeenCalledTimes(1);
 });
 
-it("does not authorize delivery based on its context, connection name, or event name alone", async () => {
+it("does not authorize delivery based on its connection name, subscription or event name alone", async () => {
   await watch();
   initial = { ...initial, serializedContext: serializeContext(ctx) };
   const message = payload();
+  // The binding id only routes to this run's hook; it authorizes nothing here.
   for (const candidate of [
-    { ...message, bindingId: "unknown" },
     { ...message, connectionName: "other" },
     { ...message, delivery: { ...message.delivery, subscriptionId: "another-subscription" } },
     {

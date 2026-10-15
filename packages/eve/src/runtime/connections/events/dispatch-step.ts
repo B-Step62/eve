@@ -1,6 +1,5 @@
-import { principalOf } from "#execution/session/principal.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
-import { AuthKey, SessionIdKey } from "#context/keys.js";
+import { AuthKey } from "#context/keys.js";
 import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import { createWorkflowRuntime } from "#execution/workflow-runtime.js";
@@ -23,12 +22,7 @@ export function resolveBinding(ctx: AlsContext, binding: EventBinding) {
     .resolvedAgent.connections.find(
       (connection) => connection.connectionName === binding.connectionName,
     );
-  if (
-    connection?.experimental_events === undefined ||
-    binding.sessionId !== ctx.require(SessionIdKey) ||
-    binding.instanceId !== connection.instanceId ||
-    binding.executionPrincipal !== principalOf(binding.auth)
-  )
+  if (connection?.experimental_events === undefined || binding.instanceId !== connection.instanceId)
     return undefined;
   const authorization = connection.authorization;
   if (
@@ -52,11 +46,10 @@ export function resolveBinding(ctx: AlsContext, binding: EventBinding) {
   };
 }
 
-/** Context only locates the handler: the run's own binding and subscription decide acceptance. */
+/** The hook token already routed this delivery to its binding; the subscription decides acceptance. */
 function accepts(state: ConnectionEventHandlerState, payload: ConnectionEventPayload): boolean {
   const { delivery } = payload;
   return (
-    payload.bindingId === state.binding.id &&
     payload.connectionName === state.binding.connectionName &&
     delivery.subscriptionId === state.subscription.id &&
     !("event" in delivery && delivery.event.name !== state.binding.request.name)
