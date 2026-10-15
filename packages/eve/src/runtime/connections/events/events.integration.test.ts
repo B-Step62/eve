@@ -28,11 +28,12 @@ import {
   type ConnectionEventHandlerState,
   type EventBinding,
 } from "#runtime/connections/events/state.js";
-import { startConnectionEventSuccessorStep } from "#runtime/connections/events/lifecycle-step.js";
 import {
-  prepareConnectionEventStep,
-  dispatchConnectionEventStep,
-} from "#runtime/connections/events/dispatch-step.js";
+  startConnectionEventSuccessorStep,
+  subscribeConnectionEvent,
+} from "#runtime/connections/events/lifecycle-step.js";
+import { isMcpAuthRequiredError } from "#runtime/connections/mcp-client.js";
+import { dispatchConnectionEventStep } from "#runtime/connections/events/dispatch-step.js";
 import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
 import { listToolMetadata } from "#execution/catalog/connection-auth.js";
 import type { ResolvedConnectionDefinition } from "#runtime/types.js";
@@ -42,29 +43,38 @@ import type {
   ManagedEventSubscription,
 } from "#shared/connection-events.js";
 
-const { createClient, loadBundle, handlers } = vi.hoisted(() => ({
+const { createClient, loadBundle, handlers, retired } = vi.hoisted(() => ({
   createClient: vi.fn(),
   loadBundle: vi.fn(),
   // Stands in for live handler runs: what each run holds in its own input and state.
   handlers: new Map<string, { binding: EventBinding; subscription: ManagedEventSubscription }>(),
+  retired: new Set<string>(),
 }));
 vi.mock("#compiled/@ai-sdk/mcp/index.js", () => ({ createMCPClient: createClient }));
 vi.mock("#runtime/connections/events/owner.js", () => ({
   // Subscribes the way the handler run's first step does.
   startConnectionEventOwner: vi.fn(async (binding: EventBinding, bundle: unknown) => {
+    // A second run for the same binding conflicts on its hook and reads the first.
+    const existing = handlers.get(binding.id);
+    if (existing !== undefined) return existing.subscription;
     const { subscribeConnectionEvent } =
       await import("#runtime/connections/events/lifecycle-step.js");
-    const outcome = await subscribeConnectionEvent(handlerContext(binding, bundle), binding);
-    if ("error" in outcome) throw new Error(outcome.error);
-    handlers.set(binding.id, { binding, subscription: outcome.subscription });
-    return outcome.subscription;
+    const { subscriptionFromOutcome } = await vi.importActual<
+      typeof import("#runtime/connections/events/owner.js")
+    >("#runtime/connections/events/owner.js");
+    const subscription = subscriptionFromOutcome(
+      await subscribeConnectionEvent(handlerContext(binding, bundle), binding),
+    );
+    handlers.set(binding.id, { binding, subscription });
+    return subscription;
   }),
   findConnectionEventOwner: vi.fn(async (bindingId: string) => {
     const handler = handlers.get(bindingId);
     return handler && { owner: eventOwner(handler.binding), subscription: handler.subscription };
   }),
+  // An ended run keeps its token, so the watch stays findable.
   retireConnectionEventOwner: vi.fn(async (bindingId: string) => {
-    handlers.delete(bindingId);
+    retired.add(bindingId);
   }),
 }));
 vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
@@ -100,6 +110,7 @@ beforeEach(async () => {
   requested = [];
   saved = new Map();
   handlers.clear();
+  retired.clear();
   callback = vi.fn(async () => {});
   gap = vi.fn(async () => {});
   terminated = vi.fn(async () => {});
@@ -357,7 +368,7 @@ it.each(["available", "filtered", "catalog unavailable", "connection unavailable
           status: "stopped",
         });
         expect(adapter.unsubscribe).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_0" }));
-        expect(handlers.has(created.id)).toBe(false);
+        expect(retired.has(created.id)).toBe(true);
       });
     } finally {
       await registry.dispose();
@@ -373,7 +384,6 @@ it("runs callbacks in the creator's eve context and persists authored state with
     expect(loadContext().require(AuthKey)?.principalId).toBe("alice");
     callbackState.update((receipts) => [...receipts, "received"]);
   });
-  await prepare(payload());
   await dispatch(payload());
   expect(initial.serializedContext["events-test.receipts"]).toEqual(["received"]);
   expect(initial.serializedContext[AuthKey.name]).toMatchObject({ principalId: "bob" });
@@ -414,7 +424,7 @@ async function watch(callId = "watch-1") {
       const handler = [...handlers.values()].at(-1);
       initial = {
         ...initial,
-        state: handler && { ...handler, receipts: {} },
+        state: handler && { ...handler, receipts: [] },
       };
     }
   });
@@ -449,19 +459,6 @@ function payload(): ConnectionEventPayload {
     },
   };
 }
-async function prepare(message: ConnectionEventPayload) {
-  const result = await prepareConnectionEventStep({
-    ...initial,
-    state: initial.state!,
-    payload: message,
-  });
-  initial = {
-    ...initial,
-    serializedContext: result.serializedContext,
-    state: result.state,
-  };
-  return result;
-}
 async function dispatch(message: ConnectionEventPayload) {
   const result = await dispatchConnectionEventStep({
     ...initial,
@@ -473,6 +470,7 @@ async function dispatch(message: ConnectionEventPayload) {
     serializedContext: result.serializedContext,
     state: result.state,
   };
+  return result;
 }
 
 it.each(["user", "app"] as const)(
@@ -521,7 +519,34 @@ it("rejects invalid event arguments before subscription and fixes destination/id
   expect(requested[0]!.context).toMatchObject({ eve: { version: 1, sessionId: "session-1" } });
 });
 
-it("fails the subscribe action with Connect's error and keeps no handler for it", async () => {
+it("keeps a 401 from subscribe classifiable as a sign-in request", async () => {
+  subscriber.mockRejectedValueOnce(Object.assign(new Error("Unauthorized"), { status: 401 }));
+  const failure = await watch().catch((error: unknown) => error);
+  expect(isMcpAuthRequiredError(failure)).toBe(true);
+  expect(handlers.size).toBe(0);
+});
+
+it("throws when a subscribe response is lost, so the step retries with the same key", async () => {
+  await watch();
+  const binding: EventBinding = {
+    ...initial.state!.binding,
+    id: "lost",
+    request: { ...initial.state!.binding.request, idempotencyKey: "lost" },
+  };
+  const context = handlerContext(binding, ctx.require(BundleKey));
+  const subscribe = subscriber.getMockImplementation()!;
+  // Connect creates the subscription, but its response never arrives.
+  subscriber.mockImplementationOnce(async (input) => {
+    await subscribe(input);
+    throw new Error("The operation timed out.");
+  });
+  await expect(subscribeConnectionEvent(context, binding)).rejects.toThrow("timed out");
+  expect(await subscribeConnectionEvent(context, binding)).toEqual({
+    subscription: saved.get("lost"),
+  });
+});
+
+it("fails the subscribe action with Connect's error, and a retry reuses its idempotency key", async () => {
   subscriber.mockRejectedValueOnce(new Error("MCP Events provider request failed."));
   await expect(watch()).rejects.toThrow("MCP Events provider request failed.");
   expect(handlers.size).toBe(0);
@@ -536,15 +561,14 @@ it("runs callbacks as the creator under the run's saved binding", async () => {
   const message = payload();
   setUser("bob");
   initial = { ...initial, serializedContext: serializeContext(ctx) };
-  expect((await prepare(message)).accepted).toBe(true);
-  await dispatch(message);
+  expect((await dispatch(message)).accepted).toBe(true);
   expect(callback).toHaveBeenCalledWith(
     expect.objectContaining({
       auth: expect.objectContaining({ principalId: "alice" }),
       origin: { sessionId: "session-1", connectionName: "issues", subscriptionId: "sub_0" },
     }),
   );
-  expect((await prepare(message)).accepted).toBe(false);
+  expect((await dispatch(message)).accepted).toBe(false);
   expect(callback).toHaveBeenCalledTimes(1);
 });
 
@@ -564,7 +588,7 @@ it("does not authorize delivery based on its context, connection name, or event 
       },
     },
   ])
-    expect((await prepare(candidate as ConnectionEventPayload)).accepted).toBe(false);
+    expect((await dispatch(candidate as ConnectionEventPayload)).accepted).toBe(false);
   expect(callback).not.toHaveBeenCalled();
 });
 
@@ -583,18 +607,16 @@ it("dispatches termination once", async () => {
       control: { type: "terminated", error: { code: 1, message: "Ended" } },
     },
   };
-  expect((await prepare(message)).accepted).toBe(true);
-  await dispatch(message);
+  expect((await dispatch(message)).accepted).toBe(true);
   expect(terminated).toHaveBeenCalledTimes(1);
-  expect((await prepare(message)).accepted).toBe(false);
+  expect((await dispatch(message)).accepted).toBe(false);
   expect(callback).not.toHaveBeenCalled();
 });
 
-it("keeps failed callbacks pending for durable retry and prevents a duplicate successful dispatch", async () => {
+it("retries a failed callback and prevents a duplicate successful dispatch", async () => {
   await watch();
   initial = { ...initial, serializedContext: serializeContext(ctx) };
   const message = payload();
-  await prepare(message);
   callback.mockRejectedValueOnce(new Error("temporary failure"));
   await expect(dispatch(message)).rejects.toThrow("temporary failure");
   await dispatch(message);
@@ -603,7 +625,7 @@ it("keeps failed callbacks pending for durable retry and prevents a duplicate su
 });
 
 // Real handler runs execute outside this module's mocks, so these runs carry no
-// agent bundle: anything that needs one fails the way a rejected subscribe does.
+// agent bundle: they exercise ownership and handover, not subscribe or dispatch.
 async function startHandler(generation?: number) {
   await watch();
   const bindingId = crypto.randomUUID();
@@ -637,20 +659,13 @@ async function publishedOutcome(runId: string) {
   }
 }
 
-it("ends the handler run when its subscribe fails, leaving no hook behind", async () => {
-  const { run, token } = await startHandler();
-  await run.returnValue;
-  expect(await publishedOutcome(run.runId)).toMatchObject({ error: expect.any(String) });
-  expect(await hookOwner(token)).toBeUndefined();
-});
-
 it("passes a watch to the next run once that run has taken its hook", async () => {
   const subscription = { ...saved.values().next().value!, id: "sub_handover" };
   const first = await startHandler(1);
   const state: ConnectionEventHandlerState = {
     binding: first.binding,
     subscription,
-    receipts: { "delivery-1": "complete" },
+    receipts: ["delivery-1"],
   };
   // Stands in for a predecessor: the run waits for its state before taking deliveries.
   await waitForHook(first.run, {
@@ -674,10 +689,14 @@ it("passes a watch to the next run once that run has taken its hook", async () =
   const successor = await hookOwner(first.token);
   expect(successor).toBeDefined();
   expect(successor).not.toBe(first.run.runId);
+  // Get and stop read the inherited subscription from the run now holding the token.
+  expect(await publishedOutcome(successor!)).toEqual({ subscription });
   expect(subscriber.mock.calls.length).toBe(subscribes);
   await resumeHook(first.token, { kind: "retire" });
   await getRun(successor!).returnValue;
-  expect(await hookOwner(first.token)).toBeUndefined();
+  // The ended run keeps the token: the watch stays findable, but takes no more deliveries.
+  expect(await hookOwner(first.token)).toBe(successor);
+  await expect(resumeHook(first.token, { kind: "retire" })).rejects.toSatisfy(HookNotFoundError.is);
 });
 
 it("lets the creator stop a watch from a later session by its id", async () => {
@@ -690,7 +709,29 @@ it("lets the creator stop a watch from a later session by its id", async () => {
       status: "stopped",
     });
   });
-  expect(handlers.has(id)).toBe(false);
+  expect(retired.has(id)).toBe(true);
+});
+
+it("keeps a stopped watch reachable while Connect finishes cleanup", async () => {
+  const { id } = await watch();
+  const pending = {
+    ...saved.values().next().value!,
+    status: "stopped" as const,
+    cleanupStatus: "pending" as const,
+  };
+  vi.mocked(adapter.unsubscribe).mockResolvedValue(pending);
+  vi.mocked(adapter.getSubscription).mockResolvedValue(pending);
+  await contextStorage.run(ctx, async () => {
+    await actions.execute("events_unsubscribe", { id }, { callId: "stop" });
+    expect(
+      await actions.execute("events_get_subscription", { id }, { callId: "get" }),
+    ).toMatchObject({
+      id,
+      cleanupStatus: "pending",
+    });
+    await actions.execute("events_unsubscribe", { id }, { callId: "stop-again" });
+  });
+  expect(adapter.unsubscribe).toHaveBeenCalledTimes(2);
 });
 
 it("keeps the handler when Connect fails to unsubscribe, so stop can be retried", async () => {
@@ -700,12 +741,12 @@ it("keeps the handler when Connect fails to unsubscribe, so stop can be retried"
     await expect(actions.execute("events_unsubscribe", { id }, { callId: "stop" })).rejects.toThrow(
       "Connect unavailable",
     );
-    expect(handlers.has(id)).toBe(true);
+    expect(retired.has(id)).toBe(false);
     expect(
       await actions.execute("events_unsubscribe", { id }, { callId: "stop-again" }),
     ).toMatchObject({ status: "stopped" });
   });
-  expect(handlers.has(id)).toBe(false);
+  expect(retired.has(id)).toBe(true);
 });
 
 it("records a gap before dispatch and keeps the subscription available for later events", async () => {
@@ -720,38 +761,25 @@ it("records a gap before dispatch and keeps the subscription available for later
     ...normal,
     delivery: { ...envelope, control: { type: "gap", cursor: "cursor-2", truncated: true } },
   };
-  expect((await prepare(message)).accepted).toBe(true);
-  await dispatch(message);
+  expect((await dispatch(message)).accepted).toBe(true);
   expect(gap).toHaveBeenCalledTimes(1);
   const next = { ...normal, delivery: { ...normal.delivery, deliveryId: "next" } };
-  expect((await prepare(next)).accepted).toBe(true);
-  await dispatch(next);
+  expect((await dispatch(next)).accepted).toBe(true);
   expect(callback).toHaveBeenCalledTimes(1);
 });
 
-it("bounds completed delivery history while retaining pending receipts", async () => {
+it("bounds completed delivery history to the latest 1,000", async () => {
   await watch();
-  const state = initial.state!;
   initial = {
     ...initial,
-    state: {
-      ...state,
-      receipts: {
-        ...Object.fromEntries(
-          Array.from({ length: 1000 }, (_, i) => [`old-${i}`, "complete" as const]),
-        ),
-        waiting: "pending",
-      },
-    },
+    serializedContext: serializeContext(ctx),
+    state: { ...initial.state!, receipts: Array.from({ length: 1000 }, (_, i) => `old-${i}`) },
   };
-  initial = { ...initial, serializedContext: serializeContext(ctx) };
-  await prepare(payload());
   await dispatch(payload());
-  const next = initial.state!;
-  expect(Object.values(next.receipts).filter((status) => status === "complete")).toHaveLength(1000);
-  expect(next.receipts.waiting).toBe("pending");
-  expect(next.receipts["old-0"]).toBeUndefined();
-  expect(next.receipts["delivery-1"]).toBe("complete");
+  const { receipts } = initial.state!;
+  expect(receipts).toHaveLength(1000);
+  expect(receipts).not.toContain("old-0");
+  expect(receipts.at(-1)).toBe("delivery-1");
 });
 
 it.each(["event", "gap", "terminated"] as const)(
@@ -787,7 +815,6 @@ it.each(["event", "gap", "terminated"] as const)(
                     }),
               },
       };
-      await prepare(tracedMessage);
       const handler = kind === "event" ? callback : kind === "gap" ? gap : terminated;
       const active: string[] = [];
       handler
@@ -833,7 +860,6 @@ it("honors disabled tracing and a dropped session policy without preventing even
       if (enabled) tracing.enable(() => false);
       await watch();
       initial = { ...initial, serializedContext: serializeContext(ctx) };
-      await prepare(payload());
       await dispatch(payload());
     }
     expect(callback).toHaveBeenCalledTimes(2);
@@ -865,7 +891,6 @@ it("links callback sends to the callback span through durable channel delivery m
       .attachSession(event.origin.sessionId)
       .send("check this event", { auth: event.auth });
   });
-  await prepare(payload());
   await dispatch(payload());
   const span = tracing.exporter
     .getFinishedSpans()
@@ -906,7 +931,6 @@ it("does not let a sampled webhook override the session's saved sampling decisio
     ...payload(),
     requestTraceContext: { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: 1 },
   };
-  await prepare(message);
   await dispatch(message);
   expect(callback).toHaveBeenCalledOnce();
   expect(tracing.exporter.getFinishedSpans()).toEqual([]);

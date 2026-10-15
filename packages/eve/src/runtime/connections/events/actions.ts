@@ -261,9 +261,6 @@ export class ConnectionEventActions {
           ]),
         )
         .digest("hex");
-      // A retried tool call finds the watch its first attempt created.
-      const existing = await findConnectionEventOwner(id);
-      if (existing !== undefined) return subscriptionResult(id, existing.subscription);
       const binding: EventBinding = {
         ...caller,
         id,
@@ -278,6 +275,7 @@ export class ConnectionEventActions {
           context: { eve: { version: 1, sessionId, bindingId: id } },
         },
       };
+      // A retried tool call reaches the run its first attempt started, by the same id.
       const subscription = await startConnectionEventOwner(
         binding,
         ctx.require(BundleKey),

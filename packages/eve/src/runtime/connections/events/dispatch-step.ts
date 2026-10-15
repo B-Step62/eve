@@ -63,29 +63,14 @@ function accepts(state: ConnectionEventHandlerState, payload: ConnectionEventPay
   );
 }
 
-export async function prepareConnectionEventStep(input: {
-  serializedContext: Record<string, unknown>;
-  state: ConnectionEventHandlerState;
-  payload: ConnectionEventPayload;
-}) {
-  "use step";
-  const ctx = await deserializeContext(input.serializedContext);
-  const { state, payload } = input;
-  const result = (accepted: boolean, next = state) => ({
-    accepted,
-    state: next,
-    serializedContext: serializeContext(ctx),
-  });
-  const { deliveryId } = payload.delivery;
-  if (
-    !accepts(state, payload) ||
-    resolveBinding(ctx, state.binding) === undefined ||
-    state.receipts[deliveryId] === "complete"
-  )
-    return result(false);
-  return result(true, { ...state, receipts: { ...state.receipts, [deliveryId]: "pending" } });
-}
+/** Bounds the run's checkpoint; durable external effects still key on deliveryId past this window. */
+const RECEIPT_WINDOW = 1000;
 
+/**
+ * Runs one delivery's callback as the watch's creator, unless the run already
+ * completed it. A crash before the receipt is recorded re-runs the callback,
+ * so callbacks are idempotent on deliveryId.
+ */
 export async function dispatchConnectionEventStep(input: {
   serializedContext: Record<string, unknown>;
   state: ConnectionEventHandlerState;
@@ -93,16 +78,15 @@ export async function dispatchConnectionEventStep(input: {
 }) {
   "use step";
   const ctx = await deserializeContext(input.serializedContext);
-  const resolved = accepts(input.state, input.payload)
-    ? resolveBinding(ctx, input.state.binding)
-    : undefined;
-  if (resolved === undefined)
-    return { serializedContext: input.serializedContext, state: input.state };
-  const { binding, connection } = resolved;
-  const state = input.state;
+  const { state } = input;
   const { delivery } = input.payload;
-  if (state.receipts[delivery.deliveryId] !== "pending")
-    return { serializedContext: input.serializedContext, state };
+  const resolved =
+    accepts(state, input.payload) && !state.receipts.includes(delivery.deliveryId)
+      ? resolveBinding(ctx, state.binding)
+      : undefined;
+  if (resolved === undefined)
+    return { accepted: false, serializedContext: input.serializedContext, state };
+  const { binding, connection } = resolved;
   const bundle = ctx.require(BundleKey);
   const callbacks = connection.experimental_events!;
   // The callback runs as its creator without replacing the last conversational caller.
@@ -149,20 +133,9 @@ export async function dispatchConnectionEventStep(input: {
       else await callbacks.onTerminated?.({ ...common, error: delivery.control.error });
     },
   );
-  // Bound checkpoint size; durable external effects still use deliveryId as
-  // their idempotency key when Connect redelivers beyond this recent window.
-  const completed = Object.entries(state.receipts)
-    .filter(([id, status]) => status === "complete" && id !== delivery.deliveryId)
-    .slice(-999);
-  const pending = Object.entries(state.receipts).filter(
-    ([id, status]) => status === "pending" && id !== delivery.deliveryId,
-  );
   const next: ConnectionEventHandlerState = {
     ...state,
-    receipts: {
-      ...Object.fromEntries([...completed, ...pending]),
-      [delivery.deliveryId]: "complete",
-    },
+    receipts: [...state.receipts, delivery.deliveryId].slice(-RECEIPT_WINDOW),
   };
-  return { serializedContext: serializeContext(ctx), state: next };
+  return { accepted: true, serializedContext: serializeContext(ctx), state: next };
 }

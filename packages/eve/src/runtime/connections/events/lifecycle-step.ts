@@ -4,6 +4,7 @@ import {
   connectionEventWorkflowReference,
   startWorkflowOnCurrentDeployment,
 } from "#execution/workflow-runtime.js";
+import { readHttpStatus } from "#runtime/connections/mcp-client.js";
 import { resolveBinding } from "#runtime/connections/events/dispatch-step.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
 import {
@@ -14,6 +15,7 @@ import {
   CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
   type ConnectionEventHandover,
   type ConnectionEventSubscribeOutcome,
+  type ConnectionEventSubscribeResult,
   type EventBinding,
 } from "#runtime/connections/events/state.js";
 import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
@@ -25,31 +27,29 @@ import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 export async function openConnectionEventStep(input: {
   readonly serializedContext: Record<string, unknown>;
   readonly binding: EventBinding;
-}): Promise<ConnectionEventSubscribeOutcome> {
+}): Promise<ConnectionEventSubscribeResult> {
   "use step";
   const outcome = await subscribeConnectionEvent(input.serializedContext, input.binding);
-  const writer = getWritable<ConnectionEventSubscribeOutcome>({
-    namespace: CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
-  }).getWriter();
-  try {
-    await writer.write(outcome);
-  } finally {
-    writer.releaseLock();
-  }
+  await publishOutcome(outcome);
   return outcome;
 }
 
-/** The model sees any failure, and the run then ends without a watch. */
+/**
+ * Connect's definitive refusals reach the model, and the run then ends
+ * without a watch. Anything else, such as a timeout after Connect may have
+ * created the subscription, throws so the step retries with the same
+ * idempotency key.
+ */
 export async function subscribeConnectionEvent(
   serializedContext: Record<string, unknown>,
   binding: EventBinding,
-): Promise<ConnectionEventSubscribeOutcome> {
+): Promise<ConnectionEventSubscribeResult> {
+  const ctx = await deserializeContext(serializedContext);
+  const resolved = resolveBinding(ctx, binding);
+  if (resolved === undefined)
+    return { error: "This connection no longer accepts the subscription's binding." };
+  const { connection, principal, backend } = resolved;
   try {
-    const ctx = await deserializeContext(serializedContext);
-    const resolved = resolveBinding(ctx, binding);
-    if (resolved === undefined)
-      return { error: "This connection no longer accepts the subscription's binding." };
-    const { connection, principal, backend } = resolved;
     const subscription = await withConnectionEventSpan(
       {
         ctx,
@@ -69,7 +69,36 @@ export async function subscribeConnectionEvent(
     // Snapshot the SDK's readonly JSON into the run's owned state.
     return { subscription: structuredClone(subscription) };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    const status = readHttpStatus(error);
+    if (status === undefined || !isRefusal(status)) throw error;
+    return { error: error instanceof Error ? error.message : String(error), status };
+  }
+}
+
+/** A 4xx other than a timeout or rate limit: retrying the same request can't succeed. */
+function isRefusal(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+/**
+ * Publishes what this run holds for readers outside it: a successor's
+ * inherited subscription, or the run a duplicate's caller should read.
+ */
+export async function publishConnectionEventOutcomeStep(
+  outcome: ConnectionEventSubscribeOutcome,
+): Promise<void> {
+  "use step";
+  await publishOutcome(outcome);
+}
+
+async function publishOutcome(outcome: ConnectionEventSubscribeOutcome): Promise<void> {
+  const writer = getWritable<ConnectionEventSubscribeOutcome>({
+    namespace: CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
+  }).getWriter();
+  try {
+    await writer.write(outcome);
+  } finally {
+    writer.releaseLock();
   }
 }
 

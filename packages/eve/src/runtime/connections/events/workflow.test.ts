@@ -12,10 +12,19 @@ const world = vi.hoisted(() => {
     waiter: (() => void) | undefined;
     takenOver = false;
     readonly token: string;
+    readonly id: string;
+    readonly retained: boolean;
+    conflict: string | null = null;
     private readonly owners: Map<string, FakeHook<unknown>>;
-    constructor(token: string, owners: Map<string, FakeHook<unknown>>) {
+    constructor(
+      token: string,
+      owners: Map<string, FakeHook<unknown>>,
+      options: { id: string; retained: boolean },
+    ) {
       this.token = token;
       this.owners = owners;
+      this.id = options.id;
+      this.retained = options.retained;
     }
     push(value: T) {
       this.queue.push(value);
@@ -45,20 +54,31 @@ const world = vi.hoisted(() => {
       return this.next().then((result) => resolve(result.value), reject);
     }
     async getConflict() {
-      return null;
+      return this.conflict === null ? null : { runId: this.conflict };
     }
     async dispose() {
       if (this.owners.get(this.token) === this) this.owners.delete(this.token);
     }
   }
   const owners = new Map<string, FakeHook<unknown>>();
+  let created = 0;
   return {
     owners,
-    createHook(options: { token: string; experimental_force?: boolean }) {
+    createHook(options: {
+      token: string;
+      experimental_force?: boolean;
+      experimental_minRetention?: unknown;
+    }) {
       const previous = owners.get(options.token);
-      if (previous !== undefined && !options.experimental_force)
-        throw new Error(`test world: ${options.token} is already held`);
-      const hook = new FakeHook<unknown>(options.token, owners);
+      const hook = new FakeHook<unknown>(options.token, owners, {
+        id: `hook-${++created}`,
+        retained: options.experimental_minRetention !== undefined,
+      });
+      // Without force, a held token conflicts; the hook reports which owner holds it.
+      if (previous !== undefined && !options.experimental_force) {
+        hook.conflict = previous.id;
+        return hook;
+      }
       owners.set(options.token, hook);
       previous?.takeOver();
       return hook;
@@ -71,40 +91,29 @@ const world = vi.hoisted(() => {
     /** What each delivery saw when its run prepared it. */
     seen: [] as { id: string; count: number; receipts: number }[],
     successors: [] as (() => Promise<void>)[],
+    followed: [] as string[],
+    refuse: false,
   };
 });
 
 vi.mock("#compiled/@workflow/core/index.js", () => ({ createHook: world.createHook }));
 vi.mock("#runtime/connections/events/dispatch-step.js", () => ({
   // The callback state: how many deliveries this watch's handler has run.
-  async prepareConnectionEventStep(input: {
-    serializedContext: { count?: number };
-    state: ConnectionEventHandlerState;
-    payload: { delivery: { id: string } };
-  }) {
-    const id = input.payload.delivery.id;
-    world.seen.push({
-      id,
-      count: input.serializedContext.count ?? 0,
-      receipts: Object.keys(input.state.receipts).length,
-    });
-    return {
-      accepted: true,
-      serializedContext: input.serializedContext,
-      state: { ...input.state, receipts: { ...input.state.receipts, [id]: "pending" } },
-    };
-  },
   async dispatchConnectionEventStep(input: {
     serializedContext: { count?: number };
     state: ConnectionEventHandlerState;
-    payload: { delivery: { id: string } };
+    payload: { delivery: { deliveryId: string } };
   }) {
+    const id = input.payload.delivery.deliveryId;
+    world.seen.push({
+      id,
+      count: input.serializedContext.count ?? 0,
+      receipts: input.state.receipts.length,
+    });
     return {
+      accepted: true,
       serializedContext: { count: (input.serializedContext.count ?? 0) + 1 },
-      state: {
-        ...input.state,
-        receipts: { ...input.state.receipts, [input.payload.delivery.id]: "complete" },
-      },
+      state: { ...input.state, receipts: [...input.state.receipts, id] },
     };
   },
 }));
@@ -112,7 +121,9 @@ vi.mock("#runtime/connections/events/lifecycle-step.js", async () => {
   const { connectionEventHandoverToken } = await import("./path.js");
   return {
     async openConnectionEventStep() {
-      return { subscription: { id: "sub_1", name: "issue.created", status: "active" } };
+      return world.refuse
+        ? { error: "Unauthorized", status: 401 }
+        : { subscription: { id: "sub_1", name: "issue.created", status: "active" } };
     },
     // The test decides when the successor starts, to place deliveries before its takeover.
     async startConnectionEventSuccessorStep(input: { binding: EventBinding }) {
@@ -121,6 +132,9 @@ vi.mock("#runtime/connections/events/lifecycle-step.js", async () => {
           input as Parameters<typeof import("./workflow.js").connectionEventWorkflow>[0],
         ),
       );
+    },
+    async publishConnectionEventOutcomeStep(outcome: { ownerRunId?: string }) {
+      if (outcome.ownerRunId !== undefined) world.followed.push(outcome.ownerRunId);
     },
     async passConnectionEventHandoverStep(input: {
       bindingId: string;
@@ -139,7 +153,7 @@ const { connectionEventHookToken } = await import("./path.js");
 const binding = { id: "binding-1" } as EventBinding;
 const token = connectionEventHookToken(binding.id);
 const deliver = (id: number) =>
-  world.resume(token, { kind: "connection-event", delivery: { id: `delivery-${id}` } });
+  world.resume(token, { kind: "connection-event", delivery: { deliveryId: `delivery-${id}` } });
 const seenThrough = (id: number) =>
   vi.waitFor(() => expect(world.seen.at(-1)?.id).toBe(`delivery-${id}`));
 
@@ -147,6 +161,8 @@ beforeEach(() => {
   world.owners.clear();
   world.seen.length = 0;
   world.successors.length = 0;
+  world.followed.length = 0;
+  world.refuse = false;
 });
 
 it("hands the successor the state and receipts of every delivery its predecessor processed", async () => {
@@ -169,7 +185,7 @@ it("hands the successor the state and receipts of every delivery its predecessor
   );
   world.resume(token, { kind: "retire" });
   await successor;
-  expect(world.owners.size).toBe(0);
+  expect(world.owners.get(token)?.retained).toBe(true);
 });
 
 it("ends the successor too when the watch stopped before the takeover", async () => {
@@ -180,5 +196,23 @@ it("ends the successor too when the watch stopped before the takeover", async ()
   world.resume(token, { kind: "retire" });
   const successor = world.successors[0]!();
   await Promise.all([first, successor]);
-  expect(world.owners.size).toBe(0);
+  // The successor took the token, so it is the one that keeps the ended watch findable.
+  expect(world.owners.get(token)?.retained).toBe(true);
+});
+
+it("points a duplicate run's caller at the run that owns the watch", async () => {
+  const first = connectionEventWorkflow({ binding, serializedContext: {} });
+  await vi.waitFor(() => expect(world.owners.has(token)).toBe(true));
+  const owner = world.owners.get(token)!.id;
+  await connectionEventWorkflow({ binding, serializedContext: {} });
+  expect(world.followed).toEqual([owner]);
+  expect(world.owners.get(token)?.id).toBe(owner);
+  world.resume(token, { kind: "retire" });
+  await first;
+});
+
+it("ends a run whose subscribe Connect refused, releasing its token", async () => {
+  world.refuse = true;
+  await connectionEventWorkflow({ binding, serializedContext: {} });
+  expect(world.owners.has(token)).toBe(false);
 });

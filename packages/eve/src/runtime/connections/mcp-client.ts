@@ -412,7 +412,7 @@ function isMcpHttpFallbackRetryableError(error: unknown): boolean {
   return status === 400 || status === 404 || status === 405;
 }
 
-function readHttpStatus(error: unknown): number | undefined {
+export function readHttpStatus(error: unknown): number | undefined {
   for (const candidate of walkErrorChain(error)) {
     if (!isObject(candidate)) {
       continue;
