@@ -174,7 +174,7 @@ it("drops a stale session-limit continuation answer and keeps the rest of the in
   const stepInput = dropStaleSessionLimitContinuationResponses({
     pendingRequestIds: new Set(),
     stepInput: {
-      answers: [submitted("sess-1:0:limit:input:12", "stop")],
+      answers: [submitted("sess-1:0:limit:input:12", "deny")],
       message: "also do this",
     },
   });
@@ -191,8 +191,8 @@ it("keeps pending and non-continuation responses while dropping stale continuati
     stepInput: {
       answers: [
         submitted("question-1", "candidate"),
-        submitted("sess-1:0:limit:input:12", "continue"),
-        submitted("sess-1:0:limit:input:20", "stop"),
+        submitted("sess-1:0:limit:input:12", "approve"),
+        submitted("sess-1:0:limit:input:20", "deny"),
       ],
     },
   });
@@ -201,7 +201,7 @@ it("keeps pending and non-continuation responses while dropping stale continuati
   // to the currently pending continuation prompt pass through.
   expect(stepInput?.answers).toEqual([
     submitted("question-1", "candidate"),
-    submitted("sess-1:0:limit:input:20", "stop"),
+    submitted("sess-1:0:limit:input:20", "deny"),
   ]);
 });
 
@@ -223,7 +223,7 @@ it("converts remaining stale responses after the drop pass", () => {
   const stepInput = dropStaleSessionLimitContinuationResponses({
     pendingRequestIds,
     stepInput: {
-      answers: [submitted("question-1", "candidate"), submitted("sess-1:0:limit:input:12", "stop")],
+      answers: [submitted("question-1", "candidate"), submitted("sess-1:0:limit:input:12", "deny")],
     },
   });
   const result = convertStaleResponsesToUserMessage({

@@ -1,18 +1,17 @@
-import { openRequests } from "#protocol/session-reader.js";
+import { openRequests, promptQueueHead } from "#protocol/session-reader.js";
 import type { UserContent } from "ai";
 
-import { answerFromText, answerFromTexts } from "#channel/resolve-text.js";
+import { answerFromText } from "#channel/resolve-text.js";
 import { coalesceTurnInputs } from "#harness/messages.js";
 import {
   convertStaleResponsesToUserMessage,
   dropStaleSessionLimitContinuationResponses,
 } from "#harness/hitl/stale-responses.js";
-import { firstOpenInteraction } from "#harness/first-open-interaction.js";
 import type { HarnessStepInput, SubmittedAnswer } from "#harness/types.js";
 import { attachClientContext, readClientContext } from "#internal/client-context.js";
 import { readAnswerText } from "#internal/input-text.js";
 import type { Answer } from "#shared/input.js";
-import type { InteractionRow } from "#protocol/session-projection/tables.js";
+import type { SessionView as SessionTables } from "#protocol/session-projection/tables.js";
 import { ownOpenRequestIds } from "#harness/session-machine/transitions.js";
 import type { SessionView } from "#harness/session-machine/view.js";
 
@@ -39,7 +38,7 @@ export function deliver(
   // Match the new typed answer before queued messages join it.
   const incoming =
     queued !== undefined && limit !== undefined
-      ? resolveTextInput({ requests: [limit] }, input)
+      ? resolveTextInput(view.projection.view, input)
       : input;
   const merged =
     queued === undefined
@@ -82,16 +81,18 @@ export type ResolvedStepInput = HarnessStepInput & { readonly messageConsumed?: 
  * neither.
  */
 export function resolveTextInput(
-  batch: { readonly requests: readonly InteractionRow[] },
+  view: SessionTables,
   stepInput: HarnessStepInput | undefined,
 ): ResolvedStepInput | undefined {
   const text = readAnswerText(stepInput);
   if (stepInput === undefined || text === undefined) return stepInput;
-  const batchRequestIds = new Set(batch.requests.map((row) => row.interactionId));
+  const batchRequestIds = new Set(openRequests(view).map((row) => row.interactionId));
   if (stepInput.answers?.some((answer) => batchRequestIds.has(answer.interactionId))) {
     return stepInput;
   }
-  const answers = typedAnswers(stepInput, answerFromTexts(text, batch.requests));
+  const first = promptQueueHead(view);
+  const response = first === undefined ? undefined : answerFromText(text, first);
+  const answers = typedAnswers(stepInput, response === undefined ? [] : [response]);
   if (answers === undefined) return stepInput;
   return compactInput({
     ...stepInput,
@@ -115,7 +116,7 @@ export function resolveTypedApproval(
   const text = readAnswerText(stepInput);
   if (stepInput === undefined || text === undefined) return stepInput;
   const answered = new Set((stepInput.answers ?? []).map(({ interactionId }) => interactionId));
-  const first = firstOpenInteraction(view.projection, (interactionId) =>
+  const first = promptQueueHead(view.projection.view, (interactionId) =>
     answered.has(interactionId),
   );
   const parked = view.turn.suspended.some((step) =>
