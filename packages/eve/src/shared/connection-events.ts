@@ -27,11 +27,6 @@ export interface ConnectionEventsAdapter {
     id: string;
     options?: { timeout?: number };
   }): Promise<ManagedEventSubscription>;
-  listSubscriptions(input?: {
-    cursor?: string;
-    limit?: number;
-    status?: ManagedEventSubscription["status"];
-  }): Promise<{ subscriptions: ManagedEventSubscription[]; nextCursor?: string }>;
   unsubscribe(input: {
     id: string;
     options?: { timeout?: number };

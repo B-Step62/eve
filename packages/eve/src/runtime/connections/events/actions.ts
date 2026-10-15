@@ -22,6 +22,7 @@ import { parseJsonObject } from "#shared/json.js";
 import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
 import { connectionEventDestination } from "#runtime/connections/events/path.js";
 import {
+  MAX_WATCH_TTL_MS,
   sameEventOwner,
   type EventBinding,
   type EventOwner,
@@ -32,7 +33,6 @@ const GET = "events_get_subscription";
 const STOP = "events_unsubscribe";
 const PREFIX = "events_subscribe_";
 const MIN_TTL_MS = 120_000;
-const MAX_TTL_MS = 31_536_000_000;
 type EventCatalog = Pick<MCPEvents, "list">;
 const SUBSCRIBE_INPUT_SCHEMA = defineJsonSchema<
   Pick<ManagedEventSubscribeInput, "arguments" | "ttlMs">
@@ -188,6 +188,11 @@ export class ConnectionEventActions {
       const handler = await findConnectionEventOwner(bindingId);
       if (handler === undefined || !sameEventOwner(handler.owner, caller))
         throw new Error("Unknown subscription for this caller and account.");
+      if (handler.subscription === undefined) {
+        if (name === STOP)
+          throw new Error("This subscription is still being created. Stop it again shortly.");
+        return pendingResult(handler.owner);
+      }
       const subscriptionId = handler.subscription.id;
       const events = await backend.createAdapter({
         principal,
@@ -267,7 +272,9 @@ export class ConnectionEventActions {
         ctx.require(BundleKey),
         options.abortSignal,
       );
-      return subscriptionResult(id, subscription);
+      return subscription === undefined
+        ? pendingResult(binding)
+        : subscriptionResult(id, subscription);
     });
   }
 }
@@ -284,8 +291,8 @@ function subscribeInputSchema(
       ttlMs: {
         type: ["integer", "null"],
         minimum: MIN_TTL_MS,
-        maximum: MAX_TTL_MS,
-        description: `How long to watch, in milliseconds (${MIN_TTL_MS} to ${MAX_TTL_MS}), or null until stopped`,
+        maximum: MAX_WATCH_TTL_MS,
+        description: `How long to watch, in milliseconds (${MIN_TTL_MS} to ${MAX_WATCH_TTL_MS}), or null until stopped`,
       },
     },
   };
@@ -294,6 +301,12 @@ function subscribeInputSchema(
 /** Model-facing ids are eve's binding ids: they locate the handler that owns the watch. */
 function subscriptionResult(bindingId: string, subscription: ManagedEventSubscription) {
   return { ...subscription, id: bindingId, subscriptionId: subscription.id };
+}
+
+/** A watch whose subscribe is still in flight: its id already works with get and stop. */
+function pendingResult(binding: EventBinding) {
+  const { name, arguments: eventArguments } = binding.request;
+  return { id: binding.id, name, arguments: eventArguments, status: "pending" as const };
 }
 
 function actionName(eventName: string): string {

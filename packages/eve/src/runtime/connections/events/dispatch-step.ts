@@ -5,7 +5,10 @@ import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import { createWorkflowRuntime } from "#execution/workflow-runtime.js";
 import { createAttachSessionFn } from "#channel/session.js";
 import type { EventBinding } from "#runtime/connections/events/state.js";
-import { retireConnectionEventOwner } from "#runtime/connections/events/owner.js";
+import {
+  findConnectionEventOwner,
+  retireConnectionEventOwner,
+} from "#runtime/connections/events/owner.js";
 import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
 import {
   principalKey,
@@ -47,6 +50,23 @@ function accepts(binding: EventBinding, payload: ConnectionEventPayload): boolea
 }
 
 /**
+ * Connect verifies a delivery's destination, not which subscription it
+ * belongs to, so a delivery must name the subscription its watch created.
+ * One that beats the subscribe response throws, and its step retries until
+ * the watch has published what it subscribed to.
+ */
+async function isWatchedSubscription(
+  binding: EventBinding,
+  payload: ConnectionEventPayload,
+): Promise<boolean> {
+  const watch = await findConnectionEventOwner(binding.id);
+  if (watch === undefined) return false;
+  if (watch.subscription === undefined)
+    throw new Error("The watch has not finished subscribing yet.");
+  return watch.subscription.id === payload.delivery.subscriptionId;
+}
+
+/**
  * Runs one delivery's callback as the watch's creator. A crash before the
  * step completes re-runs the callback, so callbacks are idempotent on
  * deliveryId. A `terminated` delivery then ends the watch's run.
@@ -59,9 +79,11 @@ export async function dispatchConnectionEventStep(input: {
   "use step";
   const ctx = await deserializeContext(input.serializedContext);
   const { delivery } = input.payload;
-  const resolved = accepts(input.binding, input.payload)
-    ? resolveBinding(ctx, input.binding)
-    : undefined;
+  const resolved =
+    accepts(input.binding, input.payload) &&
+    (await isWatchedSubscription(input.binding, input.payload))
+      ? resolveBinding(ctx, input.binding)
+      : undefined;
   if (resolved === undefined) return;
   const { binding, connection } = resolved;
   const bundle = ctx.require(BundleKey);

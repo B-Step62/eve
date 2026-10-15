@@ -14,6 +14,7 @@ import { serializeContext } from "#context/serialize.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import type { CompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 import { ConnectionEventActions } from "#runtime/connections/events/actions.js";
+import { startConnectionEventOwner } from "#runtime/connections/events/owner.js";
 import type { EventBinding } from "#runtime/connections/events/state.js";
 import { subscribeConnectionEvent } from "#runtime/connections/events/lifecycle-step.js";
 import { isMcpAuthRequiredError } from "#runtime/connections/mcp-client.js";
@@ -31,7 +32,11 @@ const { createClient, loadBundle, handlers, retired } = vi.hoisted(() => ({
   createClient: vi.fn(),
   loadBundle: vi.fn(),
   // Stands in for live handler runs: what each run holds in its own input and state.
-  handlers: new Map<string, { binding: EventBinding; subscription: ManagedEventSubscription }>(),
+  // A subscription is undefined while its watch's subscribe is still in flight.
+  handlers: new Map<
+    string,
+    { binding: EventBinding; subscription: ManagedEventSubscription | undefined }
+  >(),
   retired: new Set<string>(),
 }));
 vi.mock("#compiled/@ai-sdk/mcp/index.js", () => ({ createMCPClient: createClient }));
@@ -114,7 +119,6 @@ beforeEach(async () => {
   adapter = {
     subscribe: subscriber,
     getSubscription: vi.fn(),
-    listSubscriptions: vi.fn(),
     unsubscribe: vi.fn(async () => ({
       ...saved.values().next().value!,
       status: "stopped" as const,
@@ -277,7 +281,7 @@ it.each([3_600_000, null])(
     expect(subscriber).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ name: "issue.created", arguments: { project: "ABC" }, ttlMs }),
     );
-    expect(handlers.get(initial.binding!.id)?.subscription.id).toBe("sub_0");
+    expect(handlers.get(initial.binding!.id)?.subscription?.id).toBe("sub_0");
   },
 );
 
@@ -605,6 +609,60 @@ it("does not run a delivery whose connection or event name differs from its bind
   ])
     await dispatch(candidate as ConnectionEventPayload);
   expect(callback).not.toHaveBeenCalled();
+});
+
+it("does not run a delivery for a subscription its watch did not create", async () => {
+  await watch();
+  initial = { ...initial, serializedContext: serializeContext(ctx) };
+  const message = payload();
+  // Connect verifies the destination, not the binding: another subscription can name this one.
+  await dispatch({ ...message, delivery: { ...message.delivery, subscriptionId: "sub_other" } });
+  expect(callback).not.toHaveBeenCalled();
+});
+
+it("retries a delivery that beats its watch's subscribe response, then runs it", async () => {
+  await watch();
+  initial = { ...initial, serializedContext: serializeContext(ctx) };
+  const handler = handlers.get(initial.binding!.id)!;
+  const { subscription } = handler;
+  handlers.set(initial.binding!.id, { ...handler, subscription: undefined });
+  await expect(dispatch(payload())).rejects.toThrow("not finished subscribing");
+  expect(callback).not.toHaveBeenCalled();
+  handlers.set(initial.binding!.id, { ...handler, subscription });
+  await dispatch(payload());
+  expect(callback).toHaveBeenCalledTimes(1);
+});
+
+it("returns a subscribe that outlasts the wait as pending under its id, which get later resolves", async () => {
+  // The watch run keeps subscribing after the tool stops waiting for it.
+  vi.mocked(startConnectionEventOwner).mockImplementationOnce(async (binding) => {
+    handlers.set(binding.id, { binding, subscription: undefined });
+    return undefined;
+  });
+  const pending = await watch();
+  expect(pending).toEqual({
+    id: initial.binding!.id,
+    name: initial.binding!.request.name,
+    arguments: { project: "ABC" },
+    status: "pending",
+  });
+  const { id } = pending;
+  const late = { ...saved.values().next().value, id: "sub_late", status: "active" as const };
+  await contextStorage.run(ctx, async () => {
+    expect(await actions.execute("events_get_subscription", { id }, { callId: "get" })).toEqual(
+      pending,
+    );
+    await expect(actions.execute("events_unsubscribe", { id }, { callId: "stop" })).rejects.toThrow(
+      "still being created",
+    );
+    handlers.set(id, { binding: initial.binding!, subscription: late as ManagedEventSubscription });
+    vi.mocked(adapter.getSubscription).mockResolvedValue(late as ManagedEventSubscription);
+    expect(
+      await actions.execute("events_get_subscription", { id }, { callId: "get-again" }),
+    ).toMatchObject({ id, subscriptionId: "sub_late", status: "active" });
+  });
+  // The model's next call reuses the id it was given: Connect saw one subscribe.
+  expect(adapter.getSubscription).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_late" }));
 });
 
 it("ends the watch after its terminated callback", async () => {

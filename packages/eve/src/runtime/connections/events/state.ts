@@ -37,11 +37,8 @@ export type ConnectionEventSubscribeOutcome =
   /** Another run already owns this binding: read the outcome from that run. */
   | { readonly ownerRunId: string };
 
-/** The watch hook's metadata: what each delivery runs under, and whether the watch has ended. */
-export type ConnectionEventWatch = {
-  readonly binding: EventBinding;
-  readonly ended: boolean;
-};
+/** The longest finite watch, in milliseconds. */
+export const MAX_WATCH_TTL_MS = 31_536_000_000;
 
 export function sameEventOwner(left: EventOwner, right: EventOwner): boolean {
   return (

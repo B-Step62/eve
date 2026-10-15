@@ -7,9 +7,7 @@ import {
   CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
   type ConnectionEventSubscribeOutcome,
   type ConnectionEventSubscribeResult,
-  type ConnectionEventWatch,
   type EventBinding,
-  type EventOwner,
 } from "#runtime/connections/events/state.js";
 import {
   connectionEventDeliveryWorkflowReference,
@@ -35,16 +33,21 @@ function bindingContext(binding: EventBinding, bundle: CompiledBundle): Record<s
   return serializeContext(ctx);
 }
 
-/** Starts the watch's run, which subscribes once its hook is registered. */
+/**
+ * Starts the watch's run, which subscribes once its hook is registered.
+ * Returns undefined when the subscription is still being created after the
+ * caller stops waiting: the watch exists under the binding's id either way.
+ */
 export async function startConnectionEventOwner(
   binding: EventBinding,
   bundle: CompiledBundle,
   signal?: AbortSignal,
-): Promise<ManagedEventSubscription> {
+): Promise<ManagedEventSubscription | undefined> {
   const run = await startWorkflowOnCurrentDeployment(connectionEventWorkflowReference, [
     { binding, serializedContext: bindingContext(binding, bundle) },
   ]);
-  return subscriptionFromOutcome(await readSubscribeOutcome(run.runId, signal));
+  const outcome = await readSubscribeOutcome(run.runId, signal);
+  return outcome && subscriptionFromOutcome(outcome);
 }
 
 /**
@@ -56,8 +59,8 @@ export async function startConnectionEventDelivery(
   bundle: CompiledBundle,
 ): Promise<boolean> {
   const watch = await findWatch(payload.bindingId);
-  if (watch === undefined || watch.metadata.ended) return false;
-  const { binding } = watch.metadata;
+  if (watch === undefined || !(await isLive(watch.runId))) return false;
+  const { binding } = watch;
   await startWorkflowOnCurrentDeployment(connectionEventDeliveryWorkflowReference, [
     { binding, serializedContext: bindingContext(binding, bundle), payload },
   ]);
@@ -66,14 +69,20 @@ export async function startConnectionEventDelivery(
 
 async function findWatch(
   bindingId: string,
-): Promise<{ runId: string; metadata: ConnectionEventWatch } | undefined> {
+): Promise<{ runId: string; binding: EventBinding } | undefined> {
   try {
     const hook = await getHookByToken(connectionEventHookToken(bindingId));
-    return { runId: hook.runId, metadata: (await hook.metadata) as ConnectionEventWatch };
+    return { runId: hook.runId, binding: (await hook.metadata) as EventBinding };
   } catch (error) {
     if (HookNotFoundError.is(error)) return undefined;
     throw error;
   }
+}
+
+/** A watch's hook outlives its run; the run's status says whether the watch is still open. */
+async function isLive(runId: string): Promise<boolean> {
+  const status = await getRun(runId).status;
+  return status === "pending" || status === "running";
 }
 
 /** Connect's refusal reaches the caller with its status, so a 401 is classified as a sign-in request. */
@@ -84,22 +93,26 @@ export function subscriptionFromOutcome(
   return outcome.subscription;
 }
 
-/** A watch, live or recently ended: who owns it and what it subscribed to. */
+/**
+ * A watch, live or ended: who owns it and what it subscribed to. The
+ * subscription is undefined while it is still being created.
+ */
 export async function findConnectionEventOwner(
   bindingId: string,
-): Promise<{ owner: EventOwner; subscription: ManagedEventSubscription } | undefined> {
+): Promise<
+  { owner: EventBinding; subscription: ManagedEventSubscription | undefined } | undefined
+> {
   const watch = await findWatch(bindingId);
   if (watch === undefined) return undefined;
   const outcome = await readSubscribeOutcome(watch.runId);
-  return "error" in outcome
-    ? undefined
-    : { owner: watch.metadata.binding, subscription: outcome.subscription };
+  if (outcome !== undefined && "error" in outcome) return undefined;
+  return { owner: watch.binding, subscription: outcome?.subscription };
 }
 
-/** Ends the watch's run; an ended watch's retained hook has no run left to resume. */
+/** Ends the watch's run; an ended watch's hook has no run left to resume. */
 export async function retireConnectionEventOwner(bindingId: string): Promise<void> {
   const watch = await findWatch(bindingId);
-  if (watch === undefined || watch.metadata.ended) return;
+  if (watch === undefined || !(await isLive(watch.runId))) return;
   try {
     await resumeHook(connectionEventHookToken(bindingId), { kind: "retire" });
   } catch (error) {
@@ -111,18 +124,20 @@ export async function retireConnectionEventOwner(bindingId: string): Promise<voi
 async function readSubscribeOutcome(
   runId: string,
   signal?: AbortSignal,
-): Promise<ConnectionEventSubscribeResult> {
+): Promise<ConnectionEventSubscribeResult | undefined> {
   const outcome = await readPublishedOutcome(runId, signal);
-  if (!("ownerRunId" in outcome)) return outcome;
+  if (outcome === undefined || !("ownerRunId" in outcome)) return outcome;
   const owned = await readPublishedOutcome(outcome.ownerRunId, signal);
-  if ("ownerRunId" in owned) throw new Error("Event handler ownership did not resolve.");
+  if (owned !== undefined && "ownerRunId" in owned)
+    throw new Error("Event handler ownership did not resolve.");
   return owned;
 }
 
+/** The run's published outcome, or undefined if the caller stops waiting before it is published. */
 async function readPublishedOutcome(
   runId: string,
   signal?: AbortSignal,
-): Promise<ConnectionEventSubscribeOutcome> {
+): Promise<ConnectionEventSubscribeOutcome | undefined> {
   const reader = getRun(runId)
     .getReadable<ConnectionEventSubscribeOutcome>({
       namespace: CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
@@ -132,15 +147,16 @@ async function readPublishedOutcome(
     AbortSignal.timeout(SUBSCRIBE_OUTCOME_TIMEOUT_MS),
     ...(signal === undefined ? [] : [signal]),
   ]);
-  const abandoned = new Promise<never>((_, reject) => {
-    const abort = () => reject(deadline.reason);
+  const abandoned = new Promise<{ value: undefined; abandoned: true }>((resolve) => {
+    const abort = () => resolve({ value: undefined, abandoned: true });
     if (deadline.aborted) abort();
     else deadline.addEventListener("abort", abort, { once: true });
   });
   try {
-    const { value } = await Promise.race([reader.read(), abandoned]);
-    if (value === undefined) throw new Error("Event handler ended before subscribing.");
-    return value;
+    const read = await Promise.race([reader.read(), abandoned]);
+    if ("abandoned" in read) return undefined;
+    if (read.value === undefined) throw new Error("Event handler ended before subscribing.");
+    return read.value;
   } finally {
     await reader.cancel().catch(() => {});
   }

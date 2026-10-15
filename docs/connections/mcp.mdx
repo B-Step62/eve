@@ -292,17 +292,22 @@ and lifetime; the watch ends at its expiry.
 
 Subscriptions belong to their creator and connection, not a conversation session.
 Get and stop take the `id` the subscribe action returned, and accept it from any
-of the creator's sessions. There is no list action yet. Ending the originating
+of the creator's sessions. There is no list action yet. If Connect has not
+answered by the time the subscribe action stops waiting, it returns
+`status: "pending"` with the watch's `id`; get reports the subscription once it
+exists, and stop works after that. Ending the originating
 session does not stop the watch. Stop, expiry, or upstream termination ends it.
 Stop cancels the subscription in Connect first, then ends its watch.
 `cleanupStatus: "pending"` means Connect is still finishing upstream cancellation.
-An ended watch stays reachable by its `id` for seven days, so get and stop still
+An ended watch stays reachable by its `id` for at least seven days, so get and stop still
 report Connect's status while that cleanup finishes.
 
 The receiver verifies Connect's delivery, then starts a durable workflow for that
 one delivery under the watch's binding. It responds with `202` once that run is
-accepted, and `410` once the watch has ended. The delivery run checks the binding
-against the deployed connection before running your callback. Raw events never
+accepted, and `410` once the watch has ended. The delivery run checks that the
+delivery names the subscription its watch created, waiting for that subscription
+if the delivery arrived first, and checks the binding against the deployed
+connection before running your callback. Raw events never
 enter the session inbox.
 Only an explicit `attachSession(...).send(...)` enters a conversation session.
 Connect owns upstream verification, renewal, and cancellation.

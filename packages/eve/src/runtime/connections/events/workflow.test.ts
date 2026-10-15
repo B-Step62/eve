@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
-import type { ConnectionEventWatch, EventBinding } from "./state.js";
+import type { EventBinding } from "./state.js";
 
 /** A deterministic stand-in for Workflow's hooks and sleep: one owner per token. */
 const world = vi.hoisted(() => {
@@ -10,19 +10,19 @@ const world = vi.hoisted(() => {
     readonly token: string;
     readonly id: string;
     readonly metadata: unknown;
-    readonly retained: boolean;
+    readonly retention: unknown;
     conflict: string | null = null;
     private readonly owners: Map<string, FakeHook<unknown>>;
     constructor(
       token: string,
       owners: Map<string, FakeHook<unknown>>,
-      options: { id: string; metadata: unknown; retained: boolean },
+      options: { id: string; metadata: unknown; retention: unknown },
     ) {
       this.token = token;
       this.owners = owners;
       this.id = options.id;
       this.metadata = options.metadata;
-      this.retained = options.retained;
+      this.retention = options.retention;
     }
     push(value: T) {
       this.queue.push(value);
@@ -59,7 +59,7 @@ const world = vi.hoisted(() => {
       const hook = new FakeHook<unknown>(options.token, owners, {
         id: `hook-${++created}`,
         metadata: options.metadata,
-        retained: options.experimental_minRetention !== undefined,
+        retention: options.experimental_minRetention,
       });
       // A held token conflicts; the hook reports which owner holds it.
       if (previous !== undefined) {
@@ -115,10 +115,10 @@ vi.mock("#runtime/connections/events/lifecycle-step.js", () => ({
 const { connectionEventWorkflow, connectionEventDeliveryWorkflow } = await import("./workflow.js");
 const { connectionEventHookToken } = await import("./path.js");
 
-const binding = { id: "binding-1" } as EventBinding;
+const binding = { id: "binding-1", request: { ttlMs: 3_600_000 } } as EventBinding;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const token = connectionEventHookToken(binding.id);
 const watching = () => vi.waitFor(() => expect(world.owners.has(token)).toBe(true));
-const watch = () => world.owners.get(token)!.metadata as ConnectionEventWatch;
 
 beforeEach(() => {
   world.owners.clear();
@@ -129,14 +129,16 @@ beforeEach(() => {
   world.dispatch.mockReset();
 });
 
-it("holds the binding in its hook until stopped, then keeps an ended hook findable", async () => {
+it("holds the binding in one hook that outlives the watch by a week, and keeps it when stopped", async () => {
   const run = connectionEventWorkflow({ binding, serializedContext: {} });
   await watching();
-  expect(watch()).toEqual({ binding, ended: false });
+  const hook = world.owners.get(token)!;
+  expect(hook.metadata).toEqual(binding);
+  expect(hook.retention).toBe(binding.request.ttlMs! + WEEK_MS);
   world.resume(token, { kind: "retire" });
   await run;
-  expect(world.owners.get(token)?.retained).toBe(true);
-  expect(watch()).toEqual({ binding, ended: true });
+  // Never disposed or replaced: get and stop keep reaching the same hook.
+  expect(world.owners.get(token)).toBe(hook);
 });
 
 it("ends the watch at its subscription's expiry", async () => {
@@ -144,9 +146,10 @@ it("ends the watch at its subscription's expiry", async () => {
   const run = connectionEventWorkflow({ binding, serializedContext: {} });
   await vi.waitFor(() => expect(world.sleeps).toHaveLength(1));
   expect(world.sleeps[0]).toEqual(new Date(world.expiresAt));
+  const hook = world.owners.get(token);
   world.expire();
   await run;
-  expect(watch()).toEqual({ binding, ended: true });
+  expect(world.owners.get(token)).toBe(hook);
 });
 
 it("runs each delivery in its own run, so a failed callback leaves the watch to a later stop", async () => {
@@ -167,7 +170,7 @@ it("runs each delivery in its own run, so a failed callback leaves the watch to 
   expect(live?.queue).toEqual([]);
   world.resume(token, { kind: "retire" });
   await run;
-  expect(watch().ended).toBe(true);
+  expect(world.owners.get(token)).toBe(live);
 });
 
 it("points a duplicate run's caller at the run that owns the watch", async () => {
