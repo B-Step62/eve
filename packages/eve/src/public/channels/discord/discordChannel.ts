@@ -56,6 +56,10 @@ import {
   discordJsonBody,
   readMessageContent,
 } from "#public/channels/discord/responses.js";
+import {
+  createDiscordGatewayRoute,
+  type DiscordGatewayConfig,
+} from "#public/channels/discord/messages.js";
 import { type DiscordWebhookVerifier } from "#public/channels/discord/verify.js";
 import { verifyDiscordInbound } from "#public/channels/discord/verifyInbound.js";
 import { readNonEmptyString } from "#shared/guards.js";
@@ -219,6 +223,13 @@ export interface DiscordChannelConfig {
     interaction: DiscordInputResponseInteraction,
   ): DiscordInputResponseResult | Promise<DiscordInputResponseResult>;
 
+  /**
+   * Accepts ordinary messages (DMs, mentions, and thread follow-ups) that a
+   * relay forwards from the Discord Gateway, such as `runDiscordGatewayRelay`
+   * from `eve/channels/discord/gateway`. Mounts `POST /eve/v1/discord/gateway`.
+   */
+  readonly gateway?: DiscordGatewayConfig;
+
   readonly events?: DiscordChannelEvents;
 }
 
@@ -267,7 +278,10 @@ export interface DiscordChannel extends Channel<
   DiscordReceiveTarget,
   DiscordInstrumentationMetadata
 > {}
-/** Discord channel factory for HTTP Interactions and proactive channel messages. */
+/**
+ * Discord channel factory for HTTP Interactions, proactive channel messages,
+ * and, with `gateway`, ordinary messages forwarded from the Discord Gateway.
+ */
 export function discordChannel(config: DiscordChannelConfig = {}): DiscordChannel {
   const onCommand = config.onCommand ?? defaultOnCommand;
   const onInputResponse =
@@ -326,6 +340,15 @@ export function discordChannel(config: DiscordChannelConfig = {}): DiscordChanne
           });
         },
       ),
+      ...(config.gateway === undefined
+        ? []
+        : [
+            createDiscordGatewayRoute({
+              buildContext: (state) => ({ discord: buildDiscordHandle({ config, state }) }),
+              config,
+              gateway: config.gateway,
+            }),
+          ]),
     ],
 
     async receive(input, { from }) {
