@@ -20,9 +20,7 @@ export default defineEval({
     const session = parked.session;
 
     // When the user asks the provider to look up the draft.
-    const live = await session.start("Look up the draft with the provider and report its status.", {
-      turnPolicy: "steer",
-    });
+    const live = await session.start("Look up the draft with the provider and report its status.");
 
     // Then the reply reports provider-ready and completes; the message cancelled A, which never runs.
     await expectToolResult(t, live, "read-draft");
