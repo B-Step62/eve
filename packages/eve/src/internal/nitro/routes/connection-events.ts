@@ -8,9 +8,11 @@ import { createLogger, logError } from "#internal/logging.js";
 import type { NitroArtifactsConfig } from "#internal/nitro/routes/runtime-artifacts.js";
 import { resolveNitroCompiledArtifactsSource } from "#internal/nitro/routes/runtime-artifacts.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
-import { connectionEventDestination } from "#runtime/connections/events/path.js";
+import {
+  connectionEventDestination,
+  connectionEventHookToken,
+} from "#runtime/connections/events/path.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
-import { connectionEventHookToken } from "#runtime/connections/events/workflow.js";
 import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
 import { isObject } from "#shared/guards.js";
 
@@ -72,6 +74,7 @@ export async function handleConnectionEventRequest(
       });
       return new Response(null, { status: 202 });
     } catch (error) {
+      // Handovers take the hook without a gap, so a missing hook means the watch has ended.
       if (HookNotFoundError.is(error)) return new Response(null, { status: 410 });
       if (isObject(error) && error.code === "invalid_delivery")
         return new Response(null, { status: 401 });

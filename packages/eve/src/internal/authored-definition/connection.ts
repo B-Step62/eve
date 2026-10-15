@@ -102,15 +102,7 @@ export function normalizeMcpClientConnectionDefinition(
       record.experimental_events,
       `${message} experimental_events must be an object.`,
     );
-    expectOnlyKnownKeys(events, ["storage", "onEvent", "onGap", "onTerminated"], message);
-    if (events.storage !== undefined) {
-      const storage = expectObjectRecord(
-        events.storage,
-        `${message} event storage must be a document backend.`,
-      );
-      if (typeof storage.read !== "function" || typeof storage.write !== "function")
-        throw new Error(`${message} event storage requires read and conditional write functions.`);
-    }
+    expectOnlyKnownKeys(events, ["onEvent", "onGap", "onTerminated"], message);
     if (
       typeof events.onEvent !== "function" ||
       (events.onGap !== undefined && typeof events.onGap !== "function") ||
@@ -131,7 +123,6 @@ export function normalizeMcpClientConnectionDefinition(
     }
     type Events = NonNullable<McpClientConnectionDefinition["experimental_events"]>;
     result.experimental_events = {
-      storage: events.storage as Events["storage"],
       onEvent: events.onEvent as Events["onEvent"],
       onGap: events.onGap as Events["onGap"],
       onTerminated: events.onTerminated as Events["onTerminated"],

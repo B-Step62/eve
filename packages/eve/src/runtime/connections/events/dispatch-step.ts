@@ -14,21 +14,18 @@ import {
   principalKey,
   resolveConnectionPrincipalFromAuth,
 } from "#runtime/connections/principal.js";
-import { connectionEventDestination } from "#runtime/connections/events/path.js";
-import { connectionEventStore } from "#runtime/connections/events/store.js";
 import type { AlsContext } from "#context/container.js";
 
-function resolveBinding(ctx: AlsContext, payload: ConnectionEventPayload, binding: EventBinding) {
+/** Re-checks the run's saved binding against the deployed connection before any work runs as its creator. */
+export function resolveBinding(ctx: AlsContext, binding: EventBinding) {
   const connection = ctx
     .require(BundleKey)
     .resolvedAgent.connections.find(
-      (connection) => connection.connectionName === payload.connectionName,
+      (connection) => connection.connectionName === binding.connectionName,
     );
   if (
-    binding.id !== payload.bindingId ||
     connection?.experimental_events === undefined ||
     binding.sessionId !== ctx.require(SessionIdKey) ||
-    binding.connectionName !== payload.connectionName ||
     binding.instanceId !== connection.instanceId ||
     binding.executionPrincipal !== principalOf(binding.auth)
   )
@@ -55,6 +52,17 @@ function resolveBinding(ctx: AlsContext, payload: ConnectionEventPayload, bindin
   };
 }
 
+/** Context only locates the handler: the run's own binding and subscription decide acceptance. */
+function accepts(state: ConnectionEventHandlerState, payload: ConnectionEventPayload): boolean {
+  const { delivery } = payload;
+  return (
+    payload.bindingId === state.binding.id &&
+    payload.connectionName === state.binding.connectionName &&
+    delivery.subscriptionId === state.subscription.id &&
+    !("event" in delivery && delivery.event.name !== state.binding.request.name)
+  );
+}
+
 export async function prepareConnectionEventStep(input: {
   serializedContext: Record<string, unknown>;
   state: ConnectionEventHandlerState;
@@ -62,80 +70,20 @@ export async function prepareConnectionEventStep(input: {
 }) {
   "use step";
   const ctx = await deserializeContext(input.serializedContext);
-  const resolved = resolveBinding(ctx, input.payload, input.state.binding);
-  const result = (accepted: boolean, state = input.state) => ({
+  const { state, payload } = input;
+  const result = (accepted: boolean, next = state) => ({
     accepted,
-    state,
+    state: next,
     serializedContext: serializeContext(ctx),
   });
-  if (resolved === undefined) return result(false);
-  const { connection, principal, backend } = resolved;
-  const state = input.state;
-  let { binding } = resolved;
-  const { delivery } = input.payload;
-  const receipt = state.receipts[delivery.deliveryId];
-  const store = connectionEventStore(connection, binding);
-  const current = (await store.list())[binding.id];
-  if (current === undefined || resolveBinding(ctx, input.payload, current) === undefined)
-    return result(false);
-  binding = current;
-  const resumingTermination =
-    "control" in delivery &&
-    delivery.control.type === "terminated" &&
-    binding.terminationDeliveryId === delivery.deliveryId;
-  if (receipt === "complete" || (binding.retired && receipt !== "pending" && !resumingTermination))
-    return result(false);
-  // A timeout may have hidden Connect's successful subscribe response. Reconcile
-  // the saved intent with its original idempotency key before trusting the ID.
-  if (binding.subscription === undefined) {
-    const request = binding.request;
-    const subscription = await withConnectionEventSpan(
-      {
-        ctx,
-        connectionName: connection.connectionName,
-        operation: "recover",
-        bindingId: binding.id,
-        requestTraceContext: input.payload.requestTraceContext,
-        deliveryId: delivery.deliveryId,
-      },
-      async () => {
-        const adapter = await backend.createAdapter({
-          principal,
-          connection: { url: connection.url },
-          destination: { path: connectionEventDestination(connection.connectionName) },
-        });
-        return adapter.subscribe({ ...request, options: { timeout: 30_000 } });
-      },
-    );
-    binding = { ...binding, subscription };
-  }
+  const { deliveryId } = payload.delivery;
   if (
-    binding.subscription!.id !== delivery.subscriptionId ||
-    ("event" in delivery && delivery.event.name !== binding.request.name)
+    !accepts(state, payload) ||
+    resolveBinding(ctx, state.binding) === undefined ||
+    state.receipts[deliveryId] === "complete"
   )
     return result(false);
-  if (
-    "event" in delivery &&
-    ["stopped", "expired", "failed"].includes(binding.subscription!.status)
-  )
-    return result(false);
-  let next: EventBinding =
-    "control" in delivery && delivery.control.type === "terminated"
-      ? { ...binding, retired: true, terminationDeliveryId: delivery.deliveryId }
-      : binding;
-  if ("control" in delivery && delivery.control.type === "gap")
-    next = { ...next, gap: { cursor: delivery.control.cursor, deliveryId: delivery.deliveryId } };
-  next = await store.save(next);
-  if (
-    next.retired &&
-    receipt !== "pending" &&
-    !("control" in delivery && delivery.control.type === "terminated")
-  )
-    return result(false);
-  return result(true, {
-    binding: next,
-    receipts: { ...state.receipts, [delivery.deliveryId]: "pending" },
-  });
+  return result(true, { ...state, receipts: { ...state.receipts, [deliveryId]: "pending" } });
 }
 
 export async function dispatchConnectionEventStep(input: {
@@ -145,16 +93,15 @@ export async function dispatchConnectionEventStep(input: {
 }) {
   "use step";
   const ctx = await deserializeContext(input.serializedContext);
-  const resolved = resolveBinding(ctx, input.payload, input.state.binding);
+  const resolved = accepts(input.state, input.payload)
+    ? resolveBinding(ctx, input.state.binding)
+    : undefined;
   if (resolved === undefined)
     return { serializedContext: input.serializedContext, state: input.state };
   const { binding, connection } = resolved;
   const state = input.state;
   const { delivery } = input.payload;
-  if (
-    state.receipts[delivery.deliveryId] !== "pending" ||
-    binding.subscription?.id !== delivery.subscriptionId
-  )
+  if (state.receipts[delivery.deliveryId] !== "pending")
     return { serializedContext: input.serializedContext, state };
   const bundle = ctx.require(BundleKey);
   const callbacks = connection.experimental_events!;

@@ -263,29 +263,31 @@ supported by this first version because the receiver must be mounted at build
 time. The provider still resolves the current authorized user or app for each
 subscription operation.
 
-`origin` and `auth` come from eve's saved subscription binding. Provider event
+`origin` and `auth` come from eve's subscription binding, saved in its handler. Provider event
 payloads never select the execution principal. Callback code chooses whether
 to send input to an existing session. A session attachment never creates a
 replacement session.
 
 ### Subscription and delivery flow
 
-`eve__search` exposes subscribe actions from the event catalog, plus list, get,
-and stop actions. `eve__tool` applies the connection's approval and auth gates.
-Supply event arguments and an `expiresAt` deadline, or `null` for no deadline.
+`eve__search` exposes subscribe actions from the event catalog, plus get and
+stop actions. `eve__tool` applies the connection's approval and auth gates.
+Supply event arguments and a `ttlMs` lifetime in milliseconds.
 Registration mounts the receiver; it does not create a subscription.
 
-Subscriptions belong to their creator and connection, not a conversation session.
-The creator can manage them from later sessions. Ending the originating session
-does not stop the watch. Explicit stop, expiration, or upstream termination ends it.
-Each creator can retain at most 100 bindings per connection.
+Each subscription is owned by one durable handler workflow. Subscribing starts it:
+the handler registers its hook, then calls Connect, so a delivery that arrives
+before the subscribe response waits for it. If Connect rejects the subscription,
+the action fails and the handler ends. The handler's input holds the binding (the
+creator, their auth and the request); eve keeps no other copy. Connect owns the
+subscription's status and lifetime.
 
-Subscription action results include `retired`, which reports eve's local state,
-alongside `status`, which reports Connect's last-known state. `retired: true`
-means eve accepts no new event work for that binding, even if `status` is still
-`active`. Termination and stop retire the binding; retirement alone does not
-confirm upstream cancellation. List uses cached Connect status; get refreshes
-it without clearing local retirement. An already accepted callback can still retry.
+Subscriptions belong to their creator and connection, not a conversation session.
+Get and stop take the `id` the subscribe action returned, and accept it from any
+of the creator's sessions. There is no list action yet. Ending the originating
+session does not stop the watch. Stop, expiry, or upstream termination ends it.
+Stop cancels the subscription in Connect first, then ends its handler.
+`cleanupStatus: "pending"` means Connect is still finishing upstream cancellation.
 
 The receiver verifies Connect's delivery, then queues it to a durable event-handler
 workflow. It responds with `202` after durable acceptance. The handler checks the
@@ -294,18 +296,14 @@ Only an explicit `attachSession(...).send(...)` enters a conversation session.
 Connect owns upstream verification, renewal, and cancellation.
 
 Callbacks run as their creator. `defineState()` persists within that subscription's
-handler, not the conversation. Gap and termination state persists before its callback.
+handler, not the conversation.
 Use `deliveryId` to deduplicate external effects: callback steps can retry after a crash.
 Each handler retains its latest 1,000 completed receipts. Older redeliveries can run again.
+Every few hundred deliveries a handler hands its binding, state and receipts to a fresh
+workflow run, so a long-lived watch never replays an ever-growing history.
 Exhausted callback retries fail the handler workflow, not the conversation session.
 
 ### Runtime requirements
-
-Bindings need durable storage outside sessions. Set `experimental_events.storage`
-to a `MemoryDocumentBackend` for your deployment, or use the default private Vercel
-Blob backend with `EVE_MEMORY_BLOB_STORE_ID` or `BLOB_READ_WRITE_TOKEN` configured.
-The backend must provide conditional writes. `eve dev` defaults to process-local
-storage, which does not survive restarting the process.
 
 This experimental integration supports static root-agent connections with Streamable
 HTTP event discovery. Generated event actions are eve-owned actions, not remote MCP

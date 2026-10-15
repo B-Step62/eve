@@ -1,10 +1,7 @@
 import * as workflowRuntime from "#execution/workflow-runtime.js";
-import { inMemory } from "#public/memory/file/backends/in-memory.js";
-import { connectionEventStore } from "#runtime/connections/events/store.js";
-import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
-import { principalOf } from "#execution/session/principal.js";
-import { connectionEventHookToken } from "#runtime/connections/events/workflow.js";
-import { start, resumeHook } from "#internal/workflow/runtime.js";
+import { connectionEventHookToken } from "#runtime/connections/events/path.js";
+import { start, resumeHook, getHookByToken, getRun } from "#internal/workflow/runtime.js";
+import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
 import { waitForHook } from "#internal/testing/workflow-test-helpers.js";
 import { eventTracing } from "#internal/testing/event-tracing.js";
 import { trace } from "@opentelemetry/api";
@@ -18,11 +15,17 @@ import { afterEach, beforeEach, expect, it, vi, onTestFinished } from "vitest";
 import { ContextContainer, contextStorage, loadContext } from "#context/container.js";
 import { defineState } from "#public/definitions/state.js";
 import { AuthKey, SessionIdKey, SessionTraceSeedKey } from "#context/keys.js";
-import { deserializeContext, serializeContext } from "#context/serialize.js";
+import { serializeContext } from "#context/serialize.js";
 import { BundleKey } from "#runtime/sessions/runtime-context-keys.js";
 import type { CompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 import { ConnectionEventActions } from "#runtime/connections/events/actions.js";
-import type { ConnectionEventHandlerState } from "#runtime/connections/events/state.js";
+import {
+  CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
+  eventOwner,
+  type ConnectionEventHandlerState,
+  type EventBinding,
+} from "#runtime/connections/events/state.js";
+import { handOverConnectionEventStep } from "#runtime/connections/events/lifecycle-step.js";
 import {
   prepareConnectionEventStep,
   dispatchConnectionEventStep,
@@ -36,14 +39,30 @@ import type {
   ManagedEventSubscription,
 } from "#shared/connection-events.js";
 
-const { createClient, loadBundle } = vi.hoisted(() => ({
+const { createClient, loadBundle, handlers } = vi.hoisted(() => ({
   createClient: vi.fn(),
   loadBundle: vi.fn(),
+  // Stands in for live handler runs: what each run holds in its own input and state.
+  handlers: new Map<string, { binding: EventBinding; subscription: ManagedEventSubscription }>(),
 }));
 vi.mock("#compiled/@ai-sdk/mcp/index.js", () => ({ createMCPClient: createClient }));
 vi.mock("#runtime/connections/events/owner.js", () => ({
-  startConnectionEventOwner: vi.fn(async () => {}),
-  retireConnectionEventOwner: vi.fn(async () => {}),
+  // Subscribes the way the handler run's first step does.
+  startConnectionEventOwner: vi.fn(async (binding: EventBinding, bundle: unknown) => {
+    const { subscribeConnectionEvent } =
+      await import("#runtime/connections/events/lifecycle-step.js");
+    const outcome = await subscribeConnectionEvent(handlerContext(binding, bundle), binding);
+    if ("error" in outcome) throw new Error(outcome.error);
+    handlers.set(binding.id, { binding, subscription: outcome.subscription });
+    return outcome.subscription;
+  }),
+  findConnectionEventOwner: vi.fn(async (bindingId: string) => {
+    const handler = handlers.get(bindingId);
+    return handler && { owner: eventOwner(handler.binding), subscription: handler.subscription };
+  }),
+  retireConnectionEventOwner: vi.fn(async (bindingId: string) => {
+    handlers.delete(bindingId);
+  }),
 }));
 vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
   getCompiledRuntimeAgentBundle: loadBundle,
@@ -77,6 +96,7 @@ beforeEach(async () => {
   };
   requested = [];
   saved = new Map();
+  handlers.clear();
   callback = vi.fn(async () => {});
   gap = vi.fn(async () => {});
   terminated = vi.fn(async () => {});
@@ -121,7 +141,6 @@ beforeEach(async () => {
       },
     },
     experimental_events: {
-      storage: inMemory(),
       onEvent: callback,
       onGap: gap,
       onTerminated: terminated,
@@ -262,16 +281,27 @@ it("discovers through the released AI SDK and subscribes through the backend wit
   expect(subscriber).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ name: "issue.created", arguments: { project: "ABC" } }),
   );
-  const authorization = connection.authorization;
-  if (authorization === undefined || typeof authorization === "function")
-    throw new Error("Static auth required");
-  const bindings = await connectionEventStore(connection, {
-    principalKey: principalKey(
-      resolveConnectionPrincipal(connection.connectionName, authorization, ctx),
+  expect(initial.state!.subscription.id).toBe("sub_0");
+});
+
+it("subscribes with ttlMs, the lifetime Connect's API accepts", async () => {
+  await watch();
+  expect(requested[0]).toMatchObject({ ttlMs: TTL_MS, idempotencyKey: initial.state!.binding.id });
+  expect(requested[0]).not.toHaveProperty("expiresAt");
+  const [tool] = await contextStorage.run(ctx, () => actions.metadata());
+  expect(tool!.inputSchema).toMatchObject({ required: ["arguments", "ttlMs"] });
+  await expect(
+    contextStorage.run(ctx, () =>
+      actions.execute(
+        tool!.name,
+        { arguments: { project: "ABC" }, expiresAt: null },
+        {
+          callId: "legacy",
+        },
+      ),
     ),
-    executionPrincipal: principalOf(ctx.get(AuthKey)),
-  }).list();
-  expect(Object.values(bindings)[0]?.subscription?.id).toBe("sub_0");
+  ).rejects.toThrow("ttlMs");
+  expect(subscriber).toHaveBeenCalledTimes(1);
 });
 
 it.each(["available", "filtered", "catalog unavailable", "connection unavailable"])(
@@ -296,34 +326,35 @@ it.each(["available", "filtered", "catalog unavailable", "connection unavailable
             toolCallId: name,
             messages: [],
           });
-        expect(
-          await execute(tool!.name, { arguments: { project: "ABC" }, expiresAt: null }),
-        ).toMatchObject({
-          id: "sub_0",
-          status: "active",
-          retired: false,
-        });
+        const created = (await execute(tool!.name, {
+          arguments: { project: "ABC" },
+          ttlMs: TTL_MS,
+        })) as { id: string };
+        expect(created).toMatchObject({ subscriptionId: "sub_0", status: "active" });
         expect(requested[0]!.arguments).toEqual({ project: "ABC" });
-        expect(await execute("events_list_subscriptions", {})).toMatchObject({
-          subscriptions: [{ id: "sub_0" }],
-        });
         if (availability.includes("unavailable")) {
           if (availability === "connection unavailable") await registry.dispose();
           createClient.mockRejectedValue(new Error("MCP unavailable"));
         }
         vi.mocked(adapter.getSubscription).mockResolvedValue(saved.values().next().value!);
-        expect(await execute("events_get_subscription", { id: "sub_0" })).toMatchObject({
-          id: "sub_0",
-        });
-        expect(await execute("events_unsubscribe", { id: "sub_0" })).toMatchObject({
-          id: "sub_0",
-          status: "stopped",
-          retired: true,
+        expect(await execute("events_get_subscription", { id: created.id })).toMatchObject({
+          id: created.id,
+          subscriptionId: "sub_0",
         });
         if (availability.includes("unavailable")) {
           setUser("bob");
-          expect(await execute("events_list_subscriptions", {})).toEqual({ subscriptions: [] });
+          await expect(execute("events_get_subscription", { id: created.id })).rejects.toThrow(
+            "Unknown subscription",
+          );
+          setUser("alice");
         }
+        expect(await execute("events_unsubscribe", { id: created.id })).toMatchObject({
+          id: created.id,
+          subscriptionId: "sub_0",
+          status: "stopped",
+        });
+        expect(adapter.unsubscribe).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_0" }));
+        expect(handlers.has(created.id)).toBe(false);
       });
     } finally {
       await registry.dispose();
@@ -365,34 +396,33 @@ function setUser(id: string) {
     attributes: {},
   });
 }
+const TTL_MS = 3_600_000;
 async function watch(callId = "watch-1") {
   return contextStorage.run(ctx, async () => {
     const tools = await actions.metadata();
-    const authorization = connection.authorization;
-    if (authorization === undefined || typeof authorization === "function")
-      throw new Error("Static auth required");
     try {
-      return await actions.execute(
+      return (await actions.execute(
         tools[0]!.name,
-        { arguments: { project: "ABC" }, expiresAt: null },
+        { arguments: { project: "ABC" }, ttlMs: TTL_MS },
         { callId },
-      );
+      )) as ManagedEventSubscription & { subscriptionId: string };
     } finally {
-      // Build the handler context from the durable registry, not session state.
-      const owner = principalKey(
-        resolveConnectionPrincipal(connection.connectionName, authorization, ctx),
-      );
-      const store = connectionEventStore(connection, {
-        principalKey: owner,
-        executionPrincipal: principalOf(ctx.get(AuthKey)),
-      });
-      const binding = Object.values(await store.list())[0];
+      // The handler starts from its own input, not session state.
+      const handler = [...handlers.values()].at(-1);
       initial = {
         ...initial,
-        state: binding === undefined ? undefined : { binding, receipts: {} },
+        state: handler && { ...handler, receipts: {} },
       };
     }
   });
+}
+/** The context a handler run starts with: its creator, never the current caller. */
+function handlerContext(binding: EventBinding, bundle: unknown): Record<string, unknown> {
+  const handler = new ContextContainer();
+  handler.set(BundleKey, bundle as CompiledRuntimeAgentBundle);
+  handler.set(AuthKey, binding.auth);
+  handler.set(SessionIdKey, binding.sessionId);
+  return serializeContext(handler);
 }
 function payload(): ConnectionEventPayload {
   const binding = initial.state!.binding;
@@ -451,23 +481,21 @@ it.each(["user", "app"] as const)(
       ...connection,
       authorization: { principalType, getToken: auth.getToken, vercelConnect: auth.vercelConnect },
     };
+    // The handler re-checks its binding against the deployed connection.
+    (ctx.require(BundleKey).resolvedAgent.connections as ResolvedConnectionDefinition[])[0] =
+      connection;
     actions = new ConnectionEventActions(connection, async () => ({
       account: ctx.require(AuthKey)!.principalId,
     }));
-    await watch();
+    const { id } = await watch();
     setUser("bob");
     const tools = await contextStorage.run(ctx, () => actions.metadata());
     expect(tools[0]!.description).toContain("bob.issue.created");
-    await expect(
-      contextStorage.run(ctx, () =>
-        actions.execute("events_get_subscription", { id: "sub_0" }, { callId: "get" }),
-      ),
-    ).rejects.toThrow("Unknown subscription");
-    expect(
-      await contextStorage.run(ctx, () =>
-        actions.execute("events_list_subscriptions", {}, { callId: "list" }),
-      ),
-    ).toEqual({ subscriptions: [] });
+    for (const action of ["events_get_subscription", "events_unsubscribe"])
+      await expect(
+        contextStorage.run(ctx, () => actions.execute(action, { id }, { callId: action })),
+      ).rejects.toThrow("Unknown subscription");
+    expect(adapter.unsubscribe).not.toHaveBeenCalled();
     setUser("alice");
     await watch();
     expect(subscriber).toHaveBeenCalledTimes(1);
@@ -480,7 +508,7 @@ it("rejects invalid event arguments before subscription and fixes destination/id
     await expect(
       actions.execute(
         tool!.name,
-        { arguments: { project: 42 }, expiresAt: null },
+        { arguments: { project: 42 }, ttlMs: TTL_MS },
         { callId: "invalid" },
       ),
     ).rejects.toThrow("catalog schema");
@@ -490,19 +518,22 @@ it("rejects invalid event arguments before subscription and fixes destination/id
   expect(requested[0]!.context).toMatchObject({ eve: { version: 1, sessionId: "session-1" } });
 });
 
-it("reconciles an accepted subscribe with a lost response before dispatching and binds the original auth", async () => {
-  const acceptedSubscribe = subscriber.getMockImplementation()!;
-  subscriber.mockImplementationOnce(async (input) => {
-    await acceptedSubscribe(input);
-    throw new Error("response lost");
-  });
-  await expect(watch()).rejects.toThrow("response lost");
+it("fails the subscribe action with Connect's error and keeps no handler for it", async () => {
+  subscriber.mockRejectedValueOnce(new Error("MCP Events provider request failed."));
+  await expect(watch()).rejects.toThrow("MCP Events provider request failed.");
+  expect(handlers.size).toBe(0);
+  // A retry of the same tool call subscribes again with the same idempotency key.
+  await watch();
+  const [failed, retried] = subscriber.mock.calls.map(([input]) => input);
+  expect(failed?.idempotencyKey).toBe(retried?.idempotencyKey);
+});
+
+it("runs callbacks as the creator under the run's saved binding", async () => {
+  await watch();
   const message = payload();
   setUser("bob");
   initial = { ...initial, serializedContext: serializeContext(ctx) };
   expect((await prepare(message)).accepted).toBe(true);
-  expect(subscriber).toHaveBeenCalledTimes(2);
-  expect(requested[0]!.idempotencyKey).toBe(requested[1]!.idempotencyKey);
   await dispatch(message);
   expect(callback).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -534,8 +565,8 @@ it("does not authorize delivery based on its context, connection name, or event 
   expect(callback).not.toHaveBeenCalled();
 });
 
-it("persists termination before its callback and does not execute later normal events", async () => {
-  expect(await watch()).toMatchObject({ id: "sub_0", status: "active", retired: false });
+it("dispatches termination once", async () => {
+  await watch();
   initial = { ...initial, serializedContext: serializeContext(ctx) };
   const normal = payload();
   const { event: _event, ...envelope } = normal.delivery as Extract<
@@ -550,31 +581,10 @@ it("persists termination before its callback and does not execute later normal e
     },
   };
   expect((await prepare(message)).accepted).toBe(true);
-  expect(initial.state!.binding.retired).toBe(true);
   await dispatch(message);
   expect(terminated).toHaveBeenCalledTimes(1);
-  expect(
-    (await prepare({ ...normal, delivery: { ...normal.delivery, deliveryId: "next" } })).accepted,
-  ).toBe(false);
+  expect((await prepare(message)).accepted).toBe(false);
   expect(callback).not.toHaveBeenCalled();
-  ctx = await deserializeContext(initial.serializedContext);
-  vi.mocked(adapter.getSubscription).mockResolvedValue(saved.values().next().value!);
-  await contextStorage.run(ctx, async () => {
-    const expected = { id: "sub_0", status: "active", retired: true };
-    expect(
-      await actions.execute("events_list_subscriptions", {}, { callId: "list" }),
-    ).toMatchObject({
-      subscriptions: [expected],
-    });
-    expect(
-      await actions.execute("events_get_subscription", { id: "sub_0" }, { callId: "get" }),
-    ).toMatchObject(expected);
-    expect(
-      await actions.execute("events_list_subscriptions", {}, { callId: "list-again" }),
-    ).toMatchObject({
-      subscriptions: [expected],
-    });
-  });
 });
 
 it("keeps failed callbacks pending for durable retry and prevents a duplicate successful dispatch", async () => {
@@ -589,72 +599,106 @@ it("keeps failed callbacks pending for durable retry and prevents a duplicate su
   expect(callback).toHaveBeenCalledTimes(2);
 });
 
-it("retries termination after losing the registry write response without accepting new deliveries", async () => {
-  await watch();
-  initial = { ...initial, serializedContext: serializeContext(ctx) };
-  const normal = payload();
-  const { event: _event, ...envelope } = normal.delivery as Extract<
-    typeof normal.delivery,
-    { event: unknown }
-  >;
-  const message: ConnectionEventPayload = {
-    ...normal,
-    delivery: {
-      ...envelope,
-      control: { type: "terminated", error: { code: 1, message: "Ended" } },
-    },
+// Real handler runs execute outside this module's mocks, so these runs carry no
+// agent bundle: anything that needs one fails the way a rejected subscribe does.
+async function startHandler(input: {
+  handover?: {
+    subscription: ManagedEventSubscription;
+    receipts: ConnectionEventHandlerState["receipts"];
   };
-  const storage = connection.experimental_events!.storage!;
-  const write = storage.write.bind(storage);
-  vi.spyOn(storage, "write").mockImplementationOnce(async (input) => {
-    await write(input);
-    throw new Error("registry write response lost");
-  });
-  await expect(prepare(message)).rejects.toThrow("registry write response lost");
-  // A retry starts with the previous step's state, without its pending receipt.
-  expect((await prepare(normal)).accepted).toBe(false);
-  expect(
-    (
-      await prepare({
-        ...message,
-        delivery: { ...message.delivery, deliveryId: "another-termination" },
-      })
-    ).accepted,
-  ).toBe(false);
-  expect((await prepare(message)).accepted).toBe(true);
-  await dispatch(message);
-  expect(terminated).toHaveBeenCalledTimes(1);
-  expect((await prepare(message)).accepted).toBe(false);
-});
-
-it("registers and retires a durable event handler without a conversation session", async () => {
+}) {
   await watch();
   const bindingId = crypto.randomUUID();
-  const binding = { ...initial.state!.binding, id: bindingId };
+  const binding: EventBinding = {
+    ...initial.state!.binding,
+    id: bindingId,
+    request: { ...initial.state!.binding.request, idempotencyKey: bindingId },
+  };
   const run = await start(workflowRuntime.connectionEventWorkflowReference, [
-    { binding, serializedContext: {} },
+    { binding, serializedContext: {}, ...(input.handover && { handover: input.handover }) },
   ]);
+  onTestFinished(() => run.cancel().catch(() => {}));
+  return { run, binding, token: connectionEventHookToken(bindingId) };
+}
+async function hookOwner(token: string): Promise<string | undefined> {
   try {
-    await waitForHook(run, { token: connectionEventHookToken(bindingId), timeout: 10_000 });
-    await resumeHook(connectionEventHookToken(bindingId), { kind: "retire" });
-    await run.returnValue;
-    expect(callback).not.toHaveBeenCalled();
-  } finally {
-    await run.cancel().catch(() => {});
+    return (await getHookByToken(token)).runId;
+  } catch (error) {
+    if (HookNotFoundError.is(error)) return undefined;
+    throw error;
   }
+}
+async function publishedOutcome(runId: string) {
+  const reader = getRun(runId)
+    .getReadable({ namespace: CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE })
+    .getReader();
+  try {
+    return (await reader.read()).value;
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+it("ends the handler run when its subscribe fails, leaving no hook behind", async () => {
+  const { run, token } = await startHandler({});
+  await run.returnValue;
+  expect(await publishedOutcome(run.runId)).toMatchObject({ error: expect.any(String) });
+  expect(await hookOwner(token)).toBeUndefined();
 });
 
-it("lets the creator manage a watch from a later session without copying subscription state", async () => {
-  await watch();
+it("hands a live watch to a fresh run that takes its hook without a gap", async () => {
+  const subscription = { ...saved.values().next().value!, id: "sub_handover" };
+  const first = await startHandler({
+    handover: { subscription, receipts: { "delivery-1": "complete" } },
+  });
+  await waitForHook(first.run, { token: first.token, timeout: 10_000 });
+  expect(await publishedOutcome(first.run.runId)).toEqual({ subscription });
+  const subscribes = subscriber.mock.calls.length;
+  await handOverConnectionEventStep({
+    serializedContext: {},
+    binding: first.binding,
+    subscription,
+    receipts: { "delivery-1": "complete", "delivery-2": "complete" },
+  });
+  // The predecessor ends once the successor has taken the hook.
+  await first.run.returnValue;
+  const successor = await hookOwner(first.token);
+  expect(successor).toBeDefined();
+  expect(successor).not.toBe(first.run.runId);
+  // The successor republishes the inherited subscription instead of subscribing again.
+  expect(await publishedOutcome(successor!)).toEqual({ subscription });
+  expect(subscriber.mock.calls.length).toBe(subscribes);
+  await resumeHook(first.token, { kind: "retire" });
+  await getRun(successor!).returnValue;
+  expect(await hookOwner(first.token)).toBeUndefined();
+});
+
+it("lets the creator stop a watch from a later session by its id", async () => {
+  const { id } = await watch();
   ctx.set(SessionIdKey, "session-2");
   await contextStorage.run(ctx, async () => {
-    expect(
-      await actions.execute("events_list_subscriptions", {}, { callId: "list" }),
-    ).toMatchObject({ subscriptions: [{ id: "sub_0", retired: false }] });
-    expect(
-      await actions.execute("events_unsubscribe", { id: "sub_0" }, { callId: "stop" }),
-    ).toMatchObject({ id: "sub_0", retired: true, status: "stopped" });
+    expect(await actions.execute("events_unsubscribe", { id }, { callId: "stop" })).toMatchObject({
+      id,
+      subscriptionId: "sub_0",
+      status: "stopped",
+    });
   });
+  expect(handlers.has(id)).toBe(false);
+});
+
+it("keeps the handler when Connect fails to unsubscribe, so stop can be retried", async () => {
+  const { id } = await watch();
+  vi.mocked(adapter.unsubscribe).mockRejectedValueOnce(new Error("Connect unavailable"));
+  await contextStorage.run(ctx, async () => {
+    await expect(actions.execute("events_unsubscribe", { id }, { callId: "stop" })).rejects.toThrow(
+      "Connect unavailable",
+    );
+    expect(handlers.has(id)).toBe(true);
+    expect(
+      await actions.execute("events_unsubscribe", { id }, { callId: "stop-again" }),
+    ).toMatchObject({ status: "stopped" });
+  });
+  expect(handlers.has(id)).toBe(false);
 });
 
 it("records a gap before dispatch and keeps the subscription available for later events", async () => {
@@ -670,60 +714,12 @@ it("records a gap before dispatch and keeps the subscription available for later
     delivery: { ...envelope, control: { type: "gap", cursor: "cursor-2", truncated: true } },
   };
   expect((await prepare(message)).accepted).toBe(true);
-  expect(initial.state!.binding.gap?.cursor).toBe("cursor-2");
   await dispatch(message);
   expect(gap).toHaveBeenCalledTimes(1);
   const next = { ...normal, delivery: { ...normal.delivery, deliveryId: "next" } };
   expect((await prepare(next)).accepted).toBe(true);
   await dispatch(next);
   expect(callback).toHaveBeenCalledTimes(1);
-});
-
-it("does not reactivate a retired binding when a concurrent status refresh finishes later", async () => {
-  await watch();
-  let finishGet!: (subscription: ManagedEventSubscription) => void;
-  let getStarted!: () => void;
-  const started = new Promise<void>((resolve) => {
-    getStarted = resolve;
-  });
-  vi.mocked(adapter.getSubscription).mockImplementationOnce(() => {
-    getStarted();
-    return new Promise((resolve) => {
-      finishGet = resolve;
-    });
-  });
-  await contextStorage.run(ctx, async () => {
-    const refreshing = actions.execute(
-      "events_get_subscription",
-      { id: "sub_0" },
-      { callId: "get" },
-    );
-    await started;
-    await actions.execute("events_unsubscribe", { id: "sub_0" }, { callId: "stop" });
-    finishGet(saved.values().next().value!);
-    expect(await refreshing).toMatchObject({ retired: true });
-  });
-  initial = { ...initial, serializedContext: serializeContext(ctx) };
-  expect((await prepare(payload())).accepted).toBe(false);
-  expect(callback).not.toHaveBeenCalled();
-});
-
-it("can stop an uncertain creation by its local ID without contacting the MCP server", async () => {
-  const accepted = subscriber.getMockImplementation()!;
-  subscriber.mockImplementationOnce(async (input) => {
-    await accepted(input);
-    throw new Error("response lost");
-  });
-  await expect(watch()).rejects.toThrow("response lost");
-  const binding = initial.state!.binding;
-  createClient.mockRejectedValue(new Error("MCP unavailable"));
-  const result = await contextStorage.run(ctx, () =>
-    actions.execute("events_unsubscribe", { id: binding.id }, { callId: "stop" }),
-  );
-  expect(result).toMatchObject({ id: "sub_0", status: "stopped" });
-  expect(requested[1]!.idempotencyKey).toBe(requested[0]!.idempotencyKey);
-  initial = { ...initial, serializedContext: serializeContext(ctx) };
-  expect((await prepare(payload())).accepted).toBe(false);
 });
 
 it("bounds completed delivery history while retaining pending receipts", async () => {

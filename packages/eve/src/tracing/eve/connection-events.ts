@@ -105,7 +105,6 @@ type EventOperation =
   | "subscribe"
   | "get"
   | "unsubscribe"
-  | "recover"
   | "onEvent"
   | "onGap"
   | "onTerminated";
@@ -194,7 +193,7 @@ export async function withConnectionEventSpan<T>(
         host,
       );
       if (
-        ["subscribe", "get", "unsubscribe", "recover"].includes(input.operation) &&
+        ["subscribe", "get", "unsubscribe"].includes(input.operation) &&
         typeof result === "object" &&
         result !== null
       ) {
