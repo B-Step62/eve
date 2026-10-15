@@ -283,30 +283,36 @@ Registration mounts the receiver; it does not create a subscription.
 
 Each subscription is owned by one durable watch workflow. Subscribing starts it:
 the watch registers its hook, which carries the binding (the creator, their auth
-and the request), then calls Connect, so a delivery that arrives before the
-subscribe response already finds the binding. If Connect rejects the subscription,
-the action fails and the watch ends. A timeout or server error is retried with
-the same idempotency key, so a subscription Connect already created is reused.
+and the request), then calls Connect. If Connect rejects the subscription, the
+action fails and the watch ends. A timeout or server error is retried with the
+same idempotency key, so a subscription Connect already created is reused.
 eve keeps no other copy of the binding. Connect owns the subscription's status
 and lifetime; the watch ends at its expiry.
+
+Subscribe is idempotent per intent: the watch `id` is derived from the creator,
+the connection, the event name and its arguments, not from the tool call.
+Watching the same event with the same arguments again, for example after a
+cancelled or timed-out call, returns the existing watch instead of creating a
+second subscription. Once that watch has ended, the same request starts a new one.
 
 Subscriptions belong to their creator and connection, not a conversation session.
 Get and stop take the `id` the subscribe action returned, and accept it from any
 of the creator's sessions. There is no list action yet. If Connect has not
 answered by the time the subscribe action stops waiting, it returns
 `status: "pending"` with the watch's `id`; get reports the subscription once it
-exists, and stop works after that. Ending the originating
-session does not stop the watch. Stop, expiry, or upstream termination ends it.
-Stop cancels the subscription in Connect first, then ends its watch.
-`cleanupStatus: "pending"` means Connect is still finishing upstream cancellation.
-An ended watch stays reachable by its `id` for at least seven days, so get and stop still
-report Connect's status while that cleanup finishes.
+exists. Ending the originating session does not stop the watch. Stop, expiry, or
+upstream termination ends it. Stop returns `status: "stopping"` and hands the
+cancellation to the watch, which calls Connect's unsubscribe and, while Connect
+answers `cleanupStatus: "pending"`, repeats it with a growing durable delay.
+The watch ends once Connect's cleanup completes. An ended watch is not found:
+get and stop report an unknown subscription.
 
-The receiver verifies Connect's delivery, then starts a durable workflow for that
-one delivery under the watch's binding. It responds with `202` once that run is
-accepted, and `410` once the watch has ended. The delivery run checks that the
-delivery names the subscription its watch created, waiting for that subscription
-if the delivery arrived first, and checks the binding against the deployed
+The receiver verifies Connect's delivery and checks that it names the
+subscription its watch created. It then starts a durable workflow for that one
+delivery under the watch's binding, and responds with `202` once that run is
+accepted, or `410` once the watch has ended. A delivery that arrives before the
+subscribe response waits in the watch's hook; the watch starts its run once it
+knows its subscription. The delivery run checks the binding against the deployed
 connection before running your callback. Raw events never
 enter the session inbox.
 Only an explicit `attachSession(...).send(...)` enters a conversation session.

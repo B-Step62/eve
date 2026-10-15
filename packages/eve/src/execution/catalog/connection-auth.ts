@@ -94,14 +94,14 @@ class ListingTimeoutError extends Error {}
  * {@link LISTING_TIMEOUT_MS}, so one hung server can't stall a step. Clients
  * share one in-flight listing and take no signal, so this stops waiting rather
  * than cancelling: a late result fills only that client's cache, and the race
- * handles a late rejection.
+ * handles a late rejection. Event discovery runs under the same deadline.
  */
 export async function listToolMetadata(
   connectionName: string,
   client: ConnectionClient,
 ): Promise<readonly ConnectionToolMetadata[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
+  const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       reject(
         new ListingTimeoutError(
@@ -111,20 +111,23 @@ export async function listToolMetadata(
     }, LISTING_TIMEOUT_MS);
   });
   try {
-    return await Promise.race([listConnectionMetadata(client), timeout]);
+    return await listConnectionMetadata(connectionName, client, deadline);
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function listConnectionMetadata(
+  connectionName: string,
   client: ConnectionClient,
+  deadline: Promise<never>,
 ): Promise<readonly ConnectionToolMetadata[]> {
+  const remoteListing = Promise.race([client.getToolMetadata(), deadline]);
   const actions = client.eventActions;
-  if (actions === undefined) return client.getToolMetadata();
+  if (actions === undefined) return remoteListing;
   const [remoteResult, actionResult] = await Promise.allSettled([
-    client.getToolMetadata(),
-    listEventActions(actions),
+    remoteListing,
+    listEventActions(connectionName, actions, deadline),
   ]);
   // An auth challenge must reach the sign-in flow, not become a partial catalog.
   for (const result of [remoteResult, actionResult]) {
@@ -142,23 +145,18 @@ async function listConnectionMetadata(
   return [...remote, ...generated];
 }
 
+/** Event discovery that fails or misses the listing's deadline keeps get and stop for existing watches. */
 async function listEventActions(
+  connectionName: string,
   actions: ConnectionEventActionHandler,
+  deadline: Promise<never>,
 ): Promise<readonly ConnectionToolMetadata[]> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new ListingTimeoutError("Event discovery timed out.")),
-      LISTING_TIMEOUT_MS / 2,
-    );
-  });
   try {
-    return await Promise.race([actions.metadata(), timeout]);
+    return await Promise.race([actions.metadata(), deadline]);
   } catch (error) {
     if (isConnectionAuthorizationRequiredError(error)) throw error;
+    log.warn("failed to discover connection events", { connection: connectionName, error });
     return actions.recoveryMetadata();
-  } finally {
-    clearTimeout(timer);
   }
 }
 

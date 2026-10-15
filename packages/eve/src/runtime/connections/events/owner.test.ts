@@ -7,10 +7,7 @@ import type { ConnectionEventSubscribeOutcome, EventBinding } from "./state.js";
 
 const { hooks, runs, started, resumed } = vi.hoisted(() => ({
   hooks: new Map<string, { runId: string; metadata: unknown }>(),
-  runs: new Map<
-    string,
-    { status: string; outcome: Promise<unknown>; publish: (value: unknown) => void }
-  >(),
+  runs: new Map<string, { published: unknown[]; outcome: Promise<unknown> }>(),
   started: vi.fn(async (_reference: unknown, _args: unknown[]) => ({ runId: "watch-run" })),
   resumed: vi.fn(async (_token: string, _value: unknown) => ({})),
 }));
@@ -20,19 +17,24 @@ vi.mock("#internal/workflow/runtime.js", () => ({
     if (hook === undefined) throw new HookNotFoundError(token);
     return { runId: hook.runId, metadata: Promise.resolve(hook.metadata) };
   },
-  resumeHook: resumed,
+  async resumeHook(token: string, value: unknown) {
+    if (!hooks.has(token)) throw new HookNotFoundError(token);
+    return resumed(token, value);
+  },
   getRun(runId: string) {
     const run = runs.get(runId)!;
+    // The run's published subscribe outcome, as its stream delivers it.
     return {
-      status: Promise.resolve(run.status),
-      // The run's published subscribe outcome, as its stream delivers it.
       getReadable: () =>
-        new ReadableStream({
-          async pull(controller) {
-            controller.enqueue(await run.outcome);
-            controller.close();
-          },
-        }),
+        Object.assign(
+          new ReadableStream({
+            async pull(controller) {
+              controller.enqueue(await run.outcome);
+              controller.close();
+            },
+          }),
+          { getTailIndex: async () => run.published.length - 1 },
+        ),
     };
   },
 }));
@@ -64,7 +66,7 @@ const payload = {
   kind: "connection-event",
   connectionName: "issues",
   bindingId: binding.id,
-  delivery: { deliveryId: "delivery-1" },
+  delivery: { deliveryId: "delivery-1", subscriptionId: "sub_1" },
 } as ConnectionEventPayload;
 const subscription = {
   id: "sub_1",
@@ -73,13 +75,19 @@ const subscription = {
   status: "active" as const,
   expiresAt: null,
 };
-/** A watch run holding its hook; `status` is Workflow's run status. */
-function holdWatch(status: string) {
+/** A running watch holding its hook; call the result to publish its subscribe outcome. */
+function holdWatch() {
   let publish!: (value: unknown) => void;
-  const outcome = new Promise((resolve) => (publish = resolve));
-  runs.set("watch-run", { status, outcome, publish });
+  const run = {
+    published: [] as unknown[],
+    outcome: new Promise((resolve) => (publish = resolve)),
+  };
+  runs.set("watch-run", run);
   hooks.set(token, { runId: "watch-run", metadata: binding });
-  return (value: ConnectionEventSubscribeOutcome) => publish(value);
+  return (value: ConnectionEventSubscribeOutcome) => {
+    run.published.push(value);
+    publish(value);
+  };
 }
 
 beforeEach(() => {
@@ -90,7 +98,7 @@ beforeEach(() => {
 });
 
 it("starts each delivery in its own run, under the binding its watch's hook carries", async () => {
-  holdWatch("running");
+  holdWatch()({ subscription });
   expect(await startConnectionEventDelivery(payload, bundle)).toBe(true);
   expect(started).toHaveBeenCalledExactlyOnceWith({ workflowId: "delivery" }, [
     { binding, payload, serializedContext: expect.any(Object) },
@@ -99,35 +107,42 @@ it("starts each delivery in its own run, under the binding its watch's hook carr
   expect(resumed).not.toHaveBeenCalled();
 });
 
-it.each([
-  ["has ended", () => void holdWatch("completed")],
-  ["is gone", () => {}],
-])("refuses a delivery when its watch %s", async (_name, arrange) => {
-  arrange();
+it("refuses a delivery for a subscription its watch did not create", async () => {
+  holdWatch()({ subscription });
+  const other = { ...payload, delivery: { ...payload.delivery, subscriptionId: "sub_other" } };
+  expect(await startConnectionEventDelivery(other, bundle)).toBe(false);
+  expect(started).not.toHaveBeenCalled();
+});
+
+it("refuses a delivery when its watch has ended", async () => {
   expect(await startConnectionEventDelivery(payload, bundle)).toBe(false);
   expect(started).not.toHaveBeenCalled();
 });
 
-it("retires only a live watch", async () => {
-  holdWatch("completed");
-  await retireConnectionEventOwner(binding.id);
-  expect(resumed).not.toHaveBeenCalled();
-  holdWatch("running");
-  await retireConnectionEventOwner(binding.id);
+it("hands a delivery that beats the subscribe response to the watch's own run", async () => {
+  holdWatch();
+  expect(await startConnectionEventDelivery(payload, bundle)).toBe(true);
+  expect(resumed).toHaveBeenCalledExactlyOnceWith(token, { kind: "delivery", payload });
+  expect(started).not.toHaveBeenCalled();
+});
+
+it("asks a running watch to retire, and reports one that has ended", async () => {
+  expect(await retireConnectionEventOwner(binding.id)).toBe(false);
+  holdWatch();
+  expect(await retireConnectionEventOwner(binding.id)).toBe(true);
   expect(resumed).toHaveBeenCalledExactlyOnceWith(token, { kind: "retire" });
 });
 
-it("keeps an ended watch's owner and subscription for get and stop", async () => {
-  holdWatch("completed")({ subscription });
-  expect(await findConnectionEventOwner(binding.id)).toEqual({ owner: binding, subscription });
-});
-
 it("reports a subscribe still in flight when the caller stops waiting, then its later result", async () => {
-  const publish = holdWatch("running");
+  const publish = holdWatch();
   const caller = new AbortController();
   const subscribing = startConnectionEventOwner(binding, bundle, caller.signal);
   caller.abort();
   expect(await subscribing).toBeUndefined();
+  expect(await findConnectionEventOwner(binding.id)).toEqual({
+    owner: binding,
+    subscription: undefined,
+  });
   publish({ subscription });
   expect(await findConnectionEventOwner(binding.id)).toEqual({ owner: binding, subscription });
 });

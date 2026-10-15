@@ -9,6 +9,7 @@ import {
   type ConnectionEventSubscribeResult,
   type EventBinding,
 } from "#runtime/connections/events/state.js";
+import type { ConnectionEventWatchMessage } from "#runtime/connections/events/workflow.js";
 import {
   connectionEventDeliveryWorkflowReference,
   connectionEventWorkflowReference,
@@ -34,9 +35,10 @@ function bindingContext(binding: EventBinding, bundle: CompiledBundle): Record<s
 }
 
 /**
- * Starts the watch's run, which subscribes once its hook is registered.
- * Returns undefined when the subscription is still being created after the
- * caller stops waiting: the watch exists under the binding's id either way.
+ * Starts the watch's run, which subscribes once its hook is registered. A
+ * watch already running under the binding's id answers instead. Returns
+ * undefined when the subscription is still being created after the caller
+ * stops waiting: asking for the same watch again finds it.
  */
 export async function startConnectionEventOwner(
   binding: EventBinding,
@@ -51,38 +53,37 @@ export async function startConnectionEventOwner(
 }
 
 /**
- * Starts a run for one delivery under the binding its watch's hook carries.
- * Returns false when the watch has ended, so the receiver can tell Connect.
+ * Routes one verified delivery to its watch. Returns false when the watch
+ * has ended or never created this subscription, so the receiver tells
+ * Connect to stop. A delivery that beats the subscribe response waits in the
+ * watch's own hook, and the watch's run starts it once it knows its
+ * subscription.
  */
 export async function startConnectionEventDelivery(
   payload: ConnectionEventPayload,
   bundle: CompiledBundle,
 ): Promise<boolean> {
-  const watch = await findWatch(payload.bindingId);
-  if (watch === undefined || !(await isLive(watch.runId))) return false;
-  const { binding } = watch;
-  await startWorkflowOnCurrentDeployment(connectionEventDeliveryWorkflowReference, [
-    { binding, serializedContext: bindingContext(binding, bundle), payload },
-  ]);
+  const watch = await findConnectionEventOwner(payload.bindingId);
+  if (watch === undefined) return false;
+  if (watch.subscription === undefined)
+    return resumeWatch(payload.bindingId, { kind: "delivery", payload });
+  if (watch.subscription.id !== payload.delivery.subscriptionId) return false;
+  const binding = watch.owner;
+  await startConnectionEventDeliveryRun({
+    binding,
+    serializedContext: bindingContext(binding, bundle),
+    payload,
+  });
   return true;
 }
 
-async function findWatch(
-  bindingId: string,
-): Promise<{ runId: string; binding: EventBinding } | undefined> {
-  try {
-    const hook = await getHookByToken(connectionEventHookToken(bindingId));
-    return { runId: hook.runId, binding: (await hook.metadata) as EventBinding };
-  } catch (error) {
-    if (HookNotFoundError.is(error)) return undefined;
-    throw error;
-  }
-}
-
-/** A watch's hook outlives its run; the run's status says whether the watch is still open. */
-async function isLive(runId: string): Promise<boolean> {
-  const status = await getRun(runId).status;
-  return status === "pending" || status === "running";
+/** Runs one delivery's callback in its own short run. */
+export async function startConnectionEventDeliveryRun(input: {
+  readonly binding: EventBinding;
+  readonly serializedContext: Record<string, unknown>;
+  readonly payload: ConnectionEventPayload;
+}): Promise<void> {
+  await startWorkflowOnCurrentDeployment(connectionEventDeliveryWorkflowReference, [input]);
 }
 
 /** Connect's refusal reaches the caller with its status, so a 401 is classified as a sign-in request. */
@@ -94,29 +95,43 @@ export function subscriptionFromOutcome(
 }
 
 /**
- * A watch, live or ended: who owns it and what it subscribed to. The
- * subscription is undefined while it is still being created.
+ * A running watch: who owns it and what it subscribed to. The subscription
+ * is undefined while it is still being created. An ended watch's hook ended
+ * with its run, so it is not found.
  */
 export async function findConnectionEventOwner(
   bindingId: string,
 ): Promise<
   { owner: EventBinding; subscription: ManagedEventSubscription | undefined } | undefined
 > {
-  const watch = await findWatch(bindingId);
-  if (watch === undefined) return undefined;
-  const outcome = await readSubscribeOutcome(watch.runId);
-  if (outcome !== undefined && "error" in outcome) return undefined;
-  return { owner: watch.binding, subscription: outcome?.subscription };
+  let hook;
+  try {
+    hook = await getHookByToken(connectionEventHookToken(bindingId));
+  } catch (error) {
+    if (HookNotFoundError.is(error)) return undefined;
+    throw error;
+  }
+  const outcome = await readPublishedOutcomeNow(hook.runId);
+  // The hook's run is the owner, so it never points at another run.
+  if (outcome !== undefined && !("subscription" in outcome)) return undefined;
+  return { owner: (await hook.metadata) as EventBinding, subscription: outcome?.subscription };
 }
 
-/** Ends the watch's run; an ended watch's hook has no run left to resume. */
-export async function retireConnectionEventOwner(bindingId: string): Promise<void> {
-  const watch = await findWatch(bindingId);
-  if (watch === undefined || !(await isLive(watch.runId))) return;
+/** Asks the watch's run to unsubscribe and end; the run repeats unsubscribe until Connect finishes. */
+export async function retireConnectionEventOwner(bindingId: string): Promise<boolean> {
+  return resumeWatch(bindingId, { kind: "retire" });
+}
+
+async function resumeWatch(
+  bindingId: string,
+  message: ConnectionEventWatchMessage,
+): Promise<boolean> {
   try {
-    await resumeHook(connectionEventHookToken(bindingId), { kind: "retire" });
+    await resumeHook(connectionEventHookToken(bindingId), message);
+    return true;
   } catch (error) {
-    if (!HookNotFoundError.is(error)) throw error;
+    if (HookNotFoundError.is(error)) return false;
+    throw error;
   }
 }
 
@@ -131,6 +146,18 @@ async function readSubscribeOutcome(
   if (owned !== undefined && "ownerRunId" in owned)
     throw new Error("Event handler ownership did not resolve.");
   return owned;
+}
+
+/** The run's published outcome if it has one yet, without waiting for it. */
+async function readPublishedOutcomeNow(
+  runId: string,
+): Promise<ConnectionEventSubscribeOutcome | undefined> {
+  const readable = getRun(runId).getReadable({
+    namespace: CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
+  });
+  const tail = await readable.getTailIndex();
+  await readable.cancel().catch(() => {});
+  return tail < 0 ? undefined : readPublishedOutcome(runId);
 }
 
 /** The run's published outcome, or undefined if the caller stops waiting before it is published. */

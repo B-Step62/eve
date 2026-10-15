@@ -55,8 +55,24 @@ it("does not let hung event discovery hide responsive MCP tools", async () => {
     const connection = client();
     vi.mocked(connection.eventActions!.metadata).mockReturnValue(new Promise(() => {}));
     const listing = listToolMetadata("issues", connection);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(await listing).toEqual([remote, management]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("offers event actions that take longer than half the listing deadline to discover", async () => {
+  vi.useFakeTimers();
+  try {
+    const connection = client();
+    const subscribe = { name: "events_subscribe_issue", description: "Watch", inputSchema: {} };
+    vi.mocked(connection.eventActions!.metadata).mockReturnValue(
+      new Promise((resolve) => setTimeout(() => resolve([subscribe, management]), 7_000)),
+    );
+    const listing = listToolMetadata("issues", connection);
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(await listing).toEqual([remote, subscribe, management]);
   } finally {
     vi.useRealTimers();
   }

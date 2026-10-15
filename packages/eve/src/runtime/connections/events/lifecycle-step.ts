@@ -1,7 +1,9 @@
-import { getWritable } from "#compiled/@workflow/core/index.js";
+import { createHash } from "node:crypto";
+import { getWorkflowMetadata, getWritable } from "#compiled/@workflow/core/index.js";
 import { deserializeContext } from "#context/serialize.js";
 import { readHttpStatus } from "#runtime/connections/mcp-client.js";
 import { resolveBinding } from "#runtime/connections/events/dispatch-step.js";
+import { startConnectionEventDeliveryRun } from "#runtime/connections/events/owner.js";
 import { connectionEventDestination } from "#runtime/connections/events/path.js";
 import {
   CONNECTION_EVENT_SUBSCRIPTION_NAMESPACE,
@@ -9,18 +11,28 @@ import {
   type ConnectionEventSubscribeResult,
   type EventBinding,
 } from "#runtime/connections/events/state.js";
+import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
 import { withConnectionEventSpan } from "#tracing/eve/connection-events.js";
 
 /**
  * Subscribes from inside the watch run, after its hook is registered, so a
  * delivery that beats the subscribe response finds the binding it runs under.
+ * The key is the run's own: a retried step reuses it, and a later run for the
+ * same watch, after this one ended, subscribes afresh.
  */
 export async function openConnectionEventStep(input: {
   readonly serializedContext: Record<string, unknown>;
   readonly binding: EventBinding;
 }): Promise<ConnectionEventSubscribeResult> {
   "use step";
-  const outcome = await subscribeConnectionEvent(input.serializedContext, input.binding);
+  const idempotencyKey = createHash("sha256")
+    .update(JSON.stringify([input.binding.id, getWorkflowMetadata().workflowRunId]))
+    .digest("hex");
+  const outcome = await subscribeConnectionEvent(
+    input.serializedContext,
+    input.binding,
+    idempotencyKey,
+  );
   await publishOutcome(outcome);
   return outcome;
 }
@@ -34,12 +46,13 @@ export async function openConnectionEventStep(input: {
 export async function subscribeConnectionEvent(
   serializedContext: Record<string, unknown>,
   binding: EventBinding,
+  idempotencyKey: string,
 ): Promise<ConnectionEventSubscribeResult> {
   const ctx = await deserializeContext(serializedContext);
   const resolved = resolveBinding(ctx, binding);
   if (resolved === undefined)
     return { error: "This connection no longer accepts the subscription's binding." };
-  const { connection, principal, events } = resolved;
+  const { connection } = resolved;
   try {
     const subscription = await withConnectionEventSpan(
       {
@@ -49,12 +62,12 @@ export async function subscribeConnectionEvent(
         operation: "subscribe",
       },
       async () => {
-        const adapter = await events.backend.createAdapter({
-          principal,
-          connection: { url: connection.url },
-          destination: { path: connectionEventDestination(connection.connectionName) },
+        const adapter = await createAdapter(resolved);
+        return adapter.subscribe({
+          ...binding.request,
+          idempotencyKey,
+          options: { timeout: 30_000 },
         });
-        return adapter.subscribe({ ...binding.request, options: { timeout: 30_000 } });
       },
     );
     // Snapshot the SDK's readonly JSON into the run's owned state.
@@ -64,6 +77,65 @@ export async function subscribeConnectionEvent(
     if (status === undefined || !isRefusal(status)) throw error;
     return { error: error instanceof Error ? error.message : String(error), status };
   }
+}
+
+/**
+ * One unsubscribe attempt for a stopped watch. "pending" means Connect is
+ * still cleaning up upstream and asks to be called again. A refusal, such as
+ * a subscription Connect already removed, leaves nothing to repeat.
+ */
+export async function unsubscribeConnectionEventStep(input: {
+  readonly serializedContext: Record<string, unknown>;
+  readonly binding: EventBinding;
+  readonly subscriptionId: string;
+}): Promise<"pending" | "done"> {
+  "use step";
+  const ctx = await deserializeContext(input.serializedContext);
+  const resolved = resolveBinding(ctx, input.binding);
+  if (resolved === undefined) return "done";
+  try {
+    const subscription = await withConnectionEventSpan(
+      {
+        ctx,
+        connectionName: resolved.connection.connectionName,
+        bindingId: input.binding.id,
+        subscriptionId: input.subscriptionId,
+        operation: "unsubscribe",
+      },
+      async () =>
+        (await createAdapter(resolved)).unsubscribe({
+          id: input.subscriptionId,
+          options: { timeout: 30_000 },
+        }),
+    );
+    return subscription.cleanupStatus === "pending" ? "pending" : "done";
+  } catch (error) {
+    const status = readHttpStatus(error);
+    if (status === undefined || !isRefusal(status)) throw error;
+    return "done";
+  }
+}
+
+/** Starts a delivery the watch's run took because it arrived before the subscribe response. */
+export async function startConnectionEventDeliveryStep(input: {
+  readonly binding: EventBinding;
+  readonly serializedContext: Record<string, unknown>;
+  readonly payload: ConnectionEventPayload;
+}): Promise<void> {
+  "use step";
+  await startConnectionEventDeliveryRun(input);
+}
+
+function createAdapter({
+  connection,
+  principal,
+  events,
+}: NonNullable<ReturnType<typeof resolveBinding>>) {
+  return events.backend.createAdapter({
+    principal,
+    connection: { url: connection.url },
+    destination: { path: connectionEventDestination(connection.connectionName) },
+  });
 }
 
 /** A 4xx other than a timeout or rate limit: retrying the same request can't succeed. */

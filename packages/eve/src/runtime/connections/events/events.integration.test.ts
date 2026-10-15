@@ -16,7 +16,11 @@ import type { CompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agen
 import { ConnectionEventActions } from "#runtime/connections/events/actions.js";
 import { startConnectionEventOwner } from "#runtime/connections/events/owner.js";
 import type { EventBinding } from "#runtime/connections/events/state.js";
-import { subscribeConnectionEvent } from "#runtime/connections/events/lifecycle-step.js";
+import {
+  openConnectionEventStep,
+  subscribeConnectionEvent,
+  unsubscribeConnectionEventStep,
+} from "#runtime/connections/events/lifecycle-step.js";
 import { isMcpAuthRequiredError } from "#runtime/connections/mcp-client.js";
 import { dispatchConnectionEventStep } from "#runtime/connections/events/dispatch-step.js";
 import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
@@ -28,8 +32,9 @@ import type {
   ManagedEventSubscription,
 } from "#shared/connection-events.js";
 
-const { createClient, loadBundle, handlers, retired } = vi.hoisted(() => ({
+const { createClient, loadBundle, handlers, retired, workflowRunId } = vi.hoisted(() => ({
   createClient: vi.fn(),
+  workflowRunId: { current: "wrun_1" },
   loadBundle: vi.fn(),
   // Stands in for live handler runs: what each run holds in its own input and state.
   // A subscription is undefined while its watch's subscribe is still in flight.
@@ -38,6 +43,11 @@ const { createClient, loadBundle, handlers, retired } = vi.hoisted(() => ({
     { binding: EventBinding; subscription: ManagedEventSubscription | undefined }
   >(),
   retired: new Set<string>(),
+}));
+vi.mock("#compiled/@workflow/core/index.js", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  getWorkflowMetadata: () => ({ workflowRunId: workflowRunId.current }),
+  getWritable: () => new WritableStream(),
 }));
 vi.mock("#compiled/@ai-sdk/mcp/index.js", () => ({ createMCPClient: createClient }));
 vi.mock("#runtime/connections/events/owner.js", () => ({
@@ -51,8 +61,9 @@ vi.mock("#runtime/connections/events/owner.js", () => ({
     const { subscriptionFromOutcome } = await vi.importActual<
       typeof import("#runtime/connections/events/owner.js")
     >("#runtime/connections/events/owner.js");
+    // The binding id stands in for the run's own idempotency key.
     const subscription = subscriptionFromOutcome(
-      await subscribeConnectionEvent(handlerContext(binding, bundle), binding),
+      await subscribeConnectionEvent(handlerContext(binding, bundle), binding, binding.id),
     );
     handlers.set(binding.id, { binding, subscription });
     return subscription;
@@ -61,9 +72,11 @@ vi.mock("#runtime/connections/events/owner.js", () => ({
     const handler = handlers.get(bindingId);
     return handler && { owner: handler.binding, subscription: handler.subscription };
   }),
-  // An ended run keeps its token, so the watch stays findable.
+  // The run unsubscribes and ends on its own; this records that it was asked to.
   retireConnectionEventOwner: vi.fn(async (bindingId: string) => {
+    if (!handlers.has(bindingId)) return false;
     retired.add(bindingId);
+    return true;
   }),
 }));
 vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
@@ -386,12 +399,10 @@ it.each(["available", "filtered", "catalog unavailable", "connection unavailable
           );
           setUser("alice");
         }
-        expect(await execute("events_unsubscribe", { id: created.id })).toMatchObject({
+        expect(await execute("events_unsubscribe", { id: created.id })).toEqual({
           id: created.id,
-          subscriptionId: "sub_0",
-          status: "stopped",
+          status: "stopping",
         });
-        expect(adapter.unsubscribe).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_0" }));
         expect(retired.has(created.id)).toBe(true);
       });
     } finally {
@@ -550,11 +561,7 @@ it("keeps a 401 from subscribe classifiable as a sign-in request", async () => {
 
 it("throws when a subscribe response is lost, so the step retries with the same key", async () => {
   await watch();
-  const binding: EventBinding = {
-    ...initial.binding!,
-    id: "lost",
-    request: { ...initial.binding!.request, idempotencyKey: "lost" },
-  };
+  const binding: EventBinding = { ...initial.binding!, id: "lost" };
   const context = handlerContext(binding, ctx.require(BundleKey));
   const subscribe = subscriber.getMockImplementation()!;
   // Connect creates the subscription, but its response never arrives.
@@ -562,8 +569,8 @@ it("throws when a subscribe response is lost, so the step retries with the same 
     await subscribe(input);
     throw new Error("The operation timed out.");
   });
-  await expect(subscribeConnectionEvent(context, binding)).rejects.toThrow("timed out");
-  expect(await subscribeConnectionEvent(context, binding)).toEqual({
+  await expect(subscribeConnectionEvent(context, binding, "lost")).rejects.toThrow("timed out");
+  expect(await subscribeConnectionEvent(context, binding, "lost")).toEqual({
     subscription: saved.get("lost"),
   });
 });
@@ -611,26 +618,48 @@ it("does not run a delivery whose connection or event name differs from its bind
   expect(callback).not.toHaveBeenCalled();
 });
 
-it("does not run a delivery for a subscription its watch did not create", async () => {
-  await watch();
-  initial = { ...initial, serializedContext: serializeContext(ctx) };
-  const message = payload();
-  // Connect verifies the destination, not the binding: another subscription can name this one.
-  await dispatch({ ...message, delivery: { ...message.delivery, subscriptionId: "sub_other" } });
-  expect(callback).not.toHaveBeenCalled();
+it("returns the same watch when the same event and arguments are watched again", async () => {
+  eventSchema = {
+    type: "object",
+    properties: { project: { type: "string" }, team: { type: "string" } },
+    additionalProperties: false,
+  };
+  const ask = (callId: string, eventArguments: Record<string, string>) =>
+    contextStorage.run(ctx, async () => {
+      const [tool] = await actions.metadata();
+      return (await actions.execute(
+        tool!.name,
+        { arguments: eventArguments, ttlMs: TTL_MS },
+        { callId },
+      )) as { id: string };
+    });
+  // A cancelled call's id is never seen; asking again with a new call reaches its watch.
+  const first = await ask("cancelled", { project: "ABC", team: "core" });
+  const again = await ask("retry", { team: "core", project: "ABC" });
+  expect(again.id).toBe(first.id);
+  expect(subscriber).toHaveBeenCalledTimes(1);
+  const other = await ask("other", { project: "XYZ", team: "core" });
+  expect(other.id).not.toBe(first.id);
 });
 
-it("retries a delivery that beats its watch's subscribe response, then runs it", async () => {
+it("keys Connect's subscribe by watch and run, so a step retry reuses it and a later run does not", async () => {
   await watch();
-  initial = { ...initial, serializedContext: serializeContext(ctx) };
-  const handler = handlers.get(initial.binding!.id)!;
-  const { subscription } = handler;
-  handlers.set(initial.binding!.id, { ...handler, subscription: undefined });
-  await expect(dispatch(payload())).rejects.toThrow("not finished subscribing");
-  expect(callback).not.toHaveBeenCalled();
-  handlers.set(initial.binding!.id, { ...handler, subscription });
-  await dispatch(payload());
-  expect(callback).toHaveBeenCalledTimes(1);
+  const binding = initial.binding!;
+  const open = () =>
+    openConnectionEventStep({
+      serializedContext: handlerContext(binding, ctx.require(BundleKey)),
+      binding,
+    });
+  workflowRunId.current = "wrun_1";
+  const first = await open();
+  const retried = await open();
+  workflowRunId.current = "wrun_2";
+  const later = await open();
+  const keys = requested.slice(-3).map((input) => input.idempotencyKey);
+  expect(keys[1]).toBe(keys[0]);
+  expect(keys[2]).not.toBe(keys[0]);
+  expect(retried).toEqual(first);
+  expect(later).not.toEqual(first);
 });
 
 it("returns a subscribe that outlasts the wait as pending under its id, which get later resolves", async () => {
@@ -652,9 +681,6 @@ it("returns a subscribe that outlasts the wait as pending under its id, which ge
     expect(await actions.execute("events_get_subscription", { id }, { callId: "get" })).toEqual(
       pending,
     );
-    await expect(actions.execute("events_unsubscribe", { id }, { callId: "stop" })).rejects.toThrow(
-      "still being created",
-    );
     handlers.set(id, { binding: initial.binding!, subscription: late as ManagedEventSubscription });
     vi.mocked(adapter.getSubscription).mockResolvedValue(late as ManagedEventSubscription);
     expect(
@@ -663,6 +689,21 @@ it("returns a subscribe that outlasts the wait as pending under its id, which ge
   });
   // The model's next call reuses the id it was given: Connect saw one subscribe.
   expect(adapter.getSubscription).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_late" }));
+});
+
+it("takes a stop while the subscribe is still in flight, for the watch's run to carry out", async () => {
+  vi.mocked(startConnectionEventOwner).mockImplementationOnce(async (binding) => {
+    handlers.set(binding.id, { binding, subscription: undefined });
+    return undefined;
+  });
+  const { id } = await watch();
+  await contextStorage.run(ctx, async () => {
+    expect(await actions.execute("events_unsubscribe", { id }, { callId: "stop" })).toEqual({
+      id,
+      status: "stopping",
+    });
+  });
+  expect(retired.has(id)).toBe(true);
 });
 
 it("ends the watch after its terminated callback", async () => {
@@ -701,50 +742,80 @@ it("lets the creator stop a watch from a later session by its id", async () => {
   const { id } = await watch();
   ctx.set(SessionIdKey, "session-2");
   await contextStorage.run(ctx, async () => {
-    expect(await actions.execute("events_unsubscribe", { id }, { callId: "stop" })).toMatchObject({
+    expect(await actions.execute("events_unsubscribe", { id }, { callId: "stop" })).toEqual({
       id,
-      subscriptionId: "sub_0",
-      status: "stopped",
+      status: "stopping",
     });
   });
+  // The action only asks the watch's run to stop; the run unsubscribes.
+  expect(adapter.unsubscribe).not.toHaveBeenCalled();
   expect(retired.has(id)).toBe(true);
 });
 
-it("keeps a stopped watch reachable while Connect finishes cleanup", async () => {
+it("reports a stopped watch until its run finishes Connect's cleanup", async () => {
   const { id } = await watch();
-  const pending = {
+  const cleaning = {
     ...saved.values().next().value!,
     status: "stopped" as const,
     cleanupStatus: "pending" as const,
   };
-  vi.mocked(adapter.unsubscribe).mockResolvedValue(pending);
-  vi.mocked(adapter.getSubscription).mockResolvedValue(pending);
+  vi.mocked(adapter.getSubscription).mockResolvedValue(cleaning);
   await contextStorage.run(ctx, async () => {
     await actions.execute("events_unsubscribe", { id }, { callId: "stop" });
     expect(
       await actions.execute("events_get_subscription", { id }, { callId: "get" }),
-    ).toMatchObject({
-      id,
-      cleanupStatus: "pending",
-    });
-    await actions.execute("events_unsubscribe", { id }, { callId: "stop-again" });
+    ).toMatchObject({ id, cleanupStatus: "pending" });
   });
-  expect(adapter.unsubscribe).toHaveBeenCalledTimes(2);
+  // Once the run has ended, its hook is gone and the id is unknown.
+  handlers.delete(id);
+  await contextStorage.run(ctx, async () => {
+    await expect(
+      actions.execute("events_get_subscription", { id }, { callId: "get-after" }),
+    ).rejects.toThrow("Unknown subscription");
+    await expect(
+      actions.execute("events_unsubscribe", { id }, { callId: "stop-after" }),
+    ).rejects.toThrow("Unknown subscription");
+  });
 });
 
-it("keeps the handler when Connect fails to unsubscribe, so stop can be retried", async () => {
-  const { id } = await watch();
-  vi.mocked(adapter.unsubscribe).mockRejectedValueOnce(new Error("Connect unavailable"));
-  await contextStorage.run(ctx, async () => {
-    await expect(actions.execute("events_unsubscribe", { id }, { callId: "stop" })).rejects.toThrow(
-      "Connect unavailable",
-    );
-    expect(retired.has(id)).toBe(false);
+it.each([
+  ["pending", { cleanupStatus: "pending" as const }, "pending"],
+  ["complete", { cleanupStatus: "complete" as const }, "done"],
+  ["already removed", Object.assign(new Error("Not found"), { status: 404 }), "done"],
+])(
+  "reads Connect's unsubscribe answer for the watch's run: %s",
+  async (_name, answer, expected) => {
+    await watch();
+    const subscription = saved.values().next().value!;
+    if (answer instanceof Error) vi.mocked(adapter.unsubscribe).mockRejectedValueOnce(answer);
+    else vi.mocked(adapter.unsubscribe).mockResolvedValueOnce({ ...subscription, ...answer });
+    const binding = initial.binding!;
     expect(
-      await actions.execute("events_unsubscribe", { id }, { callId: "stop-again" }),
-    ).toMatchObject({ status: "stopped" });
-  });
-  expect(retired.has(id)).toBe(true);
+      await unsubscribeConnectionEventStep({
+        serializedContext: handlerContext(binding, ctx.require(BundleKey)),
+        binding,
+        subscriptionId: subscription.id,
+      }),
+    ).toBe(expected);
+    expect(adapter.unsubscribe).toHaveBeenCalledWith(
+      expect.objectContaining({ id: subscription.id }),
+    );
+  },
+);
+
+it("retries the unsubscribe step when Connect is unavailable", async () => {
+  await watch();
+  vi.mocked(adapter.unsubscribe).mockRejectedValueOnce(
+    Object.assign(new Error("Connect unavailable"), { status: 503 }),
+  );
+  const binding = initial.binding!;
+  await expect(
+    unsubscribeConnectionEventStep({
+      serializedContext: handlerContext(binding, ctx.require(BundleKey)),
+      binding,
+      subscriptionId: "sub_0",
+    }),
+  ).rejects.toThrow("Connect unavailable");
 });
 
 it("records a gap before dispatch and keeps the subscription available for later events", async () => {

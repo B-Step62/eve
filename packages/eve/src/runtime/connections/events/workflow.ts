@@ -3,62 +3,79 @@ import { claimHookOwnership, disposeHook, isHookConflictError } from "#execution
 import { parseJsonObject } from "#shared/json.js";
 import type { ConnectionEventPayload } from "#runtime/connections/events/delivery.js";
 import { connectionEventHookToken } from "#runtime/connections/events/path.js";
-import { MAX_WATCH_TTL_MS, type EventBinding } from "#runtime/connections/events/state.js";
+import type { EventBinding } from "#runtime/connections/events/state.js";
 import { dispatchConnectionEventStep } from "#runtime/connections/events/dispatch-step.js";
 import {
   openConnectionEventStep,
   publishConnectionEventOutcomeStep,
+  startConnectionEventDeliveryStep,
+  unsubscribeConnectionEventStep,
 } from "#runtime/connections/events/lifecycle-step.js";
 
-export type ConnectionEventWatchMessage = { readonly kind: "retire" };
+export type ConnectionEventWatchMessage =
+  | { readonly kind: "retire" }
+  /** A delivery that reached the receiver before this run published its subscription. */
+  | { readonly kind: "delivery"; readonly payload: ConnectionEventPayload };
 
-/**
- * How long an ended watch stays findable by its id, so get and a repeated
- * stop still reach Connect while it finishes upstream cleanup.
- */
-const ENDED_WATCH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** Connect asks callers to repeat unsubscribe until its cleanup completes. */
+const FIRST_UNSUBSCRIBE_RETRY_MS = 5_000;
+const LAST_UNSUBSCRIBE_RETRY_MS = 3_600_000;
 
 /**
  * Holds one watch: its hook carries the binding every delivery runs under,
  * and the run waits until the watch is stopped, terminated or expires.
  * Deliveries run in their own {@link connectionEventDeliveryWorkflow}, so
- * this run's log stays a few entries long however many events arrive.
- *
- * The run never disposes a subscribed watch's hook. Its retention outlasts
- * the watch, so once the run ends Workflow keeps the hook findable by its id
- * but no longer resumable: the run's status is what says the watch ended.
+ * this run's log only grows by the deliveries that arrive before its
+ * subscribe response does. The hook ends with the run: an ended watch is
+ * not found.
  */
 export async function connectionEventWorkflow(input: {
   readonly binding: EventBinding;
   readonly serializedContext: Record<string, unknown>;
 }): Promise<void> {
   "use workflow";
+  const { binding, serializedContext } = input;
   const hook = createHook<ConnectionEventWatchMessage>({
-    token: connectionEventHookToken(input.binding.id),
-    metadata: parseJsonObject(input.binding) as HookOptions["metadata"],
-    experimental_minRetention:
-      (input.binding.request.ttlMs ?? MAX_WATCH_TTL_MS) + ENDED_WATCH_RETENTION_MS,
+    token: connectionEventHookToken(binding.id),
+    metadata: parseJsonObject(binding) as HookOptions["metadata"],
   });
   try {
     await claimHookOwnership(hook);
   } catch (error) {
     if (!isHookConflictError(error) || typeof error.conflictingRunId !== "string") throw error;
-    // A retried subscribing tool started a second run: its caller reads the first one.
+    // The same watch was asked for again while it runs: its caller reads the first run.
     await publishConnectionEventOutcomeStep({ ownerRunId: error.conflictingRunId });
     return;
   }
-  const opened = await openConnectionEventStep({
-    serializedContext: input.serializedContext,
-    binding: input.binding,
-  });
+  const opened = await openConnectionEventStep({ serializedContext, binding });
   if ("error" in opened) {
-    // Nothing was subscribed: a retried call with this id may try again.
+    // Nothing was subscribed: asking for the same watch again starts over.
     await disposeHook(hook);
     return;
   }
-  const { expiresAt } = opened.subscription;
+  const { id: subscriptionId, expiresAt } = opened.subscription;
   // Connect ends the subscription at expiresAt and sends nothing more.
-  await (expiresAt === null ? hook : Promise.race([hook, sleep(new Date(expiresAt))]));
+  const expiry = expiresAt === null ? undefined : sleep(new Date(expiresAt));
+  while (true) {
+    const message = await (expiry === undefined ? hook : Promise.race([hook, expiry]));
+    if (message === undefined) return;
+    if (message.kind === "retire") break;
+    // Connect verifies the destination, not the subscription: only this run's own runs.
+    if (message.payload.delivery.subscriptionId === subscriptionId)
+      await startConnectionEventDeliveryStep({
+        binding,
+        serializedContext,
+        payload: message.payload,
+      });
+  }
+  let retryMs = FIRST_UNSUBSCRIBE_RETRY_MS;
+  while (
+    (await unsubscribeConnectionEventStep({ serializedContext, binding, subscriptionId })) ===
+    "pending"
+  ) {
+    await sleep(retryMs);
+    retryMs = Math.min(retryMs * 2, LAST_UNSUBSCRIBE_RETRY_MS);
+  }
 }
 
 /** Runs one delivery's callback in its own short run. */

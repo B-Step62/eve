@@ -22,7 +22,6 @@ import { parseJsonObject } from "#shared/json.js";
 import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
 import { connectionEventDestination } from "#runtime/connections/events/path.js";
 import {
-  MAX_WATCH_TTL_MS,
   sameEventOwner,
   type EventBinding,
   type EventOwner,
@@ -33,6 +32,8 @@ const GET = "events_get_subscription";
 const STOP = "events_unsubscribe";
 const PREFIX = "events_subscribe_";
 const MIN_TTL_MS = 120_000;
+/** The longest finite watch Connect accepts, in milliseconds. */
+const MAX_TTL_MS = 31_536_000_000;
 type EventCatalog = Pick<MCPEvents, "list">;
 const SUBSCRIBE_INPUT_SCHEMA = defineJsonSchema<
   Pick<ManagedEventSubscribeInput, "arguments" | "ttlMs">
@@ -155,7 +156,7 @@ export class ConnectionEventActions {
       return [
         ...catalog.map((event) => ({
           name: actionName(event.name),
-          description: `Watch ${event.name}. ${event.description ?? ""} Events reach this connection's authored callback for ttlMs milliseconds or until stopped. Set ttlMs to null to watch indefinitely.`,
+          description: `Watch ${event.name}. ${event.description ?? ""} Events reach this connection's authored callback for ttlMs milliseconds or until stopped. Set ttlMs to null to watch indefinitely. Watching the same event with the same arguments again returns the existing watch.`,
           inputSchema: subscribeInputSchema(event.inputSchema),
         })),
         ...managementMetadata(),
@@ -188,11 +189,13 @@ export class ConnectionEventActions {
       const handler = await findConnectionEventOwner(bindingId);
       if (handler === undefined || !sameEventOwner(handler.owner, caller))
         throw new Error("Unknown subscription for this caller and account.");
-      if (handler.subscription === undefined) {
-        if (name === STOP)
-          throw new Error("This subscription is still being created. Stop it again shortly.");
-        return pendingResult(handler.owner);
+      // The watch's run unsubscribes, and repeats it until Connect finishes cleaning up.
+      if (name === STOP) {
+        if (!(await retireConnectionEventOwner(bindingId)))
+          throw new Error("Unknown subscription for this caller and account.");
+        return { id: bindingId, status: "stopping" as const };
       }
+      if (handler.subscription === undefined) return pendingResult(handler.owner);
       const subscriptionId = handler.subscription.id;
       const events = await backend.createAdapter({
         principal,
@@ -205,15 +208,10 @@ export class ConnectionEventActions {
           connectionName: this.connection.connectionName,
           bindingId,
           subscriptionId,
-          operation: name === STOP ? "unsubscribe" : "get",
+          operation: "get",
         },
-        () =>
-          name === STOP
-            ? events.unsubscribe({ id: subscriptionId, options: { timeout: 30_000 } })
-            : events.getSubscription({ id: subscriptionId, options: { timeout: 30_000 } }),
+        () => events.getSubscription({ id: subscriptionId, options: { timeout: 30_000 } }),
       );
-      // Cancel upstream first: a failed unsubscribe leaves the watch whole, so stop can be retried.
-      if (name === STOP) await retireConnectionEventOwner(bindingId);
       return subscriptionResult(bindingId, subscription);
     }
     return this.withClient(async (events) => {
@@ -240,15 +238,18 @@ export class ConnectionEventActions {
       if (valid.issues !== undefined)
         throw new Error("Event arguments do not match the authorized catalog schema.");
       const eventArguments = parseJsonObject(valid.value);
+      // The id names what is watched, not the tool call, so asking again after a
+      // cancelled or timed-out call reaches the same watch and its subscription.
       const id = createHash("sha256")
         .update(
-          JSON.stringify([
+          canonicalJson([
             sessionId,
             this.connection.instanceId,
             this.connection.connectionName,
             owner,
             executionPrincipal,
-            options.callId,
+            definition.name,
+            eventArguments,
           ]),
         )
         .digest("hex");
@@ -262,11 +263,10 @@ export class ConnectionEventActions {
           name: definition.name,
           arguments: structuredClone(eventArguments) as ManagedEventSubscribeInput["arguments"],
           ttlMs,
-          idempotencyKey: id,
           context: { eve: { version: 1, sessionId, bindingId: id } },
         },
       };
-      // A retried tool call reaches the run its first attempt started, by the same id.
+      // A watch already running under this id answers instead of a new one.
       const subscription = await startConnectionEventOwner(
         binding,
         ctx.require(BundleKey),
@@ -291,8 +291,8 @@ function subscribeInputSchema(
       ttlMs: {
         type: ["integer", "null"],
         minimum: MIN_TTL_MS,
-        maximum: MAX_WATCH_TTL_MS,
-        description: `How long to watch, in milliseconds (${MIN_TTL_MS} to ${MAX_WATCH_TTL_MS}), or null until stopped`,
+        maximum: MAX_TTL_MS,
+        description: `How long to watch, in milliseconds (${MIN_TTL_MS} to ${MAX_TTL_MS}), or null until stopped`,
       },
     },
   };
@@ -309,6 +309,15 @@ function pendingResult(binding: EventBinding) {
   return { id: binding.id, name, arguments: eventArguments, status: "pending" as const };
 }
 
+/** JSON with object keys sorted, so equal arguments hash equally. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    entry !== null && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry).sort(([left], [right]) => (left < right ? -1 : 1)))
+      : entry,
+  );
+}
+
 function actionName(eventName: string): string {
   return `${PREFIX}${createHash("sha256").update(eventName).digest("hex").slice(0, 24)}`;
 }
@@ -319,7 +328,7 @@ function managementMetadata(): ConnectionToolMetadata[] {
     description:
       name === GET
         ? "Get one of this caller's subscriptions, by the id its subscribe call returned, with Connect's current status."
-        : "Stop one of this caller's subscriptions, by the id its subscribe call returned. Connect may report cleanupStatus pending until upstream cancellation finishes.",
+        : "Stop one of this caller's subscriptions, by the id its subscribe call returned. The watch then cancels upstream and ends; get reports it until it has.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string" } },

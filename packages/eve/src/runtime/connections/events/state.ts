@@ -20,7 +20,8 @@ export interface EventBinding extends EventOwner {
   readonly sessionId: string;
   readonly auth: SessionAuthContext | null;
   readonly traceSeed?: SessionTraceSeed;
-  readonly request: ManagedEventSubscribeInput;
+  /** The watch's own run adds the idempotency key, so each run subscribes once. */
+  readonly request: Omit<ManagedEventSubscribeInput, "idempotencyKey" | "options">;
 }
 
 /** The run publishes its subscription once, so callers outside it can read what it owns. */
@@ -36,9 +37,6 @@ export type ConnectionEventSubscribeOutcome =
   | ConnectionEventSubscribeResult
   /** Another run already owns this binding: read the outcome from that run. */
   | { readonly ownerRunId: string };
-
-/** The longest finite watch, in milliseconds. */
-export const MAX_WATCH_TTL_MS = 31_536_000_000;
 
 export function sameEventOwner(left: EventOwner, right: EventOwner): boolean {
   return (
