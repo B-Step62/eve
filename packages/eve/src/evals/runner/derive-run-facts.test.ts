@@ -286,8 +286,7 @@ describe("deriveRunFacts", () => {
     expect(derive(events).toolCalls).toHaveLength(1);
   });
 
-  // Fails until #4900 is fixed: a result delivered first records the call with `input: {}`.
-  it.fails("keeps a tool call's input when its result is delivered before its request", () => {
+  it("keeps a tool call's input when its result is delivered before its request", () => {
     const events: UnstampedMessageStreamEvent[] = [
       turnStarted("t1", 0),
       actionResult({ callId: "c1", toolName: "lookup", output: { ok: true } }),

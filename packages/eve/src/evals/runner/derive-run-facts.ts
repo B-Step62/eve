@@ -67,6 +67,8 @@ export function deriveRunFacts(
   const sessionId = options?.sessionId;
   const toolCalls: MutableToolCall[] = [];
   const toolCallsByCallId = new Map<string, MutableToolCall>();
+  /** Calls first seen through their result, whose request has not arrived yet. */
+  const callIdsAwaitingInput = new Set<string>();
   const skillLoads = new Map<string, MutableSkillLoad>();
   const agentCalls: AgentCall[] = [];
   const settledTaskCalls = new Map<string, TaskSettledStreamEvent["data"]>();
@@ -79,13 +81,18 @@ export function deriveRunFacts(
   let usage: TokenUsage | undefined;
   let failureCode: string | undefined;
 
-  const ensureToolCall = (callId: string, name: string, input: JsonObject): MutableToolCall => {
+  const ensureToolCall = (callId: string, name: string, input?: JsonObject): MutableToolCall => {
     const existing = toolCallsByCallId.get(callId);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      // The stream can deliver a result before its request (vercel/workflow#4878).
+      if (input !== undefined && callIdsAwaitingInput.delete(callId)) existing.input = input;
+      return existing;
+    }
+    if (input === undefined) callIdsAwaitingInput.add(callId);
 
     const call: MutableToolCall = {
       name,
-      input,
+      input: input ?? {},
       output: undefined,
       status: "pending",
       turnIndex: Math.max(turnIndex, 0),
@@ -123,7 +130,7 @@ export function deriveRunFacts(
       case "action.result": {
         const { result, status } = event.data;
         if (result.kind === "tool-result") {
-          const call = ensureToolCall(result.callId, result.toolName, {});
+          const call = ensureToolCall(result.callId, result.toolName);
           call.output = result.output;
           call.status = status;
         }
