@@ -65,6 +65,7 @@ export async function resolveConnectionDefinition(
       definition.protocol === "openapi" ? resolvedRecord.operations : resolvedRecord.tools;
 
     const result: {
+      experimental_events?: ResolvedConnectionDefinition["experimental_events"];
       approval?: ResolvedConnectionDefinition["approval"];
       authorization?: ResolvedConnectionDefinition["authorization"];
       connectionName: string;
@@ -131,6 +132,13 @@ export async function resolveConnectionDefinition(
         throw new Error('"forwardPrincipal" must be a boolean.');
       }
       result.forwardPrincipal = resolvedRecord.forwardPrincipal;
+    }
+
+    if (definition.experimental_events === true) {
+      result.experimental_events = normalizeMcpClientConnectionDefinition(
+        resolvedRecord,
+        `Connection "${definition.connectionName}":`,
+      ).experimental_events;
     }
 
     if (hasHeaders) {
@@ -216,6 +224,11 @@ export function resolveDynamicConnectionValue(
   }
 
   const normalized = normalizeMcpClientConnectionDefinition(value, message);
+  if (normalized.experimental_events !== undefined) {
+    throw new Error(
+      `${message} experimental_events requires a statically authored connection so eve can mount its receiver at build time.`,
+    );
+  }
   assertAuthenticatedDynamicInstanceKey(normalized.auth, normalized.instanceKey, message);
   return omitUndefined({
     approval: normalized.approval,
