@@ -81,7 +81,7 @@ says so.
   position instead.
 - **Replies and narration.** A text part's `phase` is `"reply"` or `"narration"`. Text written
   before more work is narration; `turn.settled.data.reply` lists the reply's part ids.
-- **Calls.** `call.requested` names its `capability` (`{ kind, name, title? }`) and carries its
+- **Calls.** `call.requested` names its `capability` (`{ kind, name, label? }`) and carries its
   `input`. `call.settled` carries `outcome` (`completed`, `failed`, `rejected`, `interrupted`,
   `abandoned`) and `output` or `error`, but not the tool's name: match it to its
   `call.requested` by `callId`, or read `ctx.view.calls[callId]`. A call fails only when its
@@ -107,7 +107,7 @@ The interaction vocabulary replaces input requests and responses everywhere:
 
 | v26                                                                     | v27                                                                                                                      |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `InputRequest`, `InputResponse` (`requestId`)                           | `AskedInteraction`, `Answer` (`interactionId`)                                                                           |
+| `InputRequest`, `InputResponse` (`requestId`)                           | `Interaction`, `Answer` (`interactionId`)                                                                                |
 | `send({ inputResponses })`, `respond(inputResponses)`                   | `send({ answers })`, `respond(answers)`                                                                                  |
 | `parseInputResponse`, `parseInputResponses`, `isInputResponse`          | `parseAnswer`, `parseAnswers`, `isAnswer`                                                                                |
 | A response's `inputRequests` and `authorizations`                       | `interactions`, sign-ins included                                                                                        |
@@ -121,12 +121,24 @@ The interaction vocabulary replaces input requests and responses everywhere:
 | Evals: `inputRequests`, `pendingInputRequests`, `requireInputRequest()` | `interactions`, `pendingInteractions`, `requireInteraction()`                                                            |
 | `slackChannel`, `discordChannel`, `teamsChannel`: `onInputResponse`     | `onAnswers`, with `SlackAnswerContext`, `SlackAnswerSubmission`, `SlackAnswerResult`, and the same for Discord and Teams |
 | Telegram `renderTelegramInputRequest`, `resolveTelegramInputResponses`  | `renderTelegramInteraction`, `resolveTelegramAnswers`; `telegramCallbackAnswer`, `telegramReplyAnswer`                   |
-| Workflow `ctx.ask()`: `ToolInputRequest`, `ToolInputResponse`           | `ToolQuestion`, `ToolAskOptions`, `ToolAnswer`, `ToolResponder`                                                          |
+| Workflow `ctx.ask()`: `ToolInputRequest`, `ToolInputResponse`           | `ToolQuestion`, `ToolAskOptions`, `ToolAnswer`; its `responder` is a `Principal`                                         |
 | Approval policies: `request.requestId`                                  | `request.interactionId`                                                                                                  |
 | Instrumentation `input.*`: `requestId`, `action`, `response`            | `interactionId`, `call` (absent for a request about no call), `answer`                                                   |
 
-Posted Slack, Discord, Teams, and Telegram controls keep their encodings, so buttons posted
-before the upgrade still answer.
+Posted Slack, Discord, Teams, and Telegram controls keep their routing encodings, so buttons posted
+before the upgrade still reach their owning deployment. New approval and budget prompts use
+`APPROVE_OPTION_ID` (`"approve"`) and `DENY_OPTION_ID` (`"deny"`) from `eve/events`; change custom
+buttons and `ApprovalResponse.decision` checks from `"cancel"` to `"deny"`. Pre-v27 sessions
+continue to decode their own earlier options.
+
+Readers use `interaction(view, interactionId)` from `eve/events`. Its `interactionId`, `call`,
+`status`, `answer`, and location are top-level; the prompt fields stay under `request`, matching
+`InteractionRow`. A submitted answer leaves `status: "open"` until the interaction settles. CLI
+and MCP JSON results use the same nesting and omit `request.signIn.callbackUrl`.
+
+Call labels use `capability.label`, `call.progress.data.label`, `call.settled.data.label`, and
+`CallRow.label`. A prompt's heading still uses `request.title`. Stream parts use `kind`, because
+`type` names their event; authoring and UI parts keep their `type` discriminant.
 
 ## Hooks
 
@@ -197,7 +209,7 @@ Slack renderers take `(event, ctx, next)`, with Slack's handles on `ctx.channel.
   stays open, `"completed"` once it ended, `"failed"` on failure.
 - **Interactions.** Every interaction a person is asked, sign-ins included, is in one list:
   `ConversationState.interactions`, a response's `interactions`, `openInteractions(view)`. Filter
-  by `kind`. An approval or a question about a call shows on its call's tool part
+  by `request.kind`. An approval or a question about a call shows on its call's tool part
   (`part.interaction`); every other interaction, such as a sign-in or the budget prompt, is an
   `EveInteractionPart` of its own.
 - **Tool parts are call rows.** A message's `dynamic-tool` part, with its seven AI SDK states, is
@@ -215,7 +227,7 @@ Slack renderers take `(event, ctx, next)`, with Slack's handles on `ctx.channel.
 - **No custom reducers.** `useEveAgent({ reducer })`, `EveAgentReducer`, and the client reducer
   events are gone, and with them the snapshot's separate `conversation`: `data` is the
   conversation. Derive other state from `events`, for example with `useMemo`, or fold them
-  with `foldReceivedEvent` from `eve/events`; `conversationOf(events)` reads saved events as a
+  with `foldEvents` from `eve/events`; `conversationOf(events)` reads saved events as a
   conversation. `transcriptReducer(options)` is `transcriptOf(events, options)`.
 - **Use the shared fold.** `eve/events` exports the catalog, the fold that turns facts into tables,
   and selectors such as `activeTurn`, `reply`, `openInteractions`, `waiting`, and `idle`, so a

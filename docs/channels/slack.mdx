@@ -636,13 +636,13 @@ import { slackChannel } from "eve/channels/slack";
 
 export default slackChannel({
   approvalChannel: (request) =>
-    request.kind === "question" || request.action.toolName === "review_answer"
+    request.request.kind === "question" || request.call?.name === "review_answer"
       ? "direct-message"
       : "thread",
 });
 ```
 
-The callback receives the `AskedInteraction` and current `SessionContext`, so it can switch on `kind`, `action`, or presentation properties. Omit it to keep every request in the thread, or return `"direct-message"` unconditionally to make every request private. If eve cannot resolve the triggering Slack user for a direct message, it logs the undelivered request and posts no fallback, so private delivery fails closed. The existing `onAnswers` or tool approval response policy still decides whether the person who clicks may respond.
+The callback receives the `Interaction` and current `SessionContext`, so it can switch on `request.kind`, `call`, or prompt presentation properties. Omit it to keep every request in the thread, or return `"direct-message"` unconditionally to make every request private. If eve cannot resolve the triggering Slack user for a direct message, it logs the undelivered request and posts no fallback, so private delivery fails closed. The existing `onAnswers` or tool approval response policy still decides whether the person who clicks may respond.
 
 When a tool approval resolves, eve retires the messages it posted for it. The card loses its buttons and shows the answer and who gave it, the separate tool-input post is deleted, and a direct-message request's `Waiting on approval` note in the thread changes to the outcome. This also happens when the approval ends without a click, for example when the person replies in the thread instead, in which case the card reads `No longer needed`.
 
@@ -685,10 +685,10 @@ export default slackChannel({
 
 #### Render and decode HITL controls yourself
 
-`eve/channels/slack` exports the helpers eve uses for its own HITL controls. `renderInteractionBlocks(request, route?)` returns the Block Kit blocks for one `AskedInteraction`. `deriveHitlResponse(action)` decodes a click on those blocks into `{ response, kind?, route? }`, where `response` is the eve `InputResponse`, or returns `null` for any other action. Every eve-owned control's `action_id` starts with `HITL_ACTION_PREFIX` (`"eve_input:"`), so give your own buttons a different prefix to keep them routed to `onInteraction`.
+`eve/channels/slack` exports the helpers eve uses for its own HITL controls. `renderInteractionBlocks(request, route?)` returns the Block Kit blocks for one `Interaction`. `answerFromSlackAction(action)` decodes a click on those blocks into `{ response, kind?, route? }`, where `response` is the eve `Answer`, or returns `null` for any other action. Every eve-owned control's `action_id` starts with `ANSWER_ACTION_PREFIX` (`"eve_input:"`), so give your own buttons a different prefix to keep them routed to `onInteraction`.
 
 ```ts
-import { deriveHitlResponse, renderInteractionBlocks } from "eve/channels/slack";
+import { answerFromSlackAction, renderInteractionBlocks } from "eve/channels/slack";
 
 const [card] = renderInteractionBlocks(request) as [
   { actions: { action_id: string; value: string }[] },
@@ -696,8 +696,8 @@ const [card] = renderInteractionBlocks(request) as [
 const button = card.actions[0]!;
 
 // For a request whose first option id is "approve":
-deriveHitlResponse({ actionId: button.action_id, value: button.value });
-// { response: { optionId: "approve", requestId: request.requestId } }
+answerFromSlackAction({ actionId: button.action_id, value: button.value });
+// { response: { optionId: "approve", interactionId: request.interactionId } }
 ```
 
 Use them to test a custom renderer against eve's wire format, or to post eve's controls from your own renderer. A click on these controls in the session's Slack thread resumes the session through `onAnswers`, the same as eve's own controls. eve does not track controls you post yourself, so update or remove those messages from your renderer's `interaction.settled` handler. To pass `response` to `respond()` yourself, validate it first with `parseAnswers` from `eve/client`.

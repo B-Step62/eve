@@ -140,11 +140,11 @@ export default defineTool({
 The `response` policy receives:
 
 - `request`: the stable `interactionId`, `callId`, `toolName`, and typed `toolInput` for the call being approved, plus `principal`: the authenticated principal whose turn requested the call, or `null` when that caller was unauthenticated or anonymous. eve captures `request.principal` when the approval is requested, so it stays the same while other people continue the session.
-- `response`: the submitted `decision`, `"approve"` or `"cancel"`, plus `principal`: the authenticated principal that submitted it, including its `principalId`, `principalType`, `authenticator`, and `attributes`. Your route or channel supplies this identity. The policy runs for both decisions, so a responder it rejects can neither approve nor cancel the call.
+- `response`: the submitted `decision`, `"approve"` or `"deny"`, plus `principal`: the authenticated principal that submitted it, including its `principalId`, `principalType`, `authenticator`, and `attributes`. Your route or channel supplies this identity. The policy runs for both decisions, so a responder it rejects can neither approve nor cancel the call.
 - `session`: read-only session identity and lineage: `id`, `initiator`, `parent`, and `turn`.
 - `auth`: narrow `getToken(provider, options?)` and `requireAuth(provider, options?)` capabilities bound to the responder. Use these when authorization depends on a provider identity or permission; an interactive provider flow parks durably and then retries the policy.
 
-Return `{ status: "allowed" }` to accept the decision. Return `{ status: "rejected", reason }` to leave the shared request pending so another eligible responder can settle it. When a policy only cares who approves, return `{ status: "allowed" }` for `cancel` so anyone can still dismiss the request.
+Return `{ status: "allowed" }` to accept the decision. Return `{ status: "rejected", reason }` to leave the shared request pending so another eligible responder can settle it. When a policy only cares who approves, return `{ status: "allowed" }` for `deny` so anyone can still dismiss the request.
 
 `session.initiator` is the person who started the session, and `request.principal` is the person who asked for this call. In a shared thread they can differ. Compare the full identity of `response.principal` with `request.principal` to let only the requester settle the call:
 
@@ -230,7 +230,7 @@ export default askQuestion();
 
 `ask_question` is an ordinary [workflow tool](/docs/tools/workflows) built on `ctx.ask()`. Write your own workflow tool with `ctx.ask()` when you need a different schema or want to act on the answer in the same call. Without any asking tool, the model asks in its reply text and the user's next message carries the answer.
 
-In a custom workflow tool, an answered `ctx.ask()` returns the authenticated responder's `authenticator`, `principalId`, and `principalType` when that identity is available. It does not include channel attributes. `ctx.session.auth.current` remains the run's auth snapshot; use the response's `responder` to identify who answered.
+In a custom workflow tool, an answered `ctx.ask()` returns the authenticated responder's `id`, `type`, and optional `issuer` when that identity is available. It does not include channel attributes. `ctx.session.auth.current` remains the run's auth snapshot; use the response's `responder` to identify who answered.
 
 ## How pause and resume works
 
@@ -239,15 +239,15 @@ Approvals and questions share one protocol:
 1. A tool call needs approval, or a workflow tool such as `ask_question` calls `ctx.ask()`.
 2. eve emits an `interaction.opened` fact for each pending request.
 3. The run parks durably, for as long as it takes. The turn stays open: the stream emits `turn.paused` awaiting those interactions, and after the answer the turn runs on under the same `turnId`.
-4. The client answers with `answers` (structured, each naming its `interactionId`) or a normal follow-up `message`. A follow-up whose text matches an option ID, option label, or numeric option index resolves automatically, including approval options such as `approve` and `cancel`.
+4. The client answers with `answers` (structured, each naming its `interactionId`) or a normal follow-up `message`. A follow-up whose text matches an option ID, option label, or numeric option index resolves automatically, including approval options such as `approve` and `deny`.
 
-To tell the model why a call was denied, send `text` with the `cancel` response, for example `{ interactionId, optionId: "cancel", text: "Only the three-pack." }`. The model receives the note quoted in the denial result, marked as written by the person who denied the call, who may not be the user. The note is also visible to anyone who can read the session stream, in the `response.submitted` and `interaction.settled` facts.
+To tell the model why a call was denied, send `text` with the `deny` response, for example `{ interactionId, optionId: "deny", text: "Only the three-pack." }`. The model receives the note quoted in the denial result, marked as written by the person who denied the call, who may not be the user. The note is also visible to anyone who can read the session stream, in the `response.submitted` and `interaction.settled` facts.
 
 For `ctx.ask()` questions from tools and prompts proxied from subagents, a follow-up message answers the first open request, as described in [Several requests at once](#several-requests-at-once). The message must match an option, or the question must allow free text. Otherwise the message follows the session's `turnPolicy`. A steering message, the default, aborts the `ctx.abortSignal` of each `execute` workflow tool call the turn waits on, so a question such a call asked, such as `ask_question`'s, is withdrawn: its interaction settles `withdrawn`. The model reads the message once those calls settle.
 
 On the stream, each interaction's `request.kind` is `approval`, `question`, `budget`, or `sign-in`,
 and its `subject` names the call, task, or turn it is about. Clients read the same interaction as an
-`AskedInteraction`, with the same `kind`; use it to choose behavior and presentation, and keep a
+`Interaction`, with the same nested `request.kind`; use it to choose behavior and presentation, and keep a
 default branch, since a later release can add a kind. `interactionId` identifies the interaction to
 answer, and `call.callId`, when present, identifies the call it is about; neither encodes the
 interaction's semantics.
