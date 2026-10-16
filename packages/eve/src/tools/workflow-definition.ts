@@ -52,7 +52,7 @@ export type AgentMessageResult<TOutput = unknown> = Pick<
   "data" | "message" | "status"
 > & {
   /** Why the turn failed, present only when `status` is `"failed"`. */
-  readonly error?: { readonly message: MessageContent<string | URL> };
+  readonly error?: { readonly message: string };
 };
 
 /** The response to one message sent to a `ctx.agent` session. */
