@@ -141,7 +141,7 @@ function toolResultCapHeuristic(input: CompactionHeuristicInput): CompactionHeur
   const capped = withResumptionGuard(
     [...checkpointHead, ...capToolResults(input.older), ...input.recent],
     input.conversation,
-    input.config.threshold,
+    input.config,
   );
 
   // Capping can be a near no-op when the older region holds few large
@@ -244,11 +244,7 @@ export async function compactMessages(
     // Prefer keeping the recent tail verbatim — surviving tool results are the
     // model's evidence that work already ran. Degrade to text-only, then to a
     // smaller window, only under threshold pressure.
-    const verbatim = withResumptionGuard(
-      [...summaryHead, ...recent],
-      conversation,
-      config.threshold,
-    );
+    const verbatim = withResumptionGuard([...summaryHead, ...recent], conversation, config);
     // A new summary replaces the measured prompt, so no adjustment carries over.
     if (fitsAcceptLimit(verbatim, config, 0)) {
       return verbatim;
@@ -257,7 +253,7 @@ export async function compactMessages(
     const stripped = withResumptionGuard(
       [...summaryHead, ...keepNonToolResultMessages(recent)],
       conversation,
-      config.threshold,
+      config,
     );
     if (fitsAcceptLimit(stripped, config, 0)) {
       return stripped;
@@ -334,12 +330,13 @@ function capToolResults(messages: readonly ModelMessage[]): ModelMessage[] {
  * message when compaction folded it away — the model resumes against its
  * actual instruction, with the checkpoint as background. Falls back to
  * "Continue." when the last real user message still survives in the kept
- * messages (the model was mid-work on it) or none exists.
+ * messages (the model was mid-work on it), none exists, or replaying it would
+ * leave the history over the accept limit.
  */
 function withResumptionGuard(
   messages: ModelMessage[],
   conversation: readonly ModelMessage[],
-  threshold: number,
+  config: CompactionConfig,
 ): ModelMessage[] {
   const lastRole = messages.at(-1)?.role;
   const replay = findLastRealUserMessage(conversation);
@@ -354,7 +351,7 @@ function withResumptionGuard(
       lastRole === "tool" &&
       replay !== undefined &&
       !alreadyKept &&
-      estimateTokens([replay]) <= threshold
+      fitsAcceptLimit([replay], config, 0)
     ) {
       return [...messages, replay];
     }
@@ -363,7 +360,7 @@ function withResumptionGuard(
 
   return [
     ...messages,
-    replay !== undefined && !alreadyKept
+    replay !== undefined && !alreadyKept && fitsAcceptLimit([...messages, replay], config, 0)
       ? replay
       : createFrameworkUserMessage("execution.continuation", COMPACTION_RESUMPTION_MESSAGE),
   ];

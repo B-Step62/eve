@@ -1236,4 +1236,24 @@ describe("compactMessages: summarization fallback", () => {
       ),
     ).rejects.toThrow(/could not fit the summary/);
   });
+
+  it("continues instead of replaying a task that does not fit the accept limit", async () => {
+    // The task fits the threshold, so a bare summary and the replayed task
+    // would fit on the old ruler, but not under the 60% accept limit.
+    const task = user(`Review every file. ${"requirement ".repeat(5_600)}`);
+    const messages = [task, assistant("working on it"), assistant("still going")];
+    const threshold = 20_000;
+    expect(estimateTokens([task])).toBeGreaterThan(Math.floor(threshold * 0.6));
+    expect(estimateTokens([task])).toBeLessThan(threshold);
+
+    const compactionConfig = { recentWindowSize: 1, threshold };
+    const summarizer = summarizeWith("checkpoint text");
+    const result = await compactMessages(messages, compactionConfig, summarizer);
+
+    expect(result.at(-1)).toEqual(
+      createFrameworkUserMessage("execution.continuation", "Continue."),
+    );
+    expect(result).not.toContainEqual(task);
+    expect(shouldCompact(result, compactionConfig)).toBe(false);
+  });
 });
