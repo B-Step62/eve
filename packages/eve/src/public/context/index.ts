@@ -11,7 +11,7 @@
  */
 
 export type {
-  Session,
+  Session as SessionInfo,
   SessionAuth,
   SessionAuthContext,
   SessionParent,

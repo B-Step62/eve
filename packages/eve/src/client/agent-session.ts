@@ -1,4 +1,5 @@
 import type { SessionStreamEvent } from "#protocol/session-event.js";
+import type { SessionReader } from "#shared/session.js";
 import { followStreamIterable, type FollowedEvent } from "#client/open-stream.js";
 import type { ClientSessionContext } from "#client/session.js";
 import type { StreamOptions } from "#client/types.js";
@@ -12,11 +13,11 @@ import type { ChildOpened } from "#protocol/session-events/families/child.js";
  * remote child, which the parent deployment authenticates to the remote agent
  * after checking that it recorded the child.
  */
-export class ClientAgentSession {
+export class ClientAgentSession implements SessionReader {
   /** The agent's name, as `child.opened` reports it. */
   readonly name: string;
   /** The child session's id. */
-  readonly sessionId: string;
+  readonly id: string;
   /** The task whose run opened the session; absent when an `execute` call opened it. */
   readonly taskId: string | undefined;
   readonly #context: ClientSessionContext;
@@ -27,7 +28,7 @@ export class ClientAgentSession {
     this.#context = context;
     this.#streamPath = opened.data.stream;
     this.name = opened.data.name;
-    this.sessionId = opened.data.sessionId;
+    this.id = opened.data.sessionId;
     this.taskId =
       opened.scope?.taskId ??
       ("taskId" in opened.data.owner ? opened.data.owner.taskId : undefined);
