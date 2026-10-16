@@ -432,9 +432,8 @@ export default defineTool({
 ```
 
 `once()` without a key works as it does today, and policies keep every return value they have
-now. Two fixes land with it: an `approved` result's `reason` reaches the model, as the docs
-already say it does, and a call that runs because a policy or a remembered approval cleared it
-records that on the stream.
+now. A call that runs because a policy or a remembered approval cleared it records that on the
+stream.
 
 **Why it's useful.**
 
