@@ -17,16 +17,15 @@ import type { CompactionConfig } from "#harness/types.js";
 const COMPACTION_SUMMARY_RESERVE_TOKENS = 2_048;
 
 /**
- * Fraction of the compaction threshold a tool-result-capped history must fit
- * under before capping is accepted instead of summarizing. Capping only
- * shrinks the older region, so a result that lands just under the threshold
- * re-triggers compaction a few steps later, and every cycle rewrites the
- * prompt prefix and loses the provider prompt cache. Requiring 40% of the
- * threshold as free space keeps a capped history alive for many steps; when
- * capping cannot reach that, summarizing now costs one model call instead of
- * a run of cache-busting cap cycles followed by a summary anyway.
+ * Fraction of the compaction threshold every compacted history must fit
+ * under, measured on {@link shouldCompact}'s ruler. A history accepted just
+ * under the threshold re-triggers compaction a few steps later (or on the
+ * very next step), and every cycle rewrites the prompt prefix, loses the
+ * provider prompt cache and, on the summary path, costs a model call.
+ * Requiring 40% of the threshold as free space keeps a compacted history
+ * alive for many steps.
  */
-const TOOL_RESULT_CAP_TARGET_RATIO = 0.6;
+const COMPACTION_TARGET_RATIO = 0.6;
 
 /**
  * Element type of a non-string `ModelMessage.content` array.
@@ -145,42 +144,37 @@ function toolResultCapHeuristic(input: CompactionHeuristicInput): CompactionHeur
     input.config.threshold,
   );
 
-  // Evaluate on the same ruler shouldCompact uses (envelope included):
-  // capping can be a near no-op when the older region holds few large
-  // results, and accepting one on a looser ruler would let shouldCompact
-  // re-fire every step without compaction ever making progress.
-  const evaluation = evaluateThreshold(
-    capped,
-    input.config,
-    "should-compact",
-    input.tokenEstimateAdjustment,
-  );
-  // Accepting anything merely under the threshold would make no lasting
-  // progress: see TOOL_RESULT_CAP_TARGET_RATIO.
-  return evaluation.estimatedTokens <=
-    Math.floor(input.config.threshold * TOOL_RESULT_CAP_TARGET_RATIO)
+  // Capping can be a near no-op when the older region holds few large
+  // results; the acceptance limit rejects it then and summarization runs.
+  return fitsAcceptLimit(capped, input.config, input.tokenEstimateAdjustment)
     ? { messages: capped, type: "within-limit" }
     : { type: "insufficient" };
 }
 
 /**
- * Measures a candidate history against the compaction threshold.
- * The "should-compact" ruler includes the fixed prompt-envelope overhead that
- * {@link shouldCompact} adds, so a history accepted on it cannot immediately
- * re-trigger compaction; "estimate" is the bare history size.
+ * The largest history size compaction may accept: {@link COMPACTION_TARGET_RATIO}
+ * of the threshold, so an accepted history has real headroom before
+ * {@link shouldCompact} fires again.
  */
-function evaluateThreshold(
+function acceptLimit(config: CompactionConfig): number {
+  return Math.floor(config.threshold * COMPACTION_TARGET_RATIO);
+}
+
+/**
+ * The one acceptance check for every compaction strategy. It measures on
+ * {@link shouldCompact}'s ruler (fixed prompt envelope included) against
+ * {@link acceptLimit}, so no accepted history can re-trigger compaction on
+ * the next step.
+ */
+function fitsAcceptLimit(
   messages: readonly ModelMessage[],
   config: CompactionConfig,
-  ruler: "estimate" | "should-compact",
-  tokenEstimateAdjustment = 0,
-): { readonly estimatedTokens: number; readonly type: "over-limit" | "within-limit" } {
-  const overhead = ruler === "should-compact" ? COMPACTION_PROMPT_OVERHEAD_TOKENS : 0;
-  const estimatedTokens = estimateTokens(messages) + overhead + tokenEstimateAdjustment;
-  return {
-    estimatedTokens,
-    type: estimatedTokens <= config.threshold ? "within-limit" : "over-limit",
-  };
+  tokenEstimateAdjustment: number,
+): boolean {
+  return (
+    estimateTokens(messages) + COMPACTION_PROMPT_OVERHEAD_TOKENS + tokenEstimateAdjustment <=
+    acceptLimit(config)
+  );
 }
 
 /**
@@ -255,7 +249,8 @@ export async function compactMessages(
       conversation,
       config.threshold,
     );
-    if (evaluateThreshold(verbatim, config, "estimate").type === "within-limit") {
+    // A new summary replaces the measured prompt, so no adjustment carries over.
+    if (fitsAcceptLimit(verbatim, config, 0)) {
       return verbatim;
     }
 
@@ -264,8 +259,14 @@ export async function compactMessages(
       conversation,
       config.threshold,
     );
-    if (evaluateThreshold(stripped, config, "estimate").type === "within-limit" || keep === 0) {
+    if (fitsAcceptLimit(stripped, config, 0)) {
       return stripped;
+    }
+    if (keep === 0) {
+      throw new Error(
+        `Compaction could not fit the summary under ${acceptLimit(config)} tokens: ` +
+          `the summarized history estimates ${estimateTokens(stripped) + COMPACTION_PROMPT_OVERHEAD_TOKENS} tokens.`,
+      );
     }
 
     keep -= 1;
@@ -470,7 +471,7 @@ function selectRecentWindowSize(
     }
 
     const messageTokens = estimateTokens([message]);
-    if (recentTokens + messageTokens + reserve > config.threshold) {
+    if (recentTokens + messageTokens + reserve > acceptLimit(config)) {
       break;
     }
 

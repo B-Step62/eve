@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Context compaction now accepts tool-output truncation only when the result fits under 60% of the compaction threshold. Before, eve accepted a truncation that landed just under the threshold, so compaction ran again a few steps later and the prompt cache was lost on each run. When truncation cannot get below 60%, eve now summarizes the conversation in the same pass.
+Context compaction now accepts a compacted history only when it fits under 60% of the compaction threshold, measured the same way the trigger measures it (fixed prompt envelope included). Before, a tool-output truncation that landed just under the threshold, or a summary plus recent tail that fit only without the prompt envelope, was accepted and compaction ran again a few steps later, rewriting the prompt prefix and losing the prompt cache each time. When truncation cannot reach the limit, eve summarizes in the same pass; if even the bare summary does not fit, compaction fails instead of returning a history that is over the limit.
