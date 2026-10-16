@@ -298,10 +298,15 @@ for Telegram, Teams, Discord, Twilio, and GitHub can come back if apps ask for t
 <details>
 <summary>Smaller internals</summary>
 
-- **Loader brands.** The guards and sentinels eve's loader uses to recognize what a file exports
-  (`isDisabledToolSentinel`, `isDisabledRouteSentinel`, `PROVIDER`, `DISABLED`,
-  `isInstrumentationProvider`, `isOtelIntegration`, and similar). Documented helpers such as
-  `isScheduleAuth` stay.
+- **Loader internals.** Internal recognition details can leave the public API, but disabled-marker
+  types and their guards stay: `DisabledToolSentinel`, `DisabledRouteSentinel`, and
+  `InstrumentationDisabled`. Public factories return these values; hiding their names creates
+  declaration-portability workarounds rather than a simpler API. `isScheduleAuth` also stays.
+- **Authoring types stay public.** Keep the named judge, mock-model, and approval request/response
+  types used to write shared helpers and reusable values. This includes `JudgeBatch`, `JudgeInput`,
+  `JudgeContext`, `ScoreInput`, the `MockModel*` types, and `ApprovalRequest`, `ApprovalResponse`,
+  `ApprovalResponseAuth`, and `ApprovalResponseSession`. Removing duplicate export homes still
+  applies; hiding useful names solely to reduce the count does not.
 - **`eve/events`.** An explicit export list replaces the `export *` lines. Line encoding and its
   limits, `foldLine` / `foldLines`, `viewOfEvents`, `foldReceivedEvent`, `copyView`, the retention
   options, and the 14 fact zod schemas stay internal (the schemas put eve's vendored zod types
