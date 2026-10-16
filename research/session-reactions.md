@@ -690,12 +690,19 @@ that two callbacks behave the same.
 
 ### After a deployment change
 
-At the move to a new deployment, which happens only while a session is idle, eve discards every
-memo, and each runs again at the next model call. New code shouldn't build from data it may not
-understand, and a once-per-session instruction shouldn't keep an outdated policy just because it's
-plain text. So a memo keyed by `ctx.session.id` that captured the first caller captures whoever is
-current after the change. Event-handler occurrences that already ran don't run again. Keeping
-memos across deployments on purpose can come later if a case needs it.
+At the move to a new deployment, which happens only while a session is idle, eve discards the
+memos of dynamic values, and each runs again at the next model call. New code shouldn't build from
+data it may not understand, and a once-per-session instruction shouldn't keep an outdated policy
+just because it's plain text. So a memo keyed by `ctx.session.id` that captured the first caller
+captures whoever is current after the change. `main` only re-resolves session tools and subagents
+here; its session instructions, skills, models, and connections keep their old results.
+
+Hook memos are kept. A hook doesn't build anything from its memo: the memo records that an effect
+happened, like a `defineState` flag on `main`, which also survives a redeploy. Discarding it would
+send the budget alert again after every deployment. Event-handler occurrences that already ran
+don't run again either. A hook that should act again under new code changes its key, for example
+by adding a version. Keeping dynamic-value memos across deployments on purpose can come later if a
+case needs it.
 
 ### What eve stores
 
