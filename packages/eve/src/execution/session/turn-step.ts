@@ -63,7 +63,12 @@ import type {
 } from "#execution/session/turn-step-types.js";
 import { pausedOrParked, resolveSessionStepResult } from "#execution/session/turn-step-result.js";
 import { withSessionStateDelta } from "#execution/session/state-delta.js";
-import { openSessionEventPublisher } from "#execution/publish-session-events.js";
+import {
+  checksSessionEvents,
+  openSessionEventPublisher,
+} from "#execution/publish-session-events.js";
+import { stepDisagreement } from "#execution/session/step-decision-check.js";
+import { createLogger } from "#internal/logging.js";
 import { admitDeliveries, type DeliveryAdmission } from "#execution/session/delivery-facts.js";
 import { getAdapterKind } from "#channel/adapter.js";
 import type { SessionEvent } from "#protocol/session-event.js";
@@ -90,9 +95,10 @@ import {
   type CompletedModelCallCheckpoint,
 } from "#execution/cancelled-model-call-batch.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
-import { waitsOnPerson } from "#execution/session/pending-turn-state.js";
 
 export type { TurnStepInput };
+
+const log = createLogger("execution.turn-step");
 
 interface PendingStepAttributes {
   title?: Promise<void>;
@@ -637,6 +643,11 @@ async function runSessionStepBody(
     stepResult = { ...stepResult, session: aliased };
 
     const durableResult = resolveSessionStepResult(stepResult, nextSerializedContext);
+    if (checksSessionEvents()) {
+      const disagreement = stepDisagreement(durableResult, currentProjection(ctx).view);
+      if (disagreement !== undefined && disagreement !== "dispatch-deferred")
+        log.warn("a turn step's decision disagrees with the session's tables", { disagreement });
+    }
     if (durableResult.action === "done") await publisher.writer.close();
     return compacted ? { ...durableResult, compacted: true } : durableResult;
   } finally {

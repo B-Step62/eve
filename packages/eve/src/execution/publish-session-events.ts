@@ -356,7 +356,7 @@ export interface SessionEventPublisher {
  * `eve dev` and with `EVE_CHECK_SESSION_EVENTS=1`, off with `EVE_CHECK_SESSION_EVENTS=0`. A
  * violation fails the publication instead of writing a line readers can't fold.
  */
-function checksSessionEvents(): boolean {
+export function checksSessionEvents(): boolean {
   const configured = process.env.EVE_CHECK_SESSION_EVENTS;
   if (configured === "1") return true;
   if (configured === "0") return false;
