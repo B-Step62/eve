@@ -350,6 +350,28 @@ describe("stageAttachmentsForAdapter", () => {
 });
 
 describe("stageToolResultMedia", () => {
+  const toolResult = (value: unknown) =>
+    ({
+      content: [
+        {
+          output: { type: "content", value },
+          toolCallId: "call-1",
+          toolName: "inspect",
+          type: "tool-result",
+        },
+      ],
+      role: "tool",
+    }) as ModelMessage;
+  const chart = {
+    data: { data: "iVBORw0KGgo=", type: "data" },
+    filename: "chart.png",
+    mediaType: "image/png",
+    type: "file",
+  };
+  const note = { text: "Returned file chart.png (image/png) could not be stored.", type: "text" };
+
+  // #4839: a throw here escapes the step after its model call and tools ran,
+  // so the step retries and replays them.
   it("replaces a returned file with a note when the sandbox cannot be resumed", async () => {
     const ctx = new ContextContainer();
     ctx.set(SandboxKey, {
@@ -359,37 +381,30 @@ describe("stageToolResultMedia", () => {
       },
       stop: async () => {},
     });
-    const toolResult = (value: unknown) =>
-      ({
-        content: [
-          {
-            output: { type: "content", value },
-            toolCallId: "call-1",
-            toolName: "inspect",
-            type: "tool-result",
-          },
-        ],
-        role: "tool",
-      }) as ModelMessage;
+
+    const staged = await contextStorage.run(ctx, () => stageToolResultMedia([toolResult([chart])]));
+
+    expect(staged).toEqual([toolResult([note])]);
+  });
+
+  it("replaces a returned file with a note when the sandbox rejects the write", async () => {
+    const sandbox = mockSandbox();
+    const ctx = new ContextContainer();
+    ctx.set(SandboxKey, {
+      ...sandbox.access,
+      get: async () => ({
+        ...sandbox.session,
+        writeBinaryFile: async () => {
+          throw new Error("sandbox is past its timeout");
+        },
+      }),
+    });
 
     const staged = await contextStorage.run(ctx, () =>
-      stageToolResultMedia([
-        toolResult([
-          {
-            data: { data: "iVBORw0KGgo=", type: "data" },
-            filename: "chart.png",
-            mediaType: "image/png",
-            type: "file",
-          },
-        ]),
-      ]),
+      stageToolResultMedia([toolResult([{ text: "Rendered.", type: "text" }, chart])]),
     );
 
-    expect(staged).toEqual([
-      toolResult([
-        { text: "Returned file chart.png (image/png) could not be stored.", type: "text" },
-      ]),
-    ]);
+    expect(staged).toEqual([toolResult([{ text: "Rendered.", type: "text" }, note])]);
   });
 });
 

@@ -143,7 +143,7 @@ export async function stageAttachmentsToSandbox(
  * leaves `eve-sandbox:` refs in their place, so durable history never
  * carries tool-result bytes. {@link hydrateSandboxAttachments} restores the
  * bytes on every model call. When no sandbox is available, or it fails to
- * open, each file becomes a note instead.
+ * open or take the write, each file becomes a note instead.
  */
 export async function stageToolResultMedia<T extends ModelMessage>(
   messages: readonly T[],
@@ -317,21 +317,31 @@ async function stageToolOutputFiles(
       if (!isInlineToolOutputFile(part) || part.data.type !== "data") return part;
       const data = readFileData(part.data.data);
       if (data.kind === "link") return part;
-      if (sandbox === null || data.kind !== "bytes") {
+      if (sandbox === null || data.kind !== "bytes") return unstoredFileNote(part);
+      try {
+        const ref = await writeSandboxRef(data.bytes, part.mediaType, part.filename, sandbox);
         return {
-          text: `Returned file ${part.filename ?? "file"} (${part.mediaType}) could not be stored.`,
-          type: "text",
+          ...part,
+          data: { type: "url" as const, url: encodeSandboxRef(ref) },
+          mediaType: ref.mediaType,
         };
+      } catch (error) {
+        // Same as a failed open: the step's tools already ran, so a throw replays them.
+        log.warn("sandbox write failed for a tool-result file, degrading it to a text part", {
+          error,
+        });
+        return unstoredFileNote(part);
       }
-      const ref = await writeSandboxRef(data.bytes, part.mediaType, part.filename, sandbox);
-      return {
-        ...part,
-        data: { type: "url" as const, url: encodeSandboxRef(ref) },
-        mediaType: ref.mediaType,
-      };
     }),
   );
   return { ...output, value };
+}
+
+function unstoredFileNote(part: ToolOutputFilePart): ToolOutputContentPart {
+  return {
+    text: `Returned file ${part.filename ?? "file"} (${part.mediaType}) could not be stored.`,
+    type: "text",
+  };
 }
 
 /**

@@ -35,6 +35,7 @@ import { decodeSandboxRef, isSandboxRefUrl } from "#internal/attachments/sandbox
 import { attachClientContext } from "#internal/client-context.js";
 import { pngBytes } from "#internal/testing/media-fixtures.js";
 import { mockSandbox } from "#internal/testing/mocks/mock-sandbox.js";
+import type { SandboxAccess } from "#sandbox/state.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { InstrumentationStepStartedEventInput } from "#public/instrumentation/index.js";
 import { defineInstructions } from "#public/definitions/instructions.js";
@@ -10915,6 +10916,102 @@ describe("createToolLoopHarness", () => {
       const modelCall = agent?.stream.mock.calls[0]?.[0] as { messages: ModelMessage[] };
       expect(JSON.stringify(modelCall.messages)).toContain(base64);
     });
+
+    // #4839: a throw while staging a tool's inline image escapes the step after its model call and
+    // tools ran, so the step retries and the workflow call is never recorded.
+    it.each([
+      [
+        "the sandbox cannot be opened",
+        (sandbox: ReturnType<typeof mockSandbox>): SandboxAccess => ({
+          ...sandbox.access,
+          get: async () => {
+            throw new Error('microsandbox session "ses_1" is no longer available to resume.');
+          },
+        }),
+      ],
+      [
+        "the sandbox rejects the write",
+        (sandbox: ReturnType<typeof mockSandbox>): SandboxAccess => ({
+          ...sandbox.access,
+          get: async () => ({
+            ...sandbox.session,
+            writeBinaryFile: async () => {
+              throw new Error("sandbox is past its timeout");
+            },
+          }),
+        }),
+      ],
+    ])(
+      "still records a workflow call that shares a step with an inline tool-result file when %s",
+      async (_name, breakSandbox) => {
+        const base64 = pngBytes(32, 32, 512).toString("base64");
+        const inspectCall = {
+          input: {},
+          toolCallId: "inspect-1",
+          toolName: "inspect",
+          type: "tool-call" as const,
+        };
+        const delegateCall = {
+          input: { message: "probe" },
+          toolCallId: "delegate-1",
+          toolName: "delegate",
+          type: "tool-call" as const,
+        };
+        const inspectResult = {
+          output: {
+            type: "content" as const,
+            value: [
+              {
+                data: { data: base64, type: "data" as const },
+                filename: "chart.png",
+                mediaType: "image/png",
+                type: "file" as const,
+              },
+            ],
+          },
+          toolCallId: "inspect-1",
+          toolName: "inspect",
+          type: "tool-result" as const,
+        };
+        setupMockAgent({
+          content: [inspectCall, delegateCall],
+          finishReason: "tool-calls",
+          response: {
+            messages: [
+              { content: [inspectCall, delegateCall], role: "assistant" },
+              { content: [inspectResult], role: "tool" },
+            ],
+          },
+          text: "",
+          toolCalls: [inspectCall, delegateCall],
+          toolResults: [inspectResult],
+        });
+        const tools = new Map(createDelegationToolMap());
+        tools.set("inspect", {
+          description: "Inspect.",
+          execute: vi.fn(),
+          inputSchema: jsonSchema({ type: "object" }),
+          name: "inspect",
+        });
+        const ctx = new ContextContainer();
+        ctx.set(SandboxKey, breakSandbox(mockSandbox({ id: "sbx_broken" })));
+
+        const result = await contextStorage.run(ctx, () =>
+          createToolLoopHarness(createTestConfig(undefined, { tools }))(createTestSession(), {
+            message: "Inspect and delegate.",
+          }),
+        );
+
+        expect(runtimeWait(result.session.state)?.tasks).toEqual([
+          expect.objectContaining({ callId: "delegate-1", kind: "workflow-task" }),
+        ]);
+        expect(result.next).toBeNull();
+        // The parked step holds the tool result until the workflow call settles.
+        const session = JSON.stringify(result.session);
+        expect(session).not.toContain(base64);
+        expect(session).toContain("Returned file chart.png (image/png) could not be stored.");
+      },
+    );
 
     it("stages non-inlinable FilePart bytes into the sandbox and hands the model a text reference instead of bytes", async () => {
       setupMockAgent({
