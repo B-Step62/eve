@@ -6,12 +6,12 @@ last_updated: "2026-10-15"
 
 # A smaller public surface for 1.0
 
-After eve 1.0 releases, removing or reshaping anything eve exports needs a major version. This 
+After eve 1.0 releases, removing or reshaping anything eve exports needs a major version. This
 plan proposes some targeted cleanup of these public exports before it gets hard to change things.
 
-Today eve exports 2,005 names from 84 entry points (`eve`, `eve/client`, `eve/channels/slack`, etc). 
+Today eve exports 2,005 names from 84 entry points (`eve`, `eve/client`, `eve/channels/slack`, etc).
 The docs, the apps in this repository, and the e2e suites use about 450 of them. Most of
-the rest weren't deliberately intended as API surface area. They got exported for one of three 
+the rest weren't deliberately intended as API surface area. They got exported for one of three
 reasons:
 
 - **The same thing from several places.** `SessionView` can be imported from `eve/events` and
@@ -91,7 +91,7 @@ That's about a dozen result types, each with its own way of saying nothing happe
 (`no_active_turn`, `no_active_session`, `session_not_active`). And once a cancel or reset is
 accepted, nothing tells you when it actually took effect.
 
-**The change.** Every command, on every handle, returns a `Delivery`: an id, the session it 
+**The change.** Every command, on every handle, returns a `Delivery`: an id, the session it
 went to, and a way to follow it to the end.
 
 ```ts
@@ -393,48 +393,121 @@ option and result types get the same treatment, copied from the AI SDK's experim
 `Experimental_SandboxSession`. Instrumentation's model input becomes `unknown`, documented as the
 provider's request messages.
 
-**Why it's worth it.** eve's API changes only when eve releases a change. The cost is about 400
+**Why it's useful.** eve's API changes only when eve releases a change. The cost is about 400
 lines of types to maintain.
 
 Two exceptions stay on purpose: the Slack card builders, which are plain data factories from the
 vendored Chat SDK, and OpenTelemetry's `SpanExporter` and `SpanProcessor`, which an OpenTelemetry
 integration implements by definition.
 
-## Smaller changes
+### 7. Approvals remember by key with `once({ key })`
 
-<details>
-<summary>Approval policies: fixed behavior</summary>
+A tool's `approval` policy decides whether a call runs, waits for a person, or is refused.
+Policies keep every return value they have today: the AI SDK 7 statuses (`"not-applicable"`,
+`"approved"`, `"denied"`, `"user-approval"`), their object forms with a `reason`, and booleans for
+older predicate-style policies. What changes is how a session remembers an approval. Approvals
+are a stable part of the API, so this changes with more care than its usage alone would suggest.
 
-A tool's `approval` policy decides whether a call runs, waits for a person, or is refused. It
-returns the AI SDK 7 approval statuses, and this plan keeps all of them: `"not-applicable"`,
-`"approved"`, `"denied"`, `"user-approval"`, their object forms with a `reason`, and booleans for
-older predicate-style policies.
+**Today.** `once()` asks the first time a tool is called and remembers the approval for the rest
+of the session. To remember it per input instead, say once per environment, a tool needs two
+pieces: `approvalKey` names the grant eve saves when a person approves, and the policy checks
+`approvedTools`, the set of every grant in the session:
 
 ```ts
-approval: ({ toolInput }) =>
-  (toolInput?.amount ?? 0) < 50
-    ? { type: "approved", reason: "Under the $50 auto-approve limit." }
-    : "user-approval",
+export default defineTool({
+  approvalKey: ({ environment }) => `deploy:${environment}`,
+  approval: ({ approvedTools, toolInput }) =>
+    approvedTools.has(`deploy:${toolInput?.environment}`) ? "not-applicable" : "user-approval",
+  // …
+});
 ```
 
-What changes is how eve reads them:
+- The key is built twice, and the two strings must match. A typo means the approval is never
+  remembered, and nothing reports it.
+- `once()` doesn't combine with `approvalKey`. eve saves the grant under the key, but `once()`
+  checks the bare tool name, so a tool with both asks every time.
+- `approvedTools` mixes tool names and custom keys, and connection tools can't set a key at all.
 
-- The docs say the model receives an approval's `reason`, but today an `approved` reason is
-  dropped. It reaches the model.
-- A call the policy approved leaves no trace on the stream, so an audit can't tell it from a call
-  that needed no approval. Its `call.started` fact records `clearedBy: { policy }`, a field that
-  today only provider-executed tools set.
-- Tools, connections, and `invokeTool` each read these values with their own copy of the logic.
-  One shared function replaces the three, so they can't drift apart.
-- `approvalKey` and `approvedTools` go. They let a policy remember "approved for this input"
-  across calls, but no built-in tool or connection sets a key, and the only use outside eve's own
-  plumbing is one e2e fixture. `once()` stays, keyed by tool name. Remembering approvals by scope
-  (once per environment, say) becomes a documented recipe: `defineState`, a hook on
-  `interaction.settled` that records what was approved, and a policy that reads it.
-- The tool-only `ToolApproval` types merge into `Approval` and `ApprovalConfiguration`, which gain
-  an optional `prompt`.
+**The change.** The key moves into `once()`, and `approvalKey` and `approvedTools` are removed:
+
+```ts
+export default defineTool({
+  approval: once({ key: (input) => input.environment }), // input is typed by inputSchema
+  // …
+});
+```
+
+- `once()` without a key still remembers per tool.
+- A grant is scoped to its tool, so two tools that both key by environment can't clear each other.
+- `once` works inside a custom policy, because eve reads the key when `once` asks rather than from
+  the tool:
+
+  ```ts
+  const perEnvironment = once<DeployInput>({ key: (input) => input.environment });
+  approval: (ctx) => (ctx.toolInput?.environment === "dev" ? "not-applicable" : perEnvironment(ctx)),
+  ```
+
+- Connection tools get keyed approvals the same way.
+
+Three fixes land with it:
+
+- An `approved` status's `reason` reaches the model, as the docs already say it does.
+- A call cleared without a prompt records what cleared it on its `call.started` fact:
+  `clearedBy: { policy }` when the policy approved it, `clearedBy: { grant: { interactionId } }`
+  when `once` remembered an approval. Today neither leaves a trace, so an audit can't tell them
+  from calls that needed no approval.
+- Tools, connections, and `invokeTool` read policy results through one shared function rather
+  than three copies of the logic.
+
+**Why it's useful.**
+
+- The key is written once, next to the policy that uses it, so it can't drift.
+- One way to remember approvals, for every kind of tool.
+- A call cleared by a policy or a remembered approval says so on the stream.
+
+<details>
+<summary>What the old setup could do that <code>once({ key })</code> doesn't</summary>
+
+Three things go, none of them used outside eve today:
+
+- **Sharing a grant between tools.** A rollback tool's policy could check
+  `approvedTools.has("deploy")` to skip its prompt once a deploy was approved. Grants are now
+  scoped to their tool.
+- **Grants from approvals `once` didn't ask for.** Today every approval adds a grant, including
+  ones `always()` or a custom policy asked for. Now only a request `once` asked creates one. A
+  policy that asks for large amounts itself and uses `once` for small ones no longer clears small
+  calls when a person approves a large one.
+- **Arbitrary logic over the grant set**, such as "if any write tool was approved, let reads
+  through".
+
+An authored tool can still do all three without internal APIs, because `ctx.approval` is set in
+`execute` only when a person approved the call:
+
+```ts
+const approvedEnvironments = defineState("deploy.approved-environments", (): string[] => []);
+
+export default defineTool({
+  inputSchema: z.object({ environment: z.enum(["dev", "prod"]), sha: z.string() }),
+  approval: ({ toolInput }) =>
+    toolInput !== undefined && approvedEnvironments.get().includes(toolInput.environment)
+      ? { type: "approved", reason: `Approved earlier for ${toolInput.environment}.` }
+      : "user-approval",
+  async execute(input, ctx) {
+    if (ctx.approval !== undefined) {
+      approvedEnvironments.update((envs) => [...envs, input.environment]);
+    }
+    return deploy(input);
+  },
+});
+```
+
+Connection tools have no `execute` to record in, so sharing grants across them would need a hook.
+If anyone needs that, a shared scope such as `once({ key, shared: "prod-deploys" })` can be added
+later without a break.
 
 </details>
+
+## Smaller changes
 
 <details>
 <summary>A channel's <code>deliver()</code> payload gets a type</summary>
@@ -614,6 +687,8 @@ it: `AskedInteraction` from a message result, `ReaderInteraction` from the view,
   authors implement them and wrappers build them as values.
 - **Naming.** `agent` names calls, tasks, and wire facts; `subagent` names only local definitions.
   So `followSubagents` becomes `followAgents`.
+- **Approval types.** The tool-only `ToolApproval` types merge into `Approval` and
+  `ApprovalConfiguration`, which gain an optional `prompt`.
 - **Channel CORS.** `EveChannelCors` merges into `ChannelCors`, which also accepts a single origin
   string.
 - **Wire spelling.** Interaction options use `label` rather than `title`, and settled reasons are
