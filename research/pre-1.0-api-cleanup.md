@@ -400,18 +400,14 @@ Two exceptions stay on purpose: the Slack card builders, which are plain data fa
 vendored Chat SDK, and OpenTelemetry's `SpanExporter` and `SpanProcessor`, which an OpenTelemetry
 integration implements by definition.
 
-### 7. Approvals remember by key with `once({ key })`
+### 7. Remembering approvals with `once({ key })`
 
 A tool's `approval` policy decides whether a call runs, waits for a person, or is refused.
-Policies keep every return value they have today: the AI SDK 7 statuses (`"not-applicable"`,
-`"approved"`, `"denied"`, `"user-approval"`), their object forms with a `reason`, and booleans for
-older predicate-style policies. What changes is how a session remembers an approval. Approvals
-are a stable part of the API, so this changes with more care than its usage alone would suggest.
 
-**Today.** `once()` asks the first time a tool is called and remembers the approval for the rest
-of the session. To remember it per input instead, say once per environment, a tool needs two
-pieces: `approvalKey` names the grant eve saves when a person approves, and the policy checks
-`approvedTools`, the set of every grant in the session:
+**Today.** `once()` asks for approval the first time a tool is called, then stops asking for the
+rest of the session. To remember an approval per input instead (once per environment, say), a
+tool sets `approvalKey` to name the grant eve saves, and writes its own policy that looks the
+grant up in `approvedTools`:
 
 ```ts
 export default defineTool({
@@ -422,72 +418,63 @@ export default defineTool({
 });
 ```
 
-- The key is built twice, and the two strings must match. A typo means the approval is never
-  remembered, and nothing reports it.
-- `once()` doesn't combine with `approvalKey`. eve saves the grant under the key, but `once()`
-  checks the bare tool name, so a tool with both asks every time.
-- `approvedTools` mixes tool names and custom keys, and connection tools can't set a key at all.
+The key is built twice, and the two strings have to match: a typo means the approval is never
+remembered, and nothing reports it. `once()` can't help, because it only checks the bare tool
+name, so a tool that sets `approvalKey` and uses `once()` asks every time.
 
 **The change.** The key moves into `once()`, and `approvalKey` and `approvedTools` are removed:
 
 ```ts
 export default defineTool({
-  approval: once({ key: (input) => input.environment }), // input is typed by inputSchema
+  approval: once({ key: (input) => input.environment }),
   // …
 });
 ```
 
-- `once()` without a key still remembers per tool.
-- A grant is scoped to its tool, so two tools that both key by environment can't clear each other.
-- `once` works inside a custom policy, because eve reads the key when `once` asks rather than from
-  the tool:
-
-  ```ts
-  const perEnvironment = once<DeployInput>({ key: (input) => input.environment });
-  approval: (ctx) => (ctx.toolInput?.environment === "dev" ? "not-applicable" : perEnvironment(ctx)),
-  ```
-
-- Connection tools get keyed approvals the same way.
-
-Three fixes land with it:
-
-- An `approved` status's `reason` reaches the model, as the docs already say it does.
-- A call cleared without a prompt records what cleared it on its `call.started` fact:
-  `clearedBy: { policy }` when the policy approved it, `clearedBy: { grant: { interactionId } }`
-  when `once` remembered an approval. Today neither leaves a trace, so an audit can't tell them
-  from calls that needed no approval.
-- Tools, connections, and `invokeTool` read policy results through one shared function rather
-  than three copies of the logic.
+`once()` without a key works as it does today, and policies keep every return value they have
+now. Two fixes land with it: an `approved` result's `reason` reaches the model, as the docs
+already say it does, and a call that runs because a policy or a remembered approval cleared it
+records that on the stream.
 
 **Why it's useful.**
 
-- The key is written once, next to the policy that uses it, so it can't drift.
-- One way to remember approvals, for every kind of tool.
-- A call cleared by a policy or a remembered approval says so on the stream.
+- The key is written once, next to the policy that reads it.
+- Connection tools get keyed approvals too. Today they can't set a key.
+- An audit can tell a call that needed no approval from one that a policy or an earlier approval
+  cleared.
 
 <details>
-<summary>What the old setup could do that <code>once({ key })</code> doesn't</summary>
+<summary>How grants work, and what the old setup could do that this doesn't</summary>
 
-Three things go, none of them used outside eve today:
+**Grants.** A grant is scoped to its tool, so two tools that both key by environment can't clear
+each other. eve reads the key when `once` asks, so `once` also works inside a custom policy:
 
-- **Sharing a grant between tools.** A rollback tool's policy could check
-  `approvedTools.has("deploy")` to skip its prompt once a deploy was approved. Grants are now
-  scoped to their tool.
-- **Grants from approvals `once` didn't ask for.** Today every approval adds a grant, including
-  ones `always()` or a custom policy asked for. Now only a request `once` asked creates one. A
-  policy that asks for large amounts itself and uses `once` for small ones no longer clears small
-  calls when a person approves a large one.
-- **Arbitrary logic over the grant set**, such as "if any write tool was approved, let reads
+```ts
+const perEnvironment = once<DeployInput>({ key: (input) => input.environment });
+approval: (ctx) => (ctx.toolInput?.environment === "dev" ? "not-applicable" : perEnvironment(ctx)),
+```
+
+A call cleared by a policy records `clearedBy: { policy }` on its `call.started` fact, and one
+cleared by a grant records `clearedBy: { grant: { interactionId } }`, pointing at the approval.
+
+**What goes.** Three things `approvedTools` allowed:
+
+- Sharing a grant between tools, such as a rollback tool that skips its prompt once a deploy was
+  approved.
+- Grants from approvals `once` didn't ask for. Today any approval adds a grant; now only a prompt
+  `once` asked does. internal-agents' clickstate connection asks on its own and then checks its
+  grant; it moves to returning `once()`'s result where it asks today.
+- Logic over every grant in the session, such as "if any write tool was approved, let reads
   through".
 
-An authored tool can still do all three without internal APIs, because `ctx.approval` is set in
-`execute` only when a person approved the call:
+An authored tool can still do all three with public APIs. `ctx.approval` is set in `execute` only
+when a person approved the call, so the tool can record approvals in state and its policy can
+read them:
 
 ```ts
 const approvedEnvironments = defineState("deploy.approved-environments", (): string[] => []);
 
 export default defineTool({
-  inputSchema: z.object({ environment: z.enum(["dev", "prod"]), sha: z.string() }),
   approval: ({ toolInput }) =>
     toolInput !== undefined && approvedEnvironments.get().includes(toolInput.environment)
       ? { type: "approved", reason: `Approved earlier for ${toolInput.environment}.` }
@@ -501,9 +488,9 @@ export default defineTool({
 });
 ```
 
-Connection tools have no `execute` to record in, so sharing grants across them would need a hook.
-If anyone needs that, a shared scope such as `once({ key, shared: "prod-deploys" })` can be added
-later without a break.
+Connection tools have no `execute`, so sharing grants between them would need a hook. A shared
+scope such as `once({ key, shared: "prod-deploys" })` can be added later without a break if
+anyone needs it.
 
 </details>
 
