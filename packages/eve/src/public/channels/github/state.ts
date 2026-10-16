@@ -198,20 +198,31 @@ export function stateFromReceiveTarget(input: {
   };
 }
 
-/** Refs a later delivery's event knows better than the session's stored state. */
-const DELIVERED_REF_FIELDS = ["baseRef", "baseSha", "defaultBranch", "headRef", "headSha"] as const;
+/** Fields a later delivery's event sets, as opposed to the checkout's own. */
+const DELIVERED_EVENT_FIELDS = [
+  "baseRef",
+  "baseSha",
+  "defaultBranch",
+  "headRef",
+  "headSha",
+  "reviewCommentId",
+  "triggeringCommentId",
+  "triggeringUserLogin",
+] as const satisfies readonly (keyof GitHubChannelState)[];
 
 /**
- * Applies the refs a later delivery brings to the session's state, so its turn
- * checks out the pushed head. A ref the event does not carry (null) is kept.
+ * Applies what a later delivery's event says to the session's state: the head
+ * it was pushed to and the comment that triggered it. A field the event does
+ * not carry (null) is applied as null, so the next checkout resolves the
+ * current head from the API instead of reusing the last checkout's sha.
  */
-export function applyDeliveredGitHubRefs(
+export function applyDeliveredGitHubState(
   state: GitHubChannelState,
   delivered: Partial<GitHubChannelState> | undefined,
 ): void {
-  for (const field of DELIVERED_REF_FIELDS) {
-    const value = delivered?.[field];
-    if (value !== null && value !== undefined) state[field] = value;
+  if (delivered === undefined) return;
+  for (const field of DELIVERED_EVENT_FIELDS) {
+    if (field in delivered) Object.assign(state, { [field]: delivered[field] ?? null });
   }
 }
 

@@ -43,7 +43,7 @@ import {
   dispatchWorkflowRun,
 } from "#public/channels/github/dispatch.js";
 import {
-  applyDeliveredGitHubRefs,
+  applyDeliveredGitHubState,
   continuationTokenFromState,
   conversationFromState,
   initialGitHubState,
@@ -261,7 +261,7 @@ export function githubChannel(config: GitHubChannelConfig = {}): GitHubChannel {
     },
 
     deliver(payload, channel) {
-      applyDeliveredGitHubRefs(
+      applyDeliveredGitHubState(
         channel.state,
         payload.state as Partial<GitHubChannelState> | undefined,
       );
