@@ -58,14 +58,6 @@ export function pausedOnCalls(session: HarnessSession): TurnPause | undefined {
   };
 }
 
-/** Whether the turn waits on a person: a sign-in, or a request the session asked itself. */
-export function waitsOnPerson(session: HarnessSession, projection: SessionProjection): boolean {
-  return (
-    openSignIns(projection.view).length > 0 ||
-    ownOpenRequestIds(sessionView(projection, session.state)).size > 0
-  );
-}
-
 /** Whether the turn waits on a sign-in, an answer, or a call, which ends a batch of model calls. */
 export function waitsOnAnything(session: HarnessSession, projection: SessionProjection): boolean {
   return (

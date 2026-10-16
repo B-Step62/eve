@@ -597,7 +597,7 @@ async function runSessionStepBody(
                 : undefined;
             const harnessResult = await runHarnessStep(schemaSession, stepInput, completions);
             // Only the step knows whether it stopped for a person; the tables say who.
-            await publisher.finish({ announce: stoppedForPerson(harnessResult, ctx) });
+            await publisher.finish({ announce: stoppedForPerson(harnessResult) });
             return harnessResult;
           });
           // The waiting boundary may reach the client before this step returns.
@@ -645,19 +645,12 @@ async function runSessionStepBody(
 }
 
 /**
- * The step stopped for a person: it says so, or it stopped with nothing of its own to wait on
- * while the session waits on someone, as when a message steered past what the turn still asks.
+ * The step stopped for a person: it says so, or it stopped with nothing of its own to wait on,
+ * and the tables say whether that's a person (`announceWaiting`).
  */
-function stoppedForPerson(
-  result: StepResult,
-  ctx: Parameters<typeof currentProjection>[0],
-): boolean {
+function stoppedForPerson(result: StepResult): boolean {
   if (result.held !== undefined) return result.held.kind === "request";
-  return (
-    result.next === null &&
-    result.settledTurn === undefined &&
-    waitsOnPerson(result.session, currentProjection(ctx))
-  );
+  return result.next === null && result.settledTurn === undefined;
 }
 
 /** A cancel the commit's hooks raised after it was written; the cancel already underway handles it. */
