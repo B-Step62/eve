@@ -4,31 +4,93 @@ status: draft
 last_updated: "2026-10-16"
 ---
 
-# Session reactions and dynamic values
+# Dynamic values and hooks as functions
 
-This doc covers everything that changes during an eve session: the model, tools, skills, instructions, connections, subagents, and what hooks do in response. It proposes a common model underneath them: **durable reactions**. Dynamic values describe what the session should have; hooks describe what should happen. They share an execution model without needing identical authoring APIs.
+An eve agent can change during a session. Its model, tools, skills, instructions, connections, and
+subagents can depend on who is calling and what the conversation says, and hooks run code as the
+session progresses. This plan proposes one way to write all of them.
 
-The broader idea: **the session has a durable history, reactions make decisions from it, and work produces new observations that become part of that history.**
+Today a dynamic value is a set of handlers on lifecycle events, and that has three costs:
 
-**Status.** [#4616](https://github.com/vercel/eve/pull/4616), on the v27 stack, prototypes recorded dynamic values and hooks in place of main's per-kind lifecycles and closure transforms, with a `select`, `record`, and `render` API. This revision moves the authoring API to one function with `ctx.oncePer`; the prototype's runner, occurrences, and recovery carry over. The API below is the target for the initial land. [Other models](#other-models-same-examples) shows the alternatives on the same examples.
+- **Each kind has its own rules.** Models and tools can update before every model call; skills,
+  instructions, connections, and subagents only when a session or turn starts. Which result wins
+  when several events fire, what a steering message changes, and what happens when a handler
+  throws all differ by kind.
+- **Surviving a restart takes a compiler.** A session can continue in another process, and a
+  dynamic tool's callback has to be rebuilt there. eve rewrites authored callbacks at build time to
+  save what they capture, so authors have to write callbacks the compiler understands.
+- **Hooks can watch, but can barely act.** Cancelling the turn through a callback is the only
+  command a hook has. A hook that throws is logged and the turn continues, so it can't enforce a
+  check.
 
-## Summary
-
-- **On `main`, dynamism is implemented as handlers on three lifecycle events.** Each kind has its own allowed events, replacement rules, and failure behavior. Tools survive cold starts through a compiler pass that snapshots what their callbacks capture.
-- **A dynamic value is one function, evaluated before each model call.** It reads the session and returns the value: a model, tools, a skill, instructions, a connection, or a subagent.
-- **`ctx.oncePer(key, fn)` is the durability boundary.** `fn` runs when `key` is new, and its JSON result is kept. A later evaluation with the same key, in any process, gets the kept result without running `fn`. Fetching, asking a router, and randomness go inside a memo; the code around it builds tools and models from the results, and must be deterministic.
-- **Lifetimes are keys.** `ctx.session.id` evaluates once per session, `ctx.turn.id` once per turn, and a tenant ID once per tenant. Code outside a memo runs before every model call.
-- **`auto()` stops being special.** On `main` it hand-writes a memo with framework internals. Here it is an ordinary definition, and an author can write their own router the same way ([How `auto()` works](#how-auto-works-on-main-and-now)).
-- **Hooks are a function eve runs after each commit, or an `events` map.** They perform effects or return commands such as `cancel()` and `compact()`. A command acts once on what it targets, so a hook may return it on every commit while its condition holds. Hooks observe committed session state and event payloads, not the assembled conversation.
-- **Unhandled errors fail the turn.** Nothing silently drops a required instruction or a failed credential check. Optional behavior is expressed in ordinary code.
-- **No compiler pass over authored source.** Memos replace the closure transforms and the runtime that rebinds their callbacks, about 2,100 lines on `main` ([What this removes](#what-this-removes)).
-
-## Why change
-
-On `main`, an author chooses when a dynamic value runs by naming a lifecycle event:
+The plan replaces the handlers with one function that eve runs before each model call, and adds
+`ctx.oncePer` for the work that should happen once:
 
 ```ts
-// agent/skills/team_playbook.ts (main)
+// agent/tools/crm.ts
+export default defineDynamic(async (ctx) => {
+  const tenantId = ctx.session.auth.current?.attributes.tenantId;
+  if (!tenantId) return null;
+  const rows = await ctx.oncePer(tenantId, () => db.crmTools(tenantId)); // once per tenant
+  return Object.fromEntries(rows.map((row) => [row.slug, crmTool(row)]));
+});
+```
+
+eve keeps the rows, not the tools. After a restart, the function runs again, `ctx.oncePer` returns
+the saved rows without querying the database, and `crmTool` builds the same tools with ordinary
+code. Nothing is compiled. Hooks get the same function form, and return commands such as
+`cancel()` and `compact()`.
+
+## Background
+
+- A **session** is one durable conversation with an agent. It runs in **turns**: the agent reads
+  new input, then makes one or more **model calls**, running the tools the model asks for in
+  between.
+- A **dynamic value** is a capability written with `defineDynamic` instead of a static
+  definition: a file in `agent/tools/`, `skills/`, `instructions/`, `connections/`, or
+  `subagents/`, or the `model` field of `defineAgent`.
+- A **hook** is a file in `agent/hooks/` that runs code as the session progresses: auditing,
+  notifications, or enforcing a policy.
+- **Sessions outlive processes.** A turn can continue in a different process after a crash or
+  after waiting for an approval, and the next turn can run somewhere else entirely. Anything that
+  existed only in memory, such as a tool's callback, has to be rebuilt there. This doc calls that a **cold start**.
+- The session's **stream** is an ordered log of **facts** about what happened, such as
+  `turn.started` and `call.settled`. Each time eve saves new facts is a **commit**. The **view**
+  folds the facts into tables a client can read. All three come from v27, the session-stream
+  rewrite in review.
+- A session moves to a new **deployment** only while it's idle.
+
+**Status.** [#4616](https://github.com/vercel/eve/pull/4616) prototypes this on the v27 stack,
+under the name _reactions_, with a three-callback API: `select`, `record`, and `render`. This
+revision replaces that API with one function and `ctx.oncePer`. The prototype's runner, retry
+identities, and recovery carry over; the `oncePer` API itself isn't built yet.
+
+## How to read this
+
+[The main changes](#the-main-changes) each explain what happens today, what changes, and why it
+helps, with the cost where there is one. Details are collapsed under each.
+
+[When things run](#when-things-run) collects the timing and recovery rules.
+[Examples from main's docs](#examples-from-mains-docs) rewrites the examples in today's guides.
+[Alternatives](#alternatives) shows other designs on the same examples, and [Scope](#scope) lists
+what the first change includes.
+
+## The main changes
+
+### 1. A dynamic value is one function
+
+**Today.** You choose when a dynamic value runs by naming a lifecycle event, and each kind supports
+different events:
+
+| Kind                                         | Events                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------ |
+| Model, tools                                 | `session.started`, `turn.started`, and `step.started` (before each model call) |
+| Skills, instructions, connections, subagents | `session.started` and `turn.started`                                           |
+
+A skill that gives the caller their team's playbook:
+
+```ts
+// agent/skills/team_playbook.ts (today)
 export default defineDynamic({
   events: {
     "session.started": (_event, ctx) => {
@@ -39,232 +101,196 @@ export default defineDynamic({
 });
 ```
 
-This keeps the first caller's playbook for the whole session. Following the current caller means choosing another event and knowing whether that kind supports it. Tools and models can update per step; skills, instructions, connections, and subagents have narrower lifecycle choices. Steering and completed sign-ins introduce more timing rules. Some handlers receive stand-in events that were never published, and a fresh process runs handlers again to recover their callbacks.
+This keeps the first caller's playbook for the whole session. To follow the current caller you'd
+switch to `turn.started`, and then find that a steering message or a completed sign-in joins the
+running turn without another `turn.started`. A file with handlers on several events also needs
+rules for which result wins.
 
-Cold starts add another set of rules. A tool's callback may close over data fetched by its handler, but a closure cannot be stored as JSON. eve transforms the callback, snapshots its captures, and later rebinds its code. Authors have to know which JavaScript the transform understands, which captures are serializable, and when a package needs durable callback or schema wrappers.
-
-Reactions replace these two sources of complexity:
-
-| Today                                                  | Proposed                                                      |
-| ------------------------------------------------------ | ------------------------------------------------------------- |
-| Choose an event and learn each kind's precedence rules | Write a function; eve evaluates it before each model call     |
-| Persist captured variables through compiler transforms | Keep data with `ctx.oncePer`, and build ordinary code from it |
-| Re-run handlers to recover executable code             | Re-run the function; its memos return committed answers       |
-| Hooks observe, with a special cancellation callback    | Hooks act on state or facts and return session commands       |
-| Different failure behavior for different kinds         | An unhandled error fails the owning execution                 |
-
-The goal is both to simplify the internals of the system and to make one lifecycle that applies everywhere.
-
-## The common model
-
-A **reaction** is evaluated at a boundary, reads the session, and contributes something.
-
-The session view comes from the facts eve has recorded: turns, model runs, calls, tasks, interactions, and context changes. Reactions also receive the identity and execution context they need. External answers, such as database results or router choices, become durable memos rather than hidden inputs that are fetched again on recovery.
-
-```text
-session history → session view → reaction ⇄ memos
-       ↑                            │
-       │               ┌────────────┴────────────┐
-       │               ▼                         ▼
-       │       capability to hold         command to apply
-       │               │                         │
-       └────── observations from subsequent work ┘
-```
-
-There are two kinds of contribution:
-
-- **Something to hold:** these tools are available, this model is selected, these instructions apply. A new value replaces the previous one.
-- **Something to do:** cancel this turn, compact the context. It acts once on its target, not as a standing configuration value.
-
-We use the same language for both:
-
-| Term                | Meaning                                                                                                  |
-| ------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Boundary**        | Where eve evaluates a reaction: before each model call for dynamic values, after each commit for hooks   |
-| **Memo**            | A result `ctx.oncePer` kept under its key                                                                |
-| **Occurrence**      | One run of a memo under a new key, or one matching fact for an event handler. A retry keeps its identity |
-| **Contribution**    | The capability or command a reaction returns                                                             |
-| **Materialization** | Building live objects, such as tools with callbacks, from memo results: the code around the memos        |
-
-A memo's function and an event handler each evaluate an occurrence. The code around memos is materialization: it constructs live values, not new external actions.
-
-This is a conceptual model of durable history, not a requirement to put every private record on the public event stream. Memos and other private data remain in checkpointed state. Nor does it mean arbitrary I/O is a pure function of the log: the point of keeping an external answer is to make it available on recovery without asking again.
-
-### Callback context
-
-| Callback      | Signature                | Context                                                                                                                               |
-| ------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Dynamic value | `defineDynamic(fn)`      | `ctx.view`, `ctx.session`, `ctx.channel`, `ctx.turn`, `ctx.messages`, `ctx.model`, `ctx.now`, and `ctx.oncePer`                       |
-| Hook          | `defineHook(fn)`         | `ctx.view`, `ctx.session`, `ctx.channel`, `ctx.turn` (or `null` before the first turn), `ctx.now`, and `ctx.oncePer`; no conversation |
-| Event handler | `defineHook({ events })` | The hook context without `ctx.oncePer`, plus the event's position and `ctx.occurrence.id`; no conversation                            |
-| Memo          | `ctx.oncePer(key, fn)`   | `fn(occurrence)` gets `occurrence.id` and `occurrence.abortSignal`, and reads the enclosing `ctx`                                     |
-
-- **`ctx.view` is the fold a client builds from the public stream,** so selectors from `eve/events`, such as `idle(view)`, read the same on both sides.
-- **What a client doesn't have lives on `ctx`.** `ctx.turn` is the turn this model call belongs to, as `{ id, input, status }`. `ctx.messages` is the conversation this model call will send. `ctx.model` is the model chosen for it, for everything except the `model` field itself.
-- **`ctx.now` is the time of the latest commit,** so it reads the same in every process. Code that needs the time uses it rather than `Date.now()`.
-
-Dynamic values read the conversation through `ctx.messages`. Hooks and event handlers have no conversation access path; their public types and runtime contexts enforce that boundary. An event payload can still contain message content, such as the value of a `content.completed` fact; that is not the assembled conversation.
-
-## Dynamic values: what the session should have
-
-### One function
-
-The playbook can follow the caller directly:
+**The change.** A dynamic value is a function, and eve runs it before every model call:
 
 ```ts
-// agent/skills/team_playbook.ts
-import { defineDynamic, defineSkill } from "eve/skills";
-import { PLAYBOOKS } from "../lib/playbooks";
-
+// agent/skills/team_playbook.ts (proposed)
 export default defineDynamic((ctx) => {
   const team = ctx.session.auth.current?.attributes.team;
   return team && PLAYBOOKS[team] ? defineSkill({ markdown: PLAYBOOKS[team] }) : null;
 });
 ```
 
-eve evaluates it before every model call. A message from someone on another team changes the skill.
+The function reads the session and returns the value, or `null` for none. eve compares the result
+with what the last model call used and rebuilds only what changed. Every kind works the same way.
 
-The same shape works for a model that depends on image content:
+**Why it's useful.**
 
-```ts
-// agent/agent.ts
-import { defineAgent, type DynamicContext } from "eve";
-import { defineDynamic } from "eve/models";
+- One rule for every kind: no event names, no table of which kind supports which, and no
+  precedence between events.
+- A value follows whatever its function reads, including the current caller, a steering message,
+  and a completed sign-in, because it runs before the model call that sees them.
+- A model can depend on the conversation, the same way a tool can:
 
-export default defineAgent({
+  ```ts
   model: defineDynamic((ctx) =>
     ctx.messages.some(hasImage) ? "google/gemini-3.5-flash" : "zai/glm-5.2",
   ),
-});
+  ```
 
-function hasImage(message: DynamicContext["messages"][number]): boolean {
-  return (
-    message.role === "user" &&
-    Array.isArray(message.content) &&
-    message.content.some(
-      (part) =>
-        part.type === "image" || (part.type === "file" && part.mediaType.startsWith("image/")),
-    )
-  );
-}
-```
+**The cost.** The function runs before every model call, so an expensive scan of the conversation
+costs that much every time. Work that doesn't need to repeat goes in a memo
+([change 2](#2-ctxonceper-keeps-what-must-survive-a-restart)).
 
-eve compares what a definition returns with what the last model call used, and rebuilds only what changed. The function itself still runs before every model call, so an expensive scan of the conversation costs that much each time; work that needn't repeat belongs in a memo.
+<details>
+<summary>What the function can read</summary>
 
-The folder or field determines what the value may return. A tools file returns tools, a skills file returns skills, and the `model` field returns a model with its settings. `null` or `undefined` contributes nothing. The model stays a dynamic field inside an otherwise static `agent.ts`; build settings do not become session configuration.
+| Callback      | Context                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
+| Dynamic value | `ctx.view`, `ctx.session`, `ctx.channel`, `ctx.turn`, `ctx.messages`, `ctx.model`, `ctx.now`, `ctx.oncePer`   |
+| Hook function | `ctx.view`, `ctx.session`, `ctx.channel`, `ctx.turn` (`null` before the first turn), `ctx.now`, `ctx.oncePer` |
+| Event handler | The hook context without `ctx.oncePer`, plus the event and `ctx.occurrence.id`                                |
+| Memo          | `fn(occurrence)` gets `occurrence.id` and `occurrence.abortSignal`, and can read the enclosing `ctx`          |
+
+- **`ctx.view` is the same view a client folds from the stream,** so selectors from `eve/events`,
+  such as `idle(view)`, give the same answer on both sides.
+- **What a client doesn't have is on `ctx`.** `ctx.turn` is the turn this model call belongs to,
+  as `{ id, input, status }`. `ctx.messages` is the conversation this model call will send.
+  `ctx.model` is the model chosen for it, everywhere except in the `model` field itself.
+- **`ctx.now` is the time of the latest commit,** so it reads the same in every process. Code that
+  needs the time uses it rather than `Date.now()`.
+- **Hooks never see the assembled conversation.** Their types and runtime context have no path to
+  it. An event payload can still carry message content, such as a `content.completed` fact's text.
+
+The folder or field decides what a function may return: a tools file returns tools, a skills file
+a skill, and the `model` field a model with its settings. `null` or `undefined` contributes
+nothing.
+
+</details>
 
 <details>
 <summary>Other places <code>defineDynamic</code> could fit</summary>
 
-Each of these widens a field from `T` to `T | Dynamic<T>`, so a static definition still type-checks and adding one later is additive for authors. The cost falls on code that reads definitions, such as agent info and build-time name checks.
+Each of these widens a field from `T` to `T | Dynamic<T>`, so a static definition still
+type-checks and adding one later doesn't break authors. The cost falls on code that reads
+definitions, such as agent info and build-time name checks.
 
-| Place                                                                        | Status                                  | What it would enable                                                       |
-| ---------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------- |
-| A whole file in `tools/`, `skills/`, `instructions/`, `connections/`         | In the prototype                        | Capabilities per caller, tenant, or conversation                           |
-| A whole subagent at `subagents/<name>/` or `subagents/<name>.ts`             | In the prototype                        | Optional local and remote subagents                                        |
-| `defineAgent({ model })`, at the root and in a subagent                      | In the prototype, including `auto()`    | Routing, per-plan models                                                   |
-| `available` on a subagent, remote agent, tool, or connection                 | Candidate; the clearest payoff          | Showing a capability per caller without making its whole file dynamic      |
-| A tool's or subagent's `description`                                         | Candidate                               | Wording per tenant or locale                                               |
-| A tool's `inputSchema`                                                       | Candidate                               | An enum of the caller's projects or accounts                               |
-| `limits`, such as `maxTokenCostUsdPerSession`                                | Candidate                               | Budgets per plan. Checked where the budget is checked, before a model call |
-| `compaction.model` and `compaction.thresholdPercent`                         | Candidate                               | Compaction that follows the chosen model's context window                  |
-| A connection's or remote agent's `url`                                       | Candidate                               | Endpoints per tenant. Needs target comparison on cold starts               |
-| A remote agent's `auth` and `headers`                                        | Proposed, as part of a dynamic subagent | Credentials per tenant or caller, as on `main`                             |
-| The sandbox                                                                  | Awkward                                 | A sandbox outlives a value; changing it means a new sandbox                |
-| `build`, channels, schedules, workflow tools, `defaultTools`, `experimental` | Not candidates                          | Read at build time or before any session exists                            |
+| Place                                                                        | Status                                  | What it would enable                                                  |
+| ---------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
+| A whole file in `tools/`, `skills/`, `instructions/`, `connections/`         | In the prototype                        | Capabilities per caller, tenant, or conversation                      |
+| A whole subagent at `subagents/<name>/` or `subagents/<name>.ts`             | In the prototype                        | Optional local and remote subagents                                   |
+| `defineAgent({ model })`, at the root and in a subagent                      | In the prototype, including `auto()`    | Routing, per-plan models                                              |
+| `available` on a subagent, remote agent, tool, or connection                 | Candidate; the clearest payoff          | Showing a capability per caller without making its whole file dynamic |
+| A tool's or subagent's `description`                                         | Candidate                               | Wording per tenant or locale                                          |
+| A tool's `inputSchema`                                                       | Candidate                               | An enum of the caller's projects or accounts                          |
+| `limits`, such as `maxTokenCostUsdPerSession`                                | Candidate                               | Budgets per plan, checked before each model call                      |
+| `compaction.model` and `compaction.thresholdPercent`                         | Candidate                               | Compaction that follows the chosen model's context window             |
+| A connection's or remote agent's `url`                                       | Candidate                               | Endpoints per tenant. Needs a target comparison on cold starts        |
+| A remote agent's `auth` and `headers`                                        | Proposed, as part of a dynamic subagent | Credentials per tenant or caller, as on `main`                        |
+| The sandbox                                                                  | Awkward                                 | A sandbox outlives a value; changing it means a new sandbox           |
+| `build`, channels, schedules, workflow tools, `defaultTools`, `experimental` | Not candidates                          | Read at build time or before any session exists                       |
 
-`reasoning`, `modelContextWindowTokens`, and `modelOptions` already vary with the model: the dynamic `model` field returns them together, because they are one coupled decision.
+`reasoning`, `modelContextWindowTokens`, and `modelOptions` already vary with the model: the
+dynamic `model` field returns them together, because they're one decision.
 
 </details>
 
-### Memos
+### 2. `ctx.oncePer` keeps what must survive a restart
 
-When building a capability needs an external answer, put the question in a memo:
+**Today.** A dynamic tool's callback usually closes over data its handler fetched:
 
 ```ts
-// agent/tools/crm.ts
-import { defineDynamic } from "eve/tools";
-import { crmTool, db } from "../lib/crm";
+// agent/tools/query.ts (today)
+export default defineDynamic({
+  events: {
+    "session.started": async () =>
+      Object.fromEntries(
+        (await listTables()).map((t) => [
+          t.name,
+          defineTool({
+            description: `Query ${t.name}. Columns: ${t.columns.join(", ")}`,
+            inputSchema: z.object({ sql: z.string() }),
+            execute: ({ sql }) => runReadOnly(t.name, sql), // captures `t`
+          }),
+        ]),
+      ),
+  },
+});
+```
 
+After a cold start, eve needs `execute` again, but a function can't be saved. So at build time eve
+rewrites each callback to take its captured variables as an argument, and at run time saves what
+`t` was. That works only for code the compiler understands: callbacks and schemas are written
+inline, captures must be JSON, and `execute: makeExecutor()` is rejected. A package that returns
+tools from `node_modules`, where the compiler can't see, wraps every callback in
+`defineDurableCallback` and every schema in `defineDurableSchema`.
+
+**The change.** The fetch goes in `ctx.oncePer`, and the tools are built from its result with
+ordinary code:
+
+```ts
+// agent/tools/query.ts (proposed)
 export default defineDynamic(async (ctx) => {
-  const tenantId = ctx.session.auth.current?.attributes.tenantId;
-  if (!tenantId) return null;
-  const rows = await ctx.oncePer(tenantId, () => db.crmTools(tenantId));
-  return Object.fromEntries(rows.map((row) => [row.slug, crmTool(row)]));
+  const tables = await ctx.oncePer(ctx.session.id, async () =>
+    (await listTables()).map(({ name, columns }) => ({ name, columns })),
+  );
+  return Object.fromEntries(tables.map((t) => [t.name, tableTool(t)])); // the defineTool above
 });
 ```
 
-The database rows are kept; the tools are not. `crmTool` is an ordinary function that constructs a tool, including its schema and callbacks. A package can supply it without a special compiler transform or durable callback wrapper.
+`ctx.oncePer(key, fn)` runs `fn` the first time it sees `key`, and keeps the JSON it returns. A
+later evaluation with the same key, in any process, gets the kept result without running `fn`. On
+a cold start, eve runs the function again: the memo returns the saved tables, and `tableTool`
+builds the same tools, callbacks included.
 
-- **`ctx.oncePer(key, fn)` runs `fn` when `key` is new, and returns the kept result otherwise.** Keys and results are JSON, and keys compare as canonical JSON. A function that returns nothing keeps `null`.
-- **A memo holds one key at a time.** A new key replaces the previous one, so a key that comes back later runs again ([Occurrences](#occurrences)). Storage is bounded by the number of memos, not by turns.
-- **Most definitions need one memo, and it needs no name.** A definition that uses more names the others: `ctx.oncePer(key, fn, { name: "tables" })`. Two unnamed memos in one evaluation fail with an error naming the file. Memos in one evaluation can run concurrently, such as under `Promise.all`.
-- **Memos belong to their definition.** Two files that memoize the same key each run their own. Memos don't nest, and `oncePer` only works while the definition is being evaluated.
-- **`fn` gets its occurrence:** `occurrence.id`, for an external service's idempotency key, and `occurrence.abortSignal`.
+So the rule for authors is: questions to the outside world, such as database queries, a router's
+choice, or randomness, go inside a memo. The code around it builds tools and models from the
+answers.
 
-eve rejects invalid results with the file and the memo's name; a non-JSON result also identifies the offending path and type, such as `oncePer returned Date at $.accounts[2].createdAt`. Public types reject statically known violations, with runtime validation for external data.
+**Why it's useful.**
 
-**Code outside a memo must be deterministic.** eve runs it before every model call and again in a fresh process, and expects the same capability from the same memo results and `ctx`. Time comes from `ctx.now`; I/O, randomness, and mutable process state belong in a memo. A `Math.random()` outside one can change a callback's behavior even if its tool description stays the same. Nothing stops an `await` outside a memo, and it works, but it runs before every model call and its answer isn't kept.
+- No compiler pass over authored code. About 2,100 lines of build transforms and callback
+  rebinding on `main` go, along with `defineDurableCallback` and `defineDurableSchema`
+  ([What this removes](#what-this-removes)).
+- Tools are ordinary code. Helpers, factories, schemas in variables, and packages that return
+  ordinary tools all work.
+- What survives a restart is explicit: memo results, and nothing else. A cold start doesn't query
+  the database again to recover its tools.
 
-A skill's supporting files are built, not stored. eve keeps the skill's name, description, markdown, and a revision hash, and evaluates the definition again, with its memos, whenever a sandbox needs the files: when the skill first appears, when its revision changes, or when the session gets a new sandbox. Files that come from code, such as imported assets or a map of playbooks, are never stored. Files fetched in a memo are in the memo.
+**The cost.** Code outside a memo must be deterministic: from the same memo results and context, it
+must build the same tools. Nothing stops an `await` or a `Math.random()` outside a memo. It runs
+on every evaluation and its result isn't kept, so a cold start can quietly build a different tool,
+where `main`'s compiler saved every capture automatically. In development, eve evaluates each
+definition twice with its memos fixed and compares the results. That catches most of these
+mistakes on the first run, not all of them.
 
-### Lifetimes are keys
+<details>
+<summary>Memo rules</summary>
 
-| Key                                                    | Evaluates                                      |
-| ------------------------------------------------------ | ---------------------------------------------- |
-| No memo                                                | Before every model call                        |
-| `ctx.turn.id`                                          | Once per turn                                  |
-| `ctx.session.id`                                       | Once per session, under the current deployment |
-| Any JSON, such as a tenant ID or `[team, ctx.turn.id]` | Whenever it changes                            |
+- **Keys and results are JSON.** Keys compare as canonical JSON. A key is at most 64 KB and a result
+  at most 1 MB; the error names the file and the memo, and suggests keeping an ID and fetching the
+  rest when it's used. A non-JSON result names the path and type, such as
+  `oncePer returned Date at $.accounts[2].createdAt`. A function that returns nothing keeps `null`.
+- **A memo holds one key at a time.** A new key replaces the old one, so a key that comes back later
+  runs `fn` again, and alternating between two keys runs it each time. Storage grows with the
+  number of memos, not with turns.
+- **Most definitions need one memo, and it needs no name.** A definition with more names the others:
+  `ctx.oncePer(key, fn, { name: "tables" })`. Two unnamed memos in one evaluation fail with an
+  error naming the file. Memos in one evaluation can run concurrently, such as under
+  `Promise.all`.
+- **Memos belong to their definition.** Two files that memoize the same key each run their own.
+  Memos don't nest, and `oncePer` only works while the definition is being evaluated.
+- **Memos are private.** They live in the session's checkpointed state, never on the public stream.
+- **Types help where they can.** Public types reject statically known non-JSON results, and
+  runtime validation covers external data.
 
-This playbook follows the caller's team, and fetches it again every turn:
+</details>
 
-```ts
-// agent/skills/team_playbook.ts
-import { defineDynamic, defineSkill } from "eve/skills";
-import { playbooks } from "../lib/playbooks";
+### 3. Lifetimes are keys
 
-export default defineDynamic(async (ctx) => {
-  const team = ctx.session.auth.current?.attributes.team;
-  if (!team) return null;
-  const markdown = await ctx.oncePer([team, ctx.turn.id], () => playbooks.fetch(team));
-  return markdown ? defineSkill({ markdown }) : null;
-});
-```
-
-Only the key decides. `fn` can read anything in `ctx`, including the conversation, but those reads don't make it run again. For example, a router can choose once per turn using the conversation at that turn's first model call:
-
-```ts
-// agent/agent.ts
-import { openai } from "@ai-sdk/openai";
-import { defineAgent } from "eve";
-import { defineDynamic } from "eve/models";
-import { chooseTier } from "./lib/router";
-
-const models = { hard: openai("gpt-6-sol"), easy: openai("gpt-6-luna") };
-
-export default defineAgent({
-  model: defineDynamic(async (ctx) => {
-    const tier = await ctx.oncePer(ctx.turn.id, (occurrence) =>
-      chooseTier({ messages: ctx.messages, idempotencyKey: `${occurrence.id}:route` }),
-    ); // "hard" | "easy"
-    return models[tier];
-  }),
-});
-```
-
-The tier is kept, and the code after the memo picks the live model, provider instance included. `main` rejects provider instances from session and turn model handlers, because it stores the model itself. A retry gets the same occurrence; this router passes an operation-specific idempotency key to an evaluator that honors it. Data fetched from outside eve stays current only as far as its key asks; keying by `ctx.turn.id` refreshes it each turn, not whenever the database changes.
-
-A memo keyed by `ctx.session.id` also latches a first value: `await ctx.oncePer(ctx.session.id, () => ctx.model.id)` keeps the model of the first call that evaluated it, until a deployment change.
-
-### How `auto()` works, on main and now
-
-`auto()` picks a model per turn by asking an evaluation model which option fits. On `main`, it is a `step.started` handler that implements its own caching with framework internals:
+**Today.** "Once per session" means `session.started` and "once per turn" means `turn.started`.
+There's no built-in way to say "once per tenant". `auto()`, the built-in router that picks a model per
+turn, needs "once per turn" on `step.started`, so it builds its own cache with framework internals:
 
 ```ts
-// packages/eve/src/models/auto.ts (main, condensed)
+// packages/eve/src/models/auto.ts (today, condensed)
 const selection = new ContextKey<{ turnId: string; model: string }>(
-  `eve.experimental.evaluate.model.${fingerprint}`, // SHA-256 of the options, fallback, and evaluator
+  `eve.experimental.evaluate.model.${fingerprint}`, // hash of options, fallback, evaluator
 );
 
 return defineDynamic({
@@ -272,7 +298,7 @@ return defineDynamic({
     "step.started": async (event, ctx) => {
       const state = loadContext();
       const previous = state.get(selection);
-      if (previous?.turnId === turnId(event)) return models.get(previous.model)!; // this turn decided
+      if (previous?.turnId === turnId(event)) return models.get(previous.model)!; // decided
 
       const result = await evaluate({ model, state: routingState(ctx), questions: { route } });
       state.set(selection, { turnId: turnId(event), model: result.answers.route.choice });
@@ -282,61 +308,91 @@ return defineDynamic({
 });
 ```
 
-That is a memo written by hand. The turn ID is the key. The `{ turnId, model }` entry in session state is the kept result, and it stores an option key rather than a model, because a model instance can't be stored. The `models` map in the closure turns the key back into the authored model. The fingerprint stands in for invalidation: a deployment with different options gets a different key, so it decides again.
+That's a memo written by hand: the turn ID is the key, and the saved option is the result. It saves
+an option key rather than a model because a model instance can't be saved, and the fingerprint
+makes a deployment with different options decide again. `loadContext` and `ContextKey` aren't
+public, so an author's own router can't do the same. It either asks its router before every model
+call or reaches into internals.
 
-None of that is available to authors. `loadContext` and `ContextKey` are internal, so a custom router on `main` either asks its router before every model call or reaches into internals.
+**The change.** The key is the lifetime:
 
-With memos, the framework does that work, and `auto()` is an ordinary definition:
+| Key                                                    | Runs                                        |
+| ------------------------------------------------------ | ------------------------------------------- |
+| No memo                                                | Before every model call                     |
+| `ctx.turn.id`                                          | Once per turn                               |
+| `ctx.session.id`                                       | Once per session, until a deployment change |
+| Any JSON, such as a tenant ID or `[team, ctx.turn.id]` | Whenever it changes                         |
 
-```ts
-// packages/eve/src/models/auto.ts (proposed, condensed)
-return defineDynamic(async (ctx) => {
-  const key = await ctx.oncePer(ctx.turn.id, (occurrence) => choose(ctx, occurrence)); // an option key
-  return optionOf(key); // the option key, as the authored model
-});
-```
-
-The framework keeps the key, returns it in any process, gives a retry the same occurrence, and runs it again after a deployment change. The context key and its fingerprint are deleted. Because `choose` reads the turn's input inside the memo, it reads it once, at the turn's first model call. The authoring API is unchanged:
+A router that picks a tier once per turn:
 
 ```ts
 // agent/agent.ts
-import { defineAgent } from "eve";
-import { auto } from "eve/models";
+const models = { hard: openai("gpt-6-sol"), easy: openai("gpt-6-luna") };
 
 export default defineAgent({
-  model: auto({
-    fallback: "anthropic/claude-sonnet-5",
-    options: {
-      "openai/gpt-6-sol": "Difficult reasoning and engineering tasks",
-      "openai/gpt-6-luna": "Routine tasks where fast completion matters",
-    },
+  model: defineDynamic(async (ctx) => {
+    const tier = await ctx.oncePer(ctx.turn.id, () => chooseTier(ctx.messages)); // "hard" | "easy"
+    return models[tier];
   }),
 });
 ```
 
-## Hooks
+`auto()` becomes the same few lines inside eve, with no context key or fingerprint, and its
+authoring API doesn't change.
 
-A hook is either a function eve runs after every commit, for where things stand, or an `events` map, for what happened. Both read committed session state and event payloads, without access to the assembled conversation. A hook performs effects or returns commands; there is no live capability to build.
+**Why it's useful.**
+
+- Any lifetime, including combinations, without a list of named lifetimes or precedence between
+  them.
+- `auto()` isn't special, and an author's own router is ordinary code.
+- The memo keeps data, so the code after it can return a live provider instance. `main` rejects
+  provider instances from session and turn model handlers, because it saves the model itself.
+
+<details>
+<summary>How keys behave</summary>
+
+- **Only the key decides.** `fn` can read anything in `ctx`, including the conversation, but those
+  reads don't make it run again. The router above reads the conversation as it was at the turn's
+  first model call.
+- **Fetched data is only as fresh as its key.** A memo keyed by `ctx.turn.id` fetches again each
+  turn, not whenever the database changes.
+- **A session key latches a first value.** `await ctx.oncePer(ctx.session.id, () => ctx.model.id)`
+  keeps the model of the first call that evaluated it, until a deployment change.
+
+</details>
+
+### 4. Hooks can act on state, and return commands
+
+**Today.** A hook is a map of event handlers. That fits "send a notification for every settled
+turn", but a condition such as "the session is idle" isn't one event: the hook has to work out
+which events can cause it. Cancelling means calling `ctx.cancel()` from the handler, and there's no
+way to ask for a compaction.
+
+**The change.** A hook can also be a function that eve runs after every commit. It reads the same
+view a client sees, and returns a command:
 
 ```ts
 // agent/hooks/compact-when-idle.ts
 import { idle } from "eve/events";
 import { compact, defineHook } from "eve/hooks";
 
-export default defineHook((ctx) =>
-  idle(ctx.view) && ctx.turn !== null ? compact({ reason: "The session went idle." }) : null,
-);
+export default defineHook((ctx) => {
+  if (ctx.turn === null || !idle(ctx.view)) return null; // nothing to compact before a first turn
+  return compact({ reason: "The session went idle." });
+});
 ```
 
-The function runs after every commit, inside a turn or between turns, so "the session went idle" is noticed when it happens. It runs often, so it should be cheap: I/O belongs in a memo, which runs only when its key is new. Returning `compact()` on every commit while the session is idle asks for one compaction ([Commands](#commands)).
+A command acts once on its target, so returning it again while its condition holds is safe:
 
-The event form stays:
+- **`cancel()` targets the turn running when it's returned.** It's done once eve has asked that turn
+  to stop. Between turns, it does nothing.
+- **`compact()` targets the next model call,** and is done when that compaction starts.
+
+So the hook above compacts once each time the session goes idle, before the next turn's first
+model call. The event form stays, and its handlers return commands too:
 
 ```ts
 // agent/hooks/require-credentials.ts
-import { cancel, defineHook } from "eve/hooks";
-import { hasWorkspaceCredentials } from "../lib/credentials";
-
 export default defineHook({
   events: {
     async "turn.started"(_event, ctx) {
@@ -348,27 +404,12 @@ export default defineHook({
 });
 ```
 
-The hook returns a decision; eve applies it before evaluating the turn's dynamic values or starting model work. If the credential check throws, the turn fails rather than continuing without the check. On `main`, a throwing hook is logged and the turn continues. No separate guard API is needed for the initial design. Resource-specific authorization still belongs at the point a tool accesses that resource.
-
-Both forms remain useful: "whenever the session becomes idle" and "for every settled turn" are different requests.
-
-### Occurrences
-
-A memo holds one key at a time, so a key and its occurrence are different things:
-
-```text
-key:         false → true → false → true
-occurrence:    1       2       3       4
-```
-
-The two `true` keys are equal, but they are different occurrences. A retry of occurrence 2 keeps its identity; occurrence 4 gets a new one. Authors don't need to invent keys to express a repeated transition. Work that should happen only once keeps one key, such as `ctx.session.id`:
+eve applies the cancel before the turn's dynamic values run or its model is called. A hook
+function can use `ctx.oncePer` for its I/O. This one emails once per session, the first time
+spending passes $50:
 
 ```ts
 // agent/hooks/budget-alert.ts
-import { defineHook } from "eve/hooks";
-import { email } from "../lib/email";
-import { spentUsd } from "../lib/usage";
-
 export default defineHook(async (ctx) => {
   if (spentUsd(ctx.view) <= 50) return;
   await ctx.oncePer(ctx.session.id, (occurrence) =>
@@ -377,143 +418,162 @@ export default defineHook(async (ctx) => {
 });
 ```
 
-eve derives a memo occurrence's identity from the definition, the memo's name, a count of its key changes, and a digest of the key. A retry after a crash computes the same identity, because nothing new was committed, so eve doesn't have to write anything before `fn` runs. An event handler's occurrence is the fact's position in the stream:
+**Why it's useful.**
+
+- "Whenever the session is idle" and "for every settled turn" are different requests, and each
+  gets its own form.
+- A hook acts with a plain `if` and a returned command, without tracking whether it already acted.
+- Hooks read committed state and event payloads, never the conversation, so they can run after
+  every commit, including between turns.
+
+**The cost.** A hook function runs after every commit, so it must be cheap; I/O belongs in a memo.
+A condition that stays true after its command acts asks again at the next target: a hook that
+compacts above a token count compacts before every model call if compaction can't get below it.
+
+<details>
+<summary>Retries and idempotency keys</summary>
+
+Every memo run and every event handler call has an **occurrence**, whose `id` is the same if eve
+retries it. Pass it to an external service as an idempotency key; if an occurrence does several
+things, give each a stable suffix, such as `${occurrence.id}:email`.
+
+A memo holds one key at a time, so a key and an occurrence are different things. Take a memo keyed
+by whether spending is over budget, `ctx.oncePer(spentUsd(ctx.view) > 50, fn)`:
+
+```text
+key:         false → true → false → true
+occurrence:    1       2       3       4
+```
+
+The two `true` keys are equal but are different occurrences: a retry of occurrence 2 keeps its
+identity, and occurrence 4 gets a new one. Work that should happen once keeps one key, as the
+budget alert does with `ctx.session.id`.
+
+eve derives a memo occurrence's identity from the definition, the memo's name, the number of times
+its key has changed, and a digest of the key. A retry after a crash computes the same identity
+because nothing new was committed, so eve writes nothing before `fn` runs. An event handler's
+occurrence is the fact's position in the stream.
+
+An effect can succeed just before a process fails to save its result. A memo's result becomes
+durable with the step that ran it, and a crash before then runs `fn` again with the same
+occurrence. **Execution is at least once until checkpointed,** not exactly once, so an external
+service must honor the idempotency key to avoid repeating its effect.
+
+</details>
+
+### 5. Unhandled errors fail the turn
+
+**Today.** What happens when a handler throws depends on what it is. A throwing hook is logged, and
+the turn continues. A throwing tool, skill, instruction, or subagent resolver is logged and
+skipped, so the turn continues without what it would have added. A throwing connection handler
+fails the turn.
+
+**The change.** An unhandled error in a dynamic value, a memo, or a hook fails the turn. Behavior
+that's optional catches its own errors:
 
 ```ts
-// agent/hooks/notify-settled.ts
-import { defineHook } from "eve/hooks";
-import { notifications } from "../lib/notifications";
-
-export default defineHook({
-  events: {
-    async "turn.settled"(event, ctx) {
-      await notifications.send({
-        sessionId: ctx.session.id,
-        turnId: event.data.turnId,
-        idempotencyKey: ctx.occurrence.id,
-      });
-    },
-  },
+// agent/tools/crm.ts
+export default defineDynamic(async (ctx) => {
+  const tenantId = ctx.session.auth.current?.attributes.tenantId;
+  if (!tenantId) return null;
+  try {
+    const rows = await ctx.oncePer(tenantId, () => db.crmTools(tenantId));
+    return Object.fromEntries(rows.map((row) => [row.slug, crmTool(row)]));
+  } catch {
+    return null; // no CRM tools for this model call; the memo runs again before the next one
+  }
 });
 ```
 
-Pass the occurrence's ID to an external service as an idempotency key; if an occurrence performs several operations, give each a stable suffix, such as `${occurrence.id}:route` in the router above.
+Without the `try`, a CRM outage fails the turn. A required check, such as the credentials hook in
+[change 4](#4-hooks-can-act-on-state-and-return-commands), doesn't catch, so it can't be skipped.
 
-An effect can succeed just before a process fails to save its result. A memo's result becomes durable with the step that ran it, and a crash before then runs `fn` again with the same occurrence. **Execution is at least once until checkpointed**, not exactly once; an external service must honor the idempotency key to avoid repeating its effect.
+**Why it's useful.**
 
-### Commands
+- A required instruction or credential check can't silently disappear.
+- A failed memo keeps nothing, so the next evaluation tries again, even under the same key. A
+  transient error can't break a once-per-session value for the rest of the session.
 
-A command is a request against a target, not against an occurrence:
+**The cost.** Hooks that only observe, such as audit or metrics hooks, must catch their own errors
+if they shouldn't fail a turn. Where the `try` sits matters too: a memo that catches its own
+failure and returns `null` keeps that `null` until its key changes, while a `try` around
+`await ctx.oncePer(...)` keeps nothing, so the next evaluation tries again.
 
-- **`cancel()` targets the turn running when it is returned,** and is done once eve has asked that turn to stop. Between turns, it does nothing.
-- **`compact()` targets the next model call,** and is done when a compaction starts.
+<details>
+<summary>Errors outside a turn, and event handlers</summary>
 
-A request equal to one that is pending or done for the same target is dropped. A hook may therefore return the same command on every commit while its condition holds: compact-when-idle compacts once per idle stretch, and a hook that cancels while credentials are missing cancels each turn that starts without them. A condition that stays true after its command acts asks again at the next target: a hook that compacts above a token count compacts before every model call if compaction can't get below it. Event handlers follow the same rule. Applying commands remains eve's responsibility, including deciding whether they are still valid.
+- **A hook that fails between turns has no turn to fail.** eve logs the hook, the occurrence, and
+  the error, and doesn't retroactively fail a finished turn. A public fact for it can come later:
+  readers ignore fact types they don't recognize, so adding one doesn't break them.
+- **A dynamic value's error fails the turn before the model call it was evaluated for; a hook's,**
+  before the turn's next model call or as the turn would otherwise settle.
+- **An event handler runs once per fact.** A failure isn't retried on a later fact, though the
+  workflow's own step retries still apply.
+- **There's no failure-policy option at first.** eve must not respond to a failure by silently
+  dropping a required instruction, or by falling back to a static connection with different
+  credentials. An `onError` option can come later if a case needs one.
 
-## Instructions
+</details>
 
-An instruction's role decides which kind of contribution it is.
+### 6. User instructions join the conversation when they change
 
-A **system instruction** is something to hold. It applies to every model call while the definition returns it, and disappears when it returns `null`:
+**Today.** A dynamic instruction with `role: "user"` is added to the conversation, before the
+turn's input, every time its handler returns it. A `turn.started` handler that returns the same
+brief adds the same text every turn; the docs call this intentional.
 
-```ts
-// agent/instructions/long-conversation.ts
-import { defineDynamic, defineInstructions } from "eve/instructions";
+**The change.** An instruction's role decides how it behaves:
 
-export default defineDynamic((ctx) =>
-  ctx.view.session.turnCount > 6
-    ? defineInstructions({ content: "Summarize what's settled before answering." })
-    : null,
-);
-```
-
-A **user instruction** joins the conversation, before the turn's input, when its content differs from the last one its file added. It stays there like any other message:
+- A **system instruction** is held. It applies to every model call while its definition returns
+  it, and goes away when it returns `null`.
+- A **user instruction** joins the conversation, before the turn's input, when its content differs
+  from the last one its file added. After that it's history, like any other message.
 
 ```ts
 // agent/instructions/brief.ts
-import { defineDynamic, defineInstructions } from "eve/instructions";
-import { loadBrief } from "../lib/briefs";
-
 export default defineDynamic(async (ctx) => {
   const brief = await ctx.oncePer(ctx.turn.id, () => loadBrief(ctx.session.auth.current));
   return brief ? defineInstructions({ content: brief, role: "user" }) : null;
 });
 ```
 
-The brief is fetched every turn, and joins the conversation when it changed. An unchanged brief isn't added again, where a `turn.started` handler on `main` appends the same text every turn. A later `null` adds nothing and doesn't remove what is already in the conversation; compaction and clear treat it like other history, as on `main`, and neither makes the same content join again. `main`'s replacement-session recipe, which hands a stranded session's transcript to its replacement, keeps working: a memo keyed by the predecessor's ID reads the transcript once, and it joins once.
+The brief is fetched every turn, and joins the conversation only when it changed.
 
-A hook command for adding messages could follow if a case needs one, such as adding a message from an event handler. It is additive and not part of the initial change.
+**Why it's useful.** A per-turn brief doesn't pile up identical copies, and the rule doesn't
+depend on when the function runs. `main`'s recipe that hands a stranded session's transcript to
+its replacement keeps working: a memo keyed by the predecessor's ID reads the transcript once,
+and it joins once.
 
-## When things run, and how they recover
+**The cost.** This is a behavior change. An agent that relied on the same text being added again
+each turn, for example to keep a reminder near the end of a long conversation, has to change the
+content to get that.
 
-### Clear execution boundaries
+<details>
+<summary>Edge cases</summary>
 
-This is the author-facing contract, rather than an incidental order of internal callbacks:
+- A later `null` adds nothing, and doesn't remove what's already in the conversation.
+- Compaction and clear treat an added instruction like other history, as on `main`, and neither
+  makes the same content join again.
+- eve keeps one digest per file, of the last content it added, in the session's private state.
+- A hook command for adding messages, such as from an event handler, can come later if a case
+  needs one.
 
-- **Hooks run after each commit.** A hook function runs after every commit, inside a turn or between turns; an event handler runs for each matching fact. Streamed progress, such as content deltas, reaches only event handlers that handle it.
-- **Dynamic values are evaluated before each model call.** eve evaluates each definition, runs the memos whose keys are new, and fixes the model, tools, and context that call uses. Changes during a tool batch affect the next model call.
-- **A cancelling hook stops subsequent work at that boundary.** Hooks run before values, so a cancel takes effect before any value fetches data.
-- **A requested tool runs only as it was offered.** A call that waits for approval keeps a digest of its tool's declaration and of the memo results its definition was evaluated with. If they differ when the call executes, because the caller's role or tenant changed during an approval wait, the call fails with a tool error saying the tool changed since it was offered, and the model can request it again. A memo that runs again and keeps the same data, such as one keyed by turn, is not a change. Authorization is still checked at execution time.
-- **Only dynamic values read the conversation.** Hooks have no assembled-conversation access, so they can run after every commit, including background work between turns.
+</details>
 
-Which model calls are boundaries:
+### 7. Remote agents are rebuilt from how they were opened
 
-- **Every ordinary model call of a turn,** including the call after a tool batch and the call after an approval resumes. Compaction's summarizing call, the evaluator `auto()` asks, and `evaluate` inside a tool are not boundaries.
-- **A steering message is visible at the next boundary.** It is not a new turn, so memos keyed by `ctx.turn.id` don't run again; code that reads `ctx.messages` sees it before the next model call.
-- **A resumed approval runs its calls first.** Approved calls execute, with the check above, and then values are evaluated before the next model call. Nothing evaluates while a turn waits.
-- **Compaction is not a boundary.** The next boundary sees the compacted conversation, so code over messages may change: the image model returns to text once a summary replaces the image.
+**Today.** A remote subagent's `auth` and `headers` are needed outside a model call: when the parent
+messages, resets, or cancels the child, and in the route that follows the child's stream. On
+`main`, a compiler pass finds them in a dynamic remote agent and registers them by ID for those
+places.
 
-Evaluating a definition and installing its value into a model request are not the same operation. This leaves room to keep provider-visible tool lists stable where prompt caching benefits from it.
-
-### Cold starts reuse committed answers
-
-```text
-first evaluation:  function → oncePer runs fn → result kept → capability
-                                                    │
-                                                    ▼
-                                               durable memo
-                                                    │
-fresh process:     function → oncePer returns ◄─────┘ → capability
-```
-
-A fresh process evaluates each definition again, and each memo returns its committed result. It does not query the database or router again merely to recover a capability. If a memo was interrupted before its result committed, the retry runs it again.
-
-eve compares what the fresh evaluation offers with what the session was offered: tool declarations, and a connection's URL, instance key, and credential owner, since equal names or descriptions do not make two executable capabilities equivalent. A difference means code outside the memos isn't deterministic. The memos are still valid data, so eve keeps them, offers the new value at this boundary, and logs a diagnostic naming the file. Calls already requested from the old version fail as described above. In development, eve evaluates each definition twice the first time, with its memos fixed, and compares, so a `Math.random()` outside a memo shows up immediately rather than after a cold start in production.
-
-The comparison is a useful check, not proof that arbitrary callbacks behave identically: deterministic code outside memos remains an author obligation.
-
-### Failures are visible
-
-An unhandled error in a definition, a memo, or a hook fails the owning execution. During a turn, it fails the turn: a value's before the model call it was evaluated for, and a hook's before the turn's next model call, or as the turn would otherwise settle. That includes event handlers that only observe: an audit or metrics hook that mustn't fail a turn catches its own errors. On `main`, a throwing hook is logged and the turn continues, so a hook can't enforce anything by throwing.
-
-- **A failed memo keeps nothing.** The next evaluation runs it again, even under the same key, so a transient error can't break a once-per-session value for the rest of the session. That holds for hooks too: a hook's failed memo runs again at the next commit while its key stands.
-- **An event handler runs once per fact.** A failure isn't retried later, though the workflow's own step retries still apply.
-- **A hook running between turns has no turn to fail.** eve logs the failure with the hook, the occurrence, and the error. It does not retroactively fail an already completed turn. A public fact for it can come later: readers ignore fact types they don't recognize, so adding one doesn't break them.
-
-There is no initial failure-policy option. If behavior is optional, the author catches an expected error and returns no contribution. Where the `try` sits matters: a memo that catches its own failure and returns `null` keeps that `null` until its key changes, while a `try` around `await ctx.oncePer(...)` keeps nothing, so the next evaluation tries again. Unexpected errors still propagate. In particular, eve must not respond to a failure by silently removing required instructions or exposing a static connection with different credentials as a fallback.
-
-### Deployment changes invalidate memos
-
-Only idle sessions move to a new deployment. At that transition, memos are discarded, whether they feed code or are only data, and run again at the next boundary. A once-per-session instruction should not keep an obsolete policy just because it is plain text. For the same reason, a memo keyed by `ctx.session.id` that captured the first caller captures whoever is current after a deployment change.
-
-The new deployment must not blindly build from old data with incompatible new code. Start with running memos again as the uniform rule; explicit cross-deployment reuse can come later if needed. Completed event-handler occurrences are not replayed merely because a deployment changed.
-
-### Values used outside the session
-
-Some values are needed where the session's state isn't: a remote child is opened, messaged, reset, and cancelled by steps of its own, and its stream is followed by a route that has no session state at all. On `main`, a compiler pass found a dynamic remote agent's `auth` and `headers` and registered them by ID for those places.
-
-With memos, eve evaluates the definition there too, from what the child was opened with:
-
-- **A child is bound to the evaluation that opened it.** The step that opens a remote child stores, on the child's address, the session identity, the turn, `ctx.now`, and the memo results its remote agent was built from. The steps that message, reset, and cancel it, the route that follows its stream, and the relay that answers its questions all carry that binding. The binding stays private: it rides the parent's step state and private side stream, never a public fact or a request to the child.
-- **Outside a model call, a definition sees that binding.** `ctx.session`, `ctx.turn`, and `ctx.now` are as they were when the child was opened, and each memo returns the result it had then, without running. `ctx.view`, `ctx.messages`, and `ctx.model` are unavailable; reading one fails the request with an error naming the file and the read. So does a memo the child wasn't opened with, or a key that differs from the bound one.
-- **The destination is checked before credentials are used.** The name and URL the evaluation returns must match what the child was opened with, including after a deployment change, or the request fails rather than sending credentials elsewhere.
-- **In development, eve checks this when a child opens,** by evaluating the definition from the new binding right away, so a read that can't be restored shows up the first time rather than on a later message or cancel.
+**The change.** When a step opens a remote child, it saves a private **binding** with the child:
+the session's ID and auth, the turn, `ctx.now`, and the memo results the remote agent was built from.
+Wherever eve reaches the child later, it runs the definition again with that binding. Each memo
+returns its bound result without running, and eve checks that the returned name and URL match
+what the child was opened with before it sends any credentials.
 
 ```ts
 // agent/subagents/finance.ts
-import { defineDynamic, defineRemoteAgent } from "eve";
-import { mintTenantToken, tenants } from "../lib/tenants";
-
 export default defineDynamic(async (ctx) => {
   const tenantId = ctx.session.auth.current?.attributes.tenantId;
   if (!tenantId) return null;
@@ -528,15 +588,24 @@ export default defineDynamic(async (ctx) => {
 });
 ```
 
-`auth` still takes no arguments: it closes over `tenant`, and the definition can recreate it anywhere. If Bob, from another tenant, writes to the session after Alice's turn opened the child, the parent's later requests to that child still carry Alice's tenant, because `ctx.session` is the one the child was opened with.
+`auth` closes over `tenant`, and the definition can rebuild it anywhere. If Alice's turn opens the
+child and Bob, from another tenant, writes to the session later, the parent's requests to that
+child still carry Alice's tenant, because the binding holds the session as it was when the child
+opened.
 
-Reads inside a memo are fine, because a restored memo doesn't run. Reading the conversation or the view outside one is what fails. A gate like this works before every model call, and fails when eve reaches the child:
+**Why it's useful.** The compiler pass for remote agents goes, and credentials are always rebuilt
+from the same data the child was opened with, never from whoever is calling now.
+
+**The cost.** Outside a model call there's no conversation. Reading `ctx.view`, `ctx.messages`, or
+`ctx.model` there fails the request with an error naming the file and the read. So a gate like this
+works before every model call, and fails when eve later messages or cancels the child:
 
 ```ts
-if (!mentionsInvoices(ctx.messages)) return null; // fails when the child is messaged or cancelled
+if (!mentionsInvoices(ctx.messages)) return null; // fails outside a model call
 ```
 
-Moving the gate into a memo keyed by turn restores it, at the cost of deciding once per turn rather than per model call:
+The fix is to move the gate into a memo keyed by turn, which decides once per turn rather than
+before every model call:
 
 ```ts
 const offer = await ctx.oncePer(ctx.turn.id, () => mentionsInvoices(ctx.messages), {
@@ -545,26 +614,111 @@ const offer = await ctx.oncePer(ctx.turn.id, () => mentionsInvoices(ctx.messages
 if (!offer) return null;
 ```
 
-This is where `select`, `record`, and `render` was stronger: the gate lived in `select`, and `render` needed only the record. A dynamic `defineWorkspaceAgent`, which `main`'s compiler pass never handled, goes through the same path, though the prototype doesn't test it yet.
+In development, eve runs the definition from each new binding as soon as the child opens, so a read
+that can't be restored fails the first time rather than on a later message or cancel. This is the
+case where `select`, `record`, and `render` is stronger ([Alternatives](#alternatives)).
+
+<details>
+<summary>How the binding is carried</summary>
+
+- **Every path to the child carries it:** the steps that message, reset, and cancel the child, the
+  route that follows its stream, and the relay that answers its questions.
+- **It stays private.** It rides the parent's step state and a private side stream, never a public
+  fact or a request to the child.
+- **Restores are strict.** A memo the child wasn't opened with, or a key that differs from the
+  bound one, fails the request with an error naming the file.
+- **The destination check holds across deployments.** If a new deployment's code returns a
+  different name or URL for the same binding, the request fails rather than sending credentials
+  elsewhere.
+- **A dynamic `defineWorkspaceAgent`,** which `main`'s compiler pass never handled, takes the same
+  path, though the prototype doesn't test it yet.
+
+</details>
+
+## When things run
+
+This is the contract authors can rely on, rather than an incidental order of internal callbacks.
+
+- **Hooks run after each commit,** inside a turn or between turns. An event handler runs for each
+  matching fact. Streamed progress, such as content deltas, reaches only event handlers that
+  subscribe to it.
+- **Dynamic values run before each model call.** eve runs each definition, runs the memos whose
+  keys are new, and fixes the model, tools, and context that call uses. Changes during a batch of
+  tool calls affect the next model call.
+- **Hooks run first.** Before a model call, hooks finish with the latest commit before dynamic
+  values run, so a hook that cancels stops the turn before any dynamic value fetches data.
+- **Only ordinary model calls count:** the first of each turn, the one after a batch of tool calls,
+  and the one after an approval resumes. Compaction's summarizing call, the evaluator `auto()` asks,
+  and `evaluate` inside a tool don't run dynamic values.
+- **A steering message is seen at the next model call.** It isn't a new turn, so memos keyed by
+  `ctx.turn.id` don't run again, but code that reads `ctx.messages` sees it.
+- **No dynamic value runs while a turn waits** for an approval or an answer. When an approval resumes, the
+  approved calls run first, then dynamic values before the next model call.
+- **Compaction changes what comes next.** The next model call sees the compacted conversation, so
+  code over messages can change its answer: the image model switches back to text once a summary
+  replaces the image.
+- **A tool call runs only as it was offered.** A call that waits for approval keeps a digest of its
+  tool's declaration and of the memo results it was built from. If they differ when the call runs,
+  for example because the caller's role or tenant changed during the wait, the call fails with a
+  tool error saying the tool changed since it was offered, and the model can request it again.
+  Authorization is still checked when the call runs.
+
+Running a definition and installing its result in a model request are separate, which leaves room
+to keep a provider's tool list stable where prompt caching benefits from it.
+
+### After a cold start
+
+```text
+first evaluation:  function → oncePer runs fn → result kept → capability
+                                                    │
+                                                    ▼
+                                               durable memo
+                                                    │
+fresh process:     function → oncePer returns ◄─────┘ → capability
+```
+
+A fresh process runs each definition again, and each memo returns its committed result. eve
+doesn't query a database or ask a router again just to recover a capability. A memo that was
+interrupted before its result committed runs again, with the same occurrence.
+
+eve then compares what the fresh evaluation offers with what the session was offered: tool
+declarations, and a connection's URL, instance key, and credential owner. A difference means code
+outside the memos isn't deterministic. The memos are still valid data, so eve keeps them, offers
+the new value from this model call on, and logs a diagnostic naming the file. Calls already
+requested from the old version fail, as described above. The comparison is a check, not a proof
+that two callbacks behave the same.
+
+### After a deployment change
+
+At the move to a new deployment, which happens only while a session is idle, eve discards every
+memo, and each runs again at the next model call. New code shouldn't build from data it may not
+understand, and a once-per-session instruction shouldn't keep an outdated policy just because it's
+plain text. So a memo keyed by `ctx.session.id` that captured the first caller captures whoever is
+current after the change. Event-handler occurrences that already ran don't run again. Keeping
+memos across deployments on purpose can come later if a case needs it.
 
 ### What eve stores
 
-- **A memo's key is at most 64 KB, and its result at most 1 MB.** The error names the file and the memo, and suggests keeping an ID and fetching the rest when it is used.
-- **Memos are private.** They live in the session's checkpointed state, never on the public stream. So do the bindings of remote children, and the digest of the last user instruction each file added.
-- **Stored state rides along every step.** A turn step's input and result carry the session's state and history, so a memo is re-sent and re-persisted on each step. `main` has the same cost for its closure snapshots, which it stores separately for each callback, with no cap.
-- **Diagnostics go to logs, and later traces.** Each memo run reports the file, the memo, the occurrence, what triggered it (a new key, a retry after failure, or a deployment change), how long it took, and whether the definition's value changed. A fresh evaluation that doesn't match what was offered is reported too. The prototype logs them at debug level. There is no public API for them.
+- **Memos, remote-child bindings, and instruction digests are private.** Memos and digests live in
+  the session's checkpointed state, and bindings in a private side stream. None reach the public
+  stream.
+- **Stored state rides along every step.** A turn step's input and result carry the session's
+  state, so memos are re-sent and saved again on each step. `main` has the same cost for its
+  closure snapshots, which it stores per callback with no cap.
+- **Diagnostics go to logs, and later traces.** Each memo run reports the file, the memo, the
+  occurrence, why it ran (a new key, a retry, or a deployment change), how long it took, and whether
+  the value changed. The prototype logs these at debug level; there's no public API for them.
 
-## Before and after
+## Examples from main's docs
+
+The examples from today's dynamic capabilities and hooks guides, rewritten. Most lose their event
+name and nothing else.
 
 <details>
-<summary>Examples from main's docs, and how they change</summary>
-
-### Route image inputs to a vision model
+<summary>Route image inputs to a vision model</summary>
 
 ```ts
-// agent/agent.ts (main)
-import { defineAgent, defineDynamic } from "eve";
-
+// agent/agent.ts (today)
 export default defineAgent({
   model: defineDynamic({
     events: {
@@ -590,10 +744,6 @@ export default defineAgent({
 
 ```ts
 // agent/agent.ts (proposed)
-import { defineAgent } from "eve";
-import { defineDynamic } from "eve/models";
-import { hasImage } from "./lib/messages";
-
 export default defineAgent({
   model: defineDynamic((ctx) =>
     ctx.messages.some(hasImage) ? "google/gemini-3.5-flash" : "zai/glm-5.2",
@@ -601,14 +751,15 @@ export default defineAgent({
 });
 ```
 
-- **The event name goes.** The function runs before every model call, as a `step.started` handler does, and `ctx.messages` is the conversation that call will send.
+The function runs before every model call, as a `step.started` handler does.
 
-### Choose a model by plan
+</details>
+
+<details>
+<summary>Choose a model by plan</summary>
 
 ```ts
-// agent/agent.ts (main)
-import { defineAgent, defineDynamic } from "eve";
-
+// agent/agent.ts (today)
 export default defineAgent({
   model: defineDynamic({
     events: {
@@ -626,9 +777,6 @@ export default defineAgent({
 
 ```ts
 // agent/agent.ts (proposed)
-import { defineAgent } from "eve";
-import { defineDynamic } from "eve/models";
-
 export default defineAgent({
   model: defineDynamic((ctx) =>
     ctx.session.auth.initiator?.attributes.plan === "enterprise"
@@ -638,14 +786,16 @@ export default defineAgent({
 });
 ```
 
-- **The same once-per-session behavior,** because the initiator doesn't change. Reading `session.auth.current` instead follows the current caller, which `main` can't express for models without `step.started`.
+The behavior is the same, because the initiator doesn't change. Reading `session.auth.current`
+instead follows the current caller.
 
-### Expose a subagent to enterprise callers
+</details>
+
+<details>
+<summary>Expose a subagent to enterprise callers</summary>
 
 ```ts
-// agent/subagents/finance/agent.ts (main)
-import { defineAgent, defineDynamic } from "eve";
-
+// agent/subagents/finance/agent.ts (today)
 export default defineDynamic({
   events: {
     "session.started": (_event, ctx) => {
@@ -664,8 +814,6 @@ export default defineDynamic({
 
 ```ts
 // agent/subagents/finance/agent.ts (proposed)
-import { defineAgent, defineDynamic } from "eve";
-
 export default defineDynamic((ctx) =>
   ctx.session.auth.current?.attributes.plan === "enterprise"
     ? defineAgent({ description: "Analyze financial and accounting data.", model: ctx.model.id })
@@ -673,16 +821,19 @@ export default defineDynamic((ctx) =>
 );
 ```
 
-- **The behavior differs.** `main` snapshots the parent's model when the session starts. Here the subagent follows the parent's model. Keeping the first one is a memo: `model: await ctx.oncePer(ctx.session.id, () => ctx.model.id)`.
-- **A remote subagent** has the same shape, returning `defineRemoteAgent({ description, url })`. Its `auth` and `headers` are built from the child's binding wherever the child is reached ([Values used outside the session](#values-used-outside-the-session)).
+The behavior differs: today the subagent keeps the parent's model from when the session started,
+and here it follows the parent's model. Keeping the first one is a memo:
+`model: await ctx.oncePer(ctx.session.id, () => ctx.model.id)`. A remote subagent has the same
+shape, returning `defineRemoteAgent({ description, url })`
+([change 7](#7-remote-agents-are-rebuilt-from-how-they-were-opened)).
 
-### One connection per account
+</details>
+
+<details>
+<summary>One connection per account</summary>
 
 ```ts
-// agent/connections/accounts.ts (main)
-import { defineDynamic, defineMcpClientConnection } from "eve/connections";
-import { listEnabledAccounts, mintAccountToken } from "../lib/accounts";
-
+// agent/connections/accounts.ts (today)
 export default defineDynamic({
   events: {
     "session.started": async (_event, ctx) => {
@@ -711,9 +862,6 @@ export default defineDynamic({
 
 ```ts
 // agent/connections/accounts.ts (proposed)
-import { defineDynamic, defineMcpClientConnection } from "eve/connections";
-import { listEnabledAccounts, mintAccountToken } from "../lib/accounts";
-
 export default defineDynamic(async (ctx) => {
   const principal = ctx.session.auth.current;
   if (principal?.principalType !== "user") return null;
@@ -736,41 +884,20 @@ export default defineDynamic(async (ctx) => {
 });
 ```
 
-- **One line changes:** the fetch is a memo. It follows the current caller where `main` keeps the first.
-- **`main` warns that connection handlers "may run again when a parked turn resumes or a durable step retries".** Here `listEnabledAccounts` runs once per caller, and a fresh process builds the connections from the kept accounts.
-- **The token is minted by `getToken` when it's needed,** and never kept.
+One line changes: the fetch is a memo, keyed by the caller. Today's guide warns that connection
+handlers "may run again when a parked turn resumes or a durable step retries"; here
+`listEnabledAccounts` runs once per caller. The token is minted by `getToken` when it's needed,
+and never kept.
 
-### One tool per warehouse table
+</details>
 
-```ts
-// agent/tools/query.ts (main)
-import { defineDynamic, defineTool } from "eve/tools";
-import { z } from "zod";
-import { listTables, runReadOnly } from "../lib/warehouse";
+<details>
+<summary>One tool per warehouse table</summary>
 
-export default defineDynamic({
-  events: {
-    "session.started": async (_event, ctx) =>
-      Object.fromEntries(
-        (await listTables()).map((t) => [
-          t.name,
-          defineTool({
-            description: `Query ${t.name}. Columns: ${t.columns.join(", ")}`,
-            inputSchema: z.object({ sql: z.string() }),
-            execute: ({ sql }) => runReadOnly(t.name, sql),
-          }),
-        ]),
-      ),
-  },
-});
-```
+This is [change 2](#2-ctxonceper-keeps-what-must-survive-a-restart), with the tool built inline:
 
 ```ts
 // agent/tools/query.ts (proposed)
-import { defineDynamic, defineTool } from "eve/tools";
-import { z } from "zod";
-import { listTables, runReadOnly } from "../lib/warehouse";
-
 export default defineDynamic(async (ctx) => {
   const tables = await ctx.oncePer(ctx.session.id, async () =>
     (await listTables()).map(({ name, columns }) => ({ name, columns })),
@@ -788,14 +915,17 @@ export default defineDynamic(async (ctx) => {
 });
 ```
 
-- **The fetch is a memo,** and keeps only the fields the tools use.
-- **The rules about callbacks are gone.** `main` requires inline callbacks with JSON-serializable captures and inline schemas, and rejects `execute: makeExecutor()`. Code outside the memo is ordinary code: it can call helpers, create clients, or keep a schema in a variable.
-- **The memo is what survives.** `main` snapshots what `execute` captures from its handler. Here only the memo's result is kept: a value `execute` captured from outside the memo, such as one fetched with an `await` outside it, is fetched again after a cold start.
+The memo keeps only the fields the tools use. Today, `main` saves what `execute` captures from its
+handler. Here only the memo's result is kept: a value `execute` captures from outside the memo,
+such as one fetched with an `await` outside it, is fetched again after a cold start.
 
-### Replace session tools each turn
+</details>
+
+<details>
+<summary>Replace session tools each turn</summary>
 
 ```ts
-// agent/tools/catalog.ts (main)
+// agent/tools/catalog.ts (today)
 export default defineDynamic({
   events: {
     "session.started": async (_event, ctx) => ({ query: queryTool }),
@@ -812,15 +942,17 @@ export default defineDynamic((ctx) =>
 );
 ```
 
-- **There's no precedence to learn.** On `main`, what a model call sees depends on how scopes combine: session, turn, and step tools are merged, a narrower scope wins a name collision, and steering skips `turn.started`. Here the tools are what the function returns: `query` for the first turn, and `search` after it.
+The tools are what the function returns: `query` for the first turn, and `search` after it. Today,
+what a model call sees depends on how scopes combine: session, turn, and step tools are merged, a
+narrower scope wins a name collision, and steering skips `turn.started`.
 
-### A package's tool
+</details>
+
+<details>
+<summary>A package's tool</summary>
 
 ```ts
-// provider-package/search.ts (main)
-import { defineDurableCallback, defineTool } from "eve/tools";
-import { z } from "zod";
-
+// provider-package/search.ts (today)
 export function createSearchTool(baseUrl: string) {
   return defineTool({
     description: "Search the provider catalog.",
@@ -838,9 +970,6 @@ export function createSearchTool(baseUrl: string) {
 
 ```ts
 // provider-package/search.ts (proposed)
-import { defineTool } from "eve/tools";
-import { z } from "zod";
-
 export function createSearchTool(baseUrl: string) {
   return defineTool({
     description: "Search the provider catalog.",
@@ -859,47 +988,17 @@ export default defineDynamic((ctx) => {
 });
 ```
 
-- **`defineDurableCallback` and `defineDurableSchema` are deleted,** along with the rule that every callback property, including labels, approval policies, `approvalKey`, and `toModelOutput`, be wrapped.
-- **An extension doesn't need `eve extension build`** for its tools to survive a cold start.
+`defineDurableCallback` and `defineDurableSchema` go, along with the rule that every callback
+property, including labels, approval policies, `approvalKey`, and `toModelOutput`, be wrapped. An
+extension doesn't need `eve extension build` for its tools to survive a cold start.
 
-### A playbook for the caller's team
+</details>
 
-```ts
-// agent/skills/team_playbook.ts (main)
-import { defineDynamic, defineSkill } from "eve/skills";
-import { PLAYBOOKS } from "../lib/playbooks";
-
-export default defineDynamic({
-  events: {
-    "session.started": (_event, ctx) => {
-      const team = ctx.session.auth.current?.attributes.team;
-      const markdown = team ? PLAYBOOKS[team] : undefined;
-      return markdown ? defineSkill({ markdown }) : null;
-    },
-  },
-});
-```
+<details>
+<summary>Instructions for the caller's plan</summary>
 
 ```ts
-// agent/skills/team_playbook.ts (proposed)
-import { defineDynamic, defineSkill } from "eve/skills";
-import { PLAYBOOKS } from "../lib/playbooks";
-
-export default defineDynamic((ctx) => {
-  const team = ctx.session.auth.current?.attributes.team;
-  const markdown = team ? PLAYBOOKS[team] : undefined;
-  return markdown ? defineSkill({ markdown }) : null;
-});
-```
-
-- **The same code without the event,** and it follows the caller: a message from someone on another team changes the skill, where `session.started` never runs again.
-
-### Instructions for the caller's plan
-
-```ts
-// agent/instructions/persona.ts (main)
-import { defineDynamic, defineInstructions } from "eve/instructions";
-
+// agent/instructions/persona.ts (today)
 export default defineDynamic({
   events: {
     "session.started": (_event, ctx) => {
@@ -914,8 +1013,6 @@ export default defineDynamic({
 
 ```ts
 // agent/instructions/persona.ts (proposed)
-import { defineDynamic, defineInstructions } from "eve/instructions";
-
 export default defineDynamic((ctx) => {
   const plan = ctx.session.auth.current?.attributes.plan ?? "free";
   return defineInstructions({
@@ -924,15 +1021,15 @@ export default defineDynamic((ctx) => {
 });
 ```
 
-- **A system instruction is held,** and follows the plan if a later caller's differs.
+A system instruction is held, so it follows the plan if a later caller's differs.
 
-### A brief for every turn
+</details>
+
+<details>
+<summary>A brief for every turn</summary>
 
 ```ts
-// agent/instructions/brief.ts (main)
-import { defineDynamic, defineInstructions } from "eve/instructions";
-import { loadBrief } from "../lib/briefs";
-
+// agent/instructions/brief.ts (today)
 export default defineDynamic({
   events: {
     "turn.started": async (_event, ctx) => {
@@ -943,27 +1040,19 @@ export default defineDynamic({
 });
 ```
 
-```ts
-// agent/instructions/brief.ts (proposed)
-import { defineDynamic, defineInstructions } from "eve/instructions";
-import { loadBrief } from "../lib/briefs";
+The proposed version is in [change 6](#6-user-instructions-join-the-conversation-when-they-change).
+It also removes today's instruction-specific message snapshots: an instruction resolver sees
+static user instructions at `session.started` and session results at `turn.started`, while other
+kinds see a different snapshot. Here `ctx.messages` is the same conversation for every dynamic
+value before a given model call.
 
-export default defineDynamic(async (ctx) => {
-  const brief = await ctx.oncePer(ctx.turn.id, () => loadBrief(ctx.session.auth.current));
-  return brief ? defineInstructions({ content: brief, role: "user" }) : null;
-});
-```
+</details>
 
-- **The brief is fetched every turn, and joins the conversation when it changed.** `main` appends it every turn, even when it hasn't changed.
-- **`main`'s augmented message snapshots go away.** An instruction resolver on `main` sees static user instructions at `session.started`, and session results at `turn.started`; other kinds see a different snapshot. `ctx.messages` is the same conversation for every dynamic value evaluated at that boundary; hooks do not receive it.
-
-### Cancel a turn when credentials are missing
+<details>
+<summary>Cancel a turn when credentials are missing</summary>
 
 ```ts
-// agent/hooks/require-credentials.ts (main)
-import { defineHook } from "eve/hooks";
-import { loadWorkspaceCredentials } from "../lib/credentials";
-
+// agent/hooks/require-credentials.ts (today)
 export default defineHook({
   events: {
     async "turn.started"(_event, ctx) {
@@ -983,9 +1072,6 @@ export default defineHook({
 
 ```ts
 // agent/hooks/require-credentials.ts (proposed)
-import { cancel, defineHook } from "eve/hooks";
-import { loadWorkspaceCredentials } from "../lib/credentials";
-
 export default defineHook({
   events: {
     async "turn.started"(_event, ctx) {
@@ -999,30 +1085,44 @@ export default defineHook({
 });
 ```
 
-- **Cancelling is a return value** with a reason. `main` requires `ctx.cancel()` to be called before the handler's promise settles, and ignores it from work the handler doesn't await.
-- **Without the `try`, the turn fails.** On `main`, a throwing hook is logged and the turn continues, so a hook can't enforce a check by throwing.
-
-### Hooks that observe
-
-Audit, persistence, and sandbox-stopping hooks remain event handlers with side effects. They read event payloads and committed session state; any hook that previously read the assembled conversation must migrate to those inputs. A side effect that must happen once per occurrence keys on `ctx.occurrence.id` instead of coordinates copied from `event.data`.
+Cancelling becomes a return value with a reason. Today `ctx.cancel()` has to be called before the
+handler's promise settles, and is ignored from work the handler doesn't await. Without the `try`,
+the turn fails rather than continuing without the check.
 
 </details>
 
-## Other models, same examples
+<details>
+<summary>Hooks that observe</summary>
 
-Four examples cover what differs between the models: tools built from fetched data, a decision per turn, a remote agent whose credentials are needed outside the session, and a hook that acts when state crosses a line. `main`'s versions of the first two are in [Before and after](#before-and-after) and [How `auto()` works](#how-auto-works-on-main-and-now).
+Audit, persistence, and sandbox-stopping hooks stay event handlers with side effects. They read
+event payloads and committed session state; a hook that read the assembled conversation moves to
+those inputs. A side effect that must happen once per fact keys on `ctx.occurrence.id` instead of
+coordinates copied from `event.data`.
+
+</details>
+
+## Alternatives
+
+Four examples cover what differs between the designs: tools built from fetched data, a decision
+per turn, a remote agent whose credentials are needed outside a model call, and a hook that acts
+when state crosses a line.
 
 - **`oncePer`**, proposed here.
-- **`select`, `record`, and `render`**, as #4616 prototypes it. `select` is a synchronous function returning the JSON the value depends on, with `once`, `perTurn`, and `perStep` helpers. `record` runs when the selection changes, and its JSON result is kept. `render` is synchronous and pure, and builds the value from the record, or from the selection when there is no `record`. Hooks use `select` with `run`.
-- **Moments**: named boundaries at which eve asks a definition for something, such as `beforeSession`, `beforeTurn`, and `beforeModelCall`, each with a typed input. A moment's result is kept for its lifetime, and `beforeModelCall` builds the value from it. Hooks use moments such as `afterCommit`.
-- **Code by name**, only where it differs: the definition returns data, and code is found again through a factory registered under a stable name.
+- **`select`, `record`, and `render`**, as #4616 prototypes it. `select` is a synchronous function
+  returning the JSON the value depends on, with `once`, `perTurn`, and `perStep` helpers. `record`
+  runs when the selection changes, and its JSON result is kept. `render` is synchronous and pure,
+  and builds the value from the record. Hooks use `select` with `run`.
+- **Moments:** named points at which eve asks a definition for something, such as `beforeSession`,
+  `beforeTurn`, and `beforeModelCall`, each with a typed input. A moment's result is kept for its
+  lifetime, and `beforeModelCall` builds the value from it. Hooks use moments such as
+  `afterCommit`.
+- **Code by name**, shown only where it differs: the definition returns data, and a fresh process
+  finds the code through a factory registered under a stable name.
 
 The moments and code-by-name APIs are sketches for comparison; neither exists.
 
 <details>
-<summary>The four examples in each model</summary>
-
-### Tools from a warehouse
+<summary>Tools from a warehouse</summary>
 
 ```ts
 // oncePer
@@ -1068,11 +1168,18 @@ export default defineDynamic({
 });
 ```
 
-- **`oncePer` and `select`/`record`/`render` keep the same data** and build the same tools. The three callbacks separate them structurally: `render` can't `await`, so it can't fetch by accident. With `oncePer`, that separation is a convention.
-- **Moments name the lifetime** instead of keying it, and need a list of them.
-- **Code by name stores `["warehouse.table", t]` for each tool,** and a fresh process calls the registered factory. Recovery is exact, but every factory needs a stable name and registration: a parallel API, like `defineDurableCallback`, for every package that ships tools.
+- **`oncePer` and `select`/`record`/`render` keep the same data** and build the same tools. The
+  three callbacks separate them structurally: `render` can't `await`, so it can't fetch by
+  accident. With `oncePer`, that separation is a convention.
+- **Moments name the lifetime** instead of keying it, and need a fixed list of them.
+- **Code by name stores `["warehouse.table", t]` for each tool,** and a fresh process calls the
+  registered factory. Recovery is exact, but every factory needs a stable name and registration: a
+  parallel API, like `defineDurableCallback`, for every package that ships tools.
 
-### A router per turn
+</details>
+
+<details>
+<summary>A router per turn</summary>
 
 ```ts
 // oncePer
@@ -1103,9 +1210,13 @@ model: defineDynamic({
 }),
 ```
 
-- **All three keep the tier and build the model from it.** They differ in how the lifetime is spelled: a key, a selector helper, or a moment's name.
+All three keep the tier and build the model from it. They differ only in how the lifetime is
+spelled: a key, a selector helper, or a moment's name.
 
-### A remote agent per tenant
+</details>
+
+<details>
+<summary>A remote agent per tenant</summary>
 
 ```ts
 // oncePer
@@ -1131,18 +1242,27 @@ export default defineDynamic({
 export default defineDynamic({
   beforeTurn: async (ctx) => {
     const tenantId = ctx.session.auth.current?.attributes.tenantId;
-    return tenantId ? await tenants.lookup(tenantId) : null; // every turn: no moment for "the tenant changed"
+    // Every turn: there's no moment for "the tenant changed".
+    return tenantId ? await tenants.lookup(tenantId) : null;
   },
   beforeModelCall: (tenant) => (tenant === null ? null : financeAgent(tenant)),
 });
 ```
 
-`financeAgent(tenant)` returns `defineRemoteAgent({ description, url, auth })`, with `auth` closing over `tenant`.
+`financeAgent(tenant)` returns `defineRemoteAgent({ description, url, auth })`, with `auth`
+closing over `tenant`.
 
-- **`select`/`record`/`render` is the strongest here.** Outside the session, eve calls `render(record)`, which needs no context at all, so a gate on the conversation in `select` costs nothing. With `oncePer`, eve evaluates the whole function from the child's binding, and a read of the conversation outside a memo fails there ([Values used outside the session](#values-used-outside-the-session)).
-- **Moments can't say "when the tenant changes".** `beforeSession` misses a new caller, and `beforeTurn` looks the tenant up every turn.
+- **`select`/`record`/`render` is the strongest here.** Outside a model call, eve calls
+  `render(record)`, which needs no context at all, so a gate on the conversation in `select` costs
+  nothing. With `oncePer`, eve runs the whole function from the child's binding, and a read of the
+  conversation outside a memo fails there.
+- **Moments can't say "when the tenant changes".** `beforeSession` misses a new caller, and
+  `beforeTurn` looks the tenant up every turn.
 
-### A budget alert
+</details>
+
+<details>
+<summary>A budget alert</summary>
 
 ```ts
 // oncePer
@@ -1177,54 +1297,65 @@ export default defineHook({
 });
 ```
 
-- **`select` and `run` act on each transition** of the selection; `oncePer` gets the same by keying on the condition, or acts once per session, as here, by keying on the session.
-- **Moments have no memory of their own.** The hook keeps its own flag in state, and builds its own idempotency key.
+- **`select` and `run` act on each change** of the selection; `oncePer` does the same by keying
+  on the condition, or acts once per session, as here, by keying on the session.
+- **Moments have no memory of their own.** The hook keeps its own flag in state and builds its own
+  idempotency key.
 
 </details>
 
 ### Other approaches
 
-- **Events, as on `main`.** Handlers on lifecycle events, with a compiler that snapshots what callbacks capture. Each kind keeps its own precedence rules, and recovery runs handlers again.
-- **`select`, `record`, and `render`.** Structurally separates data from code: `select` and `render` can't `await`. Stronger for values used outside the session, and it is what #4616 prototypes. Three callbacks for one idea read worse for the common cases, which need no data and fit in one function.
-- **Moments.** Honest about when eve asks, unlike stand-in events, but a fixed list of lifetimes brings back precedence between them. Decision moments, such as before tool calls, before compaction, or before a turn settles, could come later where a concrete case needs a typed decision.
-- **Code by name.** Data descriptors with factories found by registered name, the way `pi-durable` resolves code. Exact recovery, at the cost of naming and registering every factory.
-- **Compiler closure conversion,** as on `main`. Automatic, and it snapshots every capture, but it restricts what callbacks may look like and costs a compiler ([What this removes](#what-this-removes)). A lint for `await` outside a memo would recover some of its safety without one.
-- **A synchronous function with suspending memos,** in the style of React's `use`: a memo without a result suspends the function, and eve runs it again when the result arrives. `await` outside a memo becomes impossible, but evaluation is harder to follow and every memo miss re-runs the function.
-- **Decisions as public facts.** Recording a router's choice or a tenant lookup on the public stream would make them visible to clients, but exposes private data and grows the public schema. Memos stay private; a specific decision can become a fact when a client needs it, as the chosen model already appears in `model.started`.
+- **Events, as on `main`.** Handlers on lifecycle events, with a compiler that saves what callbacks
+  capture. Each kind keeps its own rules, and recovery runs handlers again.
+- **`select`, `record`, and `render`.** Separates data from code structurally: `select` and
+  `render` can't `await`. Stronger for values used outside a model call, and it's what #4616
+  prototypes. But three callbacks for one idea read worse in the common cases, which need no data
+  and fit in one function.
+- **Moments.** Honest about when eve asks, unlike today's handlers, some of which receive stand-in
+  events that were never published. But a fixed list of lifetimes brings back precedence between
+  them. Decision moments, such as before tool calls, before compaction, or before a turn settles,
+  could come later where a concrete case needs a typed decision.
+- **Code by name.** Data with factories found by registered name, the way `pi-durable` resolves
+  code. Exact recovery, at the cost of naming and registering every factory.
+- **Compiler closure conversion,** as on `main`. Automatic, and it saves every capture, but it
+  restricts what callbacks may look like and costs a compiler. A lint for `await` outside a memo
+  would recover some of its safety without one.
+- **A synchronous function with suspending memos,** like React's `use`: a memo without a result
+  suspends the function, and eve runs it again when the result arrives. That makes `await` outside
+  a memo impossible, but evaluation is harder to follow and every new memo re-runs the function.
+- **Decisions as public facts.** Recording a router's choice or a tenant lookup on the stream would
+  show it to clients, but exposes private data and grows the public schema. Memos stay private; a
+  specific decision can become a fact when a client needs it, as the chosen model already appears
+  in `model.started`.
 
 ## What this removes
 
-On `main`, recovering dynamic tools and remote credentials takes a compiler. About 1,060 lines of build transforms under `internal/workflow-bundle/dynamic-*` parse authored source, find what callbacks capture, and rewrite them into registered factories. About 1,020 more in `tools/durable-callbacks.ts` and `context/dynamic-tool-lifecycle.ts` register and rebind them at runtime, alongside `defineDurableCallback` and `defineDurableSchema` for code the compiler can't see. Memos need none of it, and builds stop parsing authored source.
+On `main`, recovering dynamic tools and remote credentials takes a compiler. About 1,060 lines of
+build transforms under `internal/workflow-bundle/dynamic-*` parse authored source, find what
+callbacks capture, and rewrite them into registered factories. About 1,020 more, in
+`tools/durable-callbacks.ts` and `context/dynamic-tool-lifecycle.ts`, register and rebind them at
+run time, alongside `defineDurableCallback` and `defineDurableSchema` for code the compiler can't
+see. Memos need none of it, and builds stop parsing authored source.
 
-The rest follows from one lifecycle:
+The rest follows from having one lifecycle:
 
-- **Six lifecycles did one job six times.** Each decided when to run, where to keep its result, how a later result replaced an earlier one, and how to recover after a restart, with its own rules. That is what authors learned per kind, and it is what the code repeated. One runner does it once; a kind supplies how its value contributes to the session.
-- **Precedence and replay rules disappear.** Turn results shadowing session results, steering skipping `turn.started`, and re-running handlers to rebind callbacks are cases that one function per value doesn't have, and neither do their tests.
-
-## Pros and cons
-
-### Pros
-
-- **One function, in ordinary code.** Most definitions read like `main`'s handlers without the event, and a fetch becomes one `ctx.oncePer` line.
-- **An explicit persistence boundary.** A memo is what survives a restart; packages return ordinary tools; callback code stays code. eve can retire the per-kind lifecycle and closure-rebinding machinery rather than teach authors its restrictions.
-- **Lifetimes are keys.** Per session, per turn, per tenant, or any combination, without named lifetimes or precedence between them. A first value latches with a memo keyed by the session.
-- **`auto()` is ordinary.** Its caching moves into the framework, and authors can write their own routers without internals.
-- **Hooks act on state.** A hook can compact or cancel when a condition holds, with a plain `if`, and returning the same command again is safe.
-- **Visible failures.** A required instruction or credential check can't silently disappear, and transient errors recover at the next boundary.
-- **No compiler pass** over authored source in every build.
-
-### Cons
-
-- **Determinism outside memos is a convention.** Nothing stops an `await` outside a memo; the development check and the comparison on cold starts catch some mistakes, not all. `select`/`record`/`render` made an `await` in `render` impossible to write.
-- **Only memo results are snapshotted.** A callback that captures something fetched outside a memo gets a fresh answer after a cold start, where `main`'s compiler kept what each callback captured from its handler.
-- **Remote agents ask more of their code.** Outside a model call, a definition sees only the child's binding, so a gate on the conversation has to move into a memo.
-- **The function runs before every model call.** Expensive work outside a memo repeats.
-- **A caught failure inside a memo sticks** until its key changes.
-- **Commands repeat while their condition holds.** A condition that stays true after its command acts asks again at the next target.
-- **A memo holds one key.** Alternating between two keys runs the memo each time.
+- **Six lifecycles do one job six times.** Each decides when to run, where to keep its result, how
+  a later result replaces an earlier one, and how to recover after a restart, with its own rules.
+  That's what authors learn per kind, and what the code repeats. One runner does it once; a kind
+  only supplies how its value joins the session.
+- **Precedence and replay rules disappear.** Turn results shadowing session results, steering
+  skipping `turn.started`, and re-running handlers to rebind callbacks are cases one function per
+  value doesn't have, and neither do their tests.
 
 ## Scope
 
-The initial change is dynamic values and hooks on the v27 view, with `ctx.oncePer`, occurrences, commands, and recovery. Keep `defineDynamic`, retain event hooks, and add function hooks and returned commands. Moving #4616 to this API changes its definitions and hook kind: the runner keeps one result per memo rather than one record per definition, and remote credentials come from evaluating the definition from the child's binding rather than calling `render`.
+The first change is dynamic values and hooks on the v27 view, with `ctx.oncePer`, retry identities,
+commands, and recovery. It keeps `defineDynamic` and event hooks, and adds hook functions and
+returned commands. Moving #4616 to this API changes its definitions and hook kind: the runner keeps
+one result per memo rather than one record per definition, and remote credentials come from
+running the definition with the child's binding rather than calling `render`.
 
-Do not add `defineGuard`, a universal public `defineReaction`, an `onError` option, a lint for `await` outside memos, arbitrary dependency graphs, a command for adding messages, or a new task-authoring API. An `onError` option and the lint may come later.
+Not included: `defineGuard`, a universal public `defineReaction`, an `onError` option, a lint for
+`await` outside memos, dependency graphs between definitions, a command for adding messages, or a
+new task-authoring API. An `onError` option and the lint may come later.
