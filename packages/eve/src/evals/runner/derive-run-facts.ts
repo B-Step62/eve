@@ -103,6 +103,21 @@ export function deriveRunFacts(
     return call;
   };
 
+  const ensureSkillLoad = (callId: string, skill: string): MutableSkillLoad => {
+    const existing = skillLoads.get(callId);
+    if (existing !== undefined) return existing;
+
+    const load: MutableSkillLoad = {
+      output: undefined,
+      sessionId,
+      skill,
+      status: "pending",
+      turnIndex: Math.max(turnIndex, 0),
+    };
+    skillLoads.set(callId, load);
+    return load;
+  };
+
   for (const event of events) {
     switch (event.type) {
       case "turn.started": {
@@ -115,13 +130,7 @@ export function deriveRunFacts(
           if (action.kind === "tool-call") {
             ensureToolCall(action.callId, action.toolName, action.input);
           } else if (action.kind === "load-skill") {
-            skillLoads.set(action.callId, {
-              output: undefined,
-              sessionId,
-              skill: action.name,
-              status: "pending",
-              turnIndex: Math.max(turnIndex, 0),
-            });
+            ensureSkillLoad(action.callId, action.name);
           }
         }
         break;
@@ -134,9 +143,8 @@ export function deriveRunFacts(
           call.output = result.output;
           call.status = status;
         }
-        const load =
-          result.kind === "load-skill-result" ? skillLoads.get(result.callId) : undefined;
-        if (load !== undefined) {
+        if (result.kind === "load-skill-result") {
+          const load = ensureSkillLoad(result.callId, result.name);
           load.output = result.output;
           load.status = status;
         }

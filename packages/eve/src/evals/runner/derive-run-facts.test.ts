@@ -305,6 +305,42 @@ describe("deriveRunFacts", () => {
     ]);
   });
 
+  it("keeps a skill load's output when its result is delivered before its request", () => {
+    const skillLoadEvents = (
+      order: "request-first" | "result-first",
+    ): UnstampedMessageStreamEvent[] => {
+      const request: UnstampedMessageStreamEvent = {
+        type: "actions.requested",
+        data: {
+          actions: [{ callId: "s1", input: {}, kind: "load-skill", name: "research" }],
+          sequence: 1,
+          stepIndex: 0,
+          turnId: "t1",
+        },
+      };
+      const result: UnstampedMessageStreamEvent = {
+        type: "action.result",
+        data: {
+          result: { callId: "s1", kind: "load-skill-result", name: "research", output: "x" },
+          sequence: 1,
+          stepIndex: 0,
+          status: "completed",
+          turnId: "t1",
+        },
+      };
+      return [
+        turnStarted("t1", 0),
+        ...(order === "request-first" ? [request, result] : [result, request]),
+      ];
+    };
+
+    const expected = [
+      { output: "x", sessionId: undefined, skill: "research", status: "completed", turnIndex: 0 },
+    ];
+    expect(derive(skillLoadEvents("request-first")).skillLoads).toEqual(expected);
+    expect(derive(skillLoadEvents("result-first")).skillLoads).toEqual(expected);
+  });
+
   it("stamps the turn index from turn.started boundaries", () => {
     const events: UnstampedMessageStreamEvent[] = [
       turnStarted("t1", 0),
