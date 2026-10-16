@@ -282,6 +282,8 @@ const LIFECYCLE: Partial<
       readonly from?: string;
       /** Fact fields the row keeps under another name, where the row's own name means more. */
       readonly rename?: Readonly<Record<string, string>>;
+      /** Fact fields the row leaves out, which only readers of the fact need. */
+      readonly omit?: readonly string[];
     }
   >
 > = {
@@ -307,7 +309,7 @@ const LIFECYCLE: Partial<
   "task.ended": { status: "ended", table: "tasks" },
   "task.started": { status: "running", table: "tasks" },
   "turn.settled": { rename: { cause: "endedBy" }, status: "settled", table: "turns" },
-  "turn.started": { status: "running", table: "turns" },
+  "turn.started": { omit: ["trace"], status: "running", table: "turns" },
 };
 
 /**
@@ -325,7 +327,9 @@ function foldLifecycle(
   if (rule === undefined) return false;
   const { idField, role } = FACT_CATALOG[fact.type];
   const data = Object.fromEntries(
-    Object.entries(fact.data).map(([key, value]) => [rule.rename?.[key] ?? key, value]),
+    Object.entries(fact.data).flatMap(([key, value]) =>
+      rule.omit?.includes(key) === true ? [] : [[rule.rename?.[key] ?? key, value]],
+    ),
   );
   const id = data[idField];
   if (typeof id !== "string") return false;
