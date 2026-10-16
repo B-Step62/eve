@@ -36,8 +36,8 @@ export type RunSessionLimits = Pick<
 /** Identifies the session turn to cancel. */
 export interface CancelTurnInput {
   readonly sessionId: string;
-  /** Limits the request to the turn the caller observed. */
-  readonly turnId?: string;
+  /** Limits cancellation to the observed turn; null records a no-op without targeting later work. */
+  readonly turnId?: string | null;
 }
 
 /** Result of requesting turn cancellation. Both statuses are successful. */
@@ -199,7 +199,7 @@ export type SessionCommand =
     }
   | ({
       readonly kind: "cancel";
-      readonly turnId?: string;
+      readonly turnId?: string | null;
     } & SessionControlIdentity)
   | ({ readonly kind: "compact" } & SessionControlIdentity)
   | ({ readonly kind: "clear" } & SessionControlIdentity)
@@ -221,7 +221,10 @@ export interface SessionControlOptions {
 /** A control command as one delivery: a fresh id, and the sender when known. */
 export function controlCommand<
   TCommand extends { readonly kind: "cancel" | "clear" | "compact" | "reset" },
->(command: TCommand, options?: SessionControlOptions): TCommand & SessionControlIdentity {
+>(
+  command: TCommand,
+  options?: SessionControlOptions,
+): TCommand & SessionControlIdentity & { readonly deliveryId: string } {
   const deliveryId = crypto.randomUUID();
   return options?.auth === undefined
     ? { ...command, deliveryId }
@@ -599,6 +602,8 @@ export interface DeliverInput {
  * Carries the identifiers needed for stream endpoints.
  */
 export interface RunHandle {
+  /** Initial message delivery; absent for an idle prewarm. */
+  readonly deliveryId?: string;
   readonly events: ReadableStream<SessionStreamEvent>;
   /**
    * Runtime-owned identifier for this session. Stream and inspection APIs
@@ -698,6 +703,8 @@ export interface Runtime {
  * Options accepted by {@link Runtime.getEventStream}.
  */
 export interface GetEventStreamOptions {
+  /** Stops the read and releases its stream reader. */
+  readonly signal?: AbortSignal;
   /**
    * Zero-based index of the first event to emit. Negative values read from
    * the current tail (`-1` starts at the latest event). Defaults to `0`

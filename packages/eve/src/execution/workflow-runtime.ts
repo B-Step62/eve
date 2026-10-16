@@ -312,9 +312,10 @@ export function createWorkflowRuntime(config: {
       options?: GetEventStreamOptions,
     ): Promise<ReadableStream<SessionStreamEvent>> {
       // Recorded history needs no owner, so reading it never inspects the session's lifecycle.
-      if (options?.follow === false) return readSessionEventHistory(sessionId, options.startIndex);
+      if (options?.follow === false)
+        return readSessionEventHistory(sessionId, options.startIndex, options.signal);
       await assertFollowableSession(sessionId);
-      return readSessionEventStream(sessionId, options?.startIndex);
+      return readSessionEventStream(sessionId, options?.startIndex, options?.signal);
     },
 
     async getLineStream(

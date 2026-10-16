@@ -27,7 +27,8 @@ export type {
   MessagePart,
   MessageTextPart,
 } from "#shared/message-content.js";
-export { MessageResponse } from "#client/message-response.js";
+export type { Delivery } from "#shared/delivery.js";
+export { SessionNotActiveError } from "#channel/session-not-active-error.js";
 export { ClientAgentSession } from "#client/agent-session.js";
 export { ClientSession } from "#client/session.js";
 export {
@@ -41,7 +42,6 @@ export {
 // ---------------------------------------------------------------------------
 
 export type {
-  AcceptedDelivery,
   EveAgentStoreCallbacks,
   EveAgentStoreInit,
   EveAgentStoreSnapshot,
@@ -76,7 +76,7 @@ export type {
   CreateSessionOptions,
   HeadersValue,
   HealthResult,
-  MessageResult,
+  DeliveryResult,
   RespondTurnOptions,
   ResetResult,
   ResolvedStreamReconnectPolicy,
