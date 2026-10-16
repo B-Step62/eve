@@ -17,7 +17,6 @@ import {
 } from "#context/keys.js";
 import { drainMemoryCommit, prepareMemoryPreamble } from "#context/memory-lifecycle.js";
 import { type HarnessModelMessage, validateHarnessModelMessages } from "#harness/messages.js";
-import { cascade } from "#harness/session-machine/cascade.js";
 import {
   applyTransition,
   dropClosedRecords,
@@ -117,11 +116,9 @@ export function createStep(input: {
     position: () => turnPosition(live.read()),
     async apply(change, messages) {
       const transition = "events" in change ? change : { events: change, turn: step.view().turn };
-      // An owner's end closes what it holds in the same commit.
-      const events = cascade(live.read().view, transition.events);
-      // Records whose rows the commit closed retire with it.
+      // Records whose rows the commit closed retire with it; the writer closes and scopes.
       step.session = dropClosedRecords(
-        await applyTransition(step.session, { ...transition, events }, input.publish, messages),
+        await applyTransition(step.session, transition, input.publish, messages),
         live.read(),
       );
       if (ctx !== undefined) recordAppliedSession(ctx, step.session);
