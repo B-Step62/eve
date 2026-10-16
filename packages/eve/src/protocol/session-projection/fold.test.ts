@@ -193,7 +193,7 @@ describe("the shared fold", () => {
     // Only what the latest line touched survives; the session's usage still counts every turn.
     expect(Object.keys(view.turns)).toEqual(["turn_20"]);
     expect(Object.keys(view.runs).length).toBeLessThanOrEqual(1);
-    expect(Object.keys(view.parts)).toEqual([]);
+    expect(Object.keys(view.parts)).toEqual(["p_20"]);
     expect(view.usage.total.inputTokens).toBe(21 * spent.inputTokens);
   });
 
@@ -301,6 +301,35 @@ describe("the shared fold", () => {
     );
     expect(next.calls.small).toBeUndefined();
     expect(next.runs.run_0).toBeUndefined();
+  });
+
+  it("keeps the latest turn's reply readable, with every reply part its run completed", () => {
+    const scope = { runId: "run_0", turnId: "turn_0" };
+    const part = (partId: string, kind: string): StoredLine => ({
+      at,
+      facts: [
+        {
+          data: { kind, partId, phase: "reply", runId: "run_0", value: partId },
+          scope,
+          type: "content.completed",
+        },
+      ],
+    });
+    const [admitted, started] = turnLines(0, { opensSession: true });
+    const lines: StoredLine[] = [
+      admitted!,
+      started!,
+      // A run's reply can span commits, as text and then a file the agent sends would.
+      part("p_text", "text"),
+      part("p_file", "file"),
+      {
+        at,
+        facts: [{ data: { outcome: "completed", runId: "run_0" }, scope, type: "model.settled" }],
+      },
+    ];
+    const operational = folded(lines, "operational");
+    expect(operational.turns.turn_0?.reply).toEqual(folded(lines).turns.turn_0?.reply);
+    expect(reply(operational, "turn_0").map((row) => row.partId)).toEqual(["p_text", "p_file"]);
   });
 
   it("folds a reader's events by line, holding back a line still arriving", () => {

@@ -29,7 +29,8 @@ import type {
 /**
  * How much a fold keeps. `complete` keeps everything, for clients and history reads.
  * `operational` keeps the session, everything still open and its ownership ancestors, what the
- * latest line touched, and the rows of the latest turn and of any turn whose calls still work, for
+ * latest line touched, the latest turn's reply, and the rows of the latest turn and of any turn
+ * whose calls still work, for
  * server checkpoints and observers; it drops the rest when the next line arrives. A channel shows
  * what a turn did from its rows, so they stay until the next turn starts, or its tasks finish.
  */
@@ -521,6 +522,11 @@ function prune(view: MutableView, keep: FoldOptions["keep"]): void {
     pinPath({ family: "delivery", id: row.deliveryId });
   }
   const turns = liveTurns(view);
+  // The latest turn's reply parts stay with its rows, so a reader of the view can read its reply,
+  // and a later reply part of the same run keeps the earlier ones in it.
+  const latest = view.session.latestTurnId;
+  for (const partId of (latest === undefined ? undefined : view.turns[latest]?.reply) ?? [])
+    pinned.add(`parts:${partId}`);
   const retained = (family: Family, id: string) => {
     if (pinned.has(`${tableOf(family)}:${id}`) || keep?.(tableOf(family), id) === true) return true;
     const turnId = family === "part" ? undefined : turnOf(view, { family, id });
