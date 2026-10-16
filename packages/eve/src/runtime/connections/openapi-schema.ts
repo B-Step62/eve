@@ -78,9 +78,7 @@ export function deref(document: Record<string, unknown>, node: Record<string, un
  * specs (e.g. Notion blocks) from expanding without limit.
  *
  * Depth counts subschema levels, so arrays, property maps, and `$ref` hops
- * do not spend it. A truncated `{}` matches anything, so a `oneOf` with a
- * truncated branch becomes `anyOf`; otherwise valid input would match
- * several branches and be rejected.
+ * do not spend it.
  */
 export function derefSchema(
   document: Record<string, unknown>,
@@ -88,36 +86,24 @@ export function derefSchema(
   depth = 0,
   seen: ReadonlySet<string> = new Set(),
 ): unknown {
-  return derefNode(document, node, depth, seen, { truncations: 0 });
-}
-
-function derefNode(
-  document: Record<string, unknown>,
-  node: unknown,
-  depth: number,
-  seen: ReadonlySet<string>,
-  state: { truncations: number },
-): unknown {
   if (isArray(node)) {
-    return node.map((item) => derefNode(document, item, depth, seen, state));
+    return node.map((item) => derefSchema(document, item, depth, seen));
   }
   if (!isObject(node)) {
     return node;
   }
   if (depth > MAX_DEREF_DEPTH) {
-    state.truncations++;
     return {};
   }
   if (typeof node.$ref === "string") {
     if (seen.has(node.$ref)) {
-      state.truncations++;
       return {};
     }
     const target = resolveRef(document, node.$ref);
     if (target === undefined) {
       return {};
     }
-    return derefNode(document, target, depth, new Set([...seen, node.$ref]), state);
+    return derefSchema(document, target, depth, new Set([...seen, node.$ref]));
   }
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node)) {
@@ -134,15 +120,11 @@ function derefNode(
       result[key] = Object.fromEntries(
         Object.entries(value).map(([name, schema]) => [
           name,
-          derefNode(document, schema, depth + 1, seen, state),
+          derefSchema(document, schema, depth + 1, seen),
         ]),
       );
-    } else if (key === "oneOf") {
-      const before = state.truncations;
-      const branches = derefNode(document, value, depth + 1, seen, state);
-      result[state.truncations > before && !("anyOf" in node) ? "anyOf" : "oneOf"] = branches;
     } else {
-      result[key] = derefNode(document, value, depth + 1, seen, state);
+      result[key] = derefSchema(document, value, depth + 1, seen);
     }
   }
   normalizeSchemaType(result);

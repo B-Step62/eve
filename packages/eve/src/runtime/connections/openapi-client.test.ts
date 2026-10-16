@@ -593,45 +593,6 @@ describe("OpenApiConnectionClient", () => {
     expect((await validate(123)).issues).toBeDefined();
   });
 
-  it("widens a oneOf to anyOf when one of its branches is truncated", async () => {
-    const spec: Record<string, unknown> = {
-      openapi: "3.1.0",
-      info: { title: "T", version: "1" },
-      servers: [{ url: "https://api.example.com" }],
-      paths: {
-        "/nodes": {
-          post: {
-            operationId: "createNode",
-            requestBody: {
-              content: { "application/json": { schema: { $ref: "#/components/schemas/Node" } } },
-            },
-            responses: { "201": { description: "ok" } },
-          },
-        },
-      },
-      components: {
-        schemas: {
-          Node: {
-            type: "object",
-            properties: {
-              next: { oneOf: [{ $ref: "#/components/schemas/Node" }, { type: "null" }] },
-            },
-          },
-        },
-      },
-    };
-    const client = new OpenApiConnectionClient(makeConnection({ spec }));
-    const createNode = (await client.getToolMetadata()).find((m) => m.name === "createNode");
-    const schema = createNode!.inputSchema as JsonObject;
-
-    expect(schema).toMatchObject({
-      properties: { body: { properties: { next: { anyOf: [{}, { type: "null" }] } } } },
-    });
-    expect(
-      (await defineJsonSchema(schema)["~standard"].validate({ body: { next: null } })).issues,
-    ).toBeUndefined();
-  });
-
   it("derives the base URL from the spec servers when baseUrl is omitted", async () => {
     const fetchMock = vi.fn(
       async (_url: unknown, _init?: RequestInit) =>
