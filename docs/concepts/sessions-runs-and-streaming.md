@@ -138,7 +138,7 @@ Note: consider the privacy, confidentiality, and user-experience implications fo
 
 ### Replies and narration
 
-A model often writes text before it calls a tool. Each text part's `content.completed.data.phase` tells you which it is: `"narration"` for text written on the way to more work, `"reply"` for the turn's answer. `turn.settled.data.reply` lists the reply's part ids, so a reader that only needs the answer can wait for the turn to settle and read those parts. When a turn requested an output schema, the structured result is a `content.completed` with `kind: "result"`.
+A model often writes text before it calls a tool. Each text part's `content.completed.data.phase` tells you which it is: `"narration"` for text written on the way to more work, `"reply"` for the turn's answer. `turn.settled.data.reply` lists the reply's part ids, so a reader that only needs the answer can wait for the turn to settle and read those parts. It's the same list a folded view keeps as `view.turns[turnId].reply`, and `reply(ctx.view, turnId)` reads those parts in a hook or channel handler. When a turn requested an output schema, the structured result is a `content.completed` with `kind: "result"`.
 
 Spend is recorded on `usage.recorded`, once per model run (`owner: { runId }`), once per delegated call for what the agent it called spent (`owner: { callId }`), and once per compaction (`owner: { changeId }`). A session's total is the sum of its records; the shared fold keeps it in `view.usage.total`. Spend a task reports after its calls settled is recorded with the task's scope and `kind: "delegated-late"`.
 
