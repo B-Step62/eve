@@ -67,11 +67,16 @@ interface EmittedStreamContent {
 interface StreamActionEmissionOptions {
   readonly excludedActionToolNames: ReadonlySet<string>;
   /**
-   * A child's or schedule's turn is held while its tasks work, so a text step
-   * can't end it: the step reports `"tool-calls"` and channels don't post it
-   * as the reply.
+   * The session is a child or a schedule, whose caller hears only the turn's
+   * real end: text before `eve__task_wait` reports `"tool-calls"`, and
+   * channels don't post it as the reply.
    */
   readonly hidesHeldText?: boolean;
+  /**
+   * A task is working, so the turn is held and a text step can't end it. For a
+   * session that `hidesHeldText`, the step reports `"tool-calls"`.
+   */
+  readonly tasksWorking?: boolean;
   readonly tools: HarnessToolLookup;
   readonly unsettledActionToolNames?: Map<string, string>;
 }
@@ -515,7 +520,10 @@ async function consumeStreamContent(
   if (finishReason !== "content-filter" && currentMessage.trim().length > 0) {
     await emitFn(
       createMessageCompletedEvent({
-        finishReason: reportedFinishReason(finishReason, options?.hidesHeldText === true),
+        finishReason: reportedFinishReason(
+          finishReason,
+          options?.hidesHeldText === true && options.tasksWorking === true,
+        ),
         message: currentMessage,
         sequence: state.sequence,
         stepIndex: state.stepIndex,
