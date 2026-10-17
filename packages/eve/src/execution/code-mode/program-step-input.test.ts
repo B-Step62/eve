@@ -33,7 +33,7 @@ vi.mock("#harness/session-machine/view.js", () => ({
   turnPosition: () => ({ sequence: 0, turnId: "a" }),
 }));
 vi.mock("#harness/session-machine/commit.js", () => ({ sessionView: () => ({}) }));
-vi.mock("#harness/hitl/approvals.js", () => ({ grantedApprovalKeys: () => [] }));
+vi.mock("#harness/hitl/index.js", () => ({ grantedApprovalKeys: () => [] }));
 vi.mock("#execution/catalog/step-catalog.js", () => ({
   buildStepCatalog: () => ({
     get: () => m.definition,

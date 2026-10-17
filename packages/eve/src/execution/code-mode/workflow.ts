@@ -1,5 +1,5 @@
 import { sleep } from "#compiled/@workflow/core/index.js";
-import { ask } from "#execution/tools/workflow/ask.js";
+import { askToApproveAction } from "#execution/tools/workflow/ask.js";
 import { parseJsonValue, type JsonValue } from "#shared/json.js";
 import { toErrorMessage } from "#shared/errors.js";
 import type { WorkflowToolContext } from "#tools/workflow-definition.js";
@@ -65,7 +65,7 @@ export async function executeProgramWorkflow(
             return { index: call.index, status: "failed", error: approval.error };
           if (approval.status === "required") {
             const answer = await Promise.race([
-              ask(
+              askToApproveAction(
                 ctx,
                 {
                   prompt: `Approve ${call.tool}?`,
@@ -76,7 +76,6 @@ export async function executeProgramWorkflow(
                     { id: "cancel", label: "Cancel" },
                   ],
                 },
-                {},
                 {
                   kind: "tool-call",
                   callId,

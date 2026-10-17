@@ -11,6 +11,7 @@ import type {
   ToolInputRequestOptions,
   ToolInputResponse,
 } from "#tools/definition.js";
+import type { InputRequest } from "#shared/input.js";
 import { workflowToolContextErrorMessage } from "#shared/workflow-tool-context.js";
 
 // `Symbol.for`, not a module-local WeakMap: workflow helpers and body setup may
@@ -174,7 +175,24 @@ export function ask(
   ctx: Pick<ToolContext, "abortSignal">,
   request: ToolInputRequest,
   options: ToolInputRequestOptions = {},
-  approval?: import("#shared/input.js").InputRequest["action"],
+): Promise<ToolInputResponse> {
+  return openAsk(ctx, request, options);
+}
+
+/** An `ask()` the owner presents as an approval of `action`, not as a free-form question. */
+export function askToApproveAction(
+  ctx: Pick<ToolContext, "abortSignal">,
+  request: ToolInputRequest,
+  action: InputRequest["action"],
+): Promise<ToolInputResponse> {
+  return openAsk(ctx, request, {}, action);
+}
+
+function openAsk(
+  ctx: Pick<ToolContext, "abortSignal">,
+  request: ToolInputRequest,
+  options: ToolInputRequestOptions,
+  approval?: InputRequest["action"],
 ): Promise<ToolInputResponse> {
   const context = readWorkflowToolRunContext(ctx, "ask");
   // A caller that can't reach a person resolves `ctx.ask()` as `unavailable`.
@@ -193,7 +211,10 @@ export function ask(
       kind: "request",
       from,
       replyTo,
-      request: { control, kind: "ask", request, ...(approval === undefined ? {} : { approval }) },
+      request:
+        approval === undefined
+          ? { control, kind: "ask", request }
+          : { control, kind: "ask", request, approval },
     });
     // The withdrawal must not overtake the request it withdraws.
     return () => sent.then(() => owner.send({ control, from, kind: "withdraw", replyTo }));

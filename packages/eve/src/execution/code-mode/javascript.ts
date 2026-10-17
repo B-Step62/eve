@@ -19,15 +19,15 @@ interface BridgeCall extends ProgramCall {
   readonly logs: readonly string[];
   readonly limitExceeded?: boolean;
 }
-interface State {
-  readonly version: 2;
-  readonly runId: string;
-  readonly ticket: number;
-  readonly inputKey: string;
-  readonly calls: readonly string[];
-  readonly pending: readonly number[];
-  readonly logs: readonly string[];
-}
+type State = {
+  version: 2;
+  runId: string;
+  ticket: number;
+  inputKey: string;
+  calls: string[];
+  pending: number[];
+  logs: string[];
+};
 interface PendingCall {
   readonly call: ProgramCall;
   readonly resolve: (result: Resolution) => void;
@@ -64,7 +64,7 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
 
   async resume(input: ProgramResume): Promise<ProgramStep> {
     const started = performance.now();
-    const state = input.state as unknown as State;
+    const state = input.state as State;
     const logs = Array.isArray(state?.logs) ? capLogs(state.logs) : [];
     if (Date.now() >= input.limits.deadlineAt) {
       if (state?.runId) this.stop(this.executions.get(state.runId));
@@ -276,9 +276,9 @@ export class JavaScriptProgramRuntime implements ProgramRuntime {
       inputKey: execution.inputKey,
       calls: [...execution.calls],
       pending: execution.frontier!.map((call) => call.index),
-      logs: execution.logs,
+      logs: [...execution.logs],
     };
-    return { status: "parked", calls: execution.frontier!, state: state as unknown as JsonValue };
+    return { status: "parked", calls: execution.frontier!, state: state as JsonValue };
   }
 
   private stop(execution: LiveExecution | undefined): void {

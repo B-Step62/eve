@@ -1,3 +1,4 @@
+import { parseJsonValue, type JsonObject } from "#shared/json.js";
 /** Starts workflow-tool runs for pending coordination. */
 
 import {
@@ -83,11 +84,11 @@ async function dispatchCoordination(
           : {
               ...task,
               executeInput: {
-                ...((task.executeInput ?? task.input) as import("#shared/json.js").JsonObject),
-                context: {
+                ...((task.executeInput ?? task.input) as JsonObject),
+                context: parseJsonValue({
                   serializedContext: prepared.serializedContext,
                   sessionState: createDurableSessionState({ session }),
-                } as unknown as import("#shared/json.js").JsonValue,
+                }),
               },
             },
     })),

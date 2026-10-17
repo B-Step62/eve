@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   sleep: vi.fn(),
 }));
 vi.mock("./program-step.js", () => mocks);
-vi.mock("#execution/tools/workflow/ask.js", () => ({ ask: mocks.ask }));
+vi.mock("#execution/tools/workflow/ask.js", () => ({ askToApproveAction: mocks.ask }));
 vi.mock("#compiled/@workflow/core/index.js", () => ({ sleep: mocks.sleep }));
 import { executeProgramWorkflow } from "./workflow.js";
 const ctx = { callId: "execute", abortSignal: new AbortController().signal } as never;
@@ -138,12 +138,12 @@ describe("code-mode durable driver", () => {
       return { status: "answered", optionId: "approve" };
     });
     await executeProgramWorkflow(input, ctx);
-    expect(mocks.ask).toHaveBeenCalledWith(
-      ctx,
-      expect.anything(),
-      {},
-      { kind: "tool-call", callId: "execute:program:0", toolName: "read", input: {} },
-    );
+    expect(mocks.ask).toHaveBeenCalledWith(ctx, expect.anything(), {
+      kind: "tool-call",
+      callId: "execute:program:0",
+      toolName: "read",
+      input: {},
+    });
     expect(mocks.dispatchProgramCallStep).toHaveBeenCalledTimes(1);
   });
 

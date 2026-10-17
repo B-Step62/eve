@@ -22,7 +22,7 @@ import { runEntryCall } from "#harness/execute-call.js";
 import { AuthorizationHookKey, PendingAuthorizationResultKey } from "#harness/authorization.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import { storedProjection, turnPosition } from "#harness/session-machine/view.js";
-import { grantedApprovalKeys } from "#harness/hitl/approvals.js";
+import { grantedApprovalKeys } from "#harness/hitl/index.js";
 import { toErrorMessage } from "#shared/errors.js";
 import { parseJsonValue, type JsonObject } from "#shared/json.js";
 import type { WorkflowStepToolContext } from "#tools/workflow-definition.js";
@@ -54,7 +54,7 @@ export async function initializeProgramStep(
       if (registry === undefined) continue;
       try {
         const tools = await listToolMetadata(
-          connection.connectionName,
+          connection,
           registry.getClient(connection.connectionName),
         );
         for (const tool of tools)

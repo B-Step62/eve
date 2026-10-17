@@ -115,7 +115,7 @@ describe("JavaScriptProgramRuntime live bridge", () => {
     ).toMatchObject({ status: "completed", output: 42 });
     expect(mocks.createWorkflowSandboxTool).toHaveBeenCalledTimes(1);
     expect(visits).toEqual([0, 1]);
-    expect((runtime as unknown as { executions: Map<string, unknown> }).executions.size).toBe(0);
+    expect((Reflect.get(runtime, "executions") as Map<string, unknown>).size).toBe(0);
   });
 
   it("separates startup from execution and excludes idle time before a live resume", async () => {
@@ -183,7 +183,7 @@ describe("JavaScriptProgramRuntime live bridge", () => {
       status: "failed",
       error: "Missing recorded result for a program call.",
     });
-    expect((runtime as unknown as { executions: Map<string, unknown> }).executions.size).toBe(0);
+    expect((Reflect.get(runtime, "executions") as Map<string, unknown>).size).toBe(0);
   });
 
   it("replays recorded results on a process cache miss, exposing only the next unresolved call", async () => {
@@ -233,7 +233,7 @@ describe("JavaScriptProgramRuntime live bridge", () => {
     const input = { ...program, limits: { ...program.limits, deadlineAt: Date.now() + 100 } };
     const first = parked(await runtime.start(input));
     await vi.advanceTimersByTimeAsync(101);
-    expect((runtime as unknown as { executions: Map<string, unknown> }).executions.size).toBe(0);
+    expect((Reflect.get(runtime, "executions") as Map<string, unknown>).size).toBe(0);
     expect(await runtime.resume({ ...input, state: first.state, results: [] })).toMatchObject({
       status: "failed",
       errorClass: "deadline",
@@ -248,7 +248,7 @@ describe("JavaScriptProgramRuntime live bridge", () => {
       await runtime.resume({ ...program, source: "return 1;", state: first.state, results: [] }),
     ).toMatchObject({ status: "failed", error: "Invalid JavaScript program state." });
     runtime.close();
-    expect((runtime as unknown as { executions: Map<string, unknown> }).executions.size).toBe(0);
+    expect((Reflect.get(runtime, "executions") as Map<string, unknown>).size).toBe(0);
     expect(call.hostTools.call).toBeDefined();
   });
 
