@@ -2,7 +2,7 @@
   "kind": "eve-extension-capability-contract",
   "capability": "state",
   "epoch": 14,
-  "sha256": "63d8130fc01847a610166183e88bbf95a9df2fb33cb3ce4c2b3ed8b7d64ac073",
+  "sha256": "1deb234c8db57d7d1173cda85d8819b73905aed8a5ff725214e2d18a3e62c6e5",
   "exports": [
     "HistoryMessage",
     "SessionAuth",
