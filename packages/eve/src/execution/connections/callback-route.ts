@@ -12,8 +12,8 @@ import { resumeAuthorizationCallback } from "#execution/legacy-session/authoriza
  * 1. Parses the inbound request into a JSON-serializable
  *    {@link AuthorizationCallback} (params only — never request headers).
  * 2. Calls `resumeHook(token, payload)` to wake the suspended workflow.
- * 3. Renders the standard "Authorization complete" landing page so the
- *    user sees a friendly UI instead of an empty `202 Accepted`.
+ * 3. Acknowledges callback receipt with a landing page. Authorization is
+ *    checked later by `completeAuthorization` in the resumed turn.
  *
  * Owning this route in the framework - instead of routing the IdP at the
  * workflow runtime's raw `/.well-known/workflow/v1/webhook/:token` -
