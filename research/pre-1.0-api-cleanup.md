@@ -934,7 +934,8 @@ from drifting back:
   test checks a few entries inside the workspace, where every devDependency resolves.
 - **Reachability.** Types that public signatures reach but that aren't exported, and exported types
   nothing reaches, each against an allowlist.
-- **Docs imports.** Every name a docs snippet imports from `eve/*` is in the export list.
+- **Docs imports.** The snippet check already resolves each `eve/*` path a docs snippet imports;
+  it also checks that each imported name is in the export list.
 
 ## The numbers
 
