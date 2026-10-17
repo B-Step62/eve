@@ -1,4 +1,4 @@
-import { readHitlState } from "#harness/hitl/requests.js";
+import { readHitlState } from "#harness/hitl/index.js";
 import type { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
 

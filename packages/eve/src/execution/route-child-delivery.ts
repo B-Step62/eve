@@ -1,4 +1,4 @@
-import { readHitlState } from "#harness/hitl/requests.js";
+import { readHitlState } from "#harness/hitl/index.js";
 import type { DeliverHookPayload } from "#channel/types.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import {
