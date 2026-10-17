@@ -33,7 +33,6 @@
   "DiscordReceiveTarget",
   "DiscordRequestOptions",
   "DiscordUser",
-  "DiscordVerifyOptions",
   "DiscordWebhookVerifier",
   "defaultDiscordAuth",
   "discordChannel",

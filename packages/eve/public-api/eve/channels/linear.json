@@ -32,7 +32,6 @@
   "LinearReceiveTarget",
   "LinearSessionContext",
   "LinearUser",
-  "LinearVerifyOptions",
   "LinearWebhookSecret",
   "LinearWebhookVerifier",
   "callLinearGraphQL",

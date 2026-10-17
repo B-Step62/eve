@@ -30,7 +30,6 @@
   "TelegramReceiveTarget",
   "TelegramUpdate",
   "TelegramUser",
-  "TelegramVerifyOptions",
   "TelegramWebhookSecretToken",
   "TelegramWebhookVerifier",
   "defaultTelegramAuth",

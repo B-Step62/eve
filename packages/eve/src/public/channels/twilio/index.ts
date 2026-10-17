@@ -43,6 +43,5 @@ export { type TwilioGatherTwimlOptions } from "#public/channels/twilio/twiml.js"
 export {
   type TwilioAuthToken,
   type TwilioVerifiedRequest,
-  type TwilioVerifyOptions,
   type TwilioWebhookUrl,
 } from "#public/channels/twilio/verify.js";

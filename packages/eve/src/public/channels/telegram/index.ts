@@ -57,7 +57,6 @@ export {
 export { defaultTelegramAuth } from "#public/channels/telegram/defaults.js";
 
 export {
-  type TelegramVerifyOptions,
   type TelegramWebhookSecretToken,
   type TelegramWebhookVerifier,
 } from "#public/channels/telegram/verify.js";

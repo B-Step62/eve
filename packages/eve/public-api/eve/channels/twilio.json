@@ -26,7 +26,6 @@
   "TwilioTextMessage",
   "TwilioUpdateCallInput",
   "TwilioVerifiedRequest",
-  "TwilioVerifyOptions",
   "TwilioVoiceCall",
   "TwilioVoiceConfig",
   "TwilioVoiceResult",

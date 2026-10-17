@@ -68,8 +68,4 @@ export {
 
 export { defaultTeamsAuth } from "#public/channels/teams/defaults.js";
 
-export {
-  type TeamsJwtVerifyOptions,
-  type TeamsVerifyOptions,
-  type TeamsWebhookVerifier,
-} from "#public/channels/teams/verify.js";
+export { type TeamsWebhookVerifier } from "#public/channels/teams/verify.js";

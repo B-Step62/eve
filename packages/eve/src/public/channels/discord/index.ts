@@ -56,6 +56,5 @@ export { defaultDiscordAuth } from "#public/channels/discord/defaults.js";
 
 export {
   type DiscordPublicKey,
-  type DiscordVerifyOptions,
   type DiscordWebhookVerifier,
 } from "#public/channels/discord/verify.js";
