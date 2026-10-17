@@ -1,7 +1,7 @@
 ---
 issue: "None (maintainer-requested research)"
 status: draft
-last_updated: "2026-10-15"
+last_updated: "2026-10-17"
 ---
 
 # A smaller public surface for 1.0
@@ -25,8 +25,13 @@ reasons:
   reset) return about a dozen different result types between them, and "how did my request end"
   has five vocabularies across the client, MCP, and the CLI.
 
-The plan cuts the surface to about 1,350 names and one shape per idea. Something left out can
-still be added after 1.0 if apps need it, but we can't take something out retroactively.
+Some exported types also aren't eve's to promise. A signature that names another package's type
+changes when that package does, and when the app hasn't installed the package, the type quietly
+becomes `any`.
+
+The plan cuts the surface to about 1,400 names, with one shape per idea and types eve owns.
+Something left out can still be added after 1.0 if apps need it, but we can't take something out
+retroactively.
 
 ## Background
 
@@ -134,12 +139,19 @@ same way.
 and a client's child-agent handle) are a `SessionReader`: an `id` and `stream()`. Handles that can
 also send are `SessionOperations`, and they exist only where an authenticated caller is already in
 hand: channel routes, schedules, and the client. No handle gains a power it doesn't have today.
-`ServerSession` is removed.
+`ServerSession` is removed. The client's `ClientSession`, `ClientAgentSession`, and
+`ClientSessions` are exported as types only: `new Client()` and its methods create them, and their
+constructors take internal state.
 
 **One way to read.** Every handle reads with `stream()`, an `AsyncIterable` of events.
 `getEventStream()`, `getLineStream()`, and `getChildBinding()` are removed. The first read checks the
 session, so a route can await the first event before it sends its HTTP response and still answer
 a stranded session with an error status.
+
+Every `stream()` takes one `SessionStreamOptions`: `startIndex`, `follow`, and `signal`, plus
+`streamReconnectPolicy` on the client. `startIndex` is a line, the `line` of an event's
+`meta.position`, not an event count: one line holds every fact of a commit, and a reader resumes
+by line. Today three option types describe it, and some of their docs say it counts events.
 
 **Channel sends.** `ChannelSource.send()` returns the `Delivery` rather than a handle;
 `attachSession(delivery.sessionId)` makes a handle without any I/O. A delivery's fields are plain
@@ -163,7 +175,8 @@ object, so their `data` is `unknown`.
 
 **Names.** The frontend store's local "start over" becomes `newSession()`, so `reset()` means the
 same server-side retire on every handle. `eve/context`'s read-only `Session` is renamed
-`SessionInfo`, since it isn't a handle.
+`SessionInfo`, since it isn't a handle, and it is the type of `ctx.session`: `id`, `auth`, `turn`,
+`parent`, `schedule`, and `predecessor`.
 
 </details>
 
@@ -241,6 +254,19 @@ the same name with different definitions from different paths. That's totally fi
 if we also sometimes export the same object from different paths, it's hard to know when
 a symbol is identical or not.
 
+**One name, one meaning.** The deliberate pairs are the same idea for different slots or
+directions: `defineDynamic` per slot, `auto` for models and approvals, `byPrincipal` for memory
+and schedules, `withEve` for Next.js and Vercel, and `vercelOidc` for sending and for verifying a
+Vercel OIDC token. The other collisions go:
+
+- `eve/tools/grep` and the code extension's `grep` are two tools with different inputs: the
+  extension's adds output modes (`files_with_matches`, `content`, `count`) and limits rows rather
+  than matches per file. The built-in takes the extension's inputs, and the extension contributes
+  the built-in.
+- `gh` and `GitHubLeaseBroker` exist twice only for the deprecated `code({ github })`, and go
+  with it.
+- `eve/events` and `eve/instrumentation` declare `JsonValue` separately; one declaration remains.
+
 <details>
 <summary>The other duplicates</summary>
 
@@ -282,7 +308,8 @@ import {
 **The change.** `eve/setup` stops being exported, and the scaffold moves to
 `eve/internal/scaffold`, exporting only what Agent Builder uses. Each platform entry exports the
 channel factory, its default auth and continuation-token helpers, and the types an app writes:
-config, credentials, state, handler context, handle, thread, and payloads. Inside a handler,
+config, credentials, state, handler context, handle, thread, and payloads. Types that only a
+removed helper used, such as each platform's `*VerifyOptions`, leave with it. Inside a handler,
 `ctx.channel.telegram` (and its equivalent on every platform) already gives raw API access.
 
 Helpers stay public when they're documented or useful outside a handler: Slack's `callSlackApi`,
@@ -298,10 +325,19 @@ for Telegram, Teams, Discord, Twilio, and GitHub can come back if apps ask for t
 <details>
 <summary>Smaller internals</summary>
 
+- **Built-in extensions.** Each exports the extension, its config types, its tools, and its
+  documented sandbox helpers. `eve/extensions/code/prwatch` (27 names: pull-request watch state
+  transitions, tokens, and zod schemas) goes internal. So do the constants and prompt text that
+  `eve/extensions/git/sandbox` exports only for the code extension (`GH_SIGNED_COMMIT_*`,
+  `GH_TOOL_DESCRIPTION`, `GITHUB_TOOLING_PATHS`, `githubInstructions`, `prSkill*`, and
+  `defineGhTool`) and the `*_REVALIDATION_KEY` constants. What one built-in extension shares with
+  another moves to `eve/internal/*`.
 - **Loader internals.** Internal recognition details can leave the public API, but disabled-marker
   types and their guards stay: `DisabledToolSentinel`, `DisabledRouteSentinel`, and
   `InstrumentationDisabled`. Public factories return these values; hiding their names creates
   declaration-portability workarounds rather than a simpler API. `isScheduleAuth` also stays.
+  Guards only eve's loader calls leave: `isInstrumentationProvider`, `isOtelDeclaration`,
+  `isOtelIntegration`, and `serializeModelInputSchema`.
 - **Authoring types stay public.** Keep the named judge, mock-model, and approval request/response
   types used to write shared helpers and reusable values. This includes `JudgeBatch`, `JudgeInput`,
   `JudgeContext`, `ScoreInput`, the `MockModel*` types, and `ApprovalRequest`, `ApprovalResponse`,
@@ -310,9 +346,14 @@ for Telegram, Teams, Discord, Twilio, and GitHub can come back if apps ask for t
 - **`eve/events`.** An explicit export list replaces the `export *` lines. Line encoding and its
   limits, `foldLine` / `foldLines`, `viewOfEvents`, `foldReceivedEvent`, `copyView`, the retention
   options, and the 14 fact zod schemas stay internal (the schemas put eve's vendored zod types
-  into `.d.ts` files). `foldEvents`, `emptySessionView`, and `emptyPreviews` stay as the public way
-  to fold a stream, and components read the frontend store's `view` rather than folding
-  themselves.
+  into `.d.ts` files). So do the transport records and line types (`HEARTBEAT_RECORD`,
+  `LEASE_ENDED_RECORD`, `STREAM_ENDED_RECORD`, `classifyRecord`, `isStoredLine`, `StoredLine`,
+  `CommitLine`, `ProgressLine`, `TransportRecord`, `ReadRecord`, `PositionMarker`): the streaming
+  docs describe the format, and `eve/client` reads it. The progress catalog and the fold's own
+  guards (`PROGRESS_CATALOG`, `isFactType`, `isProgressType`, `isTerminalType`, `isKnownOutcome`,
+  `contentPhase`) go too; `FACT_CATALOG` and its descriptor types stay. `foldEvents`,
+  `emptySessionView`, and `emptyPreviews` stay as the public way to fold a stream, and components
+  read the frontend store's `view` rather than folding themselves.
 - **Built-in tools.** The 14 `…_INPUT_SCHEMA` / `…_OUTPUT_SCHEMA` constants. The documented way to
   customize a built-in tool, spreading it (`{ ...bash, description }`), already copies its
   schemas.
@@ -353,13 +394,17 @@ defineInstrumentation({
 });
 ```
 
+The provider's own types take the hooks' names: `InstrumentationDefinition`,
+`InstrumentationEvents`, `InstrumentationHandler<K>`, and `InstrumentationContext` replace
+`ProviderDefinition`, `ProviderEvents`, the bare `Handler`, and `ProviderContext`.
+
 **Why it's useful.** A provider that already handles the stream's facts handles these the same
 way, and the instrumentation entry goes from about 100 exported names to about 40. The built-in
 OpenTelemetry provider keeps its span names and trace schema 4, so dashboards built on its spans
 don't change; only hand-written providers update their event names.
 
 <details>
-<summary>Every renamed event</summary>
+<summary>Every renamed event and type</summary>
 
 - `channel.delivery.started`, `.cancelled`, `.completed`, and `.failed` become
   `delivery.consumed` and `delivery.settled { outcome }`. A turn that pauses for a person settles
@@ -371,6 +416,12 @@ don't change; only hand-written providers update their event names.
 - `memory.operation.completed` and `.failed` become `memory.operation.settled { outcome }`.
 - `InstrumentationEvent<K>` replaces about 18 named event interfaces and 15 aliases for their
   parts.
+- `ProviderState` and `ProviderSetupContext` become `InstrumentationState` and
+  `InstrumentationSetupContext`; `EvaluationRef` becomes an inline `evaluation?: { runId }`.
+- Events and `runtimeContext` inputs say where they are the same way, with the nested `session`,
+  `turn`, and `run` rather than `InstrumentationScope`'s flat ids. `InstrumentationParentLineage`
+  becomes `SessionParent`, and `InstrumentationEnvironment` and `ConversationEnvironment` become
+  one type.
 
 </details>
 
@@ -389,7 +440,26 @@ interface ToolContext {
 ```
 
 If an AI SDK release changes `ModelMessage`, eve's API changes with it, in a release eve didn't
-make and may not handle.
+make and may not handle. Some signatures follow APIs the AI SDK marks experimental: `decide`
+takes `Parameters<typeof experimental_decide>[0]`, test-only `_internal` option included, and
+both `auto()`s take `Experimental_DecisionModel`. That API has already been renamed once, from
+`experimental_evaluate`.
+
+It's worse when a type comes from a package the app doesn't have. eve bundles zod, the Chat SDK,
+and the Twilio and Linq adapters, but their bundled declarations point back at the real packages,
+or at files eve doesn't ship. An app without them that skips library checks, as most templates
+do, gets `any` with no error:
+
+```ts
+import type { AgentInfoResult } from "eve/client";
+
+declare const info: AgentInfoResult; // any: derived from a zod schema, and the app has no zod
+```
+
+In a project with only `ai` and `@types/node` installed, 43 exported types are `any` or have
+`any` fields, among them every `AgentInfo*` type, `HealthResult`, Slack's card types, and
+Twilio's webhook URL. The framework entries also import `next`, `vite`, `vue`, Nuxt, and their
+frameworks' runtimes without declaring them.
 
 **The change.** eve defines its own `HistoryMessage`, a copy of `ModelMessage`'s structure (about
 300 lines of types), exported from `eve/context`. Tool, memory, and dynamic contexts use it. If the
@@ -398,12 +468,47 @@ option and result types get the same treatment, copied from the AI SDK's experim
 `Experimental_SandboxSession`. Instrumentation's model input becomes `unknown`, documented as the
 provider's request messages.
 
-**Why it's useful.** eve's API changes only when eve releases a change. The cost is about 400
-lines of types to maintain.
+The decision API gets the same treatment. `eve/ai` defines `DecisionModel`, `DecisionQuestion`,
+`DecisionAnswer`, and `DecisionResult`, copied from the AI SDK's current shapes, and `decide`,
+both `auto()`s, and eval judges use them:
 
-Two exceptions stay on purpose: the Slack card builders, which are plain data factories from the
-vendored Chat SDK, and OpenTelemetry's `SpanExporter` and `SpanProcessor`, which an OpenTelemetry
-integration implements by definition.
+```ts
+const { answers } = await decide({
+  state: ticket,
+  questions: { urgent: { type: "boolean", instructions: "Does this need a reply today?" } },
+  signal: ctx.abortSignal,
+});
+```
+
+`decide` takes `model`, `state`, `questions`, `maxRetries`, and `signal`, and returns `answers`
+and `usage`. A model is an ID or any provider object with a `provider` and a `modelId`, so a
+provider on a newer model specification still typechecks. The AI SDK still validates, retries,
+and resolves models at runtime, as [evaluation model routing](./jev-decision-models.md) set out.
+`AgentReasoningDefinition` lists its levels rather than deriving them from the AI SDK.
+
+No public type names a package the app may not have:
+
+- Client types derived from zod schemas become interfaces. The schemas stay internal, as the
+  fact schemas do, and eve's build checks them against the interfaces.
+- Slack's card types become eve's copy of the Chat SDK's card element types. They're plain data
+  with no classes, so a copy is safe, and a Slack app doesn't need `chat` installed.
+- Twilio's webhook types, `@vercel/sandbox`'s `Drive` class and network-policy types, and
+  `@vercel/otel`'s `*OrName` option types become eve-owned or go, as do the `EveNext*` aliases of
+  Next.js's config.
+- `eve/workflow-modules` declares the part of the Workflow SDK that authored workflows use
+  (`createHook`, `createWebhook`, `sleep`, `FatalError`, and `getWorkflowMetadata` from `workflow`;
+  `start`, `getRun`, `resumeHook`, and `getHookByToken` from `workflow/api`) rather than all of its
+  about 70 names, which include a second `defineHook` and a legacy `fetch`.
+- Packages the framework entries import become optional peers with version ranges: `react`,
+  `vue`, `svelte`, `next`, `vite`, `@nuxt/kit`, `@nuxt/schema`, and `@vercel/connect`. Bundled
+  declarations ship every file they import.
+
+**Why it's useful.** eve's API changes only when eve releases a change, and an app's types never
+silently become `any`. The cost is about 500 lines of types to maintain.
+
+Two exceptions stay on purpose. OpenTelemetry's `SpanExporter` and `SpanProcessor` stay, since an
+OpenTelemetry integration implements them by definition. The Chat SDK channel's types stay the
+app's own `chat`: it passes the app's adapters to Chat SDK classes, which need one identity.
 
 ### 7. Remembering approvals with `once({ key })`
 
@@ -567,10 +672,29 @@ its own name, would strand a route-only channel's sessions whenever its file is 
 `kindHint`, which registration always overwrites, and the deprecated `metadata().audience`
 projector get removed.
 
+The identity gets one type, too. Hooks, dynamic resolvers, memory and schedule scopes,
+self-modification authorization, and instrumentation each declare their own `channel` today, with
+`kind` a plain string in most and `metadata` in some. One `ChannelInfo` from `eve/channels`
+replaces them:
+
+```ts
+type ChannelKind = `channel:${string}` | "http" | "schedule" | "subagent" | "unknown";
+
+interface ChannelInfo<TMetadata = Readonly<Record<string, unknown>>> {
+  readonly kind: ChannelKind;
+  readonly continuationToken?: string;
+  readonly metadata: TMetadata;
+}
+```
+
+`kind` is always set, and `isChannel(ctx.channel, supportChannel)` narrows `metadata` to that
+channel's in every context. Dynamic connection resolvers keep only `kind`, as now. The five
+`InstrumentationChannel*` types become `ChannelInfo` and `ChannelKind`.
+
 </details>
 
 <details>
-<summary>Memory provider keys say what they do</summary>
+<summary>Memory and dynamic resolver keys say what they do</summary>
 
 A memory provider's hooks are keyed by v26 event names, which hooks elsewhere no longer accept, and
 none of them is really a subscription to that event:
@@ -595,6 +719,12 @@ and to prune recall that piled up. `afterCompaction` returns the full set of rec
 its slot, replacing what was there
 ([proposal on #4616](https://github.com/vercel/eve/pull/4616#issuecomment-6202534510)). This lands
 with #4616.
+
+Dynamic resolvers' keys get the same treatment, without waiting for #4616. Their
+`session.started`, `turn.started`, and `step.started` are change points with a private payload,
+and `step.started` isn't a fact at all. They become `beforeSession`, `beforeTurn`, and
+`beforeModel`, and a handler receives the typed change point rather than `unknown`. `eve/tools`
+and `eve/skills` get slot-typed `defineDynamic`s, as instructions and connections have.
 
 </details>
 
@@ -622,7 +752,8 @@ The callbacks (`onEvent`, `onError`, `onFinish`, `onSessionChange`, `prepareSend
 `prepareSend` gets a public type. Two doc fixes come with it: the persistence example saves when
 `events` or `session` change rather than in `onFinish`, which doesn't fire when a turn pauses for a
 person, and the personal-agent template resets its counters on `turn.started` instead of watching
-for `"submitted"`.
+for `"submitted"`. React's hook returns `UseEveAgentReturn`, as Vue's and Svelte's do, rather
+than `UseEveAgentHelpers`.
 
 </details>
 
@@ -687,33 +818,156 @@ it: `AskedInteraction` from a message result, `ReaderInteraction` from the view,
 
 </details>
 
+<details>
+<summary>Principals have one spelling</summary>
+
+Five public shapes describe who's calling, and they spell the principal's type three ways and its
+id two ways:
+
+| Where                                             | Type            | Id            |
+| ------------------------------------------------- | --------------- | ------------- |
+| `ctx.session.auth.current` (`SessionAuthContext`) | `principalType` | `principalId` |
+| A connection's callbacks (`ConnectionPrincipal`)  | `type`          | `id`          |
+| `delivery.admitted`'s `principal`                 | `type`          | `id`          |
+| An audience callback's `caller.principal`         | `kind`          | (none)        |
+| A schedule's creator reference                    | `type`          | `principalId` |
+
+The projections differ on purpose: an audience callback never sees identifiers, the stream records
+the least it needs, and a connection's user id is normalized for its token cache. Their spelling
+shouldn't. Each becomes a subset of `SessionAuthContext`, with its names: `delivery.admitted`'s
+`principal` is `{ principalType, principalId, issuer? }`, `ConnectionPrincipal` is
+`{ principalType: "app" }` or `{ principalType: "user", principalId, issuer?, attributes? }`, and
+the audience caller and schedule reference name their type `principalType`.
+
+`principalType` is typed
+`"user" | "service" | "runtime" | "anonymous" | "local-dev" | (string & {})`, so editors suggest
+eve's values and custom route auth can still add its own. A connection's
+`principalType: "app" | "user"` keeps its name: `"user"` requires a caller whose `principalType`
+is `"user"`, and `"app"` is the agent's own credential, never a kind of caller.
+
+</details>
+
+<details>
+<summary>Deprecated aliases go</summary>
+
+Pre-1.0, a deprecated name has no reason to ship:
+
+| Goes                                                                 | Use instead                     |
+| -------------------------------------------------------------------- | ------------------------------- |
+| `experimental_chatgpt` from `eve/models/openai`                      | `chatgpt`                       |
+| `computer_use` and `gh` from `eve/extensions/code/tools`             | The computer-use and git tools  |
+| The computer-use and GitHub helpers in `eve/extensions/code/sandbox` | Their own extensions' `sandbox` |
+| `code({ github })` and the code extension's `GitHubLeaseBroker`      | `git({ github })`               |
+| `AudienceInput`, its `auth`, and `AudiencePrincipal`                 | `AudienceContext` and `caller`  |
+| `defineInstructions({ markdown })`                                   | `{ content }`                   |
+| `defineExtension`'s unused second argument                           | Nothing                         |
+| `eve/workflow-modules`' legacy `fetch`                               | Nothing                         |
+
+</details>
+
+<details>
+<summary>Names follow one convention</summary>
+
+- **Experimental.** An experimental module lives under `eve/experimental/*`, and an experimental
+  option in a stable definition goes under `experimental: {}`, as
+  `defineAgent({ experimental: { workflow } })` does. The `Experimental_` type prefix and the
+  `experimental_` field prefix go: an MCP connection's `experimental_events` becomes
+  `experimental: { events }`, and the `Experimental_ConnectionEvent*` types move to
+  `eve/experimental/connections`.
+- **Built-in extensions.** All of them live under `eve/extensions/*`: `eve/computer-use` becomes
+  `eve/extensions/computer-use`, and `eve/self-modification/{local,remote}` becomes
+  `eve/extensions/self-modification/{local,remote}`.
+- **Built-in tools.** A tool without options exports the tool itself, named and as the default,
+  as `bash` does, so `sleep`, `noReply`, and `askQuestion` stop being zero-argument factories. A
+  tool with options exports only its factory: `eve/tools/web_search` stops default-exporting a
+  preconfigured tool, so `webSearch` names one thing. `eve/tools/agent-router` becomes
+  `eve/tools/agent_router`, like the other tool paths.
+- **Factories.** Factories are camelCase functions. PascalCase is for namespaces of several
+  constructors, such as `VercelSandbox.environment()` and `DockerSandbox.image()`. The eval
+  reporters, which are single functions, become `consoleReporter()`, `junitReporter()`,
+  `braintrustReporter()`, and `datadogReporter()`.
+- **Channels.** Every channel's options type is `*ChannelConfig`, so `EveChannelInput` and
+  `McpChannelInput` become `EveChannelConfig` and `McpChannelConfig`. Each platform has one
+  credentials type, `*ChannelCredentials`, which absorbs the `*Credentials` that Discord, Teams,
+  Telegram, and Twilio also export. Continuation-token helpers all take one object
+  (`slackContinuationToken({ channelId, threadTs })`), and GitHub exports its own. The 13
+  `*ResultOrPromise` aliases become `T | Promise<T>`.
+- **Prompt text.** Every definition that carries prompt text calls it `content`: skills and
+  markdown schedules follow instructions.
+- **Abort signals.** What eve hands you calls it `abortSignal`, as `ctx.abortSignal` does, and
+  options you pass call it `signal`, as `fetch` does. Six fields break the rule and flip: sandbox
+  `delete` and `removePath` options take `signal`, and eval contexts and session events, a memory
+  backend's read input, and Linear's handle carry `abortSignal`.
+- **Outbound auth.** `basic` from `eve/agents/auth` becomes `httpBasic`, the name of the inbound
+  verifier in `eve/channels/auth`.
+
+</details>
+
+<details>
+<summary>Types an app writes are importable</summary>
+
+Adding an export after 1.0 isn't a break, so a forgotten type doesn't block 1.0. A type that an
+app writes, to annotate a handler, a helper, or a config it builds, should still be importable by
+then. About 320 types appear in public signatures without an export today. Most are brands and
+helpers that should stay unnamed, but these are ones apps write:
+
+- Each platform's handler context (`SlackChannelContext`, `TeamsChannelContext`, and the rest),
+  and `UploadPolicyInput`, which the eve, Slack, Teams, and Telegram configs accept.
+- `SessionSchedule` on `ctx.session.schedule`; `JsonObject`, `JsonArray`, and `JsonPrimitive`; and
+  `AgentInfoMemoryEntry`, the one `AgentInfo*` type `eve/client` leaves out.
+- `defineAgent`'s `build`, `promptCache`, and tool-exposure options, and `auto()`'s config.
+- The sandbox providers' create options, and remote self-modification's config, which local
+  self-modification already exports.
+
+</details>
+
+## Keeping it this way
+
+The export list is checked in and enforced, but it records names only. Four checks keep the rest
+from drifting back:
+
+- **Shapes.** A declaration report for every entry, `eve/workflow-modules`' ambient modules
+  included, so a changed signature shows up in review, not just a renamed export.
+- **A clean install.** The packed package, installed into a project with only its required peers,
+  typechecks every entry with `skipLibCheck: false`. It catches undeclared packages, bundled
+  declarations that import missing files, and types that quietly become `any`. Today's portability
+  test checks a few entries inside the workspace, where every devDependency resolves.
+- **Reachability.** Types that public signatures reach but that aren't exported, and exported types
+  nothing reaches, each against an allowlist.
+- **Docs imports.** Every name a docs snippet imports from `eve/*` is in the export list.
+
 ## The numbers
 
 The biggest reductions come from the duplicate exports in the client entries (333 names to about
 135), the setup wizard (131 to none), platform channel plumbing (559 to about 400), and the named
 instrumentation events (100 to about 40). Most other groups shrink by 5 to 20 percent.
 
+At #4954, the implementation's checkpoint, eve exports 1,504 names. This revision takes that to
+about 1,415: extension internals, wire framing, orphaned option types, and deprecated aliases
+leave, and a few groups grow slightly as types apps write become importable.
+
 <details>
 <summary>Exported names by group</summary>
 
-Measured with the TypeScript checker over the 84 entry points it resolves at #4855, counting types
-and values; the eight generated extension entries need a build first. After-counts apply this
-plan's decisions and are rounded where a decision was estimated rather than listed. The export
-lists turn them into measurements.
+Measured with the TypeScript checker, counting types and values. The #4855 column covers the 84
+entry points the checker resolves there; the generated extension entries need a build first, so
+it leaves them out. The #4954 column covers all 85 typed entries, extensions included (73 names).
+Neither counts `eve/workflow-modules`' ambient declarations. After-counts apply this plan's
+decisions and are rounded where a decision was estimated rather than listed.
 
-| Group                          | Today     | After      |
-| ------------------------------ | --------- | ---------- |
-| Clients and hooks              | 333       | ~135       |
-| Platform channels (10 entries) | 559       | ~400       |
-| Setup wizard                   | 131       | 0          |
-| Instrumentation                | 100       | ~40        |
-| Agent authoring (26 entries)   | 288       | ~265       |
-| Evals                          | 92        | ~72        |
-| `eve/events`                   | 219       | ~200       |
-| Built-in tools (13 entries)    | 61        | ~47        |
-| Experimental and extensions    | 61        | ~48        |
-| Channel framework              | 139       | ~130       |
-| Framework adapters             | 22        | 21         |
-| **Total**                      | **2,005** | **~1,355** |
+| Group                          | #4855     | #4954     | After      |
+| ------------------------------ | --------- | --------- | ---------- |
+| Clients and hooks              | 333       | 134       | ~135       |
+| Platform channels (10 entries) | 559       | 432       | ~400       |
+| Setup wizard                   | 131       | 0         | 0          |
+| Instrumentation                | 100       | 49        | ~40        |
+| Agent authoring (27 entries)   | 288       | 290       | ~300       |
+| Evals                          | 92        | 83        | ~83        |
+| `eve/events`                   | 219       | 201       | ~185       |
+| Built-in tools (13 entries)    | 61        | 47        | ~47        |
+| Experimental and extensions    | 61        | 111       | ~70        |
+| Channel framework              | 139       | 136       | ~135       |
+| Framework adapters             | 22        | 21        | ~18        |
+| **Total**                      | **2,005** | **1,504** | **~1,415** |
 
 </details>
