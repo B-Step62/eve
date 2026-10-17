@@ -8,6 +8,6 @@
  * `null` marks a runtime this build doesn't have yet; selecting it fails fast.
  */
 export const PROGRAM_ARMS: Record<string, Record<string, unknown> | null> = {
-  js: null,
-  py: null,
+  js: { codeMode: true },
+  py: { codeMode: { language: "py" } },
 };
