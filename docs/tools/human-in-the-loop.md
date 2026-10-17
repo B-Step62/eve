@@ -299,6 +299,8 @@ From your own frontend, scan all messages for pending requests and answer throug
 
 You can answer while a turn is running, such as the second approval of a batch while the first answer is still settling. The default message reducer waits for server confirmation before marking any input request answered. A submitted answer marks its request `responded` in `data.inputs` until `approval.settled` or `input.resolved` arrives; submitting a response alone does not resolve an approval, question, or session-limit prompt. Answering a request that is no longer open rejects without a server request. The `client.input.responded` event remains a submission notification for custom reducers, not confirmation that the server accepted the answer.
 
+To decline a pending sign-in instead of completing it, send `{ authorizationDecline: { attemptId } }` with no message. The session reports `authorization.completed` with `outcome: "declined"`, and the model continues without the connection and doesn't ask again unless the person asks.
+
 ## What to read next
 
 - [Tools](/docs/tools): define the typed actions an approval gates

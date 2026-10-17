@@ -106,3 +106,7 @@ export function failedCall(call: {
     result: createRuntimeToolResultFromValue({ callId, isError: true, output: failure, toolName }),
   };
 }
+
+/** What a person reads when they decline a request that isn't a question. */
+export const ONLY_QUESTIONS_DECLINE =
+  "Only questions can be declined. Choose an option for this request instead.";
