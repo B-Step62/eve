@@ -839,6 +839,11 @@ shouldn't. Each becomes a subset of `SessionAuthContext`, with its names: `deliv
 `{ principalType: "app" }` or `{ principalType: "user", principalId, issuer?, attributes? }`, and
 the audience caller and schedule reference name their type `principalType`.
 
+`@vercel/connect/eve` reads `principal.type` and `principal.id`, and hands `ConnectionPrincipal` to
+its `principalToSubject` and `createSubject` callbacks. The connection rename ships with a
+Connect release that reads the new names, and eve's optional peer range on `@vercel/connect`
+requires it, so a stale Connect fails at install rather than resolving the wrong subject.
+
 `principalType` is typed
 `"user" | "service" | "runtime" | "anonymous" | "local-dev" | (string & {})`, so editors suggest
 eve's values and custom route auth can still add its own. A connection's
