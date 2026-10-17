@@ -30,15 +30,15 @@ The adapter will send the authored key as `projectUid` to Connect's managed OAut
 
 Resolution for a `(project, environment, key)` request is scoped to connectors already attached to the requesting project. It never selects a connector merely because it exists elsewhere in the team, and no OIDC request attaches a connector to another project or widens its environments.
 
-| State in the requesting project                                                                             | Result                                                                                                                                          |
-| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| A connector is mapped to `key` and attached to this environment                                             | Use it, after checking compatibility.                                                                                                           |
-| A compatible connector whose team UID is exactly `key` is attached to this environment                      | Use it unchanged. This keeps source patched by today's `eve integration connect` working.                                                       |
-| Exactly one compatible connector named `key` (display name or final UID segment) is attached, with no alias | Claim it: record `key` as its project UID, keeping its environments and grants. With several matches, prefer the single exact server URL match. |
-| A matching connector is attached to this project, but not to this environment                               | `attachment_required`.                                                                                                                          |
-| A connector Connect provisioned, claimed, or auto-linked for `key` was removed or remapped by a user        | `attachment_removed` or `project_uid_removed`, with its `connectorId`. See [Removal and recovery](#removal-and-recovery).                       |
-| Several connectors are mapped to `key`, the name is taken, or the match has a weaker configuration          | `ambiguous`, `alias_conflict`, or `configuration_mismatch`. Connect never picks one arbitrarily or repoints the key.                            |
-| None of the above                                                                                           | Provision a new connector for this project with a unique team-wide name, map it to `key`, and attach it to the allowed environments.            |
+| State in the requesting project                                                                                                             | Result                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A connector is mapped to `key` and attached to this environment                                                                             | Use it, after checking compatibility.                                                                                                                         |
+| A compatible connector whose team UID is exactly `key` is attached to this environment                                                      | Use it unchanged. This keeps source patched by today's `eve integration connect` working.                                                                     |
+| A connector mapped to `key`, or whose team UID is exactly `key`, is attached to this project but not this environment                       | `attachment_required`.                                                                                                                                        |
+| A connector Connect provisioned or auto-linked for `key` was removed or remapped by a user                                                  | `attachment_removed` or `project_uid_removed`, with its `connectorId`. See [Removal and recovery](#removal-and-recovery).                                     |
+| A compatible connector named `key` (display name or final UID segment) is attached in any environment, with no project UID                  | `mapping_required` with its `connectorId`, or `ambiguous` when several match. Connect writes nothing; a user maps it to `key` or removes it from the project. |
+| Several connectors are mapped to `key`, a name match has another project UID, or the connector `key` resolves to has a weaker configuration | `ambiguous`, `alias_conflict`, or `configuration_mismatch`. Connect never picks one arbitrarily or repoints the key.                                          |
+| None of the above                                                                                                                           | Provision a new connector for this project with a unique team-wide name, map it to `key`, and attach it to the allowed environments.                          |
 
 A connector is **compatible** when it is an OAuth connector for the same server (same host and path, ignoring a trailing `/sse` or `/mcp`) and has at least the requested grants (user authorization, client credentials, refresh tokens), secure egress network, and forwarded claims. A request never resolves to a connector with weaker settings than it asks for. An unrelated team connector whose UID happens to be `linear` but is not attached to this project is ignored and does not block provisioning.
 
@@ -46,13 +46,13 @@ New connectors take their display name, OAuth client name (shown on the provider
 
 ### Removal and recovery
 
-Connect will treat a user's removal as final for every connector it attached to a project on a deployment's behalf, whether it provisioned the connector, claimed an existing one by name, or auto-linked an exact team-UID match on an OIDC request. Removing that connector from the project, or clearing or changing its project UID, makes the next request report `attachment_removed` or `project_uid_removed` with the connector's ID; it does not provision a replacement. Otherwise the dashboard could not stop a deployment from using a connection, and every cycle would orphan a connector and its OAuth client and force fresh consent.
-
-Connect records this per project, so a team connector shared by several projects is tracked independently in each. Recovery:
+Connect never maps a connector it did not create. The only connectors a deployment attaches or maps on its own are ones Connect provisioned for the key, or an exact team-UID match it auto-linked on an OIDC request. For those, a user's removal is final: removing the connector from the project, or clearing or changing its project UID, makes the next request report `attachment_removed` or `project_uid_removed` with the connector's ID instead of provisioning a replacement. Otherwise the dashboard could not stop a deployment from using a connection, and every cycle would orphan a connector and its OAuth client and force fresh consent. Recovery:
 
 1. Reconnect the same connector to the project with the project UID; its grants are kept.
 2. Map a different connector to the project UID.
 3. Delete the connector; the next request provisions a fresh one that needs new consent.
+
+A connector a user mapped to the key is the user's to manage. Clearing its project UID while it stays attached reports `mapping_required` again rather than being remapped, and changing it reports `alias_conflict`. Removing it from the project returns the key to unmapped, so the next request provisions a fresh connector that needs new consent; the removed connector's grants are not reused.
 
 Changing the key in source also provisions a fresh connector, but that is a workaround, not a recovery path.
 
@@ -76,15 +76,16 @@ A resolved connector is returned with its canonical ID: `201` when this request 
 | `409 conflict`                           | Creation failed in a way retrying does not fix.                                                     |
 | `503 connector_provisioning_in_progress` | Another request is resolving or provisioning the same key; `retryable: true`.                       |
 
-| `reason`                 | Produced when                                                                                       |
-| ------------------------ | --------------------------------------------------------------------------------------------------- |
-| `ambiguous`              | Several connectors match and none can be chosen safely.                                             |
-| `alias_conflict`         | The matching connector already has a different project UID in this project.                         |
-| `attachment_required`    | The matching connector is attached to this project, but not to this environment.                    |
-| `attachment_removed`     | A connector Connect attached for this key was removed from the project.                             |
-| `project_uid_removed`    | A connector Connect attached for this key had its project UID cleared or changed.                   |
-| `configuration_mismatch` | The matching connector is for a different server or has weaker grants, egress, or forwarded claims. |
-| `connector_unavailable`  | The resolved connector was deleted or became unavailable while the request was resolving it.        |
+| `reason`                 | Produced when                                                                                                  |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `ambiguous`              | Several connectors match and none can be chosen safely.                                                        |
+| `alias_conflict`         | A connector matching the key by name already has a different project UID in this project.                      |
+| `attachment_required`    | The connector mapped to the key, or with the key as its team UID, is not attached to this environment.         |
+| `attachment_removed`     | A connector Connect provisioned or auto-linked for the key was removed from the project.                       |
+| `project_uid_removed`    | A connector Connect provisioned for the key had its project UID cleared or changed.                            |
+| `configuration_mismatch` | The connector the key resolves to is for a different server or has weaker grants, egress, or forwarded claims. |
+| `mapping_required`       | An unmapped connector matching the key by name is attached to this project; a user must map or remove it.      |
+| `connector_unavailable`  | The resolved connector was deleted or became unavailable while the request was resolving it.                   |
 
 Ordinary callers see a redacted message; nothing about unrelated team resources or privileged settings is exposed.
 
@@ -96,7 +97,7 @@ This extends the existing team flag rather than adding a new one or changing use
 
 `@vercel/connect/eve` currently posts the authored string as `uid`. Its managed OAuth path will send `projectUid` instead and use the returned connector ID for `getToken`, authorization start and completion, revocation, and cache eviction. It will map `connector_setup_required` to a non-retryable authorization failure that names the connector and the reason, and `connector_provisioning_in_progress` to a retryable one. On `404 project_uid_unavailable`, and on the `403` from Connect versions that reject OIDC project UIDs, it falls back to provisioning by team UID. Caches will be partitioned by project, environment, endpoint, key, and configuration; a cached ID is not proof the connector is still attached. Exact `scl_...` references and `autoProvision: false` keep working for intentionally team-wide references.
 
-Making bare `connect("linear")` lazy changes the meaning of an existing UID. Today `eve integration connect` patches source to the team-wide UID it created, typically `connect("mcp.linear.app/linear")`, and leaves the attachment without a project UID. The exact-UID rule above keeps that source working without a second connector, and the name-claim rule lets fresh `connect("linear")` source adopt the same connector. When matching is ambiguous or the name is taken, a user must set it up; `connect({ connector: "mcp.linear.app/linear", autoProvision: false })` remains available for exact references.
+Making bare `connect("linear")` lazy changes the meaning of an existing UID. Today `eve integration connect` patches source to the team-wide UID it created, typically `connect("mcp.linear.app/linear")`, and leaves the attachment without a project UID. The exact-UID rule above keeps that source working unchanged, with no second connector. Fresh `connect("linear")` source in a project that already has that connector reports `mapping_required` once; after a user maps it, the deployment uses the same connector and grants. When matching is ambiguous or the name is taken, a user must also set it up; `connect({ connector: "mcp.linear.app/linear", autoProvision: false })` remains available for exact references.
 
 Once the contract ships, eager setup will write the project-local key on the attachment and leave `connect("linear")` in source instead of patching it. Bespoke app-installation, JWT-bearer, API-key, trigger, and custom-creation setups stay eager.
 
@@ -111,10 +112,11 @@ Step 4 is gated on the flag being on everywhere because, for a team with the fla
 
 ## Validation gates
 
-- With the flag on, two blank projects in one team using `connect("linear")` get distinct connectors, and an unattached team connector with UID `linear` is neither claimed nor attached. With the flag off, nothing is provisioned by project UID.
-- Source patched to a team UID reuses that connector only while it is attached to the requesting project and environment. Fresh `connect("linear")` source adopts the single compatible, already-attached legacy connector by name without widening its attachment or losing its grants; ambiguous or detached cases require setup.
+- With the flag on, two blank projects in one team using `connect("linear")` get distinct connectors, and an unattached team connector with UID `linear` is neither mapped nor attached. With the flag off, nothing is provisioned by project UID.
+- Source patched to a team UID reuses that connector only while it is attached to the requesting project and environment. Fresh `connect("linear")` source with a compatible legacy connector attached reports `mapping_required` with its ID and writes nothing; once a user maps it, it resolves with its grants in every attached environment. Several matches report `ambiguous`.
 - Concurrent cold starts converge on one connector, and later token requests resolve the key unambiguously. A failure after creation and before attachment is repaired on retry rather than duplicated.
-- Removing a provisioned, claimed, or auto-linked connector from the project, or clearing or changing its project UID, reports setup required with its connector ID instead of provisioning. Reconnecting it restores access with its grants; deleting it leads to a fresh connector that needs new consent. A connector shared by two projects is tracked separately in each.
+- Removing a provisioned or auto-linked connector from the project, or clearing or changing its project UID, reports setup required with its connector ID instead of provisioning. Reconnecting it restores access with its grants; deleting it leads to a fresh connector that needs new consent.
+- Clearing the project UID of a user-mapped connector reports `mapping_required` instead of remapping it; removing it from the project provisions a fresh connector.
 - Development-first creation works in production; production-first creation reports setup required in development; attaching the environment and retrying works without a redeploy. Custom environments stay exact-only.
 - Invalid server URLs, weaker egress or grants, name collisions, and ambiguous matches fail safely. Exact connector IDs and requests without `projectUid` keep their behavior.
 - The SDK uses the returned ID throughout the OAuth and token lifecycle. Tests cover Connect's real resolution and concurrency behavior, not just a mocked adapter.
