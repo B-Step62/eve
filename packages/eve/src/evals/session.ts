@@ -14,7 +14,7 @@ import type {
   SendTurnOptions,
   RespondTurnOptions,
   SendTurnPayload,
-  StreamOptions,
+  SessionStreamOptions,
 } from "#client/types.js";
 import type { TraceContext } from "#protocol/session-events/families/session.js";
 import type { ChildOpened } from "#protocol/session-events/families/child.js";
@@ -172,7 +172,7 @@ export class EvalSessionDriver implements EveEvalSession {
     return {
       name: child.name,
       id: child.id,
-      stream: (options: StreamOptions = {}) =>
+      stream: (options: SessionStreamOptions = {}) =>
         child.stream({ ...options, signal: options.signal ?? signal }),
       taskId: child.taskId,
     };

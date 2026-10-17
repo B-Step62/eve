@@ -10,7 +10,7 @@ import {
 } from "#channel/delivery-metadata.js";
 import type { MessageContent } from "#shared/message-content.js";
 import type {
-  GetEventStreamOptions,
+  SessionStreamOptions,
   Runtime,
   SessionAuthContext,
   SessionCallback,
@@ -39,10 +39,10 @@ export interface Session extends SessionOperations {
    * while its owner is stranded; `follow: false` reads recorded history up to
    * the current tail without inspecting or changing the session.
    */
-  stream(options?: GetEventStreamOptions): AsyncIterable<SessionStreamEvent>;
-  getEventStream(options?: GetEventStreamOptions): Promise<ReadableStream<SessionStreamEvent>>;
+  stream(options?: SessionStreamOptions): AsyncIterable<SessionStreamEvent>;
+  getEventStream(options?: SessionStreamOptions): Promise<ReadableStream<SessionStreamEvent>>;
   /** The session's stored lines from `startIndex`: one parsed record per line. Follows like `getEventStream`. */
-  getLineStream(options?: GetEventStreamOptions): Promise<ReadableStream<unknown>>;
+  getLineStream(options?: SessionStreamOptions): Promise<ReadableStream<unknown>>;
   /** Where a remote child of this session runs; read only by the parent's stream proxy. */
   getChildBinding?(childSessionId: string): Promise<RemoteChildBinding | undefined>;
   getStreamTailIndex(): Promise<number>;
@@ -162,13 +162,13 @@ export function createSession(
       const result = await runtime.dispatchSession({ command, sessionId: id });
       return commandDelivery(runtime, result, command.deliveryId, { follow: false });
     },
-    async *stream(options?: GetEventStreamOptions) {
+    async *stream(options?: SessionStreamOptions) {
       yield* await runtime.getEventStream(id, options);
     },
-    async getEventStream(options?: GetEventStreamOptions) {
+    async getEventStream(options?: SessionStreamOptions) {
       return runtime.getEventStream(id, options);
     },
-    async getLineStream(options?: GetEventStreamOptions) {
+    async getLineStream(options?: SessionStreamOptions) {
       return runtime.getLineStream(id, options);
     },
     async getStreamTailIndex() {

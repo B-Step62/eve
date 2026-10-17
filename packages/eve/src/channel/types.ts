@@ -668,7 +668,7 @@ export interface Runtime {
    */
   getEventStream(
     sessionId: string,
-    options?: GetEventStreamOptions,
+    options?: SessionStreamOptions,
   ): Promise<ReadableStream<SessionStreamEvent>>;
 
   /**
@@ -678,7 +678,7 @@ export interface Runtime {
    */
   getLineStream(
     sessionId: string,
-    options?: GetEventStreamOptions,
+    options?: SessionStreamOptions,
   ): Promise<ReadableStream<unknown>>;
 
   /**
@@ -699,22 +699,5 @@ export interface Runtime {
   ): Promise<RemoteChildBinding | undefined>;
 }
 
-/**
- * Options accepted by {@link Runtime.getEventStream}.
- */
-export interface GetEventStreamOptions {
-  /** Stops the read and releases its stream reader. */
-  readonly signal?: AbortSignal;
-  /**
-   * Zero-based index of the first event to emit. Negative values read from
-   * the current tail (`-1` starts at the latest event). Defaults to `0`
-   * (replay the entire stream).
-   */
-  readonly startIndex?: number;
-  /**
-   * Whether to keep following events recorded after the read opens. When
-   * `false`, the stream ends at the durable tail observed when it opens, and
-   * it stays readable while the session is stranded. Defaults to `true`.
-   */
-  readonly follow?: boolean;
-}
+export type { SessionStreamOptions } from "#shared/session.js";
+import type { SessionStreamOptions } from "#shared/session.js";

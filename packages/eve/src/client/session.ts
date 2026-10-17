@@ -28,7 +28,7 @@ import type {
   SendTurnOptions,
   SendTurnPayload,
   SessionSnapshot,
-  StreamOptions,
+  SessionStreamOptions,
 } from "#client/types.js";
 
 const SESSION_SEND_RETRY_BASE_DELAY_MS = 250;
@@ -36,10 +36,10 @@ const SESSION_SEND_RETRY_MAX_DELAY_MS = 2_000;
 const SESSION_SEND_READY_TIMEOUT_MS = 20_000;
 const followSession = Symbol("followClientSession");
 
-interface FollowSessionOptions extends StreamOptions {
+interface FollowSessionOptions extends SessionStreamOptions {
   readonly headers?: Readonly<Record<string, string>>;
   readonly onCaughtUp?: () => void;
-  readonly resolveReconnectPolicy?: () => StreamOptions["streamReconnectPolicy"];
+  readonly resolveReconnectPolicy?: () => SessionStreamOptions["streamReconnectPolicy"];
   readonly resolveHeaders?: () => Readonly<Record<string, string>> | undefined;
 }
 
@@ -214,7 +214,7 @@ export class ClientSession implements SessionOperations<
   }
 
   /** Opens this session's durable event stream from its stored cursor. */
-  stream(options?: StreamOptions): AsyncIterable<SessionStreamEvent> {
+  stream(options?: SessionStreamOptions): AsyncIterable<SessionStreamEvent> {
     return this.#streamAndAdvance(options);
   }
 
@@ -292,12 +292,12 @@ export class ClientSession implements SessionOperations<
 
   #readStream(input: {
     readonly onCaughtUp?: () => void;
-    readonly resolveReconnectPolicy?: () => StreamOptions["streamReconnectPolicy"];
+    readonly resolveReconnectPolicy?: () => SessionStreamOptions["streamReconnectPolicy"];
     readonly follow?: boolean;
     readonly headers?: Readonly<Record<string, string>>;
     readonly signal?: AbortSignal;
     readonly startIndex: number;
-    readonly streamReconnectPolicy?: StreamOptions["streamReconnectPolicy"];
+    readonly streamReconnectPolicy?: SessionStreamOptions["streamReconnectPolicy"];
     readonly resolveHeaders?: () => Readonly<Record<string, string>> | undefined;
   }): AsyncIterable<FollowedEvent> {
     return followStreamIterable({

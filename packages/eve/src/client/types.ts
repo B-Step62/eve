@@ -209,35 +209,7 @@ export interface ResolvedStreamReconnectPolicy {
 /** Automatic stream reconnection configuration. */
 export type StreamReconnectPolicy = ResolvedStreamReconnectPolicy | { readonly reconnect: false };
 
-/**
- * Options for {@link ClientSession.stream}.
- */
-export interface StreamOptions {
-  /**
-   * Reconnection policy for the event stream. Omit to use the default policy,
-   * or pass `{ reconnect: false }` when the caller owns cursor recovery.
-   */
-  readonly streamReconnectPolicy?: StreamReconnectPolicy;
-
-  /**
-   * Position of the line to start from. Negative values read relative to the
-   * current tail (`-1` starts at the latest line).
-   */
-  readonly startIndex?: number;
-
-  /**
-   * Follow the live stream after the durable tail (default). Pass `false`
-   * for a bounded catch-up read: yields events until the cursor passes the
-   * tail observed when the stream opened, then returns instead of
-   * following. Requires a nonnegative start cursor.
-   */
-  readonly follow?: boolean;
-
-  /**
-   * Abort signal for cancelling the stream.
-   */
-  readonly signal?: AbortSignal;
-}
+export type { SessionStreamOptions } from "#shared/session.js";
 
 /** Result of requesting cancellation for a client session's active turn. */
 export type CancelSessionResult = CancelTurnResult;

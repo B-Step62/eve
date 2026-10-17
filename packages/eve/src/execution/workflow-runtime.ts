@@ -13,7 +13,7 @@ import {
 import type {
   DispatchContinuationInput,
   DispatchSessionInput,
-  GetEventStreamOptions,
+  SessionStreamOptions,
   RunHandle,
   RunInput,
   Runtime,
@@ -309,7 +309,7 @@ export function createWorkflowRuntime(config: {
 
     async getEventStream(
       sessionId: string,
-      options?: GetEventStreamOptions,
+      options?: SessionStreamOptions,
     ): Promise<ReadableStream<SessionStreamEvent>> {
       // Recorded history needs no owner, so reading it never inspects the session's lifecycle.
       if (options?.follow === false)
@@ -320,7 +320,7 @@ export function createWorkflowRuntime(config: {
 
     async getLineStream(
       sessionId: string,
-      options?: GetEventStreamOptions,
+      options?: SessionStreamOptions,
     ): Promise<ReadableStream<unknown>> {
       if (options?.follow === false) return readSessionRecordHistory(sessionId, options.startIndex);
       await assertFollowableSession(sessionId);

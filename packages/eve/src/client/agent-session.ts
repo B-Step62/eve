@@ -2,7 +2,7 @@ import type { SessionStreamEvent } from "#protocol/session-event.js";
 import type { SessionReader } from "#shared/session.js";
 import { followStreamIterable, type FollowedEvent } from "#client/open-stream.js";
 import type { ClientSessionContext } from "#client/session.js";
-import type { StreamOptions } from "#client/types.js";
+import type { SessionStreamOptions } from "#client/types.js";
 import type { ChildOpened } from "#protocol/session-events/families/child.js";
 
 /**
@@ -39,12 +39,12 @@ export class ClientAgentSession implements SessionReader {
    * parent session's cursor. The child cursor starts at `0`; pass `startIndex`
    * to resume. Stop at a child turn boundary with `isCurrentTurnBoundaryEvent`.
    */
-  async *stream(options?: StreamOptions): AsyncGenerator<SessionStreamEvent> {
+  async *stream(options?: SessionStreamOptions): AsyncGenerator<SessionStreamEvent> {
     for await (const { event } of this.follow(options)) yield event;
   }
 
   /** @internal The child's events with the cursor to resume from after each. */
-  follow(options?: StreamOptions): AsyncIterable<FollowedEvent> {
+  follow(options?: SessionStreamOptions): AsyncIterable<FollowedEvent> {
     const startIndex = options?.startIndex ?? 0;
     return followStreamIterable({
       follow: options?.follow,

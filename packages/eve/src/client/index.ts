@@ -29,12 +29,12 @@ export type {
 } from "#shared/message-content.js";
 export type { Delivery } from "#shared/delivery.js";
 export { SessionNotActiveError } from "#channel/session-not-active-error.js";
-export { ClientAgentSession } from "#client/agent-session.js";
-export { ClientSession } from "#client/session.js";
-export {
+export type { ClientAgentSession } from "#client/agent-session.js";
+export type { ClientSession } from "#client/session.js";
+export type {
   ClientSessions,
-  type CreatedClientSession,
-  type CreatedIdleClientSession,
+  CreatedClientSession,
+  CreatedIdleClientSession,
 } from "#client/sessions.js";
 
 // ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ export type {
   SendTurnOptions,
   SessionSnapshot,
   ClientSessionState,
-  StreamOptions,
+  SessionStreamOptions,
   StreamReconnectPolicy,
   StreamReconnectRetryPolicy,
   TokenValue,

@@ -277,7 +277,14 @@ applied; a reset delivery settles after retirement and address release.
 Session readers expose `id` and `stream()`. `sessions.attach(id)` from `eve/server` returns a
 `SessionReader` without I/O, not a `ServerSession`. Channel handles carry the existing commands
 through `SessionOperations`; a reader does not acquire command authority. The data type previously
-exported as `Session` from `eve/context` is now `SessionInfo`.
+exported as `Session` from `eve/context` is now `SessionInfo`, exactly the metadata in `ctx.session`:
+`id`, `auth`, `turn`, optional `parent`, `schedule`, and `predecessor`.
+
+Every reader takes `SessionStreamOptions` from `eve/client`, replacing `StreamOptions` and
+`GetEventStreamOptions`. `startIndex` addresses durable lines, matching `meta.position.line`,
+not individual events. The shared options include `follow` and `signal`; only the client uses
+`streamReconnectPolicy`. Client handles (`ClientSession`, `ClientAgentSession`, `ClientSessions`)
+are type-only exports. Obtain them from `new Client()` and its methods instead of constructing them.
 
 ## Clients and frontends
 
