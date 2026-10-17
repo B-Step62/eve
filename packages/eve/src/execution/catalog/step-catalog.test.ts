@@ -559,7 +559,7 @@ describe("buildStepCatalog", () => {
     });
 
     // #4977: a server that lists its tools but never answers a call held the turn.
-    it.fails("fails and cancels a call the connection doesn't answer within 5 minutes", async () => {
+    it("fails and cancels a call the connection doesn't answer within 5 minutes", async () => {
       vi.useFakeTimers();
       try {
         const { catalog, linear, run } = linearCatalog();
