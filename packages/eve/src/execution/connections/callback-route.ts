@@ -24,7 +24,7 @@ import { resumeAuthorizationCallback } from "#execution/legacy-session/authoriza
  */
 
 import type { RouteContext } from "#public/definitions/channel.js";
-import { buildAuthorizationCompletePage } from "#runtime/connections/authorization-complete-page.js";
+import { buildAuthorizationCallbackPage } from "#runtime/connections/authorization-callback-page.js";
 import type { AuthorizationCallback } from "#shared/connection-types.js";
 
 /** Resumes the exact authorization attempt through the session inbox. */
@@ -60,7 +60,7 @@ export async function handleConnectionCallbackRequest(
     return Response.json({ error: "Connection callback not pending.", ok: false }, { status: 404 });
   }
 
-  return buildAuthorizationCompletePage();
+  return buildAuthorizationCallbackPage();
 }
 
 /**

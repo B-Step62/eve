@@ -112,7 +112,7 @@ describe("handleConnectionCallbackRequest", () => {
           {
             method,
             body,
-            ...(body ? { headers: { "content-type": "application/json" } } : {}),
+            headers: body ? { "content-type": "application/json" } : undefined,
           },
         ),
         buildRouteContext({ attemptId: "attempt-1", name: "linear", token: "tok" }),
@@ -130,7 +130,7 @@ describe("handleConnectionCallbackRequest", () => {
                 callback: {
                   method,
                   params: method === "GET" ? { error: "access_denied" } : {},
-                  ...(body ? { body } : {}),
+                  body,
                 },
               }),
             }),

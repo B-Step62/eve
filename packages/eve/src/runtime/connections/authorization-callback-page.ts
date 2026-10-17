@@ -8,7 +8,7 @@
  * no external assets, no script, so it renders identically regardless
  * of where the runtime serves the callback from.
  */
-export function buildAuthorizationCompletePage(): Response {
+export function buildAuthorizationCallbackPage(): Response {
   const html = `<!doctype html>
 <html lang="en">
   <head>
