@@ -66,15 +66,6 @@ class NodeDevelopmentRunner extends BaseEnvRunner implements DevelopmentRunner {
     this.#closedListeners.add(listener);
   }
 
-  // env-runner pools keep-alive sockets with no idle timeout, so a busy parent
-  // can reuse one the worker already closed and fail the forward (#5001).
-  // Closing after each response keeps that pool empty.
-  override async fetch(request: Request, init?: RequestInit): Promise<Response> {
-    const headers = new Headers(request.headers);
-    headers.set("connection", "close");
-    return await super.fetch(request, { ...init, headers });
-  }
-
   override sendMessage(message: unknown): void {
     if (this.#worker === undefined) {
       throw new Error("Development worker is not initialized.");
