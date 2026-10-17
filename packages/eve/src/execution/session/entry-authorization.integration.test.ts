@@ -18,7 +18,10 @@ import {
 } from "#execution/session-inbox/address.js";
 import { createToolExecuteWithAuth } from "#execution/tool-auth.js";
 import { ROOT_COMPILED_AGENT_NODE_ID } from "#compiler/manifest.js";
-import { ConnectionAuthorizationRequiredError } from "#connections/errors.js";
+import {
+  ConnectionAuthorizationFailedError,
+  ConnectionAuthorizationRequiredError,
+} from "#connections/errors.js";
 import type { MessageStreamEvent } from "#protocol/message.js";
 import type { ToolContext } from "#tools/definition.js";
 import type {
@@ -258,6 +261,103 @@ describe("workflowEntry integration", () => {
     });
   });
 
+  it.fails("reports a sign-in failed when completeAuthorization rejects its callback", async () => {
+    const { completeCalls, runtime } = await createWeatherAuthRuntime("workflow-entry-auth-denied");
+    const continuationToken = "http:workflow-entry-auth-denied";
+
+    await runtime.run(async () => {
+      const run = await startWeatherRun(continuationToken);
+      const stream = captureEvents(run);
+
+      try {
+        const firstTurn = await stream.nextUntil(
+          "initial auth-required event",
+          (event) => event.type === "authorization.required",
+        );
+        await stream.nextUntil("authorization hold", (event) => event.type === "turn.waiting");
+
+        // The provider redirects back with a denial, which completeAuthorization rejects.
+        await resumeHook(sessionInboxHookToken(sessionCommandHookToken(run.runId)), {
+          kind: "authorization-callback",
+          payloads: [
+            {
+              authorizationCallback: {
+                attemptId: authorizationAttemptId(firstTurn),
+                callback: { method: "GET", params: { error: "access_denied" } },
+                connectionName: "weather",
+              },
+            },
+          ],
+        });
+
+        const resumed = await stream.nextUntil(
+          "resumed held turn",
+          (event) => event.type === "session.waiting",
+        );
+        expect(completeCalls()).toBe(1);
+        expect(filterEventsByType(resumed, "authorization.completed")).toMatchObject([
+          { data: { name: "weather", outcome: "failed", reason: "access_denied" } },
+        ]);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
+  it.fails("runs the call a sign-in was for without asking the model again", async () => {
+    const { executions, runtime } = await createWeatherAuthRuntime("workflow-entry-auth-no-reask");
+    const continuationToken = "http:workflow-entry-auth-no-reask";
+
+    await runtime.run(async () => {
+      const run = await startWeatherRun(continuationToken);
+      const stream = captureEvents(run);
+
+      try {
+        const beforeSignIn = await stream.nextUntil(
+          "initial auth-required event",
+          (event) => event.type === "authorization.required",
+        );
+        await stream.nextUntil("authorization hold", (event) => event.type === "turn.waiting");
+        await resumeHook(sessionInboxHookToken(sessionCommandHookToken(run.runId)), {
+          kind: "authorization-callback",
+          payloads: [weatherCallback(authorizationAttemptId(beforeSignIn))],
+        });
+        const afterSignIn = await stream.nextUntil(
+          "turn after sign-in",
+          (event) => event.type === "session.waiting",
+        );
+
+        // The call that stopped for sign-in is the call that runs: the model is
+        // not asked to decide again between the sign-in and that call's result.
+        const completedAt = afterSignIn.findIndex(
+          (event) => event.type === "authorization.completed",
+        );
+        const resultAt = afterSignIn.findIndex((event) => event.type === "action.result");
+        const modelCallsBetween = afterSignIn
+          .slice(completedAt, resultAt)
+          .filter((event) => event.type === "step.started");
+        expect(
+          modelCallsBetween,
+          "model calls between authorization.completed and the tool call's action.result",
+        ).toHaveLength(0);
+
+        // One model call asks for the tool, one reads its result. Today a third
+        // call sits between the sign-in and the tool running.
+        const modelCalls = [...beforeSignIn, ...afterSignIn].filter(
+          (event) => event.type === "step.started",
+        );
+        expect(modelCalls, "model calls in the turn").toHaveLength(2);
+
+        // The tool runs once, with the arguments of the original call.
+        expect(executions()).toEqual([{ city: "Lisbon" }]);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
   it("queues another person's message behind a held sign-in", async () => {
     const { completeCalls, completedPrincipals, runtime } = await createWeatherAuthRuntime(
       "workflow-entry-auth-queued",
@@ -456,6 +556,8 @@ describe("workflowEntry integration", () => {
 });
 
 interface WeatherAuthRuntime {
+  /** The input of each get_weather call that got its token and ran. */
+  executions(): readonly { city: string }[];
   completeCalls(): number;
   completedPrincipals(): readonly ConnectionPrincipal[];
   runtime: Awaited<ReturnType<typeof createTestRuntime>>;
@@ -464,8 +566,8 @@ interface WeatherAuthRuntime {
 /**
  * A get_weather tool behind an interactive authorization: getToken always
  * requires sign-in, and completeAuthorization mints `weather-token` from the
- * `oauth-code` callback. Shared by the callback-resume and
- * challenge-stays-open owner tests.
+ * `oauth-code` callback and rejects an `access_denied` one. Shared by the
+ * callback-resume and challenge-stays-open owner tests.
  */
 async function createWeatherAuthRuntime(
   agentName: string,
@@ -473,6 +575,7 @@ async function createWeatherAuthRuntime(
 ): Promise<WeatherAuthRuntime> {
   let completeCalls = 0;
   const completedPrincipals: ConnectionPrincipal[] = [];
+  const executions: { city: string }[] = [];
   const weatherAuth: AuthorizationDefinition<{ nonce: string }> = {
     principalType: "user",
     async getToken(): Promise<TokenResult> {
@@ -491,6 +594,12 @@ async function createWeatherAuthRuntime(
     async completeAuthorization({ callback, principal, resume }): Promise<TokenResult> {
       completeCalls += 1;
       completedPrincipals.push(principal);
+      if (callback.params.error === "access_denied") {
+        throw new ConnectionAuthorizationFailedError("weather", {
+          reason: "access_denied",
+          retryable: false,
+        });
+      }
       expect(callback.params.code).toBe("oauth-code");
       expect(resume).toEqual({ nonce: "weather-nonce" });
       return { token: "weather-token" };
@@ -512,6 +621,7 @@ async function createWeatherAuthRuntime(
           typeof (rawInput as { city?: unknown }).city === "string"
             ? (rawInput as { city: string }).city
             : "Lisbon";
+        executions.push({ city });
         return {
           city,
           condition: "Sunny",
@@ -551,6 +661,7 @@ async function createWeatherAuthRuntime(
   return {
     completeCalls: () => completeCalls,
     completedPrincipals: () => completedPrincipals,
+    executions: () => executions,
     runtime,
   };
 }
