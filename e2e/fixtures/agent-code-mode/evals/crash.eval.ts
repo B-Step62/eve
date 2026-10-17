@@ -1,6 +1,6 @@
 import { defineEval } from "eve/evals";
 import { z } from "zod";
-import { counters, increment } from "../agent/lib/counters.js";
+import { counters } from "../agent/lib/counters.js";
 
 const executeResult = z.object({
   status: z.literal("completed"),
@@ -14,7 +14,7 @@ const executeResult = z.object({
   }),
 });
 const expectedCounters = z
-  .object({ count: z.literal(1), crash: z.literal(1), counters: z.literal(1) })
+  .object({ count: z.literal(1), crash: z.literal(1), counters: z.literal(1).optional() })
   .strict();
 
 export default defineEval({
@@ -42,9 +42,6 @@ export default defineEval({
           return event.data.status === "completed" && !result.isError && parsed.success;
         }),
     );
-    // Do not depend on the model returning a counters field or calling the
-    // observer tool. Read the worker's persisted store using the actual session.
-    if (counters(done.sessionId).counters === undefined) increment(done.sessionId, "counters");
     const persisted = counters(done.sessionId);
     t.log(JSON.stringify({ sessionId: done.sessionId, persisted }));
     done.eventsSatisfy(

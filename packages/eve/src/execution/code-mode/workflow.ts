@@ -39,13 +39,22 @@ export async function executeProgramWorkflow(
     startupMs: outcome.timing?.startupMs ?? 0,
     runMs: outcome.timing?.runMs ?? 0,
   };
-  const deadline = sleep(new Date(initialized.limits.deadlineAt));
+  let expired = false;
+  const deadline = sleep(new Date(initialized.limits.deadlineAt)).then(() => {
+    expired = true;
+  });
   while (outcome.status === "parked") {
     ctx.abortSignal.throwIfAborted();
     const batch = Promise.all(
       outcome.calls.map(async (call): Promise<ProgramCallResult> => {
         const callId = `${ctx.callId}:program:${call.index}`;
+        const deadlineFailure = (): ProgramCallResult => ({
+          index: call.index,
+          status: "failed",
+          error: "Program deadline exceeded before the tool call started.",
+        });
         try {
+          if (expired) return deadlineFailure();
           const approval = await approveProgramCallStep(
             program.context,
             call,
@@ -72,7 +81,7 @@ export async function executeProgramWorkflow(
                   kind: "tool-call",
                   callId,
                   toolName: call.tool,
-                  input: call.input as Record<string, JsonValue>,
+                  input: approval.input,
                 },
               ),
               deadline.then(() => ({ status: "deadline" as const })),
@@ -90,12 +99,14 @@ export async function executeProgramWorkflow(
                 error: `The user did not approve ${call.tool}.`,
               };
           }
+          if (expired) return deadlineFailure();
           approvedKeys.push(approval.key);
           const marker = await recordProgramCallStartedStep(callId);
+          if (expired) return deadlineFailure();
           const dispatched = await dispatchProgramCallStep(
             ctx,
             program.context,
-            call,
+            { ...call, input: approval.input },
             marker,
             approvedKeys,
           );

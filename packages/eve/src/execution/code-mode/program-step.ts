@@ -24,7 +24,7 @@ import { sessionView } from "#harness/session-machine/commit.js";
 import { storedProjection, turnPosition } from "#harness/session-machine/view.js";
 import { grantedApprovalKeys } from "#harness/hitl/approvals.js";
 import { toErrorMessage } from "#shared/errors.js";
-import { parseJsonValue } from "#shared/json.js";
+import { parseJsonValue, type JsonObject } from "#shared/json.js";
 import type { WorkflowStepToolContext } from "#tools/workflow-definition.js";
 import type {
   ProgramCall,
@@ -101,8 +101,8 @@ export async function runProgramStep(
 }
 
 export type ProgramApproval =
-  | { readonly status: "approved"; readonly key: string }
-  | { readonly status: "required"; readonly key: string }
+  | { readonly status: "approved"; readonly key: string; readonly input: JsonObject }
+  | { readonly status: "required"; readonly key: string; readonly input: JsonObject }
   | { readonly status: "denied"; readonly error: string };
 
 export async function approveProgramCallStep(
@@ -128,8 +128,7 @@ export async function approveProgramCallStep(
         (request) => catalog.get(request.action.toolName)?.approvalKey?.(request.action.input),
       ),
     ]);
-    const key =
-      resolved.definition.approvalKey?.(call.input as Record<string, unknown>) ?? call.tool;
+    const key = resolved.definition.approvalKey?.(checked.value) ?? call.tool;
     const policy = buildToolApproval({ approvedTools: keys, resolve: () => resolved as never });
     const approval =
       typeof policy === "function"
@@ -138,7 +137,7 @@ export async function approveProgramCallStep(
               type: "tool-call",
               toolCallId: callId,
               toolName: call.tool,
-              input: call.input,
+              input: checked.value,
             },
             messages: [],
           } as never)
@@ -146,7 +145,11 @@ export async function approveProgramCallStep(
     const status = typeof approval === "object" && approval !== null ? approval.type : approval;
     if (status === "denied")
       return { status: "denied", error: `Approval policy denied ${call.tool}.` };
-    return { status: status === "user-approval" ? "required" : "approved", key };
+    return {
+      status: status === "user-approval" ? "required" : "approved",
+      key,
+      input: checked.value,
+    };
   });
 }
 

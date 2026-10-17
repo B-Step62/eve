@@ -1,6 +1,6 @@
 import { defineEval } from "eve/evals";
 import { z } from "zod";
-import { counters, increment } from "../agent/lib/counters.js";
+import { counters } from "../agent/lib/counters.js";
 
 const executeResult = z.object({
   status: z.literal("completed"),
@@ -11,7 +11,7 @@ const executeResult = z.object({
   }),
 });
 const expectedCounters = z
-  .object({ count: z.literal(2), gated: z.literal(1), counters: z.literal(1) })
+  .object({ count: z.literal(2), gated: z.literal(1), counters: z.literal(1).optional() })
   .strict();
 
 export default defineEval({
@@ -45,9 +45,6 @@ export default defineEval({
           return event.data.status === "completed" && !result.isError && parsed.success;
         }),
     );
-    // A model need not call the observer tool. If it did, retain its invocation
-    // count; otherwise perform that one read out of band through the same store.
-    if (counters(done.sessionId).counters === undefined) increment(done.sessionId, "counters");
     const persisted = counters(done.sessionId);
     t.log(JSON.stringify({ sessionId: done.sessionId, persisted }));
     done.eventsSatisfy(

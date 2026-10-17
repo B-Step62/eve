@@ -31,7 +31,7 @@ describe("code-mode durable driver", () => {
       limits: { deadlineAt: Date.now() + 300000 },
       toolNames: ["read", "write"],
     });
-    mocks.approveProgramCallStep.mockResolvedValue({ status: "approved", key: "read" });
+    mocks.approveProgramCallStep.mockResolvedValue({ status: "approved", key: "read", input: {} });
     mocks.recordProgramCallStartedStep.mockImplementation(async (callId) => ({
       callId,
       status: "started",
@@ -131,7 +131,7 @@ describe("code-mode durable driver", () => {
     mocks.runProgramStep
       .mockResolvedValueOnce({ ...first, calls: [first.calls[0]] })
       .mockResolvedValueOnce({ status: "completed", output: 0, logs: [] });
-    mocks.approveProgramCallStep.mockResolvedValue({ status: "required", key: "read" });
+    mocks.approveProgramCallStep.mockResolvedValue({ status: "required", key: "read", input: {} });
     mocks.ask.mockImplementation(async () => {
       expect(mocks.recordProgramCallStartedStep).not.toHaveBeenCalled();
       expect(mocks.dispatchProgramCallStep).not.toHaveBeenCalled();
@@ -174,7 +174,7 @@ describe("code-mode durable driver", () => {
   it("terminates at the deadline while an approval is still pending", async () => {
     mocks.sleep.mockResolvedValue(undefined);
     mocks.ask.mockImplementation(() => new Promise(() => {}));
-    mocks.approveProgramCallStep.mockResolvedValue({ status: "required", key: "read" });
+    mocks.approveProgramCallStep.mockResolvedValue({ status: "required", key: "read", input: {} });
     mocks.runProgramStep
       .mockResolvedValueOnce({
         ...first,
@@ -213,5 +213,36 @@ describe("code-mode durable driver", () => {
       logsMayBeTruncated: true,
       interpreter: { startupMs: 0, runMs: 0 },
     });
+  });
+  it("does not dispatch after the deadline wins while approval policy is pending", async () => {
+    let approve!: (x: unknown) => void;
+    let expire!: () => void;
+    mocks.sleep.mockImplementation(
+      () =>
+        new Promise<void>((r) => {
+          expire = r;
+        }),
+    );
+    mocks.approveProgramCallStep.mockImplementation(
+      () =>
+        new Promise((r) => {
+          approve = r;
+        }),
+    );
+    mocks.runProgramStep
+      .mockResolvedValueOnce({ ...first, calls: [first.calls[0]] })
+      .mockResolvedValueOnce({
+        status: "failed",
+        error: "deadline",
+        errorClass: "deadline",
+        logs: [],
+      });
+    const run = executeProgramWorkflow(input, ctx);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expire();
+    expect(await run).toMatchObject({ status: "failed", errorClass: "deadline" });
+    approve({ status: "approved", key: "read", input: {} });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    expect(mocks.dispatchProgramCallStep).not.toHaveBeenCalled();
   });
 });
