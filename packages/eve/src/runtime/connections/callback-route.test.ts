@@ -106,14 +106,15 @@ describe("handleConnectionCallbackRequest", () => {
     "acknowledges a $method failure callback without claiming sign-in succeeded",
     async ({ method, query, body }) => {
       resumeHookMock.mockResolvedValueOnce(undefined);
+      const init: RequestInit = { method };
+      if (body !== undefined) {
+        init.body = body;
+        init.headers = { "content-type": "application/json" };
+      }
       const response = await handleConnectionCallbackRequest(
         new Request(
           `https://app.example.com${createEveConnectionCallbackRoutePath("linear", "attempt-1", "tok")}${query}`,
-          {
-            method,
-            body,
-            headers: body ? { "content-type": "application/json" } : undefined,
-          },
+          init,
         ),
         buildRouteContext({ attemptId: "attempt-1", name: "linear", token: "tok" }),
       );
