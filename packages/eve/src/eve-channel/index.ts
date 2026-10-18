@@ -103,10 +103,13 @@ function createdSessionBody(sessionId: string, body: ParsedCreateBody, deliveryI
   const created: {
     ok: true;
     protocolVersion?: number;
+    status?: "accepted";
     sessionId: string;
     deliveryId?: string;
   } = { ok: true, sessionId };
   if (deliveryId !== undefined) created.deliveryId = deliveryId;
+  // Supported delegated protocols still require this wire acknowledgement.
+  if (body.callback !== undefined) created.status = "accepted";
   if (body.protocolVersion !== undefined) created.protocolVersion = body.protocolVersion;
   return created;
 }

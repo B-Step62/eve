@@ -168,46 +168,57 @@ describe("eve ID-addressed session routes", () => {
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
-  it("continues a remote-agent trace for callback sessions", async () => {
-    const createSession = vi.fn().mockResolvedValue({
-      events: new ReadableStream(),
-      sessionId: "wrun_A",
-    });
-    const args = attachRouteSessionCreator(createArgs(), createSession);
+  it.each([undefined, 2, REMOTE_AGENT_PROTOCOL_VERSION])(
+    "preserves legacy create receipts and remote traces for protocol %s",
+    async (protocolVersion) => {
+      const createSession = vi.fn().mockResolvedValue({
+        events: new ReadableStream(),
+        sessionId: "wrun_A",
+      });
+      const args = attachRouteSessionCreator(createArgs(), createSession);
 
-    const response = await route("POST", "/eve/v1/session")(
-      new Request("https://eve.test/eve/v1/session", {
-        body: JSON.stringify({
-          callback: {
-            callId: "call-1",
-            subagentName: "research",
-            token: "tok123",
-            url: "https://caller.example.com/eve/v1/callback/tok123",
+      const response = await route("POST", "/eve/v1/session")(
+        new Request("https://eve.test/eve/v1/session", {
+          body: JSON.stringify({
+            callback: {
+              callId: "call-1",
+              subagentName: "research",
+              token: "tok123",
+              url: "https://caller.example.com/eve/v1/callback/tok123",
+            },
+            message: "hello",
+            protocolVersion,
+          }),
+          headers: {
+            "content-type": "application/json",
+            traceparent: `00-${"1".repeat(32)}-${"2".repeat(16)}-01`,
           },
-          message: "hello",
-          protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION,
+          method: "POST",
         }),
-        headers: {
-          "content-type": "application/json",
-          traceparent: `00-${"1".repeat(32)}-${"2".repeat(16)}-01`,
-        },
-        method: "POST",
-      }),
-      args,
-    );
+        args,
+      );
 
-    expect(response.status).toBe(202);
-    expect(createSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentTraceContext: {
-          isRemote: true,
-          spanId: "2".repeat(16),
-          traceFlags: 1,
-          traceId: "1".repeat(32),
-        },
-      }),
-    );
-  });
+      expect(response.status).toBe(202);
+      // Protocols 1–3 readers require this acknowledgement, even when a newer
+      // caller could identify the accepted delivery from its receipt instead.
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        status: "accepted",
+        sessionId: "wrun_A",
+        protocolVersion: protocolVersion ?? 1,
+      });
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parentTraceContext: {
+            isRemote: true,
+            spanId: "2".repeat(16),
+            traceFlags: 1,
+            traceId: "1".repeat(32),
+          },
+        }),
+      );
+    },
+  );
 
   it("preserves the dispatch caller when the transport trace advances through ingress", async () => {
     const createSession = vi.fn().mockResolvedValue({
