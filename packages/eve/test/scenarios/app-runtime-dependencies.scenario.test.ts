@@ -338,7 +338,7 @@ describe("app runtime dependency tracing", () => {
               'export default workflow({ agents: ["researcher"], maxSubagents: 6 });',
               "",
             ].join("\n")
-          : 'import { sleep } from "eve/tools/sleep";\n\nexport default sleep();\n',
+          : 'import { sleep } from "eve/tools/sleep";\n\nexport default sleep;\n',
       );
 
       return appRoot;

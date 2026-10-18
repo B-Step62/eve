@@ -7,5 +7,4 @@ export {
   type LinqCredentialValue,
   type LinqInboundMessageContext,
   type LinqInboundResult,
-  type LinqInboundResultOrPromise,
 } from "#public/channels/linq/linqChannel.js";

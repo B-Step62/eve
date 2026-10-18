@@ -38,7 +38,6 @@ export type PhotonInboundResult = {
 } | null;
 
 /** Sync or async {@link PhotonInboundResult}. */
-export type PhotonInboundResultOrPromise = PhotonInboundResult | Promise<PhotonInboundResult>;
 
 /** Configuration for {@link photonIMessageChannel}. */
 export interface PhotonIMessageChannelConfig {
@@ -50,7 +49,7 @@ export interface PhotonIMessageChannelConfig {
   readonly onMessage?: (
     ctx: PhotonInboundMessageContext,
     message: Message,
-  ) => PhotonInboundResultOrPromise;
+  ) => PhotonInboundResult | Promise<PhotonInboundResult>;
   /** Override the default webhook route (`/eve/v1/photon`). */
   readonly route?: string;
   /** Policy for accepted messages that arrive while a turn is active. */

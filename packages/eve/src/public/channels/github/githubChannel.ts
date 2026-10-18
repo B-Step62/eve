@@ -114,7 +114,6 @@ export type GitHubInboundResult = {
  * Return type of GitHub inbound hooks: a {@link GitHubInboundResult} or a
  * promise for one.
  */
-export type GitHubInboundResultOrPromise = GitHubInboundResult | Promise<GitHubInboundResult>;
 
 type GitHubEventHandler<T extends SessionEvent["type"]> = (
   event: ChannelEventOf<T>,
@@ -166,7 +165,10 @@ export interface GitHubChannelConfig {
    * Return `{ auth }` to dispatch or `null` to ignore. Replaces the default
    * mention gate.
    */
-  onComment?(ctx: GitHubInboundContext, comment: GitHubComment): GitHubInboundResultOrPromise;
+  onComment?(
+    ctx: GitHubInboundContext,
+    comment: GitHubComment,
+  ): GitHubInboundResult | Promise<GitHubInboundResult>;
 
   /**
    * Opt-in handler for `check_suite` webhook events. There is no default
@@ -176,7 +178,7 @@ export interface GitHubChannelConfig {
   onCheckSuite?(
     ctx: GitHubInboundContext,
     checkSuite: GitHubCheckSuiteEvent,
-  ): GitHubInboundResultOrPromise;
+  ): GitHubInboundResult | Promise<GitHubInboundResult>;
 
   /**
    * Opt-in handler for `check_run` webhook events. There is no default
@@ -186,13 +188,16 @@ export interface GitHubChannelConfig {
   onCheckRun?(
     ctx: GitHubInboundContext,
     checkRun: GitHubCheckRunEvent,
-  ): GitHubInboundResultOrPromise;
+  ): GitHubInboundResult | Promise<GitHubInboundResult>;
 
   /**
    * Opt-in handler for `issues` webhook events. There is no default dispatch;
    * define this to act on issues (e.g. `issue.action === "opened"`).
    */
-  onIssue?(ctx: GitHubInboundContext, issue: GitHubIssueEvent): GitHubInboundResultOrPromise;
+  onIssue?(
+    ctx: GitHubInboundContext,
+    issue: GitHubIssueEvent,
+  ): GitHubInboundResult | Promise<GitHubInboundResult>;
 
   /**
    * Opt-in handler for `pull_request` webhook events. There is no default
@@ -201,7 +206,7 @@ export interface GitHubChannelConfig {
   onPullRequest?(
     ctx: GitHubInboundContext,
     pullRequest: GitHubPullRequestEvent,
-  ): GitHubInboundResultOrPromise;
+  ): GitHubInboundResult | Promise<GitHubInboundResult>;
 
   /**
    * Opt-in handler for `workflow_run` webhook events. There is no default
@@ -211,7 +216,7 @@ export interface GitHubChannelConfig {
   onWorkflowRun?(
     ctx: GitHubInboundContext,
     workflowRun: GitHubWorkflowRunEvent,
-  ): GitHubInboundResultOrPromise;
+  ): GitHubInboundResult | Promise<GitHubInboundResult>;
 }
 
 /** Concrete return type of {@link githubChannel}. */

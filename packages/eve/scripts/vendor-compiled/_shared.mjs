@@ -43,7 +43,7 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { dirname, isAbsolute, join, parse, posix, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,6 +52,7 @@ import { onVendoredDependencyLog } from "../../src/internal/bundler/vendored-dep
 
 const declarationsDir = fileURLToPath(new URL("./declarations/", import.meta.url));
 const require = createRequire(import.meta.url);
+const ts = createRequire(require.resolve("@microsoft/api-extractor/package.json"))("typescript");
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-package authoring API
@@ -134,15 +135,7 @@ export function createDeclarationCopier({
     for (const file of queued.values()) {
       const sourceText = await readFile(join(distDir, file.source), "utf8");
       declarations.push({ ...file, sourceText });
-      const uncommented = sourceText.replace(
-        /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|\/\*[\s\S]*?\*\/|\/\/[^\n]*/gu,
-        (_match, literal) => literal ?? "",
-      );
-      const references = uncommented.matchAll(
-        /\b(?:from\s*|import\s*\(\s*|import\s*)["'](\.[^"']+)["']|<reference\s+path=["'](\.[^"']+)["']/gu,
-      );
-      for (const match of references) {
-        const specifier = match[1] ?? match[2];
+      for (const specifier of collectRelativeDeclarationReferences(sourceText)) {
         const candidates = /\.d\.[cm]?ts$/u.test(specifier)
           ? [specifier]
           : /\.[cm]?js$/u.test(specifier)
@@ -254,6 +247,32 @@ export function createDeclarationCopier({
   };
 }
 
+function collectRelativeDeclarationReferences(source) {
+  const file = ts.createSourceFile("declarations.d.ts", source, ts.ScriptTarget.Latest, true);
+  const references = new Set(
+    file.referencedFiles.map(({ fileName }) =>
+      fileName.startsWith(".") ? fileName : `./${fileName}`,
+    ),
+  );
+  function visit(node) {
+    let specifier;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+      specifier = node.moduleSpecifier;
+    else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument))
+      specifier = node.argument.literal;
+    else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    )
+      specifier = node.moduleReference.expression;
+    if (specifier && ts.isStringLiteral(specifier) && specifier.text.startsWith("."))
+      references.add(specifier.text);
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  return references;
+}
+
 function mergeExternalDeclarationImports(sources) {
   const result = new Map();
   for (const source of sources) {
@@ -305,7 +324,7 @@ export function collectExternalDeclarationImports(source) {
     !moduleName.startsWith(".") &&
     !moduleName.startsWith("/") &&
     !moduleName.startsWith("#") &&
-    !moduleName.startsWith("node:");
+    !isBuiltin(moduleName);
 
   const addName = (moduleName, name) => {
     if (!isExternal(moduleName)) {
@@ -359,6 +378,21 @@ export function collectExternalDeclarationImports(source) {
     addName(match[1]);
   }
 
+  const file = ts.createSourceFile("declarations.d.ts", source, ts.ScriptTarget.Latest, true);
+  function visit(node) {
+    if (
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteral(node.argument.literal)
+    ) {
+      let qualifier = node.qualifier;
+      while (qualifier && ts.isQualifiedName(qualifier)) qualifier = qualifier.left;
+      addName(node.argument.literal.text, qualifier?.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+
   return result;
 }
 
@@ -374,7 +408,11 @@ export function rewriteImportSource(source, moduleName, replacement) {
     .replaceAll(new RegExp(`from '${escaped}'`, "g"), `from '${replacement}'`)
     .replaceAll(new RegExp(`from "${escaped}"`, "g"), `from "${replacement}"`)
     .replaceAll(new RegExp(`import '${escaped}'`, "g"), `import '${replacement}'`)
-    .replaceAll(new RegExp(`import "${escaped}"`, "g"), `import "${replacement}"`);
+    .replaceAll(new RegExp(`import "${escaped}"`, "g"), `import "${replacement}"`)
+    .replaceAll(
+      new RegExp(`import\\s*\\(\\s*(["'])${escaped}\\1\\s*\\)`, "g"),
+      `import("${replacement}")`,
+    );
 }
 
 /**

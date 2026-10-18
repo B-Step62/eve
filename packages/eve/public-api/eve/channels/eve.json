@@ -1,7 +1,7 @@
 [
   "EveChannel",
+  "EveChannelConfig",
   "EveChannelEvents",
-  "EveChannelInput",
   "EveEventContext",
   "EveHandle",
   "EveMessageContext",

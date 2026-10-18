@@ -5,7 +5,6 @@
   "LinqCredentialValue",
   "LinqInboundMessageContext",
   "LinqInboundResult",
-  "LinqInboundResultOrPromise",
   "defaultLinqAuth",
   "linqChannel"
 ]

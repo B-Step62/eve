@@ -1,12 +1,15 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
+
+import { useTemporaryAppRoots } from "#internal/testing/use-temporary-app-roots.js";
+const createTemporaryRoot = useTemporaryAppRoots();
 
 const EVE_PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const EVE_CATALOG_ROOT = join(EVE_PACKAGE_ROOT, "..", "eve-catalog");
@@ -47,7 +50,7 @@ function rewriteDeclarationImports(
 
 describe("compiled vendor assets", () => {
   it("copies and rewrites transitive declaration chunks for an isolated consumer", async () => {
-    const root = await createTemporaryDirectory("eve-vendor-declarations-");
+    const { appRoot: root } = await createTemporaryRoot("eve-vendor-declarations-");
     const upstream = join(root, "upstream");
     const destinationRoot = join(root, "consumer");
     await mkdir(join(upstream, "dist", "nested"), { recursive: true });

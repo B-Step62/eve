@@ -4,7 +4,6 @@
   "PhotonIMessageChannelCredentials",
   "PhotonInboundMessageContext",
   "PhotonInboundResult",
-  "PhotonInboundResultOrPromise",
   "defaultPhotonAuth",
   "photonIMessageChannel"
 ]

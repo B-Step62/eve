@@ -184,7 +184,7 @@ const EXT_TREE: Readonly<Record<string, string>> = {
     "export default defineDynamic({",
     "  events: {",
     '    "beforeSession": async () =>',
-    '      defineInstructions({ markdown: "Treat CRM results as authoritative." }),',
+    '      defineInstructions({ content: "Treat CRM results as authoritative." }),',
     "  },",
     "});",
     "",
@@ -373,9 +373,9 @@ describe("mounted extension installed under node_modules", () => {
     expect(graph.root.agent.skills.map((skill) => skill.name)).toEqual(
       expect.arrayContaining(["crm__notes", "crm__research", "crm__guide"]),
     );
-    expect(
-      graph.root.agent.skills.find((skill) => skill.name === "crm__notes")?.markdown,
-    ).toContain("Record decisions as bullet points.");
+    expect(graph.root.agent.skills.find((skill) => skill.name === "crm__notes")?.content).toContain(
+      "Record decisions as bullet points.",
+    );
 
     const skillsResourceRoot = join(
       app.appRoot,
@@ -404,17 +404,17 @@ describe("mounted extension installed under node_modules", () => {
       (resolver) => resolver.slug === "crm__oncall",
     );
     const producedSkills = (await dynamicSkills?.events["beforeSession"]?.({}, {})) as {
-      escalation: { markdown: string };
+      escalation: { content: string };
     };
-    expect(producedSkills.escalation.markdown).toContain("Page the on-call.");
+    expect(producedSkills.escalation.content).toContain("Page the on-call.");
 
     const dynamicInstructions = graph.root.agent.dynamicInstructionsResolvers.find(
       (resolver) => resolver.slug === "crm__dynamic",
     );
     const producedInstructions = (await dynamicInstructions?.events["beforeSession"]?.({}, {})) as {
-      markdown: string;
+      content: string;
     };
-    expect(producedInstructions.markdown).toBe("Treat CRM results as authoritative.");
+    expect(producedInstructions.content).toBe("Treat CRM results as authoritative.");
     expect(manifest.instructions.map((entry) => entry.content).join("\n")).toContain(
       "Prefer the CRM tools for account questions.",
     );

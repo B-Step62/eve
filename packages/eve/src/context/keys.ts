@@ -348,7 +348,7 @@ export interface DurableDynamicSkillMetadata {
   readonly deferred?: true;
   readonly description: string;
   /** `SKILL.md` content as authored; loading strips any frontmatter. */
-  readonly markdown: string;
+  readonly content: string;
   /**
    * Content hash of the package files. Present only for packages with
    * supporting files, which are the only packages written to the sandbox.

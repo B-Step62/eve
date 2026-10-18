@@ -227,7 +227,7 @@
 
 ### Minor Changes
 
-- 9de88f7: Split self-modification into separate `eve/self-modification/local` and `eve/self-modification/remote` mounts, so `eve dev` no longer loads deployed sandbox dependencies. `eve/self-modification` remains an alias for the local mount and now rejects the `deployed` option; move that configuration to its own mount, for example `agent/extensions/self-modification-remote/extension.ts`, with the former `deployed` fields at the top level.
+- 9de88f7: Split self-modification into separate `eve/extensions/self-modification/local` and `eve/extensions/self-modification/remote` mounts, so `eve dev` no longer loads deployed sandbox dependencies. `eve/self-modification` remains an alias for the local mount and now rejects the `deployed` option; move that configuration to its own mount, for example `agent/extensions/self-modification-remote/extension.ts`, with the former `deployed` fields at the top level.
 
 ### Patch Changes
 
@@ -513,7 +513,7 @@
 - ce14b1e: Models now get clearer task guidance: call `task_wait` when there's nothing to say until a result arrives, reply when the person should hear something first, and in child and schedule sessions wait instead of replying. `task_wait` takes `timeoutSeconds` instead of `timeout` in milliseconds, `task_cancel` answers in plain text, and receipts and failed agent results tell the model what happens next.
 - 50afc41: Allow `eve remote info` to inspect deployments that report retired kernel-effect options, marking those options as unrecognized instead of rejecting the agent-info response.
 - ed2c04b: `ToolContext` now exposes `messages`, the model input for the step that requested the call, so tools can evaluate the conversation that led to them without recording it separately. It matches the `ctx.messages` dynamic resolvers receive at `step.started`.
-- 5a5561a: Tools can now end a turn without a reply. Set `endsTurn: true` on a `defineTool` tool whose action is the whole answer, such as a reaction: once every call in the model's step succeeds, the turn completes with no final message, so channels and schedule sends post nothing. With `true`, eve appends a sentence to the tool's model-facing description saying the call ends the turn; pass a function instead to decide from the `execute` output. The new opt-in `no_reply` tool (`eve add tool/no_reply`, or `noReply()` from `eve/tools/no_reply`) uses it to let the agent stay quiet, for example when a scheduled check finds nothing to report. Slack now clears its thread status when a turn completes.
+- 5a5561a: Tools can now end a turn without a reply. Set `endsTurn: true` on a `defineTool` tool whose action is the whole answer, such as a reaction: once every call in the model's step succeeds, the turn completes with no final message, so channels and schedule sends post nothing. With `true`, eve appends a sentence to the tool's model-facing description saying the call ends the turn; pass a function instead to decide from the `execute` output. The new opt-in `no_reply` tool (`eve add tool/no_reply`, or `noReply` from `eve/tools/no_reply`) uses it to let the agent stay quiet, for example when a scheduled check finds nothing to report. Slack now clears its thread status when a turn completes.
 - f442363: System instructions now remain available in traces when JSON encoding would otherwise push them over the span attribute size limit.
 - d09e381: The `eve dev` TUI now labels the self-modification subagent as `agent editor` instead of its raw tool name, `self-modification__agent`, and the turn bar reads "Modifying your agent" while it works.
 - 315b353: The `eve dev` terminal UI now shows each task, such as a subagent call, as one line when it starts and one when it finishes, fails, or is stopped, with a panel above the prompt showing what every working task is doing. The transcript no longer jumps or rewrites while tasks work, the model's own `task_wait` and `task_cancel` calls no longer appear in the terminal UI or Slack typing indicators, and tools with a `label` show it instead of their raw arguments.
@@ -525,9 +525,9 @@
 
 ### Minor Changes
 
-- 52a18ac: Computer use moves out of `eve/extensions/code` into its own built-in extension, `eve/computer-use`. Mounting the code extension no longer adds `computer_use`, so agents without a desktop stop sending its schema on every request. Agents that use computer use should mount `eve/computer-use` next to the code extension; mounted as `agent/extensions/computer-use.ts`, the tool is named `computer-use__computer_use`.
+- 52a18ac: Computer use moves out of `eve/extensions/code` into its own built-in extension, `eve/extensions/computer-use`. Mounting the code extension no longer adds `computer_use`, so agents without a desktop stop sending its schema on every request. Agents that use computer use should mount `eve/extensions/computer-use` next to the code extension; mounted as `agent/extensions/computer-use.ts`, the tool is named `computer-use__computer_use`.
   
-  The sandbox helpers are now exported from `eve/computer-use/sandbox` and the tool from `eve/computer-use/tools`. The old `eve/extensions/code/sandbox` and `eve/extensions/code/tools` exports still work but are deprecated.
+  The sandbox helpers are now exported from `eve/extensions/computer-use/sandbox` and the tool from `eve/extensions/computer-use/tools`. The old `eve/extensions/code/sandbox` and `eve/extensions/code/tools` exports still work but are deprecated.
 - 2cfcecc: A stream-event hook that throws no longer fails the turn or session. eve logs the failure with the hook and event identifiers, runs the remaining subscribers, and continues execution, including for `turn.started` and `step.started` hooks, which previously ended the turn with `EVENT_HANDLER_FAILED`.
 
 ### Patch Changes
@@ -656,7 +656,7 @@
 
 - 60998d6: Remove the `todo` tool, its `eve/tools/todo` export, and the dev TUI todo panel; delete any `agent/tools/todo.ts`, including one that exports `disableTool()`, which now fails the build because there is no default `todo` tool to disable. Compaction no longer resets `write_file` read tracking, so a file read before compaction can be overwritten without re-reading it; stale-read detection still rejects the write if the file changed since that read.
   
-  `ask_question` is no longer a default tool and is now an ordinary workflow tool built on `ctx.ask()`. Add it with `eve add tool/ask_question`, or change an existing `agent/tools/ask_question.ts` to `import { askQuestion } from "eve/tools/ask_question"; export default askQuestion();`. The model now asks one `question` with up to three `{ label, description }` options, can always receive a free-text answer, and gets back `{ status: "answered", answer }` with the chosen label or the user's words. In sessions that cannot request input, the tool is still available and returns `{ status: "unavailable" }`. If you disabled `ask_question` with `disableTool()`, delete that file; it now fails the build for the same reason.
+  `ask_question` is no longer a default tool and is now an ordinary workflow tool built on `ctx.ask()`. Add it with `eve add tool/ask_question`, or change an existing `agent/tools/ask_question.ts` to `import { askQuestion } from "eve/tools/ask_question"; export default askQuestion;`. The model now asks one `question` with up to three `{ label, description }` options, can always receive a free-text answer, and gets back `{ status: "answered", answer }` with the chosen label or the user's words. In sessions that cannot request input, the tool is still available and returns `{ status: "unavailable" }`. If you disabled `ask_question` with `disableTool()`, delete that file; it now fails the build for the same reason.
   
   `ctx.ask()` now resolves to `{ status: "answered", optionId?, text? }`, `{ status: "dismissed" }`, or `{ status: "unavailable" }`; check `status` before reading `optionId`. It returns `unavailable` immediately when the session cannot request input. A plain-text message answers a blocking tool's `ctx.ask()` question when it is the only pending question and the message matches an option or the question allows free text. Pass `dismissible: true` to resolve the question as `dismissed` when the user sends an unrelated message instead. An `ask_question` request's `requestId` is no longer its tool call ID; use `action.callId` to relate a request to its tool call.
 
@@ -772,7 +772,7 @@
 
 ### Patch Changes
 
-- 76d4dd8: Workflow tools can read effective declared-subagent descriptions from `ctx.agents`, including subagents hidden from the parent model. Export `agentRouter()` from `eve/tools/agent-router` to route each task across that complete map with JEV and invoke the selected agent.
+- 76d4dd8: Workflow tools can read effective declared-subagent descriptions from `ctx.agents`, including subagents hidden from the parent model. Export `agentRouter()` from `eve/tools/agent_router` to route each task across that complete map with JEV and invoke the selected agent.
 
 ## 0.60.0
 
@@ -1959,7 +1959,7 @@
 ### Patch Changes
 
 - 6dd3006: Cancelling a parent turn now delivers descendant cancellations more reliably: the cancel request retries with exponential backoff (~8s budget instead of 3s), `no_active_turn` results carry the error class that marked the target inactive, and every previously silent drop path (missing pending batch, missing child session ids, exhausted retries) now logs a warning so an uncancelled child no longer runs to completion without a trace.
-- 255027e: Add an opt-in durable `sleep` tool from `eve/tools/sleep`. Agents can export `sleep()` from `agent/tools/sleep.ts` to let the model pause a turn before checking progress or status again without holding an application runtime open.
+- 255027e: Add an opt-in durable `sleep` tool from `eve/tools/sleep`. Agents can export `sleep` from `agent/tools/sleep.ts` to let the model pause a turn before checking progress or status again without holding an application runtime open.
 - 01ed80d: `eve eval` gains a repeatable `--exclude-tag <tag...>` flag that skips evals carrying a tag. Exclusion applies after `--tag` inclusion, and a run where exclusion removes every matching eval now exits successfully with nothing executed. `--list` reports the post-filter selection — `--list --json` prints `[]` when exclusion removes everything — so suite runners can probe whether anything would run.
 - f09a399: Allow `eve init .` to scaffold in directories that already contain common, source-controlled toolchain and development-environment manifests. Existing mise configs and lockfiles, Node version selectors, proto, Devbox, Nix flake, and devenv configuration are preserved.
 - 2b09840: Remove the `/connect` dev TUI command. Add connections through `eve add` or `/add`; official Connect-backed connection items now configure and patch their Vercel connector during registry setup.

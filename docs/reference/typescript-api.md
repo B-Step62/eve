@@ -33,15 +33,24 @@ export default defineTool({
 Install the framework packages for the integration you import. These are optional peers of eve;
 using another entry does not require them.
 
-| Entry                                      | Required integration packages          |
-| ------------------------------------------ | -------------------------------------- |
-| `eve/react`                                | `react` 19                             |
-| `eve/vue`                                  | `vue` 3.5 or later in v3               |
-| `eve/svelte`                               | `svelte` 5                             |
-| `eve/next`                                 | `next` 16 and `react` 19               |
-| `eve/vite`                                 | `vite` 8.3.1 or later in v8            |
-| `eve/nuxt`                                 | `@nuxt/kit` 4 and `@nuxt/schema` 4     |
-| `@vercel/connect/eve` with eve connections | `@vercel/connect` 2.5.2 or later in v2 |
+| Entry                                      | Required integration packages                         |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `eve/react`                                | `react` 19 (and its React typings in TypeScript apps) |
+| `eve/vue`                                  | `vue` 3.5 or later in v3                              |
+| `eve/svelte`                               | `svelte` 5                                            |
+| `eve/next`                                 | `next` 16 and `react` 19                              |
+| `eve/sveltekit`, `eve/tanstack`            | `vite` 8.3.1 or later in v8                           |
+| `eve/nuxt`                                 | `@nuxt/kit` 4 and `@nuxt/schema` 4                    |
+| Chat SDK, Linq, and Photon channels        | `chat` 4 for their SDK-backed handles                 |
+| `eve/channels/linq`                        | Also `@linqapp/sdk` 0.47.1 or later in v0.47          |
+| `eve/sandbox/just-bash`                    | `just-bash` 3.6 or later in v3                        |
+| `@vercel/connect/eve` with eve connections | `@vercel/connect` 2.2 or later in v2                  |
+
+Connect events additionally require a Connect release that supplies its events bridge.
+The packed-consumer matrix checks every typed public entry with `skipLibCheck: false`,
+using only required peers for core entries and explicit integration peers for the rest.
+It has no diagnostic baseline. Declaration shape reports separately record peer boundaries;
+SDK-backed handles keep the app's SDK identity rather than copied classes.
 
 The AI SDK is a required peer and has its own Zod peer requirement. Client inspection types
 (`AgentInfoResult`, its entry types, and `HealthResult`) are eve-owned data contracts, not
@@ -76,13 +85,13 @@ inferences from eve's runtime validators.
 | `mockModel`                                           | `eve/evals`                                                             | Deterministic fixture agent models                                                     | [Evals](../evals/overview)                             |
 | `useEveAgent`                                         | `eve/react`, `eve/vue`, `eve/svelte`                                    | frontend                                                                               | [Frontend](../guides/frontend/overview)                |
 
-Tool-wide authoring helpers and types such as `defineTool`, `defineWorkflowTool`, `defineDurableCallback`, `defineDurableSchema`, `defineDynamic`, `disableTool`, and `ToolLabelDefinition` come from `eve/tools`. Capability-specific definitions and helpers use their own subpaths (see [Built-in tools](../concepts/built-in-tools)): reusable definitions such as `bash` and `glob` come from `eve/tools/<name>`, `webSearch` comes from `eve/tools/web_search`, `agentRouter` comes from `eve/tools/agent-router`, `sleep` comes from `eve/tools/sleep`, `noReply` comes from `eve/tools/no_reply`, and approval policies and types come from `eve/tools/approval`. The route verbs `GET`/`HEAD`/`POST`/`PUT`/`PATCH`/`DELETE`/`OPTIONS`/`WS` plus `disableRoute` come from `eve/channels`, and the channel auth helpers `localDev`/`vercelOidc`/`placeholderAuth` come from `eve/channels/auth`.
+Tool-wide authoring helpers and types such as `defineTool`, `defineWorkflowTool`, `defineDurableCallback`, `defineDurableSchema`, `defineDynamic`, `disableTool`, and `ToolLabelDefinition` come from `eve/tools`. Capability-specific definitions and helpers use their own subpaths (see [Built-in tools](../concepts/built-in-tools)): reusable definitions such as `bash` and `glob` come from `eve/tools/<name>`, `webSearch` comes from `eve/tools/web_search`, `agentRouter` comes from `eve/tools/agent_router`, `sleep` comes from `eve/tools/sleep`, `noReply` comes from `eve/tools/no_reply`, and approval policies and types come from `eve/tools/approval`. The route verbs `GET`/`HEAD`/`POST`/`PUT`/`PATCH`/`DELETE`/`OPTIONS`/`WS` plus `disableRoute` come from `eve/channels`, and the channel auth helpers `localDev`/`vercelOidc`/`placeholderAuth` come from `eve/channels/auth`.
 
 `AgentReasoningDefinition` is exported from `eve` for the top-level `defineAgent({ reasoning })` setting. `AgentLimitsDefinition` is exported for `defineAgent({ limits })`. `AgentWorkflowDefinition`, `AgentWorkflowRetentionDefinition`, and `AgentWorkflowWorldDefinition` are exported from `eve` for the `defineAgent({ experimental: { workflow } })` config shape. `WebSearchToolInput` and `WebSearchProvider` are exported from `eve/tools/web_search`.
 
 `webSearch({ provider })` selects `"exa"`, `"parallel"`, `"browserbase"`, or `"native"` for AI Gateway search using the Gateway model's credentials. `"native"` uses the model vendor's own search for OpenAI, Anthropic, and Gemini 3 and later models; set `fallback` to `"exa"`, `"parallel"`, or `"browserbase"` to give other Gateway models search, which they otherwise don't get. Direct provider models keep their native search implementation when supported. See [Built-in tools](../concepts/built-in-tools#web_search) for setup and provider behavior.
 
-`defineInstructions` accepts `{ content: string, role?: "system" | "user" }`; omitted `role` means `"system"`. Its `eve/instructions` version of `defineDynamic` accepts only `beforeSession` and `beforeTurn` handlers returning `defineInstructions(...)` or `null`. The legacy `{ markdown: string }` definition remains available as a deprecated system-role form.
+`defineInstructions` accepts `{ content: string, role?: "system" | "user" }`; omitted `role` means `"system"`. Its `eve/instructions` version of `defineDynamic` accepts only `beforeSession` and `beforeTurn` handlers returning `defineInstructions(...)` or `null`. The retired `{ markdown: string }` definition is rejected.
 
 The `eve/connections` version of `defineDynamic` accepts `beforeSession` and
 `beforeTurn` handlers returning one MCP or OpenAPI connection definition, a
@@ -169,7 +178,7 @@ Tool definitions accept `availableInSubagents: false` to restrict the tool to to
 | [`eve/ai`](../guides/decide#decide-inside-a-tool)                                 | Standalone `decide`                                                                                                            |
 | `eve/evals`                                                                       | `defineEval`, `defineEvalConfig`, `mockModel`, eval types                                                                      |
 | `eve/evals/expect`                                                                | `includes`, `equals`, `matches`, `similarity`                                                                                  |
-| `eve/evals/reporters`                                                             | `Braintrust`, `JUnit`, `EvalReporter`                                                                                          |
+| `eve/evals/reporters`                                                             | `braintrustReporter`, `junitReporter`, `EvalReporter`                                                                          |
 | `eve/evals/loaders`                                                               | `loadJson`, `loadYaml`                                                                                                         |
 | `eve/react`, `eve/vue`, `eve/svelte`                                              | `useEveAgent`                                                                                                                  |
 | `eve/next`, `eve/nuxt`, `eve/sveltekit`, `eve/tanstack`                           | framework bundler plugins                                                                                                      |

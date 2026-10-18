@@ -513,8 +513,8 @@ Each channel operation accepts a channel-local token. The framework prepends the
 import { slackContinuationToken } from "eve/channels/slack";
 import { twilioContinuationToken } from "eve/channels/twilio";
 
-slackContinuationToken("C0123ABC", "1800000000.001234"); // "C0123ABC:1800000000.001234"
-twilioContinuationToken("+15551234567", "+15557654321"); // "+15551234567:+15557654321"
+slackContinuationToken({ channelId: "C0123ABC", threadTs: "1800000000.001234" }); // "C0123ABC:1800000000.001234"
+twilioContinuationToken({ from: "+15551234567", to: "+15557654321" }); // "+15551234567:+15557654321"
 ```
 
 Custom channels write their own function that joins the identity fields. The framework derives nothing for you; the channel owns its token format.

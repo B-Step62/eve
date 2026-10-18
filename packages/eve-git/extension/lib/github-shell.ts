@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { getToken, type ConnectTokenParams } from "@vercel/connect";
+import { getToken } from "@vercel/connect";
 import type { SessionAuthContext } from "eve/context";
 import type { SandboxSession } from "eve/sandbox";
 
@@ -62,7 +62,17 @@ export interface GitHubLeaseRule {
 
 interface GitHubShellDependencies {
   readonly auth?: SessionAuthContext | null;
-  readonly getConnectToken?: typeof getToken;
+  readonly getConnectToken?: (
+    connector: string,
+    params: {
+      authorizationDetails: {
+        type: "github_app_installation";
+        org: string;
+        repositories: string[];
+      }[];
+      subject: { type: "app" };
+    },
+  ) => Promise<string>;
   readonly getSandbox: () => Promise<SandboxSession>;
   /** Serializes credential leases per eve session; every `ctx.getSandbox()` call returns a new handle. */
   readonly sessionId: string;
@@ -105,7 +115,7 @@ export async function executeGitHubShell(
     sandbox,
   );
   const repositories = repositoryNames(declaredRepositories, config.org);
-  const tokenParams: ConnectTokenParams = {
+  const tokenParams: Parameters<NonNullable<GitHubShellDependencies["getConnectToken"]>>[1] = {
     authorizationDetails: [{ type: "github_app_installation", org: config.org, repositories }],
     subject: { type: "app" },
   };

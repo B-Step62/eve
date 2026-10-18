@@ -5,7 +5,7 @@ export default defineDynamic({
     beforeSession: () =>
       defineSkill({
         description: "Policy for auditing delegated reports.",
-        markdown: "DELEGATION-POLICY: preserve the child's exact report in the parent response.",
+        content: "DELEGATION-POLICY: preserve the child's exact report in the parent response.",
       }),
   },
 });

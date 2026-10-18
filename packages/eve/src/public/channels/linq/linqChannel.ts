@@ -38,7 +38,6 @@ export type LinqInboundResult = {
 } | null;
 
 /** Sync or async {@link LinqInboundResult}. */
-export type LinqInboundResultOrPromise = LinqInboundResult | Promise<LinqInboundResult>;
 
 /** A direct value or lazy resolver for a Linq credential. */
 export type LinqCredentialValue = string | (() => string | Promise<string>);
@@ -65,7 +64,7 @@ export interface LinqChannelConfig {
   readonly onMessage?: (
     ctx: LinqInboundMessageContext,
     message: Message,
-  ) => LinqInboundResultOrPromise;
+  ) => LinqInboundResult | Promise<LinqInboundResult>;
   /** Override the default webhook route (`/eve/v1/linq`). */
   readonly route?: string;
   /** Policy for accepted messages that arrive while a turn is active. */

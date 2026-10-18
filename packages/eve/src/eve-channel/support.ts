@@ -9,7 +9,7 @@ import { workflowEntryReference } from "#execution/workflow-runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
 import {
   defaultEveAuth,
-  type EveChannelInput,
+  type EveChannelConfig,
   type EveHandle,
   type EveMessageContext,
   type EveMessageResult,
@@ -118,7 +118,7 @@ interface OnMessageOutcome {
 
 export async function resolveOnMessage(input: {
   readonly auth: SessionAuthContext | null;
-  readonly config: EveChannelInput;
+  readonly config: EveChannelConfig;
   readonly invocation?: EveHandle["invocation"];
   readonly message: MessageContent;
   readonly request: Request;

@@ -19,7 +19,7 @@ const KNOWN_TOP_LEVEL_KEYS = [
   "auth",
   "description",
   "forwardPrincipal",
-  "experimental_events",
+  "experimental",
   "headers",
   "instanceKey",
   "protocolVersionDiscovery",
@@ -97,10 +97,15 @@ export function normalizeMcpClientConnectionDefinition(
     url: record.url as string,
   };
 
-  if (record.experimental_events !== undefined) {
+  const experimental =
+    record.experimental === undefined
+      ? undefined
+      : expectObjectRecord(record.experimental, `${message} experimental must be an object.`);
+  if (experimental !== undefined) expectOnlyKnownKeys(experimental, ["events"], message);
+  if (experimental?.events !== undefined) {
     const events = expectObjectRecord(
-      record.experimental_events,
-      `${message} experimental_events must be an object.`,
+      experimental.events,
+      `${message} experimental.events must be an object.`,
     );
     expectOnlyKnownKeys(events, ["onEvent", "onGap", "onTerminated"], message);
     if (
@@ -109,7 +114,7 @@ export function normalizeMcpClientConnectionDefinition(
       (events.onTerminated !== undefined && typeof events.onTerminated !== "function")
     ) {
       throw new Error(
-        `${message} experimental_events requires onEvent; onGap and onTerminated must be functions when provided.`,
+        `${message} experimental.events requires onEvent; onGap and onTerminated must be functions when provided.`,
       );
     }
     if (
@@ -118,14 +123,16 @@ export function normalizeMcpClientConnectionDefinition(
       authorization.vercelConnect?.experimental_events === undefined
     ) {
       throw new Error(
-        `${message} experimental_events requires a static Connect auth provider with the events bridge.`,
+        `${message} experimental.events requires a static Connect auth provider with the events bridge.`,
       );
     }
-    type Events = NonNullable<McpClientConnectionDefinition["experimental_events"]>;
-    result.experimental_events = {
-      onEvent: events.onEvent as Events["onEvent"],
-      onGap: events.onGap as Events["onGap"],
-      onTerminated: events.onTerminated as Events["onTerminated"],
+    type Events = NonNullable<NonNullable<McpClientConnectionDefinition["experimental"]>["events"]>;
+    result.experimental = {
+      events: {
+        onEvent: events.onEvent as Events["onEvent"],
+        onGap: events.onGap as Events["onGap"],
+        onTerminated: events.onTerminated as Events["onTerminated"],
+      },
     };
   }
 

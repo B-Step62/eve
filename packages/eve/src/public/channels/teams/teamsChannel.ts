@@ -1,3 +1,5 @@
+import type { TeamsChannelCredentials } from "#public/channels/teams/credentials.js";
+export type { TeamsChannelCredentials } from "#public/channels/teams/credentials.js";
 import type { ChannelEventContext, ChannelEventOf } from "#public/definitions/channel.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import type { TeamsInstrumentationMetadata } from "#public/channels/teams/index.js";
@@ -27,7 +29,6 @@ import {
   type TeamsApiOptions,
   type TeamsApiResponse,
   type TeamsChannelAccount,
-  type TeamsCredentials,
   type TeamsMention,
   type TeamsMessageBody,
   type TeamsOutboundActivity,
@@ -61,7 +62,7 @@ import {
   type TeamsInvokeActivity,
   type TeamsMessageActivity,
 } from "#public/channels/teams/inbound.js";
-import { verifyTeamsRequest, type TeamsWebhookVerifier } from "#public/channels/teams/verify.js";
+import { verifyTeamsRequest } from "#public/channels/teams/verify.js";
 import { readNonEmptyString } from "#shared/guards.js";
 import { parseJsonObject, type JsonObject } from "#shared/json.js";
 import { defineChannel, POST, type Channel } from "#public/definitions/channel.js";
@@ -121,10 +122,6 @@ export interface TeamsChannelState {
 }
 
 /** Teams channel credentials. */
-export interface TeamsChannelCredentials extends TeamsCredentials {
-  /** Custom inbound webhook verifier. When supplied, replaces Bot Connector JWT validation. */
-  readonly webhookVerifier?: TeamsWebhookVerifier;
-}
 
 /**
  * Target accepted by `receive(teams, { target })` for proactive sessions.
@@ -158,7 +155,6 @@ export type TeamsInboundResult = {
 } | null;
 
 /** Sync or async {@link TeamsInboundResult}. */
-export type TeamsInboundResultOrPromise = TeamsInboundResult | Promise<TeamsInboundResult>;
 
 /** Result of a Teams HITL submission authorization hook. Return `null` to reject. */
 export type TeamsAnswerResult = { readonly auth: SessionAuthContext | null } | null;
@@ -167,7 +163,6 @@ export type TeamsAnswerResult = { readonly auth: SessionAuthContext | null } | n
 export type TeamsInvokeResult = Record<string, unknown> | Response | null | undefined;
 
 /** Sync or async {@link TeamsInvokeResult}. */
-export type TeamsInvokeResultOrPromise = TeamsInvokeResult | Promise<TeamsInvokeResult>;
 
 type TeamsEventHandler<T extends SessionEvent["type"]> = (
   event: ChannelEventOf<T>,
@@ -210,7 +205,7 @@ export interface TeamsChannelConfig {
   onMessage?(
     ctx: TeamsInboundMessageContext,
     message: TeamsMessageActivity,
-  ): TeamsInboundResultOrPromise;
+  ): TeamsInboundResult | Promise<TeamsInboundResult>;
 
   /** Authorizes HITL card submissions. Defaults to the submitting Teams user. */
   onAnswers?(
@@ -219,7 +214,10 @@ export interface TeamsChannelConfig {
   ): TeamsAnswerResult | Promise<TeamsAnswerResult>;
 
   /** Handler for non-HITL Teams invoke activities. Return a body, a Response, or `null`/`undefined` for a 200 OK. */
-  onInvoke?(ctx: TeamsContext, activity: TeamsInvokeActivity): TeamsInvokeResultOrPromise;
+  onInvoke?(
+    ctx: TeamsContext,
+    activity: TeamsInvokeActivity,
+  ): TeamsInvokeResult | Promise<TeamsInvokeResult>;
 }
 
 /** Low-level Teams handle exposed to hooks and event handlers. */

@@ -475,7 +475,15 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       "46": "Hooks now receive the v27 fact and session context contracts; rebuild the extension.",
     },
   },
-  skill: { current: 3, supported: [1, 2, 3], dropped: {} },
+  skill: {
+    current: 4,
+    supported: [4],
+    dropped: {
+      "1": "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
+      "2": "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
+      "3": "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
+    },
+  },
   dynamicSkill: {
     current: 39,
     supported: [39],
@@ -520,7 +528,14 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       "38": "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
     },
   },
-  instructions: { current: 2, supported: [1, 2], dropped: {} },
+  instructions: {
+    current: 3,
+    supported: [3],
+    dropped: {
+      "1": "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
+      "2": "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
+    },
+  },
   dynamicInstructions: {
     current: 40,
     supported: [40],
