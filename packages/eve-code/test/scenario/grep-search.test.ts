@@ -431,8 +431,50 @@ test("canonical grep executes native search modes and rejects errors without swa
       sandbox,
     );
     assert.equal(bounded.truncated, true);
+    assert.equal(bounded.matchCount, 1);
+    assert.match(bounded.content, /longline/u);
     assert.match(bounded.content, /Output truncated/u);
+    await writeFile(join(root, "context.txt"), "shared-token\nnear\nfar1\nfar2\nshared-token\n");
+    const context = await executeGrepSearch(
+      { context: 1, outputMode: "content", path: "context.txt", pattern: "shared-token" },
+      sandbox,
+    );
+    const native = await sandbox.run({
+      command: buildSearchCommand({
+        contextLines: 1,
+        glob: undefined,
+        ignoreCase: false,
+        limit: 50,
+        literal: true,
+        outputMode: "content",
+        path: join(root, "context.txt"),
+        pattern: "shared-token",
+      }).replace("--json", "--null"),
+    });
+    assert.equal(
+      context.content,
+      processGrepOutput({ limit: 50, outputMode: "content", path: root, stdout: native.stdout })
+        .content,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("home-scoped grep paths fail with workspace guidance before any command", async () => {
+  let commands = 0;
+  await assert.rejects(
+    executeGrepSearch(
+      { pattern: "guide", path: "$HOME/.agents/skills" },
+      {
+        resolvePath: () => "/workspace",
+        async run() {
+          commands += 1;
+          return { stdout: "", stderr: "", exitCode: 0 };
+        },
+      },
+    ),
+    /limited to the sandbox workspace/u,
+  );
+  assert.equal(commands, 0);
 });

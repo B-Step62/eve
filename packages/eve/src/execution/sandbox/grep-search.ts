@@ -75,6 +75,15 @@ export async function executeGrepSearch(
   sandbox: WorkspaceSandbox,
   abortSignal?: AbortSignal,
 ): Promise<GrepSearchResult> {
+  if (
+    input.path === "$HOME" ||
+    input.path?.startsWith("$HOME/") ||
+    input.path?.startsWith("${HOME}/")
+  ) {
+    throw new Error(
+      "grep is limited to the sandbox workspace; $HOME paths are not supported. Choose a workspace path or use read_file/glob for home-scoped files.",
+    );
+  }
   const path = assertNoParentSegments(sandbox.resolvePath(input.path ?? ""), input.path);
   const { path: searchRealPath } = await resolveInWorkspace(
     sandbox,
@@ -111,6 +120,7 @@ export async function executeGrepSearch(
   }
   return processGrepOutput({
     commandTruncated,
+    contextLines: input.context ?? 0,
     limit,
     outputMode,
     path,
@@ -203,6 +213,7 @@ export function buildPosixGrepCommand(input: GrepCommandInput): string {
 
 export function processGrepOutput(input: {
   readonly commandTruncated?: boolean;
+  readonly contextLines?: number;
   readonly limit: number;
   readonly outputMode: GrepOutputMode;
   readonly path: string;
@@ -215,6 +226,7 @@ export function processGrepOutput(input: {
   let contentBytes = 0;
   let matchCount = 0;
   let returnedRows = 0;
+  let previousLocation: { path: string; number: number } | undefined;
   let truncated = input.commandTruncated === true;
 
   const appendLine = (line: string): boolean => {
@@ -245,6 +257,19 @@ export function processGrepOutput(input: {
         input.commandTruncated === true && index === rawLines.length - 1,
       );
       if (normalized.skip) continue;
+      if ((input.contextLines ?? 0) > 0 && normalized.location !== undefined) {
+        if (
+          previousLocation &&
+          (previousLocation.path !== normalized.location.path ||
+            normalized.location.number > previousLocation.number + 1)
+        ) {
+          if (!appendLine("--")) {
+            truncated = true;
+            break;
+          }
+        }
+        previousLocation = normalized.location;
+      }
       line = normalized.line;
       isMatch = normalized.isMatch;
     }
@@ -293,16 +318,20 @@ export function processGrepOutput(input: {
   };
 }
 
-function normalizeContentLine(
-  line: string,
-  partial = false,
-): { isMatch: boolean; line: string; skip?: boolean } {
+interface ContentLine {
+  isMatch: boolean;
+  line: string;
+  skip?: boolean;
+  location?: { path: string; number: number };
+}
+
+function normalizeContentLine(line: string, partial = false): ContentLine {
   if (line.startsWith("{")) {
     let record: unknown;
     try {
       record = JSON.parse(line);
     } catch (error) {
-      if (partial) return { isMatch: false, line: "", skip: true };
+      if (partial) return partialContentLine(line);
       throw error;
     }
     if (record !== null && typeof record === "object" && "type" in record && "data" in record) {
@@ -321,6 +350,7 @@ function normalizeContentLine(
       return {
         isMatch: record.type === "match",
         line: `${path}${separator}${data.line_number}${separator}${content}`,
+        location: { path, number: data.line_number },
       };
     }
   }
@@ -337,6 +367,39 @@ function normalizeContentLine(
   return {
     isMatch: kind === ":",
     line: `${path}${kind}${lineNumber}${kind}${content}`,
+  };
+}
+
+// The byte cap can cut a JSON record inside its line text, before rg emits
+// line_number. Keep the confirmed match and a bounded preview without inventing
+// a position or allocating the rest of a minified line.
+function partialContentLine(line: string): ContentLine {
+  const type = /^\s*\{\s*"type"\s*:\s*"(match|context)"/u.exec(line)?.[1];
+  if (type === undefined) return { isMatch: false, line: "", skip: true };
+  const field = (name: "path" | "lines"): string | undefined => {
+    const match = new RegExp(
+      `"${name}"\\s*:\\s*\\{\\s*"(text|bytes)"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`,
+      "u",
+    ).exec(line);
+    if (match === null) return undefined;
+    const raw = match[2]!.slice(0, MAX_GREP_LINE_BYTES);
+    // A cap can split a JSON escape (at most six characters, e.g. \u1234).
+    for (let trim = 0; trim <= 6 && trim <= raw.length; trim += 1) {
+      try {
+        const value: string = JSON.parse(`"${raw.slice(0, raw.length - trim)}"`);
+        return match[1] === "bytes" ? Buffer.from(value, "base64").toString("utf8") : value;
+      } catch {
+        /* Drop only the incomplete trailing escape. */
+      }
+    }
+    return undefined;
+  };
+  const path = field("path") ?? "[path truncated]";
+  const preview = field("lines") ?? "[line preview truncated]";
+  const number = /"line_number"\s*:\s*(\d+)/u.exec(line)?.[1];
+  return {
+    isMatch: type === "match",
+    line: `${path}:${number ?? "[position truncated]"}:${preview}`,
   };
 }
 
