@@ -28,7 +28,9 @@ describe("locateExtensionMountPackage", () => {
           name: "eve",
           eve: {
             builtInExtensions: {
-              "./self-modification/local": { dist: "dist/src/self-modification/extension" },
+              "./extensions/self-modification/local": {
+                dist: "dist/src/self-modification/extension",
+              },
             },
           },
         }),
@@ -48,7 +50,7 @@ describe("locateExtensionMountPackage", () => {
       packageName: "eve",
       packageRoot,
       sourceRoot: `${packageRoot}/dist/src/self-modification/extension`,
-      specifier: "eve/self-modification/local",
+      specifier: "eve/extensions/self-modification/local",
     });
   });
 
