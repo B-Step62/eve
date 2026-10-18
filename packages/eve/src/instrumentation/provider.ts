@@ -1,3 +1,4 @@
+import type { ConversationEnvironment } from "#shared/conversation-context.js";
 /**
  * The provider contract authored under `agent/instrumentation/`.
  *
@@ -39,9 +40,6 @@ export const PROVIDER = Symbol.for("eve.instrumentation.provider");
 /** Marks a slot the author turned off rather than configured. */
 export const DISABLED = Symbol.for("eve.instrumentation.disabled");
 
-/** Where the agent is running when `setup` fires. */
-import type { ConversationEnvironment } from "#shared/conversation-context.js";
-
 /**
  * Passed to {@link InstrumentationProvider.setup} once at server startup,
  * before any event is published.
@@ -49,6 +47,7 @@ import type { ConversationEnvironment } from "#shared/conversation-context.js";
 export interface InstrumentationSetupContext {
   /** The agent name declared by `defineAgent`. */
   readonly agentName: string;
+  /** Where the agent is running when setup fires. */
   readonly environment: ConversationEnvironment;
   /** Present only when this server was started for a local `eve eval` run. */
   readonly evaluation?: { readonly runId: string };

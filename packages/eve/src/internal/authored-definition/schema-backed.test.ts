@@ -398,7 +398,7 @@ describe("normalizeToolDefinition", () => {
     const entry = normalizeToolDefinition(dynamicTools, FAILURE_MESSAGE);
     expect(entry.kind).toBe("dynamic-tool");
     if (entry.kind !== "dynamic-tool") throw new Error("expected dynamic-tool");
-    expect(entry.eventNames).toEqual(["session.started"]);
+    expect(entry.eventNames).toEqual(["beforeSession"]);
   });
 
   it("returns a dynamic-tool entry for a defineDynamic({ events }) export with a single entry", () => {
@@ -416,7 +416,7 @@ describe("normalizeToolDefinition", () => {
     const entry = normalizeToolDefinition(dynamicTool, FAILURE_MESSAGE);
     expect(entry.kind).toBe("dynamic-tool");
     if (entry.kind !== "dynamic-tool") throw new Error("expected dynamic-tool");
-    expect(entry.eventNames).toEqual(["session.started"]);
+    expect(entry.eventNames).toEqual(["beforeSession"]);
   });
 
   it("rejects a defineDynamic tool export carrying a fallback", () => {
@@ -445,6 +445,6 @@ describe("normalizeToolDefinition", () => {
     const entry = normalizeToolDefinition(dynamicTools, FAILURE_MESSAGE);
     expect(entry.kind).toBe("dynamic-tool");
     if (entry.kind !== "dynamic-tool") throw new Error("expected dynamic-tool");
-    expect(entry.eventNames).toEqual(expect.arrayContaining(["session.started", "step.started"]));
+    expect(entry.eventNames).toEqual(expect.arrayContaining(["beforeSession", "beforeModel"]));
   });
 });

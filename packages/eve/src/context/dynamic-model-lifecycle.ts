@@ -1,4 +1,6 @@
-import { dynamicEventKey, invokeDynamicResolver } from "#dynamic/definition.js";
+import type { PublicAgentDynamicModelDefinition } from "#shared/agent-definition.js";
+import type { DynamicResolveContext } from "#dynamic/definition.js";
+import { dynamicEventKey } from "#dynamic/definition.js";
 import type { ModelMessage } from "ai";
 
 import { buildResolveContext } from "#context/dynamic-resolve-context.js";
@@ -75,19 +77,15 @@ export async function resolveDynamicModel(input: {
       dynamicModel: input.dynamicModel,
       scope: input.scope,
     });
-    const handler = definition.events[dynamicEventKey(input.event.type)];
-
-    if (handler === undefined) {
-      throw new Error(
-        `Dynamic model resolver is missing its compiled "${input.event.type}" handler.`,
-      );
-    }
-
     input.abortSignal?.throwIfAborted();
-    const rawResult = await invokeDynamicResolver(definition.events, input.event, {
+    const rawResult = await invokeModel(definition, input.event, {
       ...buildResolveContext(input.ctx, input.messages),
       abortSignal: input.abortSignal,
     });
+    if (rawResult === undefined)
+      throw new Error(
+        `Dynamic model resolver needs a "${dynamicEventKey(input.event.type)}" handler that returns a model selection or null.`,
+      );
     input.abortSignal?.throwIfAborted();
     const selection = await resolveRuntimeModelSelection({
       durability: input.event.type === "step.started" ? "live" : "durable",
@@ -122,4 +120,21 @@ function setSelectionForEvent(
   const durableKey = durableKeyForEvent(eventType);
   if (durableKey === undefined) return;
   ctx.set(durableKey, selection?.reference ?? null);
+}
+
+// A switch preserves the correlation between each typed key and its fact.
+// Runtime tool/skill registries use widened handler maps, unlike model definitions.
+function invokeModel(
+  definition: PublicAgentDynamicModelDefinition,
+  point: DynamicScopeEvent,
+  ctx: DynamicResolveContext,
+) {
+  switch (point.type) {
+    case "session.started":
+      return definition.events.beforeSession?.(point.fact, ctx);
+    case "turn.started":
+      return definition.events.beforeTurn?.(point.fact, ctx);
+    case "step.started":
+      return definition.events.beforeModel?.(point.fact, ctx);
+  }
 }

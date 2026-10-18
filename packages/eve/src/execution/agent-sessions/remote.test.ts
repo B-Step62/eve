@@ -21,7 +21,7 @@ describe("resolveRemoteAgentForAction", () => {
     const definition = {
       dynamic: {
         eventNames: ["beforeSession"],
-        events: { "session.started": () => null },
+        events: { beforeSession: () => null },
         logicalPath: "subagents/research.ts",
         sourceId: "subagents/research.ts",
         sourceKind: "module",

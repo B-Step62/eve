@@ -371,7 +371,7 @@ A dynamic connection, tool, or skill whose name matches an **authored** one **ov
 
 ### Events
 
-| Event           | Resolver runs                                            | Tools available for             |
+| Resolver key    | Resolver runs                                            | Tools available for             |
 | --------------- | -------------------------------------------------------- | ------------------------------- |
 | `beforeSession` | At session start; may be redelivered during recovery¹    | Every model call in the session |
 | `beforeTurn`    | Once per turn; may re-run to restore a missing callback¹ | Every model call in the turn    |
@@ -409,7 +409,7 @@ export default defineDynamic({
         execute: ({ sql }) => runReadOnly(sql),
       }),
     }),
-    // On each turn, re-resolve. Replaces this file's session.started tools for later calls.
+    // On each turn, re-resolve. Replaces this file's beforeSession tools for later calls.
     beforeTurn: async (_event, ctx) => ({
       search: defineTool({
         description: "Search the catalog.",

@@ -76,7 +76,7 @@ const EXT_TREE: Readonly<Record<string, string>> = {
     'import extension from "../extension.js";',
     "export default defineDynamic({",
     "  events: {",
-    '    "session.started": async () => ({',
+    '    "beforeSession": async () => ({',
     "      quote: defineTool({",
     '        description: "Quote the configured API key.",',
     '        inputSchema: { type: "object", properties: {}, additionalProperties: false },',
@@ -168,7 +168,7 @@ const EXT_TREE: Readonly<Record<string, string>> = {
     'import { defineDynamic, defineSkill } from "eve/skills";',
     "export default defineDynamic({",
     "  events: {",
-    '    "session.started": async () => ({',
+    '    "beforeSession": async () => ({',
     "      escalation: defineSkill({",
     '        description: "Escalate an incident.",',
     '        markdown: "# Escalation\\nPage the on-call.",',
@@ -183,7 +183,7 @@ const EXT_TREE: Readonly<Record<string, string>> = {
     'import { defineDynamic, defineInstructions } from "eve/instructions";',
     "export default defineDynamic({",
     "  events: {",
-    '    "session.started": async () =>',
+    '    "beforeSession": async () =>',
     '      defineInstructions({ markdown: "Treat CRM results as authoritative." }),',
     "  },",
     "});",
@@ -269,7 +269,8 @@ describe("mounted extension installed under node_modules", () => {
     });
     const app = await createAppRoot("eve-mounted-extension-installed-", {
       files: {
-        "agent/agent.mjs": 'export default { model: "openai/gpt-5.4" };\n',
+        "agent/agent.mjs": `export default { model: "openai/gpt-5.4" };
+`,
         "agent/instructions.md": "You are a precise assistant.\n",
         "agent/subagents/manager/agent.mjs": [
           "export default {",
@@ -449,7 +450,8 @@ describe("mounted extension installed under node_modules", () => {
     ).toBe(true);
     const app = await createAppRoot("eve-mounted-extension-chunks-", {
       files: {
-        "agent/agent.mjs": 'export default { model: "openai/gpt-5.4" };\n',
+        "agent/agent.mjs": `export default { model: "openai/gpt-5.4" };
+`,
         "agent/instructions.md": "You are a precise assistant.\n",
         "agent/extensions/crm.mjs": [
           `import crm from "${PACKAGE_NAME}";`,

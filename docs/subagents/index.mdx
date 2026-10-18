@@ -135,7 +135,7 @@ export default defineDynamic({
 });
 ```
 
-Resolvers run at `session.started` or `turn.started`; `step.started` is not
+Resolvers run at `beforeSession` or `beforeTurn`; `beforeModel` is not
 supported for subagents. A nullish result (`null` or `undefined`) removes the
 subagent's description and tool definition from the model-visible surface.
 The subagent's filesystem manifest is always compiled; a non-nullish result injects

@@ -63,10 +63,10 @@ Tool-wide authoring helpers and types such as `defineTool`, `defineWorkflowTool`
 
 `webSearch({ provider })` selects `"exa"`, `"parallel"`, `"browserbase"`, or `"native"` for AI Gateway search using the Gateway model's credentials. `"native"` uses the model vendor's own search for OpenAI, Anthropic, and Gemini 3 and later models; set `fallback` to `"exa"`, `"parallel"`, or `"browserbase"` to give other Gateway models search, which they otherwise don't get. Direct provider models keep their native search implementation when supported. See [Built-in tools](../concepts/built-in-tools#web_search) for setup and provider behavior.
 
-`defineInstructions` accepts `{ content: string, role?: "system" | "user" }`; omitted `role` means `"system"`. Its `eve/instructions` version of `defineDynamic` accepts only `session.started` and `turn.started` handlers returning `defineInstructions(...)` or `null`. The legacy `{ markdown: string }` definition remains available as a deprecated system-role form.
+`defineInstructions` accepts `{ content: string, role?: "system" | "user" }`; omitted `role` means `"system"`. Its `eve/instructions` version of `defineDynamic` accepts only `beforeSession` and `beforeTurn` handlers returning `defineInstructions(...)` or `null`. The legacy `{ markdown: string }` definition remains available as a deprecated system-role form.
 
-The `eve/connections` version of `defineDynamic` accepts `session.started` and
-`turn.started` handlers returning one MCP or OpenAPI connection definition, a
+The `eve/connections` version of `defineDynamic` accepts `beforeSession` and
+`beforeTurn` handlers returning one MCP or OpenAPI connection definition, a
 map of connection definitions, or `null`. Its resolver context exposes
 authenticated session identity and `channel.kind`, but not conversation history,
 delivery payloads, tool inputs, model outputs, or free-form channel metadata. An

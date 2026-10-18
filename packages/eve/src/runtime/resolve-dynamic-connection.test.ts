@@ -34,7 +34,7 @@ describe("resolveDynamicConnectionDefinition", () => {
       resolveDynamicConnectionDefinition(definition, moduleMap, undefined),
     ).resolves.toMatchObject({
       eventNames: ["beforeSession"],
-      events: { "session.started": handler },
+      events: { beforeSession: handler },
       slug: "accounts",
     });
   });

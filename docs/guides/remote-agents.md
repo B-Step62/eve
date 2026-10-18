@@ -52,7 +52,7 @@ export default defineDynamic({
 });
 ```
 
-Dynamic remote subagents support `session.started` and `turn.started`. The
+Dynamic remote subagents support `beforeSession` and `beforeTurn`. The
 returned definition may select different remote settings at either scope. eve
 resolves function-valued URLs when the event handler runs. Auth and headers
 remain lazy and resolve before each outbound request without entering durable

@@ -178,7 +178,7 @@ export type DynamicSentinel<TResult = unknown> = {
  *
  * export default defineDynamic({
  *   events: {
- *     "session.started": async (event, ctx) => ({
+ *     "beforeSession": async (event, ctx) => ({
  *       export: defineTool({
  *         description: "Export data",
  *         inputSchema: z.object({ format: z.string() }),
@@ -228,20 +228,4 @@ export function isDynamicSentinel(value: unknown): value is DynamicSentinel {
     value !== null &&
     (value as { kind?: unknown }).kind === DYNAMIC_SENTINEL_KIND
   );
-}
-
-/** Calls the matching typed handler without discarding its discriminant. */
-export function invokeDynamicResolver<TResult>(
-  events: DynamicEvents<TResult>,
-  point: DynamicScopeEvent,
-  ctx: DynamicResolveContext,
-): TResult | Promise<TResult> | undefined {
-  switch (point.type) {
-    case "session.started":
-      return events.beforeSession?.(point.fact, ctx);
-    case "turn.started":
-      return events.beforeTurn?.(point.fact, ctx);
-    case "step.started":
-      return events.beforeModel?.(point.fact, ctx);
-  }
 }

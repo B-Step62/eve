@@ -49,8 +49,18 @@ export function createEditableMarkerTool(key: string, version: string) {
 `;
 }
 
-const EDITABLE_TOOLS_SOURCE =
-  'import { defineDynamic } from "eve/tools";\nimport { createEditableMarkerTool } from "../lib/editable-factory.ts";\n\nexport default defineDynamic({\n  events: {\n    "beforeSession": () => ({\n      alpha_marker: createEditableMarkerTool("alpha", "v1"),\n      beta_marker: createEditableMarkerTool("beta", "v1"),\n    }),\n  },\n});\n';
+const EDITABLE_TOOLS_SOURCE = `import { defineDynamic } from "eve/tools";
+import { createEditableMarkerTool } from "../lib/editable-factory.ts";
+
+export default defineDynamic({
+  events: {
+    "beforeSession": () => ({
+      alpha_marker: createEditableMarkerTool("alpha", "v1"),
+      beta_marker: createEditableMarkerTool("beta", "v1"),
+    }),
+  },
+});
+`;
 
 const EDITABLE_DYNAMIC_DESCRIPTOR: ScenarioAppDescriptor = {
   ...TRANSACTIONAL_REBUILD_DESCRIPTOR,
