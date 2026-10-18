@@ -1,7 +1,7 @@
 ---
 issue: "None (maintainer-requested research)"
 status: draft
-last_updated: "2026-10-17"
+last_updated: "2026-10-18"
 ---
 
 # A smaller public surface for 1.0
@@ -215,6 +215,9 @@ custom UI derives the same answer from the view. MCP keeps its wire names but dr
 `authorization_required`, since a sign-in is an interaction like any other; `eve invoke` uses the
 same five values.
 
+`DeliveryResult.status` excludes `"working"`: a settled result cannot still be making progress.
+The live `requestStatus(view, deliveryId)` selector retains that value.
+
 **Why it's useful.**
 
 - Apps get the answer to the question they actually ask ("what happened to my message?") without
@@ -232,11 +235,11 @@ session ended, afterwards that the request completed. The upgrade guide calls th
 Most apps import from whichever path their editor suggested first:
 
 ```ts
-import type { CallRow, SessionView, SessionStreamEvent } from "eve/client";
+import type { SessionStarted, SessionView } from "eve/client";
 import { isChannel } from "eve/instrumentation";
 ```
 
-Both work, but `CallRow` and `SessionView` belong to `eve/events`, and `isChannel` to
+Both work, but `SessionStarted` and `SessionView` belong to `eve/events`, and `isChannel` to
 `eve/channels`. The biggest source is `eve/client`, which re-exports all 175 type names of
 `eve/events`. That made sense in v26, when the stream types lived in the server package and a
 browser app couldn't import them safely; `eve/events` has no runtime dependencies now.
@@ -244,7 +247,7 @@ browser app couldn't import them safely; `eve/events` has no runtime dependencie
 **The change.** Each name is exported from the one entry point whose docs describe it:
 
 ```ts
-import type { CallRow, SessionView } from "eve/events";
+import type { SessionStarted, SessionView } from "eve/events";
 import type { SessionStreamEvent } from "eve/client";
 import { isChannel } from "eve/channels";
 ```
@@ -288,8 +291,8 @@ Vercel OIDC token. The other collisions go:
 **Today.** Two groups hold most of the names that nothing outside eve uses.
 
 `eve/setup` (77 names) and `eve/setup/scaffold` (54) are the internals of the `eve` CLI's setup
-wizard. Nothing outside the eve repository imports `eve/setup`. vercel-site's Agent Builder uses
-five exports from the scaffold to generate projects.
+wizard. Nothing outside the eve repository imports `eve/setup`. Known downstream scaffold consumers use
+five exports to generate projects.
 
 The ten platform channel entries export 559 names. Next to what an app needs (the channel
 factory, its config and state types, the handler context), they export the channel's own
@@ -306,7 +309,7 @@ import {
 ```
 
 **The change.** `eve/setup` stops being exported, and the scaffold moves to
-`eve/internal/scaffold`, exporting only what Agent Builder uses. Each platform entry exports the
+`eve/internal/scaffold`, exporting only the downstream scaffolding contract. Each platform entry exports the
 channel factory, its default auth and continuation-token helpers, and the types an app writes:
 config, credentials, state, handler context, handle, thread, and payloads. Types that only a
 removed helper used, such as each platform's `*VerifyOptions`, leave with it. Inside a handler,
@@ -354,7 +357,7 @@ for Telegram, Teams, Discord, Twilio, and GitHub can come back if apps ask for t
   `contentPhase`) go too; `FACT_CATALOG` and its descriptor types stay. `foldEvents`,
   `emptySessionView`, and `emptyPreviews` stay as the public way to fold a stream, and components
   read the frontend store's `view` rather than folding themselves.
-- **Built-in tools.** The 14 `…_INPUT_SCHEMA` / `…_OUTPUT_SCHEMA` constants. The documented way to
+- **Built-in tools.** The 12 public `…_INPUT_SCHEMA` / `…_OUTPUT_SCHEMA` constants. The documented way to
   customize a built-in tool, spreading it (`{ ...bash, description }`), already copies its
   schemas.
 - **Small helpers.** `escapeAuthChallengeParameter` and `readOAuthResourceOptions` (only the MCP
@@ -482,7 +485,8 @@ const { answers } = await decide({
 
 `decide` takes `model`, `state`, `questions`, `maxRetries`, and `signal`, and returns `answers`
 and `usage`. A model is an ID or any provider object with a `provider` and a `modelId`, so a
-provider on a newer model specification still typechecks. The AI SDK still validates, retries,
+provider on a newer model specification still typechecks. It must expose a `doDecide` or
+`doEvaluate` implementation; identity fields alone are not a usable model. The AI SDK still validates, retries,
 and resolves models at runtime, as [evaluation model routing](./jev-decision-models.md) set out.
 `AgentReasoningDefinition` lists its levels rather than deriving them from the AI SDK.
 
@@ -571,7 +575,7 @@ cleared by a grant records `clearedBy: { grant: { interactionId } }`, pointing a
 - Sharing a grant between tools, such as a rollback tool that skips its prompt once a deploy was
   approved.
 - Grants from approvals `once` didn't ask for. Today any approval adds a grant; now only a prompt
-  `once` asked does. internal-agents' clickstate connection asks on its own and then checks its
+  `once` asked does. a downstream connection asks on its own and then checks its
   grant; it moves to returning `once()`'s result where it asks today.
 - Logic over every grant in the session, such as "if any write tool was approved, let reads
   through".
@@ -696,8 +700,8 @@ channel's in every context. Dynamic connection resolvers keep only `kind`, as no
 <details>
 <summary>Memory and dynamic resolver keys say what they do</summary>
 
-A memory provider's hooks are keyed by v26 event names, which hooks elsewhere no longer accept, and
-none of them is really a subscription to that event:
+A memory provider's keys mix the live `turn.started` event name with three retired v26 names.
+None is really a subscription to that event:
 
 ```ts
 // today
@@ -802,8 +806,8 @@ it: `AskedInteraction` from a message result, `ReaderInteraction` from the view,
 <details>
 <summary>Other consolidations</summary>
 
-- **Connections.** One ownership field, `principalType: "app" | "user"`, replaces the deprecated
-  `credentialOwner` aliases. `ConnectionAuthProvider` merges into `AuthorizationDefinition`.
+- **Connections.** One ownership field, `principalType: "app" | "user"`, replaces
+  `credentialOwner`. This reverses the deprecation at #4855, where `credentialOwner` was preferred. `ConnectionAuthProvider` merges into `AuthorizationDefinition`.
 - **Sandbox.** `RuntimeSandboxSession` and `RuntimeSandboxSessionFor<S>` merge into one
   `RuntimeSandboxSession<S = SandboxSession>`. The eight method option types stay, since provider
   authors implement them and wrappers build them as values.
@@ -900,9 +904,9 @@ Pre-1.0, a deprecated name has no reason to ship:
 - **Prompt text.** Every definition that carries prompt text calls it `content`: skills and
   markdown schedules follow instructions.
 - **Abort signals.** What eve hands you calls it `abortSignal`, as `ctx.abortSignal` does, and
-  options you pass call it `signal`, as `fetch` does. Six fields break the rule and flip: sandbox
-  `delete` and `removePath` options take `signal`, and eval contexts and session events, a memory
-  backend's read input, and Linear's handle carry `abortSignal`.
+  options you pass call it `signal`, as `fetch` does. All eve-owned sandbox operation options
+  use `signal`, including run/spawn and file I/O. Eval contexts and memory-backend inputs carry
+  `abortSignal`. Linear activity `signal` is protocol data, not cancellation, and keeps its name.
 - **Outbound auth.** `basic` from `eve/agents/auth` becomes `httpBasic`, the name of the inbound
   verifier in `eve/channels/auth`.
 
