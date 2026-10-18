@@ -9,11 +9,14 @@ import type { JsonObject, JsonValue } from "#shared/json.js";
  */
 export type DecisionModel =
   | string
-  | {
+  | ({
       readonly provider: string;
       readonly modelId: string;
       readonly specificationVersion: string;
-    };
+    } & (
+      | { readonly doDecide: (...args: never[]) => unknown }
+      | { readonly doEvaluate: (...args: never[]) => unknown }
+    ));
 
 /** Text, an object, or ordered multimodal parts shared by every question. */
 export type DecisionState = string | JsonObject | readonly DecisionStatePart[];

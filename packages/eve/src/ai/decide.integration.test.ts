@@ -101,6 +101,7 @@ describe("decide", () => {
   it("rejects identity-only objects and unsupported model versions before provider I/O", async () => {
     await expect(
       decide({
+        // @ts-expect-error Identity alone is not a provider implementation.
         model: { provider: "fixture", modelId: "missing", specificationVersion: "v4" },
         state,
         questions,
