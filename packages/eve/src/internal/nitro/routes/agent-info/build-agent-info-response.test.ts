@@ -18,10 +18,10 @@ import { defineMemory } from "#public/memory/index.js";
 describe("buildAgentInfoResponse", () => {
   it("keeps the public inspection and health contracts aligned with their validators", () => {
     type ValidatedInfo = ReadonlyDeep<z.output<typeof AgentInfoResultSchema>>;
-    expectTypeOf<AgentInfoResult>().toMatchTypeOf<ValidatedInfo>();
-    expectTypeOf<ValidatedInfo>().toMatchTypeOf<AgentInfoResult>();
-    expectTypeOf<HealthResult>().toMatchTypeOf<z.output<typeof HealthResultSchema>>();
-    expectTypeOf<z.output<typeof HealthResultSchema>>().toMatchTypeOf<HealthResult>();
+    // Flatten interfaces and intersections while preserving keys and modifiers.
+    type Shape<T> = T extends object ? { [K in keyof T]: Shape<T[K]> } : T;
+    expectTypeOf<Shape<AgentInfoResult>>().toEqualTypeOf<Shape<ValidatedInfo>>();
+    expectTypeOf<HealthResult>().toEqualTypeOf<z.output<typeof HealthResultSchema>>();
   });
 
   it("projects v4 exclusively from the effective compiled graph", async () => {

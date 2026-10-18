@@ -39,7 +39,7 @@ using another entry does not require them.
 | `eve/vue`                                  | `vue` 3.5 or later in v3               |
 | `eve/svelte`                               | `svelte` 5                             |
 | `eve/next`                                 | `next` 16 and `react` 19               |
-| `eve/vite`                                 | `vite` 8.3.1 or later in v8            |
+| `eve/sveltekit`, `eve/tanstack`            | `vite` 8.3.1 or later in v8            |
 | `eve/nuxt`                                 | `@nuxt/kit` 4 and `@nuxt/schema` 4     |
 | `@vercel/connect/eve` with eve connections | `@vercel/connect` 2.5.2 or later in v2 |
 

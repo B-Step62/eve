@@ -56,15 +56,21 @@ describe("compiled vendor assets", () => {
     await mkdir(destinationRoot);
     await writeFile(
       join(upstream, "dist", "index.d.ts"),
-      'export type { Item } from "./nested/chunk.js";',
+      `/// <reference path="./ambient.d.ts" />
+export type { Item } from "./nested/chunk.js";
+type Note = 'request from "./not-an-import"';`,
     );
     await writeFile(
       join(upstream, "dist", "nested", "chunk.d.ts"),
-      'import type { Value } from "external-types"; export interface Item { value: Value; next?: import("./cycle.js").Next }',
+      'export interface Item { value: import("external-types").Value; meta: VendorFixture.Metadata; next?: import("./cycle.js").Next }',
     );
     await writeFile(
       join(upstream, "dist", "nested", "cycle.d.ts"),
       'export type Next = import("../index.js").Item;',
+    );
+    await writeFile(
+      join(upstream, "dist", "ambient.d.ts"),
+      "declare namespace VendorFixture { interface Metadata { declaredByReference: true } }",
     );
     const { createDeclarationCopier } = await import(
       pathToFileURL(join(EVE_PACKAGE_ROOT, "scripts", "vendor-compiled", "_shared.mjs")).href
@@ -83,7 +89,7 @@ describe("compiled vendor assets", () => {
     });
     await writeFile(
       join(destinationRoot, "consumer.ts"),
-      'import type { Item } from "./index.js"; const item: Item = { value: "ok" }; const value: string = item.value;',
+      'import type { Item } from "./index.js"; const item: Item = { value: "ok", meta: { declaredByReference: true } }; const value: string = item.value; const referenced: true = item.meta.declaredByReference;',
     );
     await execFileAsync(process.execPath, [
       join(EVE_PACKAGE_ROOT, "..", "..", "node_modules", "typescript", "bin", "tsc"),
