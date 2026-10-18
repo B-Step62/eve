@@ -44,7 +44,7 @@ using another entry does not require them.
 | Chat SDK, Linq, and Photon channels        | `chat` 4 for their SDK-backed handles                 |
 | `eve/channels/linq`                        | Also `@linqapp/sdk` 0.47.1 or later in v0.47          |
 | `eve/sandbox/just-bash`                    | `just-bash` 3.6 or later in v3                        |
-| `@vercel/connect/eve` with eve connections | `@vercel/connect` 2.2 or later in v2                  |
+| `@vercel/connect/eve` with eve connections | `@vercel/connect` 2.5.2 or later in v2                |
 
 Connect events additionally require a Connect release that supplies its events bridge.
 The packed-consumer matrix checks every typed public entry with `skipLibCheck: false`,
