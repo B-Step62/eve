@@ -262,9 +262,10 @@ call with the same key, in any process, gets the kept result without running `fn
 start, eve runs the function again: the memo returns the saved tables, and `tableTool` builds the
 same tools, callbacks included.
 
-The rule for authors: questions to the outside world, such as database queries, a router's choice,
-or randomness, go inside a memo. Everything outside a memo must build the same value from the same
-`ctx` and the same memo results.
+The rule for authors: code outside a memo runs again at every evaluation, and only memo results are
+kept. A question to the outside world, such as a database query or a router's choice, goes inside a
+memo when its answer should hold for the key's lifetime. Left outside, it's asked again each time,
+and the value follows whatever it answers.
 
 **Why it's useful.**
 
@@ -276,12 +277,15 @@ or randomness, go inside a memo. Everything outside a memo must build the same v
 - What survives a restart is explicit: memo results, and nothing else. A cold start doesn't query
   the database again to recover its tools.
 
-**The cost.** The rule about code outside a memo is a convention. Nothing stops an `await` or a
-`Math.random()` outside a memo: it runs on every evaluation and its result isn't kept, so a cold
-start can quietly build a different tool, where `main`'s compiler saved every capture
-automatically. eve bounds the damage: after a cold start it compares what the function offers with
-what the session was offered ([After a cold start](#after-a-cold-start)), and in development it
-evaluates each definition twice with its memos fixed and reports any difference.
+**The cost.** Nothing marks what should have been a memo. A query left outside one isn't an error:
+it runs before every model call, it can fail the turn at any of them, and a cold start rebuilds
+from a fresh answer rather than the one the session had, where `main`'s compiler saved every
+capture automatically. Randomness outside a memo is the one real bug. A `Math.random()` or
+`Date.now()` in a tool's name or description gives a different value at every evaluation, so the
+tool is rebuilt before every call and never matches what was offered. eve reports both cases:
+after a cold start it compares what the function offers with what the session was offered
+([After a cold start](#after-a-cold-start)), and in development it evaluates each definition twice
+with its memos fixed and reports any difference.
 
 <details>
 <summary>Memo rules</summary>
@@ -744,7 +748,7 @@ interrupted before its result committed runs again, with the same idempotency ke
 
 eve then compares what the fresh evaluation offers with what the session was offered: tool
 declarations, a connection's URL, instance key, and credential owner, and a remote agent's name and
-URL. A difference means code outside the memos isn't deterministic. The memos are still valid data,
+URL. A difference means code outside the memos answered differently. The memos are still valid data,
 so eve keeps them, offers the new value from this model call on, and logs a diagnostic naming the
 file. Calls already requested from the old version fail, as described above. The comparison is a
 check, not a proof that two callbacks behave the same.
