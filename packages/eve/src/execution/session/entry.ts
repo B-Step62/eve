@@ -173,7 +173,6 @@ export async function bootInitialOwner(
       dynamicSubagentAgentConfig: serializedContext["eve.dynamicSubagentAgentConfig"] as
         | DynamicSubagentAgentConfig
         | undefined,
-      inheritedLimits: input.limits,
       nodeId: serializedBundle.nodeId,
       outputSchema: input.input.outputSchema,
       rootSessionId: readRootSessionId(serializedContext),

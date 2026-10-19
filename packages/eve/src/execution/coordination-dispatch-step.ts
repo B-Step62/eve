@@ -23,10 +23,7 @@ import {
   startTaskRun,
 } from "#execution/tasks/start.js";
 import { readTaskTable, type TaskTable } from "#execution/tasks/table.js";
-import {
-  captureAgentSessionContext,
-  resolveStepAgentLimits,
-} from "#execution/agent-sessions/context.js";
+import { captureAgentSessionContext } from "#execution/agent-sessions/context.js";
 import type { TaskStartedStreamEvent } from "#protocol/message.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import { startTask } from "#harness/session-machine/transitions.js";
@@ -64,11 +61,9 @@ async function dispatchCoordination(
   let nextSession = session;
   const results: RuntimeActionResult[] = [];
   const started: TaskStartedStreamEvent["data"][] = [];
-  const agentLimits = resolveStepAgentLimits(prepared);
-
   const starts = withPrestartedRuns(
     prepared.plan.map((task) => ({
-      agentContext: captureAgentSessionContext(prepared, task.callId, agentLimits),
+      agentContext: captureAgentSessionContext(prepared, task.callId),
       auth: {
         current: prepared.auth,
         initiator: prepared.initiatorAuth,
