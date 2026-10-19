@@ -19,6 +19,7 @@ import {
   serveFile,
 } from "#internal/testing/channel-conformance/harness.js";
 
+const ACCESS_TOKEN = "whatsapp-conformance-token";
 const APP_SECRET = "whatsapp-conformance-app-secret";
 const PHONE_NUMBER_ID = "100000000000001";
 // `.invalid` never resolves, so nothing that bypasses the fake reaches the network.
@@ -40,7 +41,8 @@ interface WhatsAppSend {
 
 /**
  * Drives the real `@chat-adapter/whatsapp` adapter through Meta-signed Cloud
- * API webhooks in a 1:1 chat, wired as eve's registry template wires it.
+ * API webhooks in a 1:1 chat, configured as the Chat SDK docs recommend for an
+ * adapter that can't edit sent messages.
  * Every Graph API call the adapter makes reaches a fake that records it;
  * webhook verification, parsing, media download, and outbound rendering are
  * the adapter's own code.
@@ -116,6 +118,14 @@ export function whatsappDriver(): ChannelDriver {
       };
     }
     if (request.method === "GET" && url.pathname.startsWith("/files/")) {
+      // Meta serves media only to the access token's bearer.
+      if (request.headers.get("authorization") !== `Bearer ${ACCESS_TOKEN}`) {
+        return {
+          body: {},
+          method: `GET ${url.pathname}`,
+          response: new Response("Unauthorized", { status: 401 }),
+        };
+      }
       const file = uploads.get(url.pathname.slice("/files/".length));
       return { body: {}, method: `GET ${url.pathname}`, response: serveFile(file) };
     }
@@ -159,14 +169,16 @@ export function whatsappDriver(): ChannelDriver {
       const bridge = chatSdkChannel({
         adapters: {
           whatsapp: createWhatsAppAdapter({
-            accessToken: "whatsapp-conformance-token",
+            accessToken: ACCESS_TOKEN,
             apiUrl: `https://${GRAPH_HOST}`,
             appSecret: APP_SECRET,
             phoneNumberId: PHONE_NUMBER_ID,
             verifyToken: "whatsapp-conformance-verify-token",
           }),
         },
-        // The rest of this configuration matches apps/docs/registry/channels/chat-sdk-whatsapp.ts.
+        // WhatsApp can't edit, so replies post once (`streaming: false`), and every message
+        // reaches eve (`concurrency`). `resolveInputAuth` and each `send`'s `auth` are the
+        // documented identity wiring that the permission rules need.
         concurrency: "concurrent",
         resolveInputAuth: (event) => userAuth(event.user.userId),
         state: createMemoryState() as StateAdapter,
@@ -226,7 +238,9 @@ function routeHttps(fetch: typeof globalThis.fetch): () => void {
     const request = Object.assign(new EventEmitter(), {
       destroy() {},
       end() {
-        void fetch(target).then(
+        const headers = (options as { readonly headers?: Record<string, string> } | undefined)
+          ?.headers;
+        void fetch(target, { headers }).then(
           async (response) => {
             const bytes = Buffer.from(await response.arrayBuffer());
             callback?.(
