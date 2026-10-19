@@ -12,10 +12,6 @@ interface AcmeSandboxSession extends SandboxSession {
 }
 
 class AcmeSession {
-  constructor(base: SandboxSession) {
-    Object.assign(this, base);
-  }
-
   async exists(path: string): Promise<boolean> {
     return path === "present.txt";
   }
@@ -81,7 +77,7 @@ describe("buildBaseToolContext – getSandbox abort binding", () => {
       },
     ).environment();
     const sandbox = mockSandbox();
-    const providerSession = new AcmeSession(sandbox.session) as unknown as AcmeSandboxSession;
+    const providerSession: AcmeSandboxSession = Object.assign(new AcmeSession(), sandbox.session);
     const runtime = await createTestRuntime();
 
     await runtime.runAsSession(
