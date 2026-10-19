@@ -22,11 +22,30 @@ Today a dynamic value is a set of handlers on lifecycle events, and that has thr
 - **Hooks can watch, but can barely act.** Cancelling the turn is the only command a hook has. A
   hook that throws is logged and the turn continues, so it can't enforce a check.
 
-The plan replaces the handlers with one function, and adds `ctx.memo` for what the function learns
-from the outside world:
+A tool set per tenant shows the first two on `main`:
 
 ```ts
-// agent/tools/crm.ts
+// agent/tools/crm.ts (today)
+export default defineDynamic({
+  events: {
+    // `session.started` would keep the first caller's tenant, so this queries again every turn.
+    "turn.started": async (_event, ctx) => {
+      const tenantId = ctx.session.auth.current?.attributes.tenantId;
+      if (!tenantId) return null;
+      const rows = await db.crmTools(tenantId);
+      // eve's compiler rewrites crmTool's callbacks to save the `row` each one captures.
+      return Object.fromEntries(rows.map((row) => [row.slug, crmTool(row)]));
+    },
+  },
+});
+```
+
+It has to pick an event, it can't say "once per tenant", and its callbacks survive a restart only
+because a build step rewrote them. The plan replaces the handlers with one function, and adds
+`ctx.memo` for what the function learns from the outside world:
+
+```ts
+// agent/tools/crm.ts (proposed)
 export default defineDynamic(async (ctx) => {
   const tenantId = ctx.session.auth.current?.attributes.tenantId;
   if (!tenantId) return null;
@@ -67,16 +86,6 @@ such as `ctx.cancel()` and `ctx.compact()`.
 under the name _reactions_, with a three-callback API: `select`, `record`, and `render`. This plan
 replaces that API with one function, `ctx.memo`, and `ctx.once`. The prototype's runner, retry
 identities, command queue, and remote-child bindings carry over.
-
-## How to read this
-
-[The main changes](#the-main-changes) each explain what happens today, what changes, and why it
-helps, with the cost where there is one. Details are collapsed under each.
-[How it fits together](#how-it-fits-together) describes the one model underneath them.
-[When things run](#when-things-run) collects the timing and recovery rules.
-[Examples from main's docs](#examples-from-mains-docs) rewrites the examples in today's guides.
-[Alternatives](#alternatives) shows other designs on the same examples, starting with one close to
-today's events, and [Scope](#scope) lists what the first change includes.
 
 ## The main changes
 
