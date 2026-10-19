@@ -6,9 +6,9 @@ last_updated: "2026-10-17"
 
 # Lazy Vercel Connect provisioning with project-local UIDs
 
-## Decision
+## Objective
 
-Keep registry-authored connections unchanged:
+A registry connection currently works by syncing the eve source with a manual setup process that provisions a Vercel connector to the project.
 
 ```ts
 import { connect } from "@vercel/connect/eve";
@@ -20,15 +20,61 @@ export default defineMcpClientConnection({
 });
 ```
 
-For eligible managed OAuth connections, `"linear"` will be treated as a **project UID**: a name local to the deploying project, not a team-wide connector identifier. On first use, Connect will resolve the connector this project already maps to that name, or provision a new one for the project, and the adapter will use the returned connector ID for every token and authorization operation. No new eve authoring API is needed. The work spans the Connect API, `@vercel/connect/eve`, and a registry rollout.
+The first time a deployment uses the connection, Vercel Connect should resolve the connector this project uses for `"linear"`, or provision one for it, and the user should only see the OAuth consent prompt. Using the same `"linear"` connector label on a new project should provision a new project-specific connector. This should eliminate the need for an eager setup step from standard OAuth registry items, which is what blocks installing them from a remote session today.
 
-Today, the `connex-project-uid` team flag lets users map a project UID onto a connector's project attachment, and project-scoped reads resolve that mapping first. Deployments cannot use it to provision: the managed OAuth endpoint rejects `projectUid` from deployment OIDC tokens, and a bare key that has no project mapping falls back to a team-wide connector UID. The adapter sends the authored string as that team-wide UID.
+## Background
 
-## Contract
+### How `connect()` names a connector today
 
-The adapter will send the authored key as `projectUid` to Connect's managed OAuth creation endpoint, authenticated by the deployment's OIDC token. The project and environment come from that token, never from the request body. Only URL-backed managed OAuth connections use this path. Opaque connector IDs (`scl_...`), app or JWT-bearer setups, provider-specific setups, triggers, and connections without a provisionable URL keep their existing behavior; combining `projectUid` with those options is a `400`.
+`connect("...")` takes either an opaque connector ID (`scl_...`) or a connector **team UID**: a human-readable name unique across the team, such as `mcp.linear.app/linear`. The adapter in `@vercel/connect/eve` passes the string to Connect's token and authorization endpoints, authenticated by the deployment's OIDC token, and Connect checks that the connector is attached to the requesting project and environment.
 
-Resolution for a `(project, environment, key)` request is scoped to connectors already attached to the requesting project. It never selects a connector merely because it exists elsewhere in the team, and no OIDC request attaches a connector to another project or widens its environments.
+### Eager setup
+
+Registry items get a working connector through eager setup. Installing an item runs `eve integration connect`, which needs a linked Vercel project and a logged-in Vercel CLI. It creates or selects a connector with `vercel connect create`, attaches it to the project, and patches the connection source to that connector's team UID, for example from `connect("linear")` to `connect("mcp.linear.app/linear")`.
+
+This works, but it has to run where the CLI is logged in and the source can be rewritten. A remote session, such as an agent installing a registry item into a deployed project, has neither, so it cannot complete setup.
+
+### `autoProvision`
+
+`connect({ connector, autoProvision: true })` is the existing runtime alternative. When a token or authorization call reports the connector missing or not attached, the adapter posts the connection's URL and the authored string as `uid` to Connect's managed OAuth endpoint, using the deployment's OIDC token, then retries. Connect creates a connector with that team UID and attaches it to the requesting project, or reuses one already attached to the project and environment.
+
+Because a team UID is unique across the team, this only works for one project per team. The first project to use `connect("linear")` creates the team connector `linear`. Every later project finds that UID taken by a connector it is not attached to and gets `409`, since a deployment token may not attach another project's connector to itself.
+
+### The `connex-project-uid` flag
+
+The `connex-project-uid` team flag adds **project UIDs**: an optional, private name on a project's attachment to a connector, local to that project. With the flag on, a user can set a project UID on an attachment, and token and authorization lookups from a project resolve a key as a project UID first, in the requester's exact environment, then as a team UID. Two projects can therefore map the same key, such as `linear`, to different connectors.
+
+The flag only covers lookup. Project UIDs are written by users; deployment OIDC tokens are not allowed to set them, so that a lower environment cannot shadow the name a production deployment resolves. A deployment therefore cannot provision a connector under a project UID, and a key with no project mapping falls back to the team UID, which brings back the one-project-per-team limit above.
+
+## Goals
+
+- Bare keys such as `connect("linear")` resolve per project, so the same registry source works in every project of a team.
+- The first use provisions the connector with no setup step; OAuth consent stays on first use.
+- Source patched by today's eager setup keeps working with the connector it already has, without a second connector.
+- Users stay in control. A deployment never maps a connector it did not create, never attaches a connector to another project, never widens the environments of an attachment, and respects a user removing a connector it provisioned.
+- Concurrent cold starts and retries converge on one connector.
+- No new eve authoring API.
+
+## Non-goals
+
+- Connections that need bespoke setup, such as app installation, JWT-bearer, API-key, trigger, or custom creation flows, keep eager setup.
+- Sharing one connector across projects stays explicit: an `scl_...` ID, or a team UID with `autoProvision: false`.
+
+## What changes
+
+| Area                   | Today                                                                                          | Proposed                                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connect managed OAuth  | Deployment tokens provision by team UID only, and may not send `projectUid`.                   | Deployment tokens may send `projectUid` to resolve or provision a connector by project UID, under the [rules below](#connect-resolution-by-project-uid).      |
+| `@vercel/connect/eve`  | `autoProvision` sends the key as `uid`.                                                        | `autoProvision` sends the key as `projectUid`, falls back to `uid` when the API does not support it, and maps setup errors.                                   |
+| eve setup and registry | Eager setup patches source to a team UID; registry items ship a placeholder key and run setup. | Standard OAuth registry items ship a bare key and no setup step; eager setup, where it still runs, maps the key on the attachment instead of patching source. |
+
+## Connect: resolution by project UID
+
+This extends `connex-project-uid` rather than adding a new flag. Requests without `projectUid` keep today's exact team-UID behavior. With the flag off, `projectUid` requests return `404 project_uid_unavailable` and resolve or create nothing. Turning the flag off never deletes mappings or makes a key silently resolve to a different connector.
+
+Only URL-backed managed OAuth connections use this path. The project and environment come from the deployment's OIDC token, never from the request body. Opaque connector IDs, app or JWT-bearer setups, provider-specific setups, triggers, and connections without a provisionable URL keep their existing behavior; combining `projectUid` with those options is a `400`.
+
+Resolution for a `(project, environment, key)` request only considers connectors already attached to the requesting project. It never selects a connector merely because it exists elsewhere in the team, and no deployment request attaches a connector to another project or widens its environments.
 
 | State in the requesting project                                                                                                             | Result                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -89,37 +135,22 @@ A resolved connector is returned with its canonical ID: `201` when this request 
 
 Ordinary callers see a redacted message; nothing about unrelated team resources or privileged settings is exposed.
 
-## Relationship to `connex-project-uid`
+## `@vercel/connect/eve` adapter
 
-This extends the existing team flag rather than adding a new one or changing user-authorized `projectUid` writes. With the flag on, an OIDC caller may resolve or provision a connector by its own project UID under the rules above. Requests without `projectUid` keep today's exact team-UID behavior. With the flag off, OIDC `projectUid` requests return `404` and nothing is resolved or created. Turning the flag off never deletes mappings or makes a key silently resolve to a different team connector.
+With `autoProvision: true`, the adapter will send the authored key as `projectUid` instead of `uid`. On `404 project_uid_unavailable`, and on the `403` from Connect versions that reject `projectUid` from deployment tokens, it will fall back to provisioning by team UID, so it can ship before or after the API.
 
-## Adapter and eve rollout
+For a few minutes after provisioning, the adapter will use the returned connector ID for token, authorization, revocation, and cache-eviction calls. Lookup by key is eventually consistent and may not yet find a connector Connect just created; the ID does not depend on that lookup. Afterwards the adapter addresses the connector by key again, so a later remapping takes effect. Cached IDs are scoped to the key, the connection's server URL, the Connect endpoint, and an explicitly configured Vercel token. A cached ID is not proof the connector is still attached: when Connect rejects it, the adapter drops it and resolves the key again.
 
-`@vercel/connect/eve` currently posts the authored string as `uid`. Its managed OAuth path will send `projectUid` instead. For a few minutes after provisioning it will use the returned connector ID for `getToken`, authorization start and completion, revocation, and cache eviction, because Connect's lookup by key is eventually consistent and may not yet find a connector it just created; afterwards it addresses the connector by key again, so a later remapping takes effect. It will map `connector_setup_required` to a non-retryable authorization failure that names the connector and the reason, and `connector_provisioning_in_progress` to a retryable one. On `404 project_uid_unavailable`, and on the `403` from Connect versions that reject OIDC project UIDs, it falls back to provisioning by team UID. Cached IDs will be scoped to the key, the connection's server URL, the Connect endpoint, and an explicitly configured Vercel token; the project and environment are those of the deployment's own OIDC token. A cached ID is not proof the connector is still attached: when Connect rejects it, the adapter drops it and resolves the key again. Exact `scl_...` references and `autoProvision: false` keep working for intentionally team-wide references.
+`connector_setup_required` will map to a non-retryable authorization failure that names the connector and the reason, and `connector_provisioning_in_progress` to a retryable one. Exact `scl_...` references and `autoProvision: false` keep working unchanged.
+
+## eve setup and registry
+
+Standard user-managed OAuth registry entries will ship a bare key, such as `connect("linear")`, and drop their `integration connect` setup step. A registry install then only provides source.
 
 Making bare `connect("linear")` lazy changes the meaning of an existing UID. Today `eve integration connect` patches source to the team-wide UID it created, typically `connect("mcp.linear.app/linear")`, and leaves the attachment without a project UID. The exact-UID rule above keeps that source working unchanged, with no second connector. Fresh `connect("linear")` source in a project that already has that connector reports `mapping_required` once; after a user maps it, the deployment uses the same connector and grants. When matching is ambiguous or the name is taken, a user must also set it up; `connect({ connector: "mcp.linear.app/linear", autoProvision: false })` remains available for exact references.
 
-Once the contract ships, eager setup will write the project-local key on the attachment and leave `connect("linear")` in source instead of patching it. Bespoke app-installation, JWT-bearer, API-key, trigger, and custom-creation setups stay eager.
+Where eager setup still runs, it will write the key as the attachment's project UID and leave `connect("linear")` in source instead of patching it, so eager and lazy installs end in the same state.
 
-## Rollout order
-
-1. **Connect API:** ship OIDC `projectUid` resolution and provisioning. With the flag off it returns `404` and changes nothing.
-2. **SDK:** release `@vercel/connect` with the adapter changes above. It handles both the old `403` and the new `404`.
-3. **Flag:** enable `connex-project-uid` per team, internal teams first, until it is on for every team or removed.
-4. **Registry:** only after step 3 completes, switch eve registry entries to bare keys, drop `integration connect` setup for verified standard user-managed OAuth entries, and require the minimum `@vercel/connect` version from step 2. Update validation and published connection docs, and keep an explicit operator path for sharing an existing connector or repairing an environment attachment. A registry install provides source; OAuth consent still happens on first use.
-
-Step 4 is gated on the flag being on everywhere because, for a team with the flag off, the adapter's fallback would create a team-wide connector with UID `linear` for the first project and give every later project a `409`. An older `@vercel/connect` sends a team UID regardless of the flag and hits the same `409`, so the registry also needs the version floor.
-
-## Validation gates
-
-- With the flag on, two blank projects in one team using `connect("linear")` get distinct connectors, and an unattached team connector with UID `linear` is neither mapped nor attached. With the flag off, nothing is provisioned by project UID.
-- Source patched to a team UID reuses that connector only while it is attached to the requesting project and environment. Fresh `connect("linear")` source with a compatible legacy connector attached reports `mapping_required` with its ID and writes nothing; once a user maps it, it resolves with its grants in every attached environment. Several matches report `ambiguous`.
-- Concurrent cold starts converge on one connector, and later token requests resolve the key unambiguously. A failure after creation and before attachment is repaired on retry rather than duplicated.
-- Removing a provisioned or auto-linked connector from the project, or clearing or changing its project UID, reports setup required with its connector ID instead of provisioning. Reconnecting it restores access with its grants; deleting it leads to a fresh connector that needs new consent.
-- Clearing the project UID of a user-mapped connector reports `mapping_required` instead of remapping it; removing it from the project provisions a fresh connector.
-- Development-first creation works in production; production-first creation reports setup required in development; attaching the environment and retrying works without a redeploy. Custom environments stay exact-only.
-- Invalid server URLs, weaker egress or grants, name collisions, and ambiguous matches fail safely. Exact connector IDs and requests without `projectUid` keep their behavior.
-- Right after provisioning, the SDK uses the returned ID throughout the OAuth and token lifecycle, then returns to the key. Tests cover Connect's real resolution and concurrency behavior, not just a mocked adapter.
-- Registry entries switch only after the flag is on for every team, and each switched entry declares the minimum `@vercel/connect` version.
+Registry entries can switch only once `connex-project-uid` is on for every team and they require an `@vercel/connect` version that sends `projectUid`. Otherwise the adapter falls back to team UIDs, and the first project in a team takes the team UID `linear` while every later project gets `409`.
 
 Storage, locking, and resolver internals are documented with the Connect API rather than here.
