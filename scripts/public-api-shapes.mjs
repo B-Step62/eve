@@ -73,14 +73,17 @@ export async function checkPublicApiShapes({ write = false, initialize = false }
       symbol.declarations?.some((node) =>
         slash(node.getSourceFile().fileName).startsWith(slash(declarations) + "/"),
       );
+    // TypeScript names external module symbols with absolute installation paths.
+    const symbolName = (symbol) =>
+      symbol.declarations?.some(ts.isSourceFile) ? "<module>" : symbol.name;
     const identity = (symbol) =>
-      `${slash(relative(declarations, symbol.declarations[0].getSourceFile().fileName))}#${symbol.name}`;
+      `${slash(relative(declarations, symbol.declarations[0].getSourceFile().fileName))}#${symbolName(symbol)}`;
     const peerIdentity = (symbol) => {
       const file = slash(symbol.declarations?.[0]?.getSourceFile().fileName ?? "");
       const marker = "/node_modules/";
       return file.includes(marker)
-        ? `${file.slice(file.lastIndexOf(marker) + marker.length)}#${symbol.name}`
-        : symbol.name;
+        ? `${file.slice(file.lastIndexOf(marker) + marker.length)}#${symbolName(symbol)}`
+        : symbolName(symbol);
     };
     function closure(roots) {
       const peers = new Set();
@@ -135,6 +138,11 @@ export async function checkPublicApiShapes({ write = false, initialize = false }
     const globallyExported = new Set(
       [...entryExports.values()].flatMap((exports) => exports.map(([, symbol]) => symbol)),
     );
+    // Canonical type-only entries are used by factories in other entries. A type is orphaned
+    // only when no public value reaches it, not when its owning entry has no local factory.
+    const fromValues = closure(
+      [...globallyExported].filter((symbol) => symbol.flags & ts.SymbolFlags.Value),
+    );
     const isNamedType = (symbol) =>
       symbol.declarations?.some(
         (node) =>
@@ -148,9 +156,6 @@ export async function checkPublicApiShapes({ write = false, initialize = false }
       const source = program.getSourceFile(entries.get(entry));
       const exported = new Set(exports.map(([, symbol]) => symbol));
       const all = closure(exported);
-      const fromValues = closure(
-        [...exported].filter((symbol) => symbol.flags & ts.SymbolFlags.Value),
-      );
       const lines = [
         `# ${entry}`,
         "",

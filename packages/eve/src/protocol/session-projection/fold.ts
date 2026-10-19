@@ -153,7 +153,7 @@ export function foldEvents<TEvent extends ReceivedEvent>(
     while (end < events.length && events[end]!.meta.position.line === line) end += 1;
     const group = events.slice(start, end);
     const last = group.at(-1)!;
-    if (end === events.length && last.meta.endOfLine === false) return group;
+    if (last.meta.endOfLine === false) return events.slice(start);
     const first = group[0]!;
     const stored: StoredLine =
       group.length === 1 && isProgressType(first.type)

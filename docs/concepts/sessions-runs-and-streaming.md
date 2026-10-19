@@ -101,9 +101,9 @@ Progress records are `content.delta` (a text or reasoning delta for a `partId`),
 
 Call labels use `capability.label` before execution, `call.progress.data.label` for a progress
 snapshot, and `call.settled.data.label` at completion. The fold keeps the final label as
-`view.calls[callId].label`. A prompt's heading remains `request.title`.
+`call(view, callId)?.label`. A prompt's heading remains `request.title`.
 
-The full catalog, its outcome sets, and TypeScript types are exported from `eve/events`, along with the shared fold that turns facts into tables and selectors over them:
+The full catalog, its outcome sets, and TypeScript types are exported from `eve/events`, along with the shared fold and queries over [opaque session snapshots](#query-session-state):
 
 ```ts
 import { FACT_CATALOG, foldEvents, activeTurn, reply } from "eve/events";
@@ -138,9 +138,9 @@ Note: consider the privacy, confidentiality, and user-experience implications fo
 
 ### Replies and narration
 
-A model often writes text before it calls a tool. Each text part's `content.completed.data.phase` tells you which it is: `"narration"` for text written on the way to more work, `"reply"` for the turn's answer. `turn.settled.data.reply` lists the reply's part ids, so a reader that only needs the answer can wait for the turn to settle and read those parts. It's the same list a folded view keeps as `view.turns[turnId].reply`, and `reply(ctx.view, turnId)` reads those parts in a hook or channel handler. When a turn requested an output schema, the structured result is a `content.completed` with `kind: "result"`.
+A model often writes text before it calls a tool. Each text part's `content.completed.data.phase` tells you which it is: `"narration"` for text written on the way to more work, `"reply"` for the turn's answer. `turn.settled.data.reply` lists the reply's part ids, so a reader that only needs the answer can wait for the turn to settle and read those parts. `reply(ctx.view, turnId)` returns those parts in a hook or channel handler without exposing the backing table. When a turn requested an output schema, the structured result is a `content.completed` with `kind: "result"`.
 
-Spend is recorded on `usage.recorded`, once per model run (`owner: { runId }`), once per delegated call for what the agent it called spent (`owner: { callId }`), and once per compaction (`owner: { changeId }`). A session's total is the sum of its records; the shared fold keeps it in `view.usage.total`. Spend a task reports after its calls settled is recorded with the task's scope and `kind: "delegated-late"`.
+Spend is recorded on `usage.recorded`, once per model run (`owner: { runId }`), once per delegated call for what the agent it called spent (`owner: { callId }`), and once per compaction (`owner: { changeId }`). A session's total is the sum of its records; `usage(view).total` returns it. Spend a task reports after its calls settled is recorded with the task's scope and `kind: "delegated-late"`.
 
 ### Deliveries and responses
 
@@ -191,6 +191,52 @@ A provider response ending with `content-filter` fails its run and turn with `MO
 and a `hint` to review the request against the provider's content policy. eve does not retry the
 filtered response or complete its partial text; deltas already streamed remain visible. The session
 then waits for another user message.
+
+## Query session state
+
+`SessionView` from `eve/events` is an opaque, immutable snapshot derived from the stream. Use
+queries instead of reading tables or joining rows:
+
+```ts
+import { activeTurn, call, calls, openInteractions, usage } from "eve/events";
+
+const currentTurn = activeTurn(agent.view);
+const tools = calls(agent.view, { kind: "tool", turnId: currentTurn?.turnId });
+const pending = openInteractions(agent.view);
+const totals = usage(agent.view);
+const observed = call(agent.view, callId);
+if (observed?.state === "failed") console.error(observed.error.message);
+```
+
+Calls include their resolved `turnId`, `runId`, and `taskId` when known, so applications do not
+join calls to runs to find their turn. `turns`, `deliveries`, `tasks`, `runs`, `parts`, and
+`children` return curated observations. Identity lookups include `turn`,
+`delivery`, `task`, and `interaction`. `waiting`, `activity`, `reply`, and `requestStatus` answer
+the same lifecycle questions used by built-in clients and channels. These queries are
+synchronous and perform no I/O; referenced payloads remain references until explicitly read.
+
+The public view contains no tables or preview dictionaries. Query results cannot mutate the
+fold, and a snapshot you retain stays unchanged when later events arrive. Interactions omit
+private sign-in callback URLs, including when returned by `waiting` or `activity`. Use
+`callPreview(view, callId)` and `contentPreviews(view)` for transient progress held by a client
+or a custom fold; committed values remain separate. Hook and channel snapshots describe the
+whole committed line, never half of it.
+
+A custom reader uses the same fold:
+
+```ts
+import { emptySessionView, foldEvents, calls } from "eve/events";
+
+let view = emptySessionView();
+for await (const event of session.stream()) {
+  view = foldEvents(view, [event]);
+  render(calls(view, { kind: "tool" }));
+}
+```
+
+`foldEvents` returns a new snapshot without changing its input. It retains incomplete lines
+internally until their final event arrives and absorbs overlapping replay. Persist events and
+session cursors to reconstruct a view; the opaque value is not a serialization format.
 
 ## Positions
 
@@ -345,7 +391,7 @@ for await (const event of events) {
 }
 ```
 
-`stream()` takes `SessionStreamOptions` from `eve/client`: `startIndex` (a durable line position, with negative values counting back from the tail), `follow`, and `signal`. Client readers also accept `streamReconnectPolicy`. Key stored events on [`meta.position`](#positions), which stays stable across reads. With `follow: false`, the read ends at the durable tail observed when it opens; otherwise it keeps following new events until the stream closes or the signal aborts.
+`stream()` takes `SessionStreamOptions` from `eve/sessions`: `startIndex` (a durable line position, with negative values counting back from the tail), `follow`, and `signal`. Client readers also accept `streamReconnectPolicy`. Key stored events on [`meta.position`](#positions), which stays stable across reads. With `follow: false`, the read ends at the durable tail observed when it opens; otherwise it keeps following new events until the stream closes or the signal aborts.
 
 A read reflects events that are already durable. A hook runs after its line is written, so a bounded read there includes the event that triggered it. `sessions` reads any session ID without channel auth, so check that a caller may read a session before passing an ID from a request. It is available only in code that runs inside the eve server.
 

@@ -1,6 +1,6 @@
 import type { ChannelEventContext, ChannelEventOf } from "#public/definitions/channel.js";
 import type { SessionEvent } from "#protocol/session-event.js";
-import type { SessionHandle } from "#channel/session.js";
+import type { ChannelContext } from "#shared/channel-context.js";
 import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { ChannelContinuationOps } from "#public/definitions/channel.js";
 
@@ -441,7 +441,7 @@ export function githubChannel(config: GitHubChannelConfig = {}): GitHubChannel {
 
 function rebuildGitHubContext(
   state: GitHubChannelState,
-  _session: SessionHandle,
+  _session: ChannelContext,
   config: GitHubChannelConfig,
 ): GitHubChannelContext {
   const binding = buildGitHubBinding({ config, state });

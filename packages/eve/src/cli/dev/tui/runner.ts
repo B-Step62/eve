@@ -1,5 +1,11 @@
-import { openInteractions } from "#protocol/session-projection/selectors.js";
-import { interaction, type Interaction } from "#protocol/session-reader.js";
+import {
+  delivery,
+  turn as readTurn,
+  task,
+  openInteractions,
+  failure,
+} from "#protocol/session-projection/public-view.js";
+import type { Interaction } from "#protocol/session-projection/reader.js";
 import type { Delivery } from "#shared/delivery.js";
 import { optionStyle } from "#channel/interaction-prompts.js";
 import { type ConversationState } from "#client/conversation-state.js";
@@ -34,7 +40,6 @@ import {
   type AgentTUIConversationView,
   type TuiFailure,
 } from "./conversation-view.js";
-import { failure } from "#protocol/session-projection/selectors.js";
 import { devBootPhase, type DevBootProgressReporter } from "#internal/dev-boot-progress.js";
 
 import {
@@ -902,9 +907,9 @@ export class EveTUIRunner {
   #restoreCancelledMessage(conversation: ConversationState): void {
     const sent = this.#sentMessage;
     if (sent?.deliveryId === undefined) return;
-    const turnId = conversation.view.deliveries[sent.deliveryId]?.turnId;
+    const turnId = delivery(conversation.view, sent.deliveryId)?.turnId;
     if (turnId === undefined) return;
-    const turn = conversation.view.turns[turnId];
+    const turn = readTurn(conversation.view, turnId);
     if (turn === undefined || turn.status === "running") return;
     const status = turn.outcome;
     this.#sentMessage = undefined;
@@ -964,12 +969,10 @@ export class EveTUIRunner {
   /** Open requests the user can answer now, including while other work runs. */
   #answerableInputs(): readonly Interaction[] {
     // A sign-in completes by its callback, not an answer typed here.
-    return openInteractions(this.#store.snapshot.view)
-      .flatMap((row) => interaction(this.#store.snapshot.view, row.interactionId) ?? [])
-      .filter(
-        (input) =>
-          input.request.kind !== "sign-in" && !this.#dismissedInputs.has(input.interactionId),
-      );
+    return openInteractions(this.#store.snapshot.view).filter(
+      (input) =>
+        input.request.kind !== "sign-in" && !this.#dismissedInputs.has(input.interactionId),
+    );
   }
 
   /**
@@ -1617,7 +1620,7 @@ export class EveTUIRunner {
         if (event.data.outcome === "failed") {
           diagnostics.append({
             source: "tool",
-            summary: `${this.#store.snapshot.view.tasks[event.data.taskId]?.name ?? "A task"} ended with an error`,
+            summary: `${task(this.#store.snapshot.view, event.data.taskId)?.name ?? "A task"} ended with an error`,
             detail: event.data.error?.message ?? "Task failed.",
           });
         }

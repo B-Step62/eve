@@ -10,17 +10,20 @@ import { isFactType } from "#protocol/session-events/catalog.js";
 import {
   emptyPreviews,
   emptySessionView,
-  copyView,
   foldReceivedEvent,
 } from "#protocol/session-projection/fold.js";
 import { runTurn } from "#protocol/session-projection/selectors.js";
 import type { SessionPreviews, SessionView } from "#protocol/session-projection/tables.js";
 import {
+  snapshotOf,
+  type SessionView as PublicSessionView,
+} from "#protocol/session-projection/session-view.js";
+import {
   callPlace,
   interaction,
   interactionPlace,
   type Interaction,
-} from "#protocol/session-reader.js";
+} from "#protocol/session-projection/reader.js";
 import type { Answer } from "#shared/input.js";
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -62,7 +65,8 @@ export class Conversation {
   readonly #submissionIds = new Map<string, string>();
   #changed: Set<string> | "all" = "all";
   #state: ConversationState | undefined;
-  #viewCopy: SessionView | undefined;
+  #viewCopy: PublicSessionView | undefined;
+  #viewPosition = -1;
 
   /** Folds one event of the session's stream; false when the tables already hold it. */
   observe(event: SessionStreamEvent): boolean {
@@ -177,19 +181,17 @@ export class Conversation {
     const state: Mutable<ConversationState> = {
       agents: this.#agentSessions(),
       view: this.#frozenView,
-      previews: { calls: { ...previews.calls }, parts: { ...previews.parts } },
       messages: this.#orderedMessages(),
     };
     this.#state = state;
     return state;
   }
 
-  /** Progress changes previews and the cursor, but not the immutable lifecycle tables. */
-  get #frozenView(): SessionView {
-    const copy = this.#viewCopy;
-    if (copy?.position === this.view.position) return copy;
-    return (this.#viewCopy =
-      copy === undefined ? copyView(this.view) : { ...copy, position: this.view.position });
+  get #frozenView(): PublicSessionView {
+    if (this.#viewCopy !== undefined && this.#viewPosition === this.view.position)
+      return this.#viewCopy;
+    this.#viewPosition = this.view.position;
+    return (this.#viewCopy = snapshotOf(this.view, this.previews));
   }
 
   #touch(turnId: string): void {

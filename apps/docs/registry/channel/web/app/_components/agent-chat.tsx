@@ -1,6 +1,6 @@
 "use client";
 
-import { interaction } from "eve/events";
+import { interaction, interactions, turns } from "eve/events";
 
 import type { MessagePart } from "eve/client";
 import { activity, failure, type Activity } from "eve/events";
@@ -83,7 +83,7 @@ export function AgentChat({
     now.kind !== "waiting-on-person" &&
     (lastMessage?.role !== "assistant" || isPendingAssistantShell);
   const failed =
-    isBusy || isResuming ? undefined : failure(agent.view, agent.view.session.latestTurnId);
+    isBusy || isResuming ? undefined : failure(agent.view, turns(agent.view).at(-1)?.turnId);
   const turnFailure =
     failed?.code === "MODEL_CALL_FAILED"
       ? "The model is temporarily unavailable. Please try again."
@@ -94,12 +94,12 @@ export function AgentChat({
   const activeSessionId = sessionId ?? agent.session?.sessionId;
   // Answers are accepted while work runs; the server's settlement closes each request.
   const canRespond = (interactionId: string) =>
-    !isResuming && agent.view.interactions[interactionId]?.status === "open";
+    !isResuming && interaction(agent.view, interactionId)?.status === "open";
   // A tool call can ask several questions at once, and its message part holds only the latest.
   const questionsFor = (callId: string) =>
-    Object.keys(agent.view.interactions)
-      .flatMap((id) => interaction(agent.view, id) ?? [])
-      .filter((input) => input.request.kind === "question" && input.call?.callId === callId);
+    interactions(agent.view).filter(
+      (input) => input.request.kind === "question" && input.call?.callId === callId,
+    );
 
   const requestCancellation = () => {
     setCancellationError(undefined);

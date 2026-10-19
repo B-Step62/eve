@@ -2,7 +2,6 @@
 
 ## Export names
 
-- SessionReader: src/shared/session.d.ts#SessionReader
 - sessions: src/public/server/index.d.ts#sessions
 
 ## Peer boundaries

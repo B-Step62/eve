@@ -4,7 +4,7 @@ import type { ChannelEventContext, ChannelEventOf } from "#public/definitions/ch
 import type { SessionEvent } from "#protocol/session-event.js";
 import type { DiscordInstrumentationMetadata } from "#public/channels/discord/index.js";
 import type { ChannelFrom } from "#channel/channel-operations.js";
-import type { SessionHandle } from "#channel/session.js";
+import type { ChannelContext } from "#shared/channel-context.js";
 import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { ChannelContinuationOps } from "#public/definitions/channel.js";
 import { createLogger, logError } from "#internal/logging.js";
@@ -356,7 +356,7 @@ export function discordChannel(config: DiscordChannelConfig = {}): DiscordChanne
 
 function rebuildDiscordContext(
   state: DiscordChannelState,
-  session: SessionHandle,
+  session: ChannelContext,
   config: DiscordChannelConfig,
 ): DiscordChannelContext {
   return {
@@ -367,7 +367,7 @@ function rebuildDiscordContext(
 
 function buildDiscordHandle(input: {
   readonly config: DiscordChannelConfig;
-  readonly session?: SessionHandle;
+  readonly session?: ChannelContext;
   readonly state: DiscordChannelState;
 }): DiscordHandle {
   const api = input.config.api;

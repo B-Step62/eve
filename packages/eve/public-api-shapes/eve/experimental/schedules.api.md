@@ -906,13 +906,7 @@ export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 ```
 
-### src/protocol/session-projection/request-status.d.ts
-
-```ts
-export type RequestStatus = "working" | "awaiting-input" | "completed" | "failed" | "cancelled";
-```
-
-### src/protocol/session-reader.d.ts
+### src/protocol/session-projection/reader.d.ts
 
 ```ts
 export interface AskedCall {
@@ -920,8 +914,11 @@ export interface AskedCall {
   readonly name: string;
   readonly input?: JsonValue;
 }
-export interface Interaction extends InteractionPlace {
+export interface Interaction {
   readonly interactionId: string;
+  readonly turnId: string;
+  readonly stepIndex: number;
+  readonly taskId?: string;
   readonly request: Omit<InteractionRequest, "signIn"> & {
     readonly signIn?: Omit<SignInChallenge, "callbackUrl">;
   };
@@ -931,11 +928,12 @@ export interface Interaction extends InteractionPlace {
   readonly reason?: string;
   readonly answer?: Answer;
 }
-export interface InteractionPlace {
-  readonly turnId: string;
-  readonly stepIndex: number;
-  readonly taskId?: string;
-}
+```
+
+### src/protocol/session-projection/request-status.d.ts
+
+```ts
+export type RequestStatus = "working" | "awaiting-input" | "completed" | "failed" | "cancelled";
 ```
 
 ### src/public/definitions/connections/events.d.ts
@@ -1458,21 +1456,33 @@ interface AuthorizationDefinitionBase {
 ### src/shared/delivery.d.ts
 
 ```ts
-export interface Delivery<TOutput = unknown> extends AsyncIterable<SessionStreamEvent> {
+export interface Delivery<TOutput = unknown> {
   readonly sessionId: string;
   readonly deliveryId: string;
-  result(): Promise<DeliveryResult<TOutput>>;
+  stream(options?: DeliveryReadOptions): AsyncIterable<SessionStreamEvent>;
+  result(options?: DeliveryReadOptions): Promise<DeliveryResult<TOutput>>;
 }
-export interface DeliveryResult<TOutput = unknown> {
+export interface DeliveryReadOptions {
+  readonly signal?: AbortSignal;
+}
+export type DeliveryResult<TOutput = unknown> = {
   readonly deliveryId: string;
   readonly sessionId: string;
-  readonly status: RequestStatus;
+  readonly outcome: DeliveryOutcome;
   readonly sessionEnded: boolean;
   readonly reply: string | undefined;
   readonly data: TOutput | undefined;
-  readonly events: SessionStreamEvent[];
   readonly interactions: readonly Interaction[];
-}
+} & (
+  | {
+      readonly status: Exclude<RequestStatus, "working" | "failed">;
+      readonly error?: never;
+    }
+  | {
+      readonly status: "failed";
+      readonly error: ErrorInfo;
+    }
+);
 ```
 
 ### src/shared/message-content.d.ts

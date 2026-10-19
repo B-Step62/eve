@@ -7,7 +7,6 @@ import type {
   EveAgentStoreSnapshot,
 } from "#client/eve-agent-store-state.js";
 import { StreamDelivery, type Delivery } from "#client/delivery.js";
-import { deliveryEvents } from "#client/delivery-events.js";
 import { SessionNotActiveError } from "#channel/session-not-active-error.js";
 import type {
   SessionEventStream,
@@ -23,9 +22,9 @@ import {
   waitWithSignal,
 } from "#client/eve-agent-store-helpers.js";
 import { activeTurn, failure, idle } from "#protocol/session-projection/selectors.js";
-import { openSignIns } from "#protocol/session-reader.js";
+import { openSignIns } from "#protocol/session-projection/reader.js";
 import { toError } from "#shared/errors.js";
-import type { SendTurnPayload } from "#client/types.js";
+import type { ClientSessionState, SendTurnPayload } from "#client/types.js";
 
 export type {
   EveAgentStoreCallbacks,
@@ -60,6 +59,7 @@ export class EveAgentStore {
   #error: Error | undefined;
   #events: readonly SessionStreamEvent[];
   #snapshot: EveAgentStoreSnapshot;
+  #observedSession: ClientSessionState | undefined;
   #inLine = false;
   #posting = 0;
   #finishes = 0;
@@ -172,7 +172,11 @@ export class EveAgentStore {
       }
       this.#reconcile();
       accepted.resolve(deliveryId);
-      return this.#storedDelivery<TOutput>(response, signal);
+      return new StreamDelivery<TOutput>({
+        sessionId: response.sessionId,
+        deliveryId,
+        createStream: (read) => response.stream(read),
+      });
     } catch (error) {
       if (lifetime === this.#controller) {
         retract?.();
@@ -285,39 +289,12 @@ export class EveAgentStore {
       throwIfAborted(lifetime.signal);
       this.#accepted.add(receipt.deliveryId);
       this.#reconcile();
-      return this.#storedDelivery(receipt, lifetime.signal);
+      return receipt;
     } finally {
       if (lifetime === this.#controller) {
         this.#posting -= 1;
         this.#publish();
         this.#closeStreamWhenIdle();
-      }
-    }
-  }
-
-  #storedDelivery<TOutput = unknown>(
-    receipt: Pick<Delivery, "sessionId" | "deliveryId">,
-    signal: AbortSignal,
-  ): Delivery<TOutput> {
-    return new StreamDelivery<TOutput>({
-      sessionId: receipt.sessionId,
-      deliveryId: receipt.deliveryId,
-      createStream: () => deliveryEvents(this.#storedEvents(signal), receipt.deliveryId, signal),
-    });
-  }
-
-  async *#storedEvents(signal: AbortSignal): AsyncIterable<SessionStreamEvent> {
-    let cursor = 0;
-    for (;;) {
-      throwIfAborted(signal);
-      while (cursor < this.#events.length) yield this.#events[cursor++]!;
-      if (this.#error !== undefined) throw this.#error;
-      const updated = Promise.withResolvers<void>();
-      const unsubscribe = this.subscribe(() => updated.resolve());
-      try {
-        if (cursor === this.#events.length) await waitWithSignal(updated.promise, signal);
-      } finally {
-        unsubscribe();
       }
     }
   }
@@ -342,7 +319,7 @@ export class EveAgentStore {
     this.#messageSubmissions.reset();
     this.#error = undefined;
     if (this.#attached) this.#followAgents();
-    this.#callbacks.onSessionChange?.(this.#session?.state);
+    this.#callbacks.onSessionChange?.(this.#sessionState);
     this.#publish();
     if (this.#autoPrewarm && this.#attached) void this.prewarm().catch(() => {});
   }
@@ -379,7 +356,7 @@ export class EveAgentStore {
       throwIfAborted(lifetime.signal);
       this.#session = session;
       this.#error = undefined;
-      this.#callbacks.onSessionChange?.(session.state);
+      this.#callbacks.onSessionChange?.(this.#sessionState);
       this.#followAgents();
       this.#publish();
       return response;
@@ -458,7 +435,7 @@ export class EveAgentStore {
     this.#reconcile();
     // Stop observes committed facts even while POST receipts gate public snapshots.
     for (const check of this.#turnWaiters) check();
-    this.#callbacks.onSessionChange?.(this.#session?.state);
+    this.#callbacks.onSessionChange?.(this.#sessionState);
     this.#publish();
     this.#closeStreamWhenIdle();
   }
@@ -503,6 +480,20 @@ export class EveAgentStore {
     this.#publish();
   }
 
+  /** Other Delivery/session readers may have read further than this store's committed prefix. */
+  get #sessionState(): ClientSessionState | undefined {
+    if (this.#session === undefined) return (this.#observedSession = undefined);
+    const sessionId = this.#session.id;
+    const streamIndex = this.#conversationClient.view.position;
+    if (
+      this.#observedSession?.sessionId !== sessionId ||
+      this.#observedSession.streamIndex !== streamIndex
+    ) {
+      this.#observedSession = { sessionId, streamIndex };
+    }
+    return this.#observedSession;
+  }
+
   #createSnapshot(): EveAgentStoreSnapshot {
     const data = this.#conversationClient.conversation;
     const { view } = data;
@@ -511,12 +502,12 @@ export class EveAgentStore {
       view,
       error: this.#error,
       events: this.#events,
-      session: this.#session?.state,
+      session: this.#sessionState,
       status:
         this.#resumePromise !== undefined
           ? "resuming"
-          : activeTurn(view) !== undefined ||
-              !idle(view) ||
+          : activeTurn(this.#conversationClient.view) !== undefined ||
+              !idle(this.#conversationClient.view) ||
               this.#pending.size > 0 ||
               this.#accepted.size > 0
             ? "busy"

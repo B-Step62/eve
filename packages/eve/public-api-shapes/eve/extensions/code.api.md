@@ -7,14 +7,14 @@
 
 ## Peer boundaries
 
-- zod/v4/classic/external.d.cts#"/tmp/eve-api-owned-types/node_modules/.pnpm/zod@4.5.4/node_modules/zod/v4/classic/external"
+- zod/v4/classic/external.d.cts#<module>
 - zod/v4/classic/schemas.d.cts#ZodCustom
 - zod/v4/classic/schemas.d.cts#ZodDefault
 - zod/v4/classic/schemas.d.cts#ZodEnum
 - zod/v4/classic/schemas.d.cts#ZodObject
 - zod/v4/classic/schemas.d.cts#ZodOptional
 - zod/v4/classic/schemas.d.cts#ZodString
-- zod/v4/core/index.d.cts#"/tmp/eve-api-owned-types/node_modules/.pnpm/zod@4.5.4/node_modules/zod/v4/core/index"
+- zod/v4/core/index.d.cts#<module>
 - zod/v4/core/schemas.d.cts#$strict
 - zod/v4/core/schemas.d.cts#$strip
 

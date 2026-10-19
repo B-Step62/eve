@@ -19,7 +19,6 @@
 - DynamicToolSet: src/tools/dynamic.d.ts#DynamicToolSet
 - MatchedConnectionResult: src/public/tools/result.d.ts#MatchedConnectionResult
 - MatchedToolResult: src/public/tools/result.d.ts#MatchedToolResult
-- SettledCallRow: src/public/tools/result.d.ts#SettledCallRow
 - ToolAnswer: src/tools/definition.d.ts#ToolAnswer
 - ToolAskOptions: src/tools/definition.d.ts#ToolAskOptions
 - ToolAuthOptions: src/tools/auth.d.ts#ToolAuthOptions
@@ -160,7 +159,24 @@ type ApprovalToolInput<TInput> = TInput extends object ? Readonly<TInput> : TInp
 ### src/channel/session.d.ts
 
 ```ts
-export interface Session extends SessionOperations {
+export interface Session extends SessionReader {
+  send(message: MessageContent, options: SessionSendOptions): Promise<Delivery>;
+  respond<const TAnswers extends readonly Answer[]>(
+    answers: StrictAnswers<TAnswers>,
+    options: SessionRespondOptions,
+  ): Promise<Delivery>;
+  cancel(
+    options?: SessionControlOptions & {
+      readonly turnId?: string | null;
+    },
+  ): Promise<Delivery>;
+  clear(options?: SessionControlOptions): Promise<Delivery>;
+  compact(options?: SessionControlOptions): Promise<Delivery>;
+  reset(
+    options?: SessionControlOptions & {
+      readonly reason?: string;
+    },
+  ): Promise<Delivery>;
   stream(options?: SessionStreamOptions): AsyncIterable<SessionStreamEvent>;
 }
 export type SessionRespondOptions = SessionDeliveryOptions;
@@ -1028,48 +1044,42 @@ export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 ```
 
-### src/protocol/session-projection/request-status.d.ts
+### src/protocol/session-projection/observations.d.ts
 
 ```ts
-export type RequestStatus = "working" | "awaiting-input" | "completed" | "failed" | "cancelled";
-```
-
-### src/protocol/session-projection/tables.d.ts
-
-```ts
-export interface CallRow extends Introduced, Ended {
-  readonly callId: string;
-  readonly owner: CallOwner;
-  readonly capability: Capability;
-  readonly input?: JsonValue;
-  readonly inputRef?: ValueReference;
-  readonly inputError?: ErrorInfo;
-  readonly status: "requested" | "running" | "settled";
-  readonly clearedBy?: ClearedBy;
-  readonly taskId?: string;
-  readonly outcome?: CallOutcome;
-  readonly output?: JsonValue;
-  readonly outputRef?: ValueReference;
-  readonly outputOf?: {
-    readonly callId: string;
-  };
-  readonly error?: ErrorInfo;
-  readonly reason?: string;
-  readonly cause?: Cause;
-  readonly label?: string;
-  readonly usage?: Usage;
-}
-export interface Ended {
-  readonly closedAt?: number;
+export interface ObservationTiming {
+  readonly startedAt?: string;
   readonly endedAt?: string;
 }
-export interface Introduced {
-  readonly introducedAt: number;
-  readonly startedAt: string;
-}
+export type CallObservation = ObservationTiming & {
+  readonly callId: string;
+  readonly name: string;
+  readonly kind: CapabilityKind;
+  readonly label: string;
+  readonly runId?: string;
+  readonly turnId?: string;
+  readonly taskId?: string;
+  readonly input?: JsonValue;
+  readonly inputRef?: ValueReference;
+  readonly output?: JsonValue;
+  readonly outputRef?: ValueReference;
+  readonly outcome?: CallOutcome;
+  readonly reason?: string;
+  readonly clearedBy?: ClearedBy;
+  readonly usage?: Usage;
+} & (
+    | {
+        readonly state: "failed";
+        readonly error: ErrorInfo;
+      }
+    | {
+        readonly state: Exclude<CallState, "failed">;
+        readonly error?: ErrorInfo;
+      }
+  );
 ```
 
-### src/protocol/session-reader.d.ts
+### src/protocol/session-projection/reader.d.ts
 
 ```ts
 export interface AskedCall {
@@ -1077,8 +1087,11 @@ export interface AskedCall {
   readonly name: string;
   readonly input?: JsonValue;
 }
-export interface Interaction extends InteractionPlace {
+export interface Interaction {
   readonly interactionId: string;
+  readonly turnId: string;
+  readonly stepIndex: number;
+  readonly taskId?: string;
   readonly request: Omit<InteractionRequest, "signIn"> & {
     readonly signIn?: Omit<SignInChallenge, "callbackUrl">;
   };
@@ -1088,11 +1101,26 @@ export interface Interaction extends InteractionPlace {
   readonly reason?: string;
   readonly answer?: Answer;
 }
-export interface InteractionPlace {
-  readonly turnId: string;
-  readonly stepIndex: number;
-  readonly taskId?: string;
-}
+```
+
+### src/protocol/session-projection/request-status.d.ts
+
+```ts
+export type RequestStatus = "working" | "awaiting-input" | "completed" | "failed" | "cancelled";
+```
+
+### src/protocol/session-projection/selectors.d.ts
+
+```ts
+export type CallState =
+  | "requested"
+  | "approval"
+  | "running"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "rejected"
+  | "cancelled";
 ```
 
 ### src/public/definitions/connections/events.d.ts
@@ -1232,8 +1260,8 @@ export interface ToolResultFromFn {
   ): MatchedToolResult<TOutput> | undefined;
   (result: ToolResultSource, connection: ConnectionDefinition): MatchedConnectionResult | undefined;
 }
-export type SettledCallRow = Pick<CallRow, "callId" | "capability" | "outcome" | "output">;
-export type ToolResultSource = SettledCallRow | undefined;
+export type ToolResultSource =
+  Pick<CallObservation, "callId" | "kind" | "name" | "state" | "output"> | undefined;
 type ConnectionDefinition = McpClientConnectionDefinition | OpenAPIConnectionDefinition;
 ```
 
@@ -1457,21 +1485,33 @@ export type ConversationEnvironment = "development" | "preview" | "production";
 ### src/shared/delivery.d.ts
 
 ```ts
-export interface Delivery<TOutput = unknown> extends AsyncIterable<SessionStreamEvent> {
+export interface Delivery<TOutput = unknown> {
   readonly sessionId: string;
   readonly deliveryId: string;
-  result(): Promise<DeliveryResult<TOutput>>;
+  stream(options?: DeliveryReadOptions): AsyncIterable<SessionStreamEvent>;
+  result(options?: DeliveryReadOptions): Promise<DeliveryResult<TOutput>>;
 }
-export interface DeliveryResult<TOutput = unknown> {
+export interface DeliveryReadOptions {
+  readonly signal?: AbortSignal;
+}
+export type DeliveryResult<TOutput = unknown> = {
   readonly deliveryId: string;
   readonly sessionId: string;
-  readonly status: RequestStatus;
+  readonly outcome: DeliveryOutcome;
   readonly sessionEnded: boolean;
   readonly reply: string | undefined;
   readonly data: TOutput | undefined;
-  readonly events: SessionStreamEvent[];
   readonly interactions: readonly Interaction[];
-}
+} & (
+  | {
+      readonly status: Exclude<RequestStatus, "working" | "failed">;
+      readonly error?: never;
+    }
+  | {
+      readonly status: "failed";
+      readonly error: ErrorInfo;
+    }
+);
 ```
 
 ### src/shared/history-message.d.ts
@@ -1987,29 +2027,6 @@ interface WriteOptions<T> {
 ### src/shared/session.d.ts
 
 ```ts
-export interface SessionOperations<
-  TSendOptions = SessionSendOptions,
-  TRespondOptions = SessionRespondOptions,
-  TControlOptions = SessionControlOptions,
-> extends SessionReader {
-  send(message: MessageContent, options: TSendOptions): Promise<Delivery>;
-  respond<const TAnswers extends readonly Answer[]>(
-    answers: StrictAnswers<TAnswers>,
-    options: TRespondOptions,
-  ): Promise<Delivery>;
-  cancel(
-    options?: TControlOptions & {
-      readonly turnId?: string | null;
-    },
-  ): Promise<Delivery>;
-  clear(options?: TControlOptions): Promise<Delivery>;
-  compact(options?: TControlOptions): Promise<Delivery>;
-  reset(
-    options?: TControlOptions & {
-      readonly reason?: string;
-    },
-  ): Promise<Delivery>;
-}
 export interface SessionReader {
   readonly id: string;
   stream(options?: SessionStreamOptions): AsyncIterable<SessionStreamEvent>;

@@ -1,5 +1,5 @@
 import type { CallState } from "#protocol/session-projection/selectors.js";
-import type { Interaction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-projection/reader.js";
 import type { CapabilityKind } from "#protocol/session-events/families/call.js";
 import type { ErrorInfo } from "#protocol/session-events/envelope.js";
 

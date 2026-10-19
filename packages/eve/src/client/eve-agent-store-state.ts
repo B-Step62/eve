@@ -1,6 +1,6 @@
 import type { SessionStreamEvent } from "#protocol/session-event.js";
 import type { Client } from "#client/client.js";
-import type { SessionView } from "#protocol/session-projection/tables.js";
+import type { SessionView } from "#protocol/session-projection/session-view.js";
 import type { ConversationState } from "#client/conversation-state.js";
 import type { ClientSession } from "#client/session.js";
 import type {
@@ -20,7 +20,7 @@ export type EveAgentStoreStatus = "idle" | "busy" | "resuming";
 export type PrepareSend = (input: SendTurnPayload) => SendTurnPayload | Promise<SendTurnPayload>;
 
 export interface EveAgentStoreSnapshot extends ConversationState {
-  /** Authoritative lifecycle tables as of this committed snapshot. */
+  /** Immutable lifecycle observations as of this complete commit. */
   readonly view: SessionView;
   /** The latest session creation, stream, resume, or turn failure. */
   readonly error: Error | undefined;

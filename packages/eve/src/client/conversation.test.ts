@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { call, interaction, turn } from "#protocol/session-projection/public-view.js";
 import { Conversation, conversationOf } from "#client/conversation.js";
 import type { EveMessagePart, EveToolPart } from "#client/message-types.js";
 import type { SessionEvent } from "#protocol/session-event.js";
@@ -117,11 +118,11 @@ describe("the conversation", () => {
       at,
     );
     conversation.observe(events[0]!);
-    expect(conversation.state.view.calls.call_0).toBeUndefined();
+    expect(call(conversation.state.view, "call_0")).toBeUndefined();
     conversation.observe(events[1]!);
-    expect(conversation.state.view.calls.call_0?.status).toBe("requested");
-    expect(conversation.state.view.interactions.i_0?.status).toBe("open");
-    expect(before.view.calls.call_0).toBeUndefined();
+    expect(call(conversation.state.view, "call_0")?.state).toBe("approval");
+    expect(interaction(conversation.state.view, "i_0")?.status).toBe("open");
+    expect(call(before.view, "call_0")).toBeUndefined();
   });
 
   it("shows a turn's parts and calls in the order the stream introduced them", () => {
@@ -443,7 +444,7 @@ describe("the conversation", () => {
     const state = conversationOf(
       [...started, text("p_0", "Done.")].map((event, index) => stampTestEvent(event, index)),
     );
-    expect(state.view.turns[turnId]?.status).toBe("running");
+    expect(turn(state.view, turnId)?.status).toBe("running");
     expect(state.messages).toHaveLength(2);
   });
 });

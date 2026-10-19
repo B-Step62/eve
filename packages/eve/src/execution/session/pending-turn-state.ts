@@ -3,7 +3,7 @@ import { runtimeWait, ownOpenRequestIds } from "#harness/session-machine/view.js
 import type { TaskToolCall } from "#execution/tasks/calls.js";
 import type { HarnessSession } from "#harness/types.js";
 import type { SessionProjection } from "#protocol/session-projection.js";
-import { openSignIns } from "#protocol/session-reader.js";
+import { openSignIns } from "#protocol/session-projection/reader.js";
 
 /**
  * What a paused turn waits on, which is one kind of thing at a time. The turn keeps it to resume;

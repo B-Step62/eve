@@ -16,7 +16,7 @@
 
 - @types/node/crypto.d.ts#CryptoKey
 - @types/node/crypto.d.ts#webcrypto
-- zod/index.d.cts#"/tmp/eve-api-owned-types/node_modules/.pnpm/zod@4.5.4/node_modules/zod/index"
+- zod/index.d.cts#<module>
 - zod/v4/classic/coerce.d.cts#ZodCoercedDate
 - zod/v4/classic/coerce.d.cts#ZodCoercedNumber
 - zod/v4/classic/compat.d.cts#ZodTypeAny
@@ -43,7 +43,7 @@
 - zod/v4/classic/schemas.d.cts#ZodUnknown
 - zod/v4/core/core.d.cts#$ZodBranded
 - zod/v4/core/core.d.cts#output
-- zod/v4/core/index.d.cts#"/tmp/eve-api-owned-types/node_modules/.pnpm/zod@4.5.4/node_modules/zod/v4/core/index"
+- zod/v4/core/index.d.cts#<module>
 - zod/v4/core/schemas.d.cts#$ZodTypeInternals
 - zod/v4/core/schemas.d.cts#$loose
 - zod/v4/core/schemas.d.cts#$strip

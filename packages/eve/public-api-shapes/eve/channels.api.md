@@ -12,7 +12,8 @@
 - Channel: src/public/definitions/channel.d.ts#Channel
 - ChannelAudience: src/shared/channel-audience.d.ts#ChannelAudience
 - ChannelCommitHandler: src/public/definitions/channel.d.ts#ChannelCommitHandler
-- ChannelContinuationOps: src/public/definitions/channel.d.ts#ChannelContinuationOps
+- ChannelContext: src/shared/channel-context.d.ts#ChannelContext
+- ChannelContinuationOps: src/shared/channel-context.d.ts#ChannelContinuationOps
 - ChannelCors: src/channel/cors.d.ts#ChannelCors
 - ChannelCorsOptions: src/channel/cors.d.ts#ChannelCorsOptions
 - ChannelDefinition: src/public/definitions/channel.d.ts#ChannelDefinition
@@ -30,8 +31,6 @@
 - CommittedLine: src/channel/adapter.d.ts#CommittedLine
 - ConversationEnvironment: src/shared/conversation-context.d.ts#ConversationEnvironment
 - DELETE: src/channel/routes.d.ts#DELETE
-- Delivery: src/shared/delivery.d.ts#Delivery
-- DeliveryResult: src/shared/delivery.d.ts#DeliveryResult
 - DisabledRouteSentinel: src/public/definitions/channel.d.ts#DisabledRouteSentinel
 - FetchFileContext: src/shared/channel-definition.d.ts#FetchFileContext
 - FetchFileFunction: src/shared/channel-definition.d.ts#FetchFileFunction
@@ -53,12 +52,6 @@
 - PUT: src/channel/routes.d.ts#PUT
 - RouteDefinition: src/channel/routes.d.ts#RouteDefinition
 - RouteHandlerArgs: src/channel/routes.d.ts#RouteHandlerArgs
-- Session: src/channel/session.d.ts#Session
-- SessionHandle: src/channel/session.d.ts#SessionHandle
-- SessionNotActiveError: src/channel/session-not-active-error.d.ts#SessionNotActiveError
-- SessionOperations: src/shared/session.d.ts#SessionOperations
-- SessionRespondOptions: src/channel/session.d.ts#SessionRespondOptions
-- SessionSendOptions: src/channel/session.d.ts#SessionSendOptions
 - SessionStrandedError: src/channel/session-stranded-error.d.ts#SessionStrandedError
 - TurnPolicy: src/channel/types.d.ts#TurnPolicy
 - UploadPolicyInput: src/public/channels/upload-policy.d.ts#UploadPolicyInput
@@ -407,17 +400,6 @@ export type WebSocketUpgradeResult =
 type WebSocketHeaders = Headers | readonly (readonly [string, string])[] | Record<string, string>;
 ```
 
-### src/channel/session-not-active-error.d.ts
-
-```ts
-export declare class SessionNotActiveError extends Error {
-  readonly code = "EVE_SESSION_NOT_ACTIVE";
-  readonly retryable: boolean;
-  constructor(options?: { readonly retryable?: boolean });
-  static is(error: unknown): error is SessionNotActiveError;
-}
-```
-
 ### src/channel/session-stranded-error.d.ts
 
 ```ts
@@ -434,16 +416,25 @@ interface StrandedSessionOwner {
 ### src/channel/session.d.ts
 
 ```ts
-export interface Session extends SessionOperations {
+export interface Session extends SessionReader {
+  send(message: MessageContent, options: SessionSendOptions): Promise<Delivery>;
+  respond<const TAnswers extends readonly Answer[]>(
+    answers: StrictAnswers<TAnswers>,
+    options: SessionRespondOptions,
+  ): Promise<Delivery>;
+  cancel(
+    options?: SessionControlOptions & {
+      readonly turnId?: string | null;
+    },
+  ): Promise<Delivery>;
+  clear(options?: SessionControlOptions): Promise<Delivery>;
+  compact(options?: SessionControlOptions): Promise<Delivery>;
+  reset(
+    options?: SessionControlOptions & {
+      readonly reason?: string;
+    },
+  ): Promise<Delivery>;
   stream(options?: SessionStreamOptions): AsyncIterable<SessionStreamEvent>;
-}
-export interface SessionHandle {
-  readonly id: string;
-  readonly auth: SessionAuth;
-  readonly continuation?: {
-    readonly token: string;
-    alias(rawToken: string): void;
-  };
 }
 export type SessionRespondOptions = SessionDeliveryOptions;
 export type SessionSendOptions = SessionDeliveryOptions & {
@@ -539,6 +530,7 @@ export interface SessionContext {
     environment: SandboxEnvironment<object | undefined, Session>,
   ): Promise<RuntimeSandboxSession<Session>>;
 }
+export type SessionInfo = SessionContext["session"];
 ```
 
 ### src/context/session-schedule.d.ts
@@ -1188,187 +1180,7 @@ export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
 ```
 
-### src/protocol/session-projection/request-status.d.ts
-
-```ts
-export type RequestStatus = "working" | "awaiting-input" | "completed" | "failed" | "cancelled";
-```
-
-### src/protocol/session-projection/tables.d.ts
-
-```ts
-export interface CallRow extends Introduced, Ended {
-  readonly callId: string;
-  readonly owner: CallOwner;
-  readonly capability: Capability;
-  readonly input?: JsonValue;
-  readonly inputRef?: ValueReference;
-  readonly inputError?: ErrorInfo;
-  readonly status: "requested" | "running" | "settled";
-  readonly clearedBy?: ClearedBy;
-  readonly taskId?: string;
-  readonly outcome?: CallOutcome;
-  readonly output?: JsonValue;
-  readonly outputRef?: ValueReference;
-  readonly outputOf?: {
-    readonly callId: string;
-  };
-  readonly error?: ErrorInfo;
-  readonly reason?: string;
-  readonly cause?: Cause;
-  readonly label?: string;
-  readonly usage?: Usage;
-}
-export interface ChangeRow extends Introduced, Ended {
-  readonly changeId: string;
-  readonly kind: ContextKind;
-  readonly turnId?: string;
-  readonly cause?: Cause;
-  readonly trigger?: {
-    readonly inputTokens: number;
-  };
-  readonly status: "running" | "settled";
-  readonly outcome?: ContextOutcome;
-  readonly selects?: null | {
-    readonly turnId: string;
-  };
-  readonly error?: ErrorInfo;
-}
-export interface ChildRow extends Introduced, ChildOpenedData {}
-export interface DeliveryRow extends Introduced, Ended {
-  readonly deliveryId: string;
-  readonly principal?: Principal;
-  readonly source?: DeliverySource;
-  readonly clientContext?: JsonValue;
-  readonly status: "admitted" | "consumed" | "settled";
-  readonly turnId?: string;
-  readonly consumedAt?: number;
-  readonly parts?: readonly UserPart[];
-  readonly outcome?: DeliveryOutcome;
-  readonly reason?: string;
-}
-export interface Ended {
-  readonly closedAt?: number;
-  readonly endedAt?: string;
-}
-export interface InteractionRow extends Introduced, Ended {
-  readonly interactionId: string;
-  readonly subject: InteractionOpenedData["subject"];
-  readonly request: InteractionOpenedData["request"];
-  readonly origin?: InteractionOpenedData["origin"];
-  readonly audience?: InteractionOpenedData["audience"];
-  readonly status: "open" | "settled";
-  readonly outcome?: InteractionOutcome;
-  readonly reason?: string;
-  readonly cause?: Cause;
-  readonly response?: {
-    readonly [key: string]: JsonValue;
-  };
-}
-export interface Introduced {
-  readonly introducedAt: number;
-  readonly startedAt: string;
-}
-export interface PartRow extends Introduced {
-  readonly partId: string;
-  readonly runId: string;
-  readonly kind: ContentKind;
-  readonly phase: ContentPhase;
-  readonly value?: JsonValue;
-  readonly valueRef?: ValueReference;
-  readonly interrupted?: true;
-  readonly mediaType?: string;
-  readonly fallbackText?: string;
-}
-export interface ResponseRow extends Introduced, Ended {
-  readonly responseId: string;
-  readonly interactionId: string;
-  readonly deliveryId: string;
-  readonly value?: ResponseValue;
-  readonly status: "submitted" | "admitted" | "settled";
-  readonly outcome?: ResponseOutcome;
-  readonly reason?: string;
-}
-export interface RunRow extends Introduced, Ended {
-  readonly runId: string;
-  readonly owner: ModelOwner;
-  readonly status: "requested" | "running" | "settled";
-  readonly step?: number;
-  readonly modelId?: string;
-  readonly attempt?: number;
-  readonly outcome?: ModelOutcome;
-  readonly finishReason?: string;
-  readonly generationId?: string;
-  readonly error?: ErrorInfo;
-  readonly usage?: Usage;
-}
-export interface SessionRow extends Ended {
-  readonly status: "new" | "open" | "ended";
-  readonly startedAt?: string;
-  readonly parent?: {
-    readonly sessionId: string;
-    readonly callId: string;
-  };
-  readonly runtime?: RuntimeIdentity;
-  readonly outcome?: SessionOutcome;
-  readonly cause?: Cause;
-  readonly error?: ErrorInfo;
-  readonly turnCount: number;
-  readonly latestTurnId?: string;
-}
-export interface SessionView {
-  readonly position: number;
-  readonly session: SessionRow;
-  readonly deliveries: Table<DeliveryRow>;
-  readonly turns: Table<TurnRow>;
-  readonly runs: Table<RunRow>;
-  readonly parts: Table<PartRow>;
-  readonly calls: Table<CallRow>;
-  readonly tasks: Table<TaskRow>;
-  readonly interactions: Table<InteractionRow>;
-  readonly responses: Table<ResponseRow>;
-  readonly children: Table<ChildRow>;
-  readonly changes: Table<ChangeRow>;
-  readonly usage: UsageTotals;
-  readonly selection?: null | {
-    readonly turnId: string;
-  };
-}
-export interface TaskRow extends Introduced, Ended {
-  readonly taskId: string;
-  readonly startedBy: {
-    readonly callId: string;
-  };
-  readonly kind: string;
-  readonly name: string;
-  readonly status: "running" | "ended";
-  readonly outcome?: TaskOutcome;
-  readonly reason?: string;
-  readonly error?: ErrorInfo;
-}
-export interface TurnRow extends Introduced, Ended {
-  readonly turnId: string;
-  readonly cause: Cause;
-  readonly follows: string | null;
-  readonly status: "running" | "settled";
-  readonly runs?: number;
-  readonly reply?: readonly string[];
-  readonly outcome?: TurnOutcome;
-  readonly error?: ErrorInfo;
-  readonly endedBy?: Cause;
-}
-export interface UsageTotals {
-  readonly total: Usage;
-  readonly byKind: {
-    readonly [kind: string]: Usage;
-  };
-}
-type Table<TRow> = {
-  readonly [id: string]: TRow;
-};
-```
-
-### src/protocol/session-reader.d.ts
+### src/protocol/session-projection/reader.d.ts
 
 ```ts
 export interface AskedCall {
@@ -1376,8 +1188,11 @@ export interface AskedCall {
   readonly name: string;
   readonly input?: JsonValue;
 }
-export interface Interaction extends InteractionPlace {
+export interface Interaction {
   readonly interactionId: string;
+  readonly turnId: string;
+  readonly stepIndex: number;
+  readonly taskId?: string;
   readonly request: Omit<InteractionRequest, "signIn"> & {
     readonly signIn?: Omit<SignInChallenge, "callbackUrl">;
   };
@@ -1387,10 +1202,20 @@ export interface Interaction extends InteractionPlace {
   readonly reason?: string;
   readonly answer?: Answer;
 }
-export interface InteractionPlace {
-  readonly turnId: string;
-  readonly stepIndex: number;
-  readonly taskId?: string;
+```
+
+### src/protocol/session-projection/request-status.d.ts
+
+```ts
+export type RequestStatus = "working" | "awaiting-input" | "completed" | "failed" | "cancelled";
+```
+
+### src/protocol/session-projection/session-view.d.ts
+
+```ts
+declare const sessionViewBrand: unique symbol;
+export interface SessionView {
+  readonly [sessionViewBrand]: true;
 }
 ```
 
@@ -1461,12 +1286,6 @@ export interface Channel<
   ) => Promise<Delivery>;
   readonly turnPolicy?: TurnPolicy;
 }
-export interface ChannelContinuationOps {
-  readonly continuation?: {
-    readonly token: string;
-    alias(token: string): void;
-  };
-}
 export interface ChannelEventContext<TChannel = ChannelContinuationOps> extends SessionContext {
   readonly channel: TChannel;
   readonly position: FactPosition;
@@ -1477,7 +1296,7 @@ export interface DisabledRouteSentinel {
 }
 export type ChannelCommitHandler<TCtx = void> = (
   line: CommittedLine,
-  ctx: ChannelEventContext<ChannelContext<TCtx>>,
+  ctx: ChannelEventContext<TCtx & ChannelContinuationOps>,
 ) => void | Promise<void>;
 export type ChannelDefinition<
   TState = undefined,
@@ -1487,7 +1306,7 @@ export type ChannelDefinition<
 > = GenericChannelDefinition<ChannelEvents<TCtx>, TState, TCtx, TReceiveTarget, TMetadata>;
 export type ChannelEventHandler<T extends SessionEvent["type"], TCtx = void> = (
   event: ChannelEventOf<T>,
-  ctx: ChannelEventContext<ChannelContext<TCtx>>,
+  ctx: ChannelEventContext<TCtx & ChannelContinuationOps>,
 ) => void | Promise<void>;
 export type ChannelEventOf<T extends SessionEvent["type"]> = Extract<
   SessionEvent,
@@ -1505,7 +1324,6 @@ export type InferChannelMetadata<TChannel> =
   TChannel extends Channel<any, any, infer TMetadata> ? TMetadata : Record<string, unknown>;
 export type ReceiveInput<TReceiveTarget = Record<string, unknown>> =
   GenericReceiveInput<TReceiveTarget>;
-type ChannelContext<TCtx> = TCtx & ChannelContinuationOps;
 ```
 
 ### src/shared/channel-audience.d.ts
@@ -1515,12 +1333,26 @@ export declare const CHANNEL_AUDIENCES: readonly ["public", "private", "unknown"
 export type ChannelAudience = (typeof CHANNEL_AUDIENCES)[number];
 ```
 
+### src/shared/channel-context.d.ts
+
+```ts
+export interface ChannelContext extends ChannelContinuationOps {
+  readonly session: Pick<SessionInfo, "id" | "auth">;
+}
+export interface ChannelContinuationOps {
+  readonly continuation?: {
+    readonly token: string;
+    alias(token: string): void;
+  };
+}
+```
+
 ### src/shared/channel-definition.d.ts
 
 ```ts
 export interface FetchFileContext {
   readonly state: Readonly<Record<string, unknown>>;
-  readonly session: SessionHandle;
+  readonly session: ChannelContext["session"];
 }
 export interface FetchFileResult {
   readonly bytes: Buffer;
@@ -1537,11 +1369,11 @@ export interface GenericChannelDefinition<
   readonly turnPolicy?: TurnPolicy;
   deliver?(
     payload: ChannelDelivery<TState>,
-    ctx: TCtx,
+    ctx: TCtx & ChannelContext,
   ): ChannelDelivery<TState> | void | Promise<ChannelDelivery<TState> | void>;
   readonly state?: TState;
   readonly cors?: ChannelCors;
-  context?(state: NonNullable<TState>, session: SessionHandle): TCtx;
+  context?(state: NonNullable<TState>, channel: ChannelContext): TCtx;
   readonly routes: readonly RouteDefinition<TState>[];
   receive?(
     input: GenericReceiveInput<TReceiveTarget>,
@@ -1623,21 +1455,33 @@ export type ConversationEnvironment = "development" | "preview" | "production";
 ### src/shared/delivery.d.ts
 
 ```ts
-export interface Delivery<TOutput = unknown> extends AsyncIterable<SessionStreamEvent> {
+export interface Delivery<TOutput = unknown> {
   readonly sessionId: string;
   readonly deliveryId: string;
-  result(): Promise<DeliveryResult<TOutput>>;
+  stream(options?: DeliveryReadOptions): AsyncIterable<SessionStreamEvent>;
+  result(options?: DeliveryReadOptions): Promise<DeliveryResult<TOutput>>;
 }
-export interface DeliveryResult<TOutput = unknown> {
+export interface DeliveryReadOptions {
+  readonly signal?: AbortSignal;
+}
+export type DeliveryResult<TOutput = unknown> = {
   readonly deliveryId: string;
   readonly sessionId: string;
-  readonly status: RequestStatus;
+  readonly outcome: DeliveryOutcome;
   readonly sessionEnded: boolean;
   readonly reply: string | undefined;
   readonly data: TOutput | undefined;
-  readonly events: SessionStreamEvent[];
   readonly interactions: readonly Interaction[];
-}
+} & (
+  | {
+      readonly status: Exclude<RequestStatus, "working" | "failed">;
+      readonly error?: never;
+    }
+  | {
+      readonly status: "failed";
+      readonly error: ErrorInfo;
+    }
+);
 ```
 
 ### src/shared/input.d.ts
@@ -1917,29 +1761,6 @@ interface WriteOptions<T> {
 ### src/shared/session.d.ts
 
 ```ts
-export interface SessionOperations<
-  TSendOptions = SessionSendOptions,
-  TRespondOptions = SessionRespondOptions,
-  TControlOptions = SessionControlOptions,
-> extends SessionReader {
-  send(message: MessageContent, options: TSendOptions): Promise<Delivery>;
-  respond<const TAnswers extends readonly Answer[]>(
-    answers: StrictAnswers<TAnswers>,
-    options: TRespondOptions,
-  ): Promise<Delivery>;
-  cancel(
-    options?: TControlOptions & {
-      readonly turnId?: string | null;
-    },
-  ): Promise<Delivery>;
-  clear(options?: TControlOptions): Promise<Delivery>;
-  compact(options?: TControlOptions): Promise<Delivery>;
-  reset(
-    options?: TControlOptions & {
-      readonly reason?: string;
-    },
-  ): Promise<Delivery>;
-}
 export interface SessionReader {
   readonly id: string;
   stream(options?: SessionStreamOptions): AsyncIterable<SessionStreamEvent>;

@@ -10,7 +10,7 @@ export interface SessionEventStreamOptions {
   readonly onError: (error: unknown) => void;
 }
 
-/** One continuously folded transport; commands never consume a second response stream. */
+/** One continuously folded UI transport, independent of explicit Delivery reads. */
 export class SessionEventStream {
   readonly #controller = new AbortController();
   readonly #caughtUp = Promise.withResolvers<void>();

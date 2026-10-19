@@ -1,3 +1,4 @@
+import { call as readCall } from "eve/events";
 import type { ChannelFrom, ChannelSendOptions, ChannelSource } from "eve/channels";
 import { defineChannel, POST } from "eve/channels";
 import type { SendblueMessagePayload } from "chat-adapter-sendblue";
@@ -377,10 +378,10 @@ export default defineChannel<SendblueChannelState, SendblueChannelContext>({
       }
 
       const { subject } = event.data;
-      const call = "callId" in subject ? ctx.view.calls[subject.callId] : undefined;
+      const call = "callId" in subject ? readCall(ctx.view, subject.callId) : undefined;
       const pending: PendingInputRequest = {
         requestId: event.data.interactionId,
-        toolName: call?.capability.name ?? "",
+        toolName: call?.name ?? "",
       };
 
       if (isSaveMemoryRequest(pending) && inflightSend) {

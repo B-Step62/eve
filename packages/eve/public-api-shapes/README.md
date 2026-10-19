@@ -7,7 +7,7 @@ Run `node scripts/public-api-shapes.mjs --write` after reviewing an API change. 
 `../public-api-reachability.json` records intentional or unresolved named-type findings:
 
 - `unexported`: reachable eve-owned named declarations with no public export home, across all entries. Generic parameters and member-local names are excluded.
-- `orphaned`: exported types not reached from that entry's exported values. Standalone annotation types and disabled markers can be intentional.
+- `orphaned`: exported types not reached from any public entry's exported values. A canonical type home such as `eve/sessions` need not re-export the factories that use its types. Standalone annotation types and disabled markers can still be intentional.
 - `any`: exported types/values that are `any`, or have an immediately visible `any` field. This is not a recursive proof about every nested generic instantiation.
 
 The initial allowlists are audit evidence, not deletion instructions or a claim that every unexported name is an authoring type. Brands, helpers, and deliberately retained standalone types remain. Export a type an app needs to annotate before considering an exception. Updates can remove findings automatically, but never add exceptions automatically.

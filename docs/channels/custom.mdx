@@ -97,7 +97,7 @@ Each route receives these operation surfaces:
 
 Event handlers receive `(event, ctx)`: the whole fact, with its `type`, `data`, and
 `scope`, and a context. `ctx.session.id` identifies the exact session, `ctx.position`
-and `ctx.view` locate the fact on the stream and the session's state as of its commit,
+and `ctx.view` locate the fact on the stream and expose an opaque snapshot of its whole commit,
 and `ctx.channel` is the channel's own context. `ctx.channel.continuation` exposes the
 current address and `alias()` when this channel needs to add another address. Handlers
 run after the line is written, so they observe facts and never shape them.
@@ -148,7 +148,8 @@ handle to the canonical owner.
 ```ts
 const source = from(threadId);
 
-const session = await source.send("Hello", { auth });
+const delivery = await source.send("Hello", { auth });
+const result = await delivery.result();
 await source.respond(answers, { auth });
 await source.cancel({ turnId });
 await source.compact();
@@ -167,8 +168,12 @@ produce one fresh session. A `respond()` call, or a `deliver()` that includes in
 carries answers a fresh session has no request for, so it throws `SessionStrandedError` and leaves
 the stranded session in place.
 
-`Session` is fixed: every call targets exactly one durable ID. It never creates,
-follows, or resolves a replacement.
+`Session` from `eve/sessions` is fixed: every call targets exactly one durable ID. It never
+creates, follows, or resolves a replacement. Shared `Delivery`, `DeliveryResult`, `SessionReader`,
+stream/read options, and `SessionNotActiveError` also come from `eve/sessions`, not `eve/channels`.
+Accepted commands return reusable deliveries: call `stream({ signal })` for events or
+`result({ signal })` for a settled summary with its `outcome` and failure `error`. Aborting a read
+does not cancel the command or other readers.
 
 ```ts
 const session = attachSession(sessionId);
@@ -322,8 +327,8 @@ Keep each route's `method` and `path` unless you mean to move the endpoint.
 - `reset` terminally retires the current session. A later address `send()` creates
   a fresh session; a fixed `Session` handle remains pinned to the retired ID.
 
-Control operations never create a session. Unknown or inactive targets return a
-benign no-active status. Authenticate and deduplicate command webhooks before
+Control operations never create a session. Unknown or inactive targets throw
+`SessionNotActiveError`; an accepted no-op cancellation settles with `outcome: "ignored"`. Authenticate and deduplicate command webhooks before
 calling `reset`, because a delayed duplicate can retire a newer address owner.
 
 ## CORS
@@ -523,7 +528,13 @@ When another identity should address a session, add it with `channel.continuatio
 
 Aliasing adds an address to the current session. Earlier addresses continue to resolve to the same session and accept the same payloads. `reset` terminally retires the current session and makes all its addresses available to later `send()` calls. `cancel` stops only the active turn and leaves the session, history, and continuation-token ownership intact.
 
-The `context(state, session)` config option builds the per-step `channel` argument handed to every event handler. It receives the channel's live adapter `state` and a `SessionHandle`, and returns the channel-owned context (thread handles, API clients, late-bound callbacks). The framework injects [`ChannelContinuationOps`](#define-a-channel) and passes the result as the second positional argument to each handler. Closing over `session` lets the factory register callbacks that add an alias later. State mutations made through the returned context are written back to adapter state.
+The `context(state, channel)` config option builds the per-step context read as `ctx.channel`
+in event handlers. Its second argument is `ChannelContext` from `eve/channels`: live
+`session.id` and `session.auth` information, plus channel-owned `continuation` routing. It does
+not expose session commands or put aliasing on session information. Close over
+`channel.continuation` for late-bound callbacks, or call `ctx.channel.continuation?.alias(token)`
+from an event handler. eve adds `ChannelContinuationOps` to the returned context and writes
+state mutations back to adapter state.
 
 ```ts
 import { defineChannel } from "eve/channels";
@@ -532,12 +543,12 @@ import { mintRef } from "./refs";
 
 defineChannel<{ ref: string | null }>({
   state: { ref: null },
-  context(state, session) {
+  context(state, channel) {
     return {
       state,
       registerAnchor(ref: string) {
         state.ref = ref;
-        session.continuation?.alias(ref);
+        channel.continuation?.alias(ref);
       },
     };
   },

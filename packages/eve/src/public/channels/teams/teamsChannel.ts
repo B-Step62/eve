@@ -4,7 +4,7 @@ import type { ChannelEventContext, ChannelEventOf } from "#public/definitions/ch
 import type { SessionEvent } from "#protocol/session-event.js";
 import type { TeamsInstrumentationMetadata } from "#public/channels/teams/index.js";
 import type { ChannelFrom, ChannelResolveSession } from "#channel/channel-operations.js";
-import type { SessionHandle } from "#channel/session.js";
+import type { ChannelContext } from "#shared/channel-context.js";
 import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { ChannelContinuationOps } from "#public/definitions/channel.js";
 
@@ -434,7 +434,7 @@ function teamsAudience(conversationType: string | null): ChannelAudience {
 
 function rebuildTeamsContext(
   state: TeamsChannelState,
-  session: SessionHandle,
+  session: ChannelContext,
   config: TeamsChannelConfig,
 ): TeamsChannelContext {
   const binding = buildTeamsBinding({ config, session, state });
@@ -447,7 +447,7 @@ function rebuildTeamsContext(
 
 function buildTeamsBinding(input: {
   readonly config: TeamsChannelConfig;
-  readonly session?: SessionHandle;
+  readonly session?: ChannelContext;
   readonly state: TeamsChannelState;
 }): TeamsContext {
   const teams = buildTeamsHandle(input);
@@ -474,7 +474,7 @@ function buildTeamsBinding(input: {
 
 function buildTeamsHandle(input: {
   readonly config: TeamsChannelConfig;
-  readonly session?: SessionHandle;
+  readonly session?: ChannelContext;
   readonly state: TeamsChannelState;
 }): TeamsHandle {
   const state = input.state;

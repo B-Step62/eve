@@ -5,7 +5,7 @@ import type {
 } from "#public/definitions/channel.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import type { PromptQueueState } from "#channel/prompt-queue.js";
-import type { SessionHandle } from "#channel/session.js";
+import type { ChannelContext } from "#shared/channel-context.js";
 import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { ChannelFrom } from "#channel/channel-operations.js";
 import { createLogger } from "#internal/logging.js";
@@ -283,7 +283,7 @@ export function linearChannel(config: LinearChannelConfig = {}): LinearChannel {
 
 function rebuildLinearContext(
   state: LinearChannelState,
-  _session: SessionHandle,
+  _session: ChannelContext,
   config: LinearChannelConfig,
 ): LinearChannelContext {
   return {

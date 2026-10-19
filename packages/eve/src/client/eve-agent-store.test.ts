@@ -1,3 +1,4 @@
+import { delivery, turn } from "#protocol/session-projection/public-view.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -5,6 +6,7 @@ import {
   EveAgentStore,
   type EveAgentStoreInit,
 } from "#client/eve-agent-store.js";
+import { Client } from "#client/client.js";
 import { testTurnFacts } from "#internal/testing/events.js";
 import { eventsOfLine, linesOf } from "#protocol/session-lines.js";
 import {
@@ -126,12 +128,39 @@ describe("EveAgentStore acceptance and observation", () => {
     expect(texts(current)).toEqual(["user: sunny.", "assistant: Sunny."]);
     expect(current.snapshot.messages[0]!.id).toBe(echoId);
     expect(finished).toHaveBeenCalledOnce();
+    expect(server.reads).toHaveLength(1);
+    current.newSession();
     await expect((await sent).result()).resolves.toMatchObject({
       status: "completed",
       reply: "Sunny.",
       sessionEnded: false,
     });
-    expect(server.reads).toHaveLength(1);
+    expect(server.reads).toHaveLength(2);
+  });
+
+  it("does not publish another reader's cursor ahead of its own committed events", async () => {
+    const server = agent();
+    const session = new Client({ host: "https://eve.test" }).sessions.attach("session_1");
+    const current = store({ session });
+    const receipt = await session.send("sunny.");
+    server.append(testTurnFacts(0, "Sunny.", [receipt.deliveryId]));
+    await receipt.result();
+    expect(session.state.streamIndex).toBeGreaterThan(0);
+    const prepared = Promise.withResolvers<void>();
+    current.setCallbacks({
+      prepareSend: async (input) => {
+        await prepared.promise;
+        return input;
+      },
+    });
+    const sending = current.send({ message: "later." });
+    try {
+      expect(current.snapshot.events).toEqual([]);
+      expect(current.snapshot.session?.streamIndex).toBe(0);
+    } finally {
+      prepared.resolve();
+      await sending;
+    }
   });
 
   it("keeps identical messages distinct when the stream beats reversed POST acknowledgements", async () => {
@@ -283,7 +312,7 @@ describe("EveAgentStore Stop during submission", () => {
     await current.send({ message: "sunny." });
     const facts = testTurnFacts(0, "Later.", ["d_0"]);
     server.append(facts.slice(0, 1));
-    await vi.waitFor(() => expect(current.snapshot.view.deliveries.d_0?.status).toBe("admitted"));
+    await vi.waitFor(() => expect(delivery(current.snapshot.view, "d_0")?.status).toBe("admitted"));
     const stopped = current.cancel();
     server.append(facts.slice(1, 4));
     await expect(stopped).resolves.toMatchObject({
@@ -333,7 +362,7 @@ describe("EveAgentStore Stop during submission", () => {
     prepared.resolve();
     await sent;
     server.append(testTurnFacts(0, "Other.", ["other"]).slice(0, 4));
-    await vi.waitFor(() => expect(current.snapshot.view.turns.turn_0?.status).toBe("running"));
+    await vi.waitFor(() => expect(turn(current.snapshot.view, "turn_0")?.status).toBe("running"));
     expect(server.cancellations).toEqual([]);
     server.append(testTurnFacts(0, "Other.", ["other"]).slice(4));
     server.append(testTurnFacts(1, "Later.", ["d_0"]).slice(0, 4));
@@ -439,12 +468,12 @@ describe("EveAgentStore committed snapshots", () => {
     const current = store();
     await current.send({ message: "sunny." });
     server.append(testTurnFacts(0, "Later.", ["d_0"]).slice(0, 4));
-    await vi.waitFor(() => expect(current.snapshot.view.turns.turn_0?.status).toBe("running"));
+    await vi.waitFor(() => expect(turn(current.snapshot.view, "turn_0")?.status).toBe("running"));
     const before = current.snapshot;
     const seen: { cancelled: boolean; failed: boolean }[] = [];
     current.subscribe(() =>
       seen.push({
-        cancelled: current.snapshot.view.turns.turn_0?.outcome === "cancelled",
+        cancelled: turn(current.snapshot.view, "turn_0")?.outcome === "cancelled",
         failed: current.snapshot.error !== undefined,
       }),
     );
@@ -469,7 +498,7 @@ describe("EveAgentStore committed snapshots", () => {
     );
     await vi.waitFor(() => expect(current.snapshot.error?.message).toBe("boom"));
     expect(seen.filter(({ cancelled, failed }) => cancelled && !failed)).toEqual([]);
-    expect(before.view.turns.turn_0?.status).toBe("running");
+    expect(turn(before.view, "turn_0")?.status).toBe("running");
   });
 });
 
@@ -586,7 +615,7 @@ describe("EveAgentStore with followIdle disabled", () => {
       true,
     );
     await vi.waitFor(() =>
-      expect(current.snapshot.view.deliveries.control?.status).toBe("settled"),
+      expect(delivery(current.snapshot.view, "control")?.status).toBe("settled"),
     );
     expect(current.snapshot.status).toBe("busy");
     expect(server.reads[0]?.signal?.aborted).toBe(false);

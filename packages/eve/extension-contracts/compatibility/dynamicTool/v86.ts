@@ -1,6 +1,7 @@
+// Epoch 86 of the dynamicTool capability: the authoring contract of epoch 85 still compiles.
 import { defineDynamic, defineTool } from "#public/tools/index.js";
 
-// Epoch 86 dynamic tools can use Connect auth without opting into event handling.
+// Epoch 85 dynamic tools can use Connect auth without opting into event handling.
 export default defineDynamic({
   events: {
     "session.started": () => ({

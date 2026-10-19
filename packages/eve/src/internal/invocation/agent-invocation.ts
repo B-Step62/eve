@@ -1,4 +1,4 @@
-import type { Interaction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-projection/reader.js";
 import type { JsonValue } from "#shared/json.js";
 import type { RequestStatus } from "#protocol/session-projection/request-status.js";
 
