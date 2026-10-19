@@ -279,3 +279,37 @@ export async function failingServeWorkflow(): Promise<never> {
   "use workflow";
   throw new Error("Live serve workflow must not execute.");
 }
+
+/** Reads a token from the `oauth/issues` connector, whose sign-in always fails terminally. */
+export async function failedSignInWorkflow(_input: unknown, ctx: WorkflowToolContext) {
+  "use workflow";
+  return await failedSignInStep(ctx);
+}
+
+async function failedSignInStep(ctx: WorkflowToolContext): Promise<string> {
+  "use step";
+  const provider: AuthorizationDefinition = {
+    principalType: "user",
+    vercelConnect: { connector: "oauth/issues" },
+    async getToken() {
+      throw new ConnectionAuthorizationRequiredError("issues");
+    },
+    async startAuthorization({ callbackUrl }) {
+      return {
+        challenge: {
+          displayName: "Issues",
+          url: `https://idp.example/authorize?cb=${callbackUrl}`,
+        },
+        resume: { nonce: "issues-nonce" },
+      };
+    },
+    async completeAuthorization() {
+      throw new ConnectionAuthorizationFailedError("issues", {
+        message: "Authorization did not complete.",
+        reason: "authorization_incomplete",
+        retryable: false,
+      });
+    },
+  };
+  return (await ctx.getToken(provider)).token;
+}

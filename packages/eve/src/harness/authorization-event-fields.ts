@@ -1,3 +1,4 @@
+import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { AuthorizationPrincipal } from "#protocol/message.js";
 import type { ConnectionPrincipal } from "#shared/connection-types.js";
@@ -16,6 +17,22 @@ export function authorizationEventFields(challenge: AuthorizationChallenge) {
     name: challenge.name,
     principal: principalIdentity(challenge.principal),
     principalId: challenge.principalId,
+  };
+}
+
+/** The `authorization.completed` fields of a sign-in that ended with `failure`. */
+export function failedSignInFields(failure: unknown) {
+  const reason = isConnectionAuthorizationFailedError(failure)
+    ? (failure.reason ?? failure.message)
+    : failure instanceof Error
+      ? failure.message
+      : typeof failure === "string"
+        ? failure
+        : undefined;
+  return {
+    outcome: "failed" as const,
+    ...(reason !== undefined && { reason }),
+    ...(isConnectionAuthorizationFailedError(failure) && { retryable: failure.retryable }),
   };
 }
 

@@ -37,7 +37,7 @@ import {
   resolveConnectionPrincipalFromAuth,
 } from "#runtime/connections/principal.js";
 import { liveProjection } from "#harness/session-machine/current.js";
-import { terminalSignInFailure } from "#harness/hitl/sign-ins.js";
+import { signInAlreadyFailedError, terminalSignInFailure } from "#harness/hitl/sign-ins.js";
 import { AuthKey, type SessionAuthContext } from "#context/keys.js";
 import {
   type AuthorizationDefinition,
@@ -191,11 +191,7 @@ export async function handleAuthorizationError(
           principal: resolveScopedPrincipal(scoped),
         });
   if (refused !== undefined) {
-    throw new ConnectionAuthorizationFailedError(scoped.scope, {
-      message: `Authorization for "${scoped.scope}" already failed in this turn and can't be retried${refused.reason === undefined ? "." : `: ${refused.reason}`}`,
-      ...(refused.reason !== undefined && { reason: refused.reason }),
-      retryable: false,
-    });
+    throw signInAlreadyFailedError(scoped.scope, refused);
   }
 
   if (options.evictToken) {

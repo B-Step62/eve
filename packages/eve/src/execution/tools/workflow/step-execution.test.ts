@@ -159,7 +159,10 @@ describe("workflow step authorization", () => {
         await ctx.getToken(provider);
         ctx.requireAuth(provider);
       }, input),
-    ).rejects.toMatchObject({ fatal: true, reason: "token_rejected_after_authorization" });
+    ).resolves.toMatchObject({
+      kind: "authorization-failed",
+      reason: "token_rejected_after_authorization",
+    });
     expect(complete).toHaveBeenCalledOnce();
   });
   it("uses the captured requester instead of another ambient user and caches only within a step", async () => {
@@ -237,8 +240,8 @@ describe("workflow step authorization", () => {
           },
         ],
       }),
-    ).rejects.toMatchObject({
-      fatal: true,
+    ).resolves.toMatchObject({
+      kind: "authorization-failed",
       message: expect.stringContaining("rejected the token immediately after authorization"),
     });
     expect(evict).toHaveBeenCalledOnce();

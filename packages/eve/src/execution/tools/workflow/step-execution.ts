@@ -66,9 +66,13 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
           ),
         );
       } catch (error) {
-        // The Workflow SDK recognizes fatal=true; preserve eve's classified error fields.
         if (isConnectionAuthorizationFailedError(error) && !error.retryable) {
-          Object.assign(error, { fatal: true });
+          return {
+            kind: "authorization-failed",
+            connectionName: error.connectionName,
+            message: error.message,
+            ...(error.reason !== undefined && { reason: error.reason }),
+          };
         }
         throw error;
       }
