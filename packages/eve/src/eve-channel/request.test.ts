@@ -13,25 +13,28 @@ describe("parseCreateBody", () => {
     });
   });
 
-  it("accepts a delegated call from an older eve that still sends an activity observer", () => {
-    const callback = {
-      callId: "call-1",
-      subagentName: "researcher",
-      token: "parent-callback-token",
-      url: "https://parent.example.com/eve/v1/callback/parent-callback-token",
-    };
-    const body = parseCreateBody({
-      activityObserver: {
-        sink: { url: "https://parent.example.com/eve/v1/activity/x", version: 1 },
-      },
-      callback,
-      message: "research this",
-      protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION,
-    });
+  it.each([1, 2, REMOTE_AGENT_PROTOCOL_VERSION])(
+    "accepts a delegated protocol %s call with a retired activity observer",
+    (protocolVersion) => {
+      const callback = {
+        callId: "call-1",
+        subagentName: "researcher",
+        token: "parent-callback-token",
+        url: "https://parent.example.com/eve/v1/callback/parent-callback-token",
+      };
+      const body = parseCreateBody({
+        activityObserver: {
+          sink: { url: "https://parent.example.com/eve/v1/activity/x", version: 1 },
+        },
+        callback,
+        message: "research this",
+        protocolVersion,
+      });
 
-    expect(body).toEqual(expect.objectContaining({ callback, message: "research this" }));
-    expect(body).not.toHaveProperty("activityObserver");
-  });
+      expect(body).toEqual(expect.objectContaining({ callback, message: "research this" }));
+      expect(body).not.toHaveProperty("activityObserver");
+    },
+  );
 
   it("rejects an explicitly empty message", async () => {
     const response = parseCreateBody({ message: "" });

@@ -70,7 +70,6 @@ import {
   parseSessionControlBody,
   parseSessionMessageBody,
   parseStartIndex,
-  rejectSessionContinuationToken,
   requireSessionId,
 } from "#eve-channel/request.js";
 import { attachClientContext } from "#internal/client-context.js";
@@ -171,9 +170,6 @@ export function eveChannel(input: EveChannelInput): EveChannel {
             { status: 403 },
           );
         }
-        const tokenRejection = rejectSessionContinuationToken(payload);
-        if (tokenRejection !== null) return tokenRejection;
-
         const forwarded = await resolveForwardedPrincipal({
           trustedForwarders: input.trustedForwarders,
           forwarder: auth,

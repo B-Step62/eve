@@ -1,6 +1,6 @@
 ---
 issue: "None (maintainer proposal; related PR #4930)"
-status: draft
+status: in-progress
 last_updated: "2026-10-19"
 ---
 
@@ -10,13 +10,13 @@ last_updated: "2026-10-19"
 
 Before 1.0, reject unrecognized top-level fields in framework-owned HTTP JSON
 request bodies with **400 Bad Request**. Name the unknown field and list the
-accepted fields for the matched route. This is a proposed breaking change, not
-implemented behavior.
+accepted fields for the matched route. This PR implements the breaking change for
+session creation, follow-up messages and answers, and session controls.
 
-Today, session parsers read the fields they recognize and ignore remaining keys,
-with a few explicit exceptions. A typo such as `outputschema`, an option from a
-newer client, or a field sent to the wrong route can succeed without its intended
-effect. The response gives people and agents no indication of how to correct the
+Before this change, session parsers selected recognized fields and ignored remaining
+keys, with a few explicit exceptions. A typo such as `outputschema`, an option from a
+newer client, or a field sent to the wrong route could succeed without its intended
+effect. The response gave people and agents no indication of how to correct the
 request.
 
 ## Request contract
@@ -35,19 +35,21 @@ Content-Type: application/json
 ```json
 {
   "ok": false,
-  "error": "Unknown field 'outputschema'. Accepted fields: message, answers, clientContext, outputSchema, turnPolicy, callback."
+  "error": "Unknown field 'outputschema'. Accepted fields: message, inputResponses, clientContext, outputSchema, turnPolicy, callback, forwardedPrincipal."
 }
 ```
 
 The accepted-field list must describe the actual route and supported protocol,
-including any recognized protocol-specific fields. The example uses the planned
-`answers` vocabulary from [the pre-1.0 API cleanup](https://github.com/vercel/eve/pull/4930);
-main currently uses `inputResponses`.
+including any recognized protocol-specific fields. This implementation uses
+`inputResponses`; [the pre-1.0 API cleanup](https://github.com/vercel/eve/pull/4930)
+separately proposes the `answers` vocabulary.
 
 For multiple unknown fields, identify them in a deterministic order and include
-the accepted-field list. Report field names, not request values. A fieldless
-control route rejects any supplied top-level field; an empty object or absent
-body remains valid where already supported.
+the accepted-field list. Report field names, not request values. Diagnostics show
+at most eight names, shorten names longer than 128 characters with an ellipsis,
+and flag omitted names.
+A fieldless control route rejects any supplied top-level field; an empty object
+or absent body remains valid where already supported.
 
 Preserve authentication and authorization checks. Reject invalid fields before
 admitting work, calling authored message handlers, or dispatching a control. A
@@ -61,19 +63,21 @@ it on a route where it has no defined effect.
 ## Scope and compatibility
 
 Apply this rule to eve-owned JSON request envelopes, starting with session
-creation, follow-up messages and answers, and session control routes. Keep each
-route's accepted fields with its input contract rather than maintaining a second,
-independent list for diagnostics.
+creation, follow-up messages and answers, and session control routes. These routes
+now keep accepted fields beside their parsers and reuse the same list for
+validation and diagnostics. Other HTTP protocol surfaces keep their existing
+validation in this PR.
 
 This proposal does not recursively close arbitrary JSON values. Declared open
 objects such as `clientContext` and application data retain their contracts.
 It does not impose a universal schema on authored routes, third-party webhook
 payloads, HTTP headers, query parameters, or non-JSON transports.
 
-Supported protocol fields must be explicitly recognized. Existing intentional
-ignores, such as the legacy `activityObserver` field, need an explicit,
-protocol-scoped no-op contract if retained. They are not permission to accept
-arbitrary unknown fields.
+Supported protocol fields must be explicitly recognized. The legacy
+`activityObserver` field remains a recognized no-op only on delegated requests
+with a `callback`. Known remote protocol fields, forwarded principals, and tool
+stubs retain their existing validation and permission checks. None of these
+contracts permits arbitrary unknown fields.
 
 A newer client that sends a new field to an older strict server receives a 400
 instead of silently losing the requested behavior. This is the intended lasting
@@ -90,16 +94,14 @@ compatibility switch is proposed here.
 ## Implementation and validation boundary
 
 The session parsers in
-[`request.ts`](../packages/eve/src/eve-channel/request.ts) currently select fields
-and contain route-specific rejections. The
-[create-request tests](../packages/eve/src/eve-channel/request.test.ts) also
-explicitly cover ignoring a legacy activity observer. Audit these intentional
-exceptions when defining the route contracts; do not infer accepted fields only
-from the object eventually passed to execution.
+[`request.ts`](../packages/eve/src/eve-channel/request.ts) reject unknown fields
+before dispatch and preserve existing field-value validation. The
+[route tests](../packages/eve/src/public/channels/eve-session-routes.test.ts) cover
+typos and wrong-route fields without admission or message-handler side effects,
+bounded diagnostics, authentication ordering, and open payloads. The
+[create-request tests](../packages/eve/src/eve-channel/request.test.ts) retain the
+explicit legacy activity-observer contract.
 
-Implementation should prove that typos and wrong-route fields produce actionable
-400s without admission or authored-handler side effects. Cover multiple unknown
-fields, fieldless controls, legitimate protocol fields, and newer-client fields
-reaching an older strict contract. Preserve valid requests, existing value
-validation, and declared open JSON payloads. Add deterministic HTTP fixture evals
-for the rejection and corrected-request paths; run them in CI.
+The fixture-owned HTTP eval covers rejecting a typo and a create-only field,
+then accepting each corrected request. Run that eval in CI. Callback/webhook
+protocols and query-parameter validation are outside this implementation.

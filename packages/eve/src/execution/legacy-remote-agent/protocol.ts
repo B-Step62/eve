@@ -39,7 +39,7 @@ export interface LegacyRemoteAgentCaller {
  * Removes the `callback.taskId` a protocol-1 caller adds when it delegates
  * from a background task. Current callers don't send it. The task id is
  * returned so the session can name it back to the caller. The caller's
- * `activityObserver` needs no removal: eve ignores that field from any caller.
+ * `activityObserver` is a recognized no-op only on delegated session requests.
  */
 export function splitLegacyTaskFields(input: Record<string, unknown>): {
   readonly payload: Record<string, unknown>;
