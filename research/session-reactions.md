@@ -282,10 +282,10 @@ it runs before every model call, it can fail the turn at any of them, and a cold
 from a fresh answer rather than the one the session had, where `main`'s compiler saved every
 capture automatically. Randomness outside a memo is the one real bug. A `Math.random()` or
 `Date.now()` in a tool's name or description gives a different value at every evaluation, so the
-tool is rebuilt before every call and never matches what was offered. eve reports either one when it
-changes what's offered: after a cold start it compares what the function offers with what the session was offered
-([After a cold start](#after-a-cold-start)), and in development it evaluates each definition twice
-with its memos fixed and reports any difference.
+tool is rebuilt before every call and never matches what was offered. eve reports either one when
+it changes what's offered: after a cold start it compares what the function offers with what the
+session was offered ([After a cold start](#after-a-cold-start)), and in development it evaluates
+each definition twice with its memos fixed and reports any difference.
 
 <details>
 <summary>Memo rules</summary>
