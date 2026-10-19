@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,14 @@ import { describe, expect, it } from "vitest";
 import { compileAgentInWorkspace } from "#compiler/compile-agent.js";
 import { useTemporaryAppRoots } from "#internal/testing/use-temporary-app-roots.js";
 import { startProductionServer } from "./start-production-server.js";
+
+async function findFreePort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const { port } = server.address() as AddressInfo;
+  await new Promise((resolveClose) => server.close(resolveClose));
+  return port;
+}
 
 describe("production server output", () => {
   const createApp = useTemporaryAppRoots();
@@ -53,7 +61,7 @@ describe("production server output", () => {
     },
   );
 
-  it.fails("fails when another process already holds the requested port", async () => {
+  it("fails when another process already holds the requested port", async () => {
     const occupant = createServer((_request, response) => response.end("not eve"));
     await new Promise<void>((resolveListen) => occupant.listen(0, "127.0.0.1", resolveListen));
     const { port } = occupant.address() as AddressInfo;
@@ -83,6 +91,40 @@ describe("production server output", () => {
         () => undefined,
       );
       await new Promise((resolveClose) => occupant.close(resolveClose));
+    }
+  });
+
+  it("fails when another process takes the port after the pre-bind check", async () => {
+    const port = await findFreePort();
+    const { appRoot } = await createApp("eve-production-port-race-", {
+      files: {
+        // The first listener plays the process that wins the port between the
+        // pre-bind check and the server's own bind; the second is the
+        // srvx-like bind that then fails and leaves the process alive.
+        ".output/server/index.mjs": [
+          'import { createServer } from "node:http";',
+          "const port = Number(process.env.PORT);",
+          'createServer((_request, response) => response.end("not eve"))',
+          "  .listen(port, process.env.HOST, () => {",
+          "    createServer()",
+          "      .listen(port, process.env.HOST)",
+          '      .once("error", (error) => {',
+          '        console.error("[srvx] Failed to start server:", error);',
+          "        process.exitCode = 1;",
+          "      });",
+          "  });",
+        ].join("\n"),
+      },
+    });
+
+    const started = startProductionServer(appRoot, { host: "127.0.0.1", port });
+    try {
+      await expect(started).rejects.toThrow(`Port ${port} on 127.0.0.1 is already in use.`);
+    } finally {
+      await started.then(
+        (server) => server.close(),
+        () => undefined,
+      );
     }
   });
 });

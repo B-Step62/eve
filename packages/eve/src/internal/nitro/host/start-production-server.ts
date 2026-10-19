@@ -1,11 +1,17 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { createConnection, createServer } from "node:net";
+import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { loadDevelopmentEnvironmentFiles } from "#cli/dev/environment.js";
 import type { ProductionServerHandle } from "#internal/nitro/host/types.js";
+import {
+  EVE_HEALTH_ROUTE_PATH,
+  EVE_START_TOKEN_ENV,
+  EVE_START_TOKEN_HEADER,
+} from "#protocol/routes.js";
 
 const DEFAULT_PRODUCTION_SERVER_HOST = "0.0.0.0";
 const DEFAULT_PRODUCTION_SERVER_PORT = 3000;
@@ -62,20 +68,22 @@ function formatClientHost(host: string): string {
   return host;
 }
 
-function createKnownPortUrl(input: { host: string; port: number }): string | undefined {
+function createKnownPortUrl(input: { host: string; port: number }): string {
   return `http://${formatClientHost(input.host)}:${String(input.port)}/`;
 }
 
-async function resolveListenPort(input: { host: string; port: number }): Promise<number> {
-  if (input.port !== 0) {
-    return input.port;
-  }
+function portInUseError(input: { host: string; port: number }): Error {
+  return new Error(`Port ${String(input.port)} on ${input.host} is already in use.`);
+}
 
+async function resolveListenPort(input: { host: string; port: number }): Promise<number> {
   const server = createServer();
 
   return await new Promise((resolvePort, rejectPort) => {
-    server.once("error", rejectPort);
-    server.listen(0, input.host, () => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      rejectPort(error.code === "EADDRINUSE" ? portInUseError(input) : error);
+    });
+    server.listen(input.port, input.host, () => {
       const address = server.address();
 
       server.close((error) => {
@@ -105,28 +113,35 @@ function parseServerUrlFromOutput(output: string): string | undefined {
   return normalizeServerClientUrl(match[0]);
 }
 
-async function isListening(url: string): Promise<boolean> {
-  const target = new URL(url);
-  const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
-  return await new Promise((resolveReady) => {
-    const socket = createConnection({ host: target.hostname, port });
-    const finish = (ready: boolean) => {
-      socket.destroy();
-      resolveReady(ready);
-    };
-    socket.setTimeout(2_000, () => finish(false));
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-  });
+/**
+ * The built server stays silent when srvx's TEST mode is on or its bind
+ * fails, so readiness falls back to the health route. Only a response that
+ * echoes this launch's token comes from our child; any other HTTP answer
+ * means another process won the port after the pre-bind check.
+ */
+async function probeHealth(url: string, startToken: string): Promise<"own" | "foreign" | "none"> {
+  let response: Response;
+  try {
+    response = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, url), {
+      method: "HEAD",
+      signal: AbortSignal.timeout(2_000),
+    });
+  } catch {
+    return "none";
+  }
+  return response.headers.get(EVE_START_TOKEN_HEADER) === startToken ? "own" : "foreign";
 }
 
 async function waitForReady(input: {
   child: ChildProcess;
   getStartError(): unknown;
   getOutput(): string;
-  knownUrl?: string;
+  host: string;
+  port: number;
+  startToken: string;
 }): Promise<string> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+  const knownUrl = createKnownPortUrl(input);
 
   while (Date.now() < deadline) {
     const startError = input.getStartError();
@@ -135,10 +150,16 @@ async function waitForReady(input: {
     }
 
     const parsedUrl = parseServerUrlFromOutput(input.getOutput());
-    const url = parsedUrl ?? input.knownUrl;
+    if (parsedUrl !== undefined) {
+      return new URL(parsedUrl).toString();
+    }
 
-    if (url !== undefined && (parsedUrl !== undefined || (await isListening(url)))) {
-      return new URL(url).toString();
+    const probe = await probeHealth(knownUrl, input.startToken);
+    if (probe === "own") {
+      return knownUrl;
+    }
+    if (probe === "foreign") {
+      throw portInUseError(input);
     }
 
     if (input.child.exitCode !== null || input.child.signalCode !== null) {
@@ -210,10 +231,7 @@ export async function startProductionServer(
     host,
     port: options.port ?? readEnvironmentPort() ?? DEFAULT_PRODUCTION_SERVER_PORT,
   });
-  const knownUrl = createKnownPortUrl({
-    host,
-    port,
-  });
+  const startToken = randomUUID();
   // Startup output is kept only for URL detection and startup diagnostics.
   // After readiness it is dropped so a long-running server does not grow it.
   let output = "";
@@ -229,6 +247,7 @@ export async function startProductionServer(
       NITRO_HOST: host,
       NITRO_PORT: String(port),
       PORT: String(port),
+      [EVE_START_TOKEN_ENV]: startToken,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -270,7 +289,9 @@ export async function startProductionServer(
       child,
       getStartError: () => startError,
       getOutput: () => output,
-      knownUrl,
+      host,
+      port,
+      startToken,
     });
     ready = true;
     output = "";

@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, mkdir, realpath, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -372,6 +374,36 @@ describe("runCli", () => {
       });
     } finally {
       await server.stop();
+    }
+  }, 120_000);
+
+  it("exits non-zero without reporting ready when another process holds the port", async () => {
+    const { buildApplication } = await import("../../src/internal/nitro/host.js");
+    const appRoot = await createMinimalAppRoot("eve-cli-start-port-taken-");
+    await buildApplication(appRoot, { skipSandboxPrewarm: true });
+    const occupant = createServer((_request, response) => response.end("not eve"));
+    await new Promise<void>((resolveListen) => occupant.listen(0, "127.0.0.1", resolveListen));
+    const { port } = occupant.address() as AddressInfo;
+
+    try {
+      const result = await promisify(execFile)(
+        process.execPath,
+        [EVE_BIN_PATH, "start", "--host", "127.0.0.1", "--port", String(port)],
+        { cwd: appRoot, timeout: 60_000 },
+      ).then(
+        () => ({ code: 0, stderr: "", stdout: "" }),
+        (error: { code?: unknown; stderr?: string; stdout?: string }) => ({
+          code: error.code,
+          stderr: error.stderr ?? "",
+          stdout: error.stdout ?? "",
+        }),
+      );
+
+      expect(result.stdout).not.toContain("[START]");
+      expect(result.stderr).toContain(`Port ${port} on 127.0.0.1 is already in use.`);
+      expect(result.code).not.toBe(0);
+    } finally {
+      await new Promise((resolveClose) => occupant.close(resolveClose));
     }
   }, 120_000);
 
