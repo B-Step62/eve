@@ -6,7 +6,6 @@ import { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-author
 import { completeSignIn, settle } from "#harness/session-machine/transitions.js";
 import type { SuspendedStep } from "#harness/session-machine/view.js";
 import type { Step } from "#harness/step/context.js";
-import { park } from "#harness/step/park.js";
 import { SessionLimitDeclinedError, throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import { bumpSessionRuntimeUsageLimits } from "#harness/session-usage.js";
 import type { HarnessToolLookup, HarnessStepInput, StepResult } from "#harness/types.js";
@@ -18,6 +17,7 @@ import {
   grantedApprovals,
   openLimit,
   queueInput,
+  refusedDeliveries,
   requireSignIn,
   settleApprovals,
   settleLimit,
@@ -26,26 +26,49 @@ import {
   withdrawUnavailable,
 } from "./approvals.js";
 import { rejectApprovedCall, runApprovedCalls, type ApprovedCallResult } from "./approved-calls.js";
-import { checkResponders, weighResponders } from "./responders.js";
+import {
+  checkResponders,
+  currentAnswering,
+  weighResponders,
+  type Answering,
+  type WeighedResponders,
+} from "./responders.js";
+import type { Plan } from "#harness/session-machine/machine.js";
+import { blocked } from "#harness/step/park.js";
 import {
   compactInput,
   deliver,
   resolveTextInput,
   resolveTypedApproval,
   type ResolvedStepInput,
+  turnInputOnly,
   withoutResponses,
+  withoutTurnInput,
 } from "./delivery.js";
 import { recheckApprovedCall } from "#harness/tools.js";
 
+/** What the world says about a delivery's answers before the step takes them. */
+export interface AnswersGiven {
+  readonly input: HarnessStepInput | undefined;
+  /** The step takes the input its turn queued, which waits while runtime results arrive. */
+  readonly takeQueued: boolean;
+  /** What the response policies concluded about the answers they weighed (`weighAnswers`). */
+  readonly weighed: WeighedResponders;
+  /** The approvals whose tool went away and whose step can search for another. */
+  readonly searchable: ReadonlySet<string>;
+  readonly answering: Answering;
+}
+
 /**
- * What a delivery leaves for its step once its answers are admitted. `stop` ends the step: a
- * response policy committed and runs next step, or a responder must sign in first. `run` carries
- * the turn's input, without the answers, and whether a message steers the turn.
+ * What the step takes once the delivery's answers are in: `stop` ends the step, as when the
+ * answers wait for a response policy, a responder must sign in, or the turn holds the input
+ * behind what it waits on. `take` carries the turn's input, without the answers, and what the
+ * answers decided.
  */
-export type HumanInputIntake =
-  | { readonly kind: "stop"; readonly result: StepResult }
+export type TakenAnswers =
+  | { readonly kind: "stop" }
   | {
-      readonly kind: "run";
+      readonly kind: "take";
       readonly input: HarnessStepInput | undefined;
       /** The message the turn receives, as the stream shows it. */
       readonly message?: HarnessStepInput["message"];
@@ -53,81 +76,105 @@ export type HumanInputIntake =
       readonly consumedMessage: boolean;
       /** The delivery carries input for a turn. */
       readonly opensTurn: boolean;
-      /** A message steers the turn past what it waits on. */
-      readonly steer: boolean;
+      readonly decided: HumanDecisions;
     };
 
 /**
- * Admits a delivery's answers: a sign-in callback completes its sign-in, a stale answer becomes
- * text, a typed one the answer it stands for, and each answer stands once its checks and response
- * policy allow it. Nothing is decided here; `settleHumanInput` decides.
+ * Takes a delivery's answers and messages into the session, a pure rule of the machine. A
+ * policy's verdict stands or settles the answer it weighed; a stale answer becomes text, a typed
+ * one the answer it stands for, and each answer stands once its responder may give it. Standing
+ * answers then decide what they answer: the budget prompt, and each step's approvals once all
+ * have one, or when the turn's own person steers past them with a message.
+ *
+ * Input the turn can't take yet waits in its queue, unreceived: input that follows the approved
+ * calls, whose results the model reads first, and input that arrived while the turn waits on
+ * what it asked.
  */
-export async function admitHumanInput(
-  step: Step,
-  input: HarnessStepInput | undefined,
-  options: { readonly takeQueued: boolean },
-): Promise<HumanInputIntake> {
-  const { config } = step;
-  // A sign-in completes first, at the coordinates of the turn it holds.
-  const completions = config.signInCompletions ?? [];
-  if (completions.length > 0) await step.apply(completeSignIn(step.view(), { completions }));
-  // Answers a response policy weighs meet it first, as a responder's sign-in callback resumes.
-  const weighed = await weighResponders(step.view(), {
-    now: Date.now(),
-    toolsOf: (parked) => restoreTools(step, parked),
-  });
-  await step.apply(weighed);
+export function takeAnswers(plan: Plan, given: AnswersGiven): TakenAnswers {
+  const { weighed } = given;
+  plan.apply(weighed);
   if (weighed.unavailable.length > 0) {
-    await step.apply(
-      withdrawUnavailable(step.view(), {
+    plan.apply(
+      withdrawUnavailable(plan.view(), {
         interactionIds: weighed.unavailable,
-        searchable: (request) =>
-          toolsOf(step, stepForRequest(step.view(), request.interactionId)).get(
-            SEARCH_TOOL_NAME,
-          ) !== undefined,
+        searchable: (request) => given.searchable.has(request.interactionId),
       }),
     );
   }
   if (weighed.challenges.length > 0) {
-    await step.apply(requireSignIn(step.view(), { challenges: weighed.challenges, queued: input }));
-    return { kind: "stop", result: await park(step) };
+    // A message waits behind the sign-in; mid-turn, only the turn's own person's messages reach
+    // the step, so it steers once the turn takes it.
+    plan.apply(
+      requireSignIn(plan.view(), {
+        challenges: weighed.challenges,
+        queued: given.input,
+        steers: given.input?.message !== undefined && openLimit(plan.view()) === undefined,
+      }),
+    );
+    return { kind: "stop" };
   }
-  const delivered = deliver(step.view(), input, options);
-  if (delivered.takeQueued && step.view().turn.queued !== undefined) {
-    await step.apply({ events: [], turn: { ...step.view().turn, queued: undefined } });
+  const delivered = deliver(plan.view(), given.input, { takeQueued: given.takeQueued });
+  // A message queued before it could steer steers now.
+  const queuedSteers = delivered.takeQueued && plan.view().turn.steers === true;
+  if (delivered.takeQueued && plan.view().turn.queued !== undefined) {
+    const { queued: _queued, steers: _steers, ...turn } = plan.view().turn;
+    plan.apply({ events: [], turn });
   }
   // A typed approval answers like a press, so the approval's response policy decides it.
-  const typed = resolveTypedApproval(step.view(), delivered.input);
-  const limit = openLimit(step.view());
+  const typed = resolveTypedApproval(plan.view(), delivered.input);
+  const limit = openLimit(plan.view());
   // A new message steers the held turn, unless it waits behind the budget prompt. A typed answer
   // is not a new message.
   const messaged =
-    (input?.message !== undefined && typed?.message !== undefined) ||
+    queuedSteers ||
+    (given.input?.message !== undefined && typed?.message !== undefined) ||
     delivered.displayMessage !== undefined;
   const steer = messaged && limit === undefined;
-  const steered = steer ? await withdrawSteeredSignIns(step, typed) : typed;
+  const steered = steer ? withdrawSteeredSignIns(plan, typed) : typed;
 
   // A typed answer to the budget prompt is an answer like a press.
   const answered: ResolvedStepInput | undefined =
-    limit === undefined ? steered : resolveTextInput(step.view().projection.view, steered);
+    limit === undefined ? steered : resolveTextInput(plan.view().projection.view, steered);
   // Who gave each answer decides whether it stands now, waits for a response policy, or is
   // refused.
-  const check = checkResponders(step.view(), answered, Date.now());
-  await step.apply(admitAnswers(step.view(), { check, delivery: answered }));
+  const check = checkResponders(plan.view(), answered, given.answering);
+  plan.apply(admitAnswers(plan.view(), { check, delivery: answered }));
+  // A refused delivery is settled, so the turn doesn't carry it on, or settle it again.
+  let input = withoutDeliveries(answered, refusedDeliveries(check, answered));
   if (Object.keys(check.weigh).length > 0) {
     // The answers are recorded before any policy runs: the next step weighs them, with the rest
-    // of the delivery.
-    await step.apply(queueInput(step.view(), compactInput(withoutResponses(answered))));
-    return { kind: "stop", result: { next: step.runStep, session: step.session } };
+    // of the delivery, whose message steers then.
+    plan.apply(
+      queueInput(plan.view(), compactInput(input), {
+        steers: steer && answered?.messageConsumed !== true,
+      }),
+    );
+    return { kind: "stop" };
   }
   const consumedMessage = answered?.messageConsumed === true;
+  let message = consumedMessage
+    ? undefined
+    : (delivered.displayMessage ?? delivered.input?.message);
+  const decided = decide(plan, steer && !consumedMessage);
+  if (decided.approved.length > 0 || decided.settledApprovals) {
+    // The model reads what the answers decided before the delivery's own input, as the AI SDK
+    // ran it, so that input waits a step.
+    plan.apply(queueInput(plan.view(), turnInputOnly(input)));
+    input = withoutTurnInput(input);
+    message = undefined;
+  }
+  if (decided.approved.length === 0 && blocked(plan.view(), plan.machine.session.state)) {
+    // Nothing the answers decided can run, so the input waits, unreceived, behind them.
+    plan.apply(queueInput(plan.view(), compactInput(input)));
+    return { kind: "stop" };
+  }
   return {
     consumedMessage,
-    input: withoutResponses(answered),
-    kind: "run",
-    message: consumedMessage ? undefined : (delivered.displayMessage ?? delivered.input?.message),
+    decided,
+    input,
+    kind: "take",
+    message,
     opensTurn: hasTurnInput(delivered.input) || hasTurnInput(steered),
-    steer: steer && !consumedMessage,
   };
 }
 
@@ -140,26 +187,56 @@ export interface HumanDecisions {
 }
 
 /**
- * The person's standing answers decide what they answer: the budget prompt settles, and each
- * step's approvals settle together once each has an answer, or when a message steers past them.
+ * The standing answers decide what they answer: the budget prompt settles, and each step's
+ * approvals settle together once each has an answer, or when a message steers past them.
  */
-export async function settleHumanInput(
+function decide(plan: Plan, steer: boolean): HumanDecisions {
+  const limit = settleLimit(plan.view());
+  if (limit.events.length > 0) plan.apply(limit);
+  const settled = settleApprovals(plan.view(), { steer });
+  plan.apply(settled);
+  return { approved: settled.approved, limit: limit.limit, settledApprovals: settled.answered };
+}
+
+/**
+ * Before the step takes a delivery's answers, the world has its say: each sign-in callback
+ * completes its sign-in, and the response policies weigh the answers they gate, with the tools
+ * of the step that asked. Their verdicts, with who the step answers as, are what `takeAnswers`
+ * decides from.
+ */
+export async function weighAnswers(
   step: Step,
-  intake: Extract<HumanInputIntake, { readonly kind: "run" }>,
-): Promise<HumanDecisions> {
-  const limit = settleLimit(step.view());
-  if (limit.events.length > 0) await step.apply(limit);
-  // Approved calls run with the tools of the step that asked, built before anything runs.
-  for (const parked of step.view().turn.suspended) await restoreTools(step, parked);
-  const settled = settleApprovals(step.view(), {
-    steer: intake.steer,
+  input: HarnessStepInput | undefined,
+  options: { readonly takeQueued: boolean },
+): Promise<AnswersGiven> {
+  const completions = step.config.signInCompletions ?? [];
+  if (completions.length > 0) await step.apply(completeSignIn(step.view(), { completions }));
+  const weighed = await weighResponders(step.view(), {
+    now: Date.now(),
+    toolsOf: (parked) => restoreTools(step, parked),
   });
-  await step.apply(settled);
+  const searchable = new Set(
+    weighed.unavailable.filter(
+      (interactionId) =>
+        toolsOf(step, stepForRequest(step.view(), interactionId)).get(SEARCH_TOOL_NAME) !==
+        undefined,
+    ),
+  );
   return {
-    approved: settled.approved,
-    limit: limit.limit,
-    settledApprovals: settled.answered,
+    answering: currentAnswering(),
+    input,
+    searchable,
+    takeQueued: options.takeQueued,
+    weighed,
   };
+}
+
+/**
+ * Approved calls run with the tools of the step that asked, built from the history as it stood
+ * when the answers came, before the turn's input joins it.
+ */
+export async function restoreAskingTools(step: Step): Promise<void> {
+  for (const parked of step.view().turn.suspended) await restoreTools(step, parked);
 }
 
 /**
@@ -309,7 +386,7 @@ async function runApproved(
     }),
     step.session.history,
   );
-  return park(step);
+  return { session: step.session };
 }
 
 // A step's catalog is built once per suspended step. Restoring a step's tools runs its
@@ -363,13 +440,13 @@ const STEERED_SIGN_IN_REASON = "Cancelled because a new message arrived.";
  * A message steers the held turn: the sign-ins it waits on end, declined, and the model learns
  * why. The answers responders still wait on close with the approvals they answer.
  */
-async function withdrawSteeredSignIns(
-  step: Step,
+function withdrawSteeredSignIns(
+  plan: Plan,
   input: HarnessStepInput | undefined,
-): Promise<HarnessStepInput | undefined> {
-  const names = [...new Set(step.view().signIns.map((challenge) => challenge.name))];
+): HarnessStepInput | undefined {
+  const names = [...new Set(plan.view().signIns.map((challenge) => challenge.name))];
   if (names.length === 0) return input;
-  await step.apply(withdrawSignIns(step.view(), STEERED_SIGN_IN_REASON));
+  plan.apply(withdrawSignIns(plan.view(), STEERED_SIGN_IN_REASON));
   return {
     ...input,
     context: [
@@ -377,6 +454,17 @@ async function withdrawSteeredSignIns(
       `Sign-in to ${names.join(", ")} was cancelled because the user sent a new message instead. Ask to sign in again only if the new message still needs it.`,
     ],
   };
+}
+
+function withoutDeliveries(
+  input: ResolvedStepInput | undefined,
+  settled: ReadonlySet<string>,
+): HarnessStepInput | undefined {
+  const rest = withoutResponses(input);
+  if (rest === undefined || settled.size === 0) return rest;
+  const deliveries = rest.deliveries?.filter(({ deliveryId }) => !settled.has(deliveryId));
+  const { deliveries: _all, ...other } = rest;
+  return deliveries === undefined || deliveries.length === 0 ? other : { ...other, deliveries };
 }
 
 /** Whether the input carries user-facing turn input. */

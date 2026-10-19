@@ -149,16 +149,21 @@ const RUN_MESSAGE_BATCH_MAX_CHARS = 64_000;
  * under the size cap. The first message always fits, so one larger than the
  * cap still goes, alone.
  */
-export function runMessageBatchBudget(): (message: WorkflowToolRunMessage) => boolean {
+export function runMessageBatchBudget(
+  /** Messages the batch already took. */
+  taken: readonly WorkflowToolRunMessage[] = [],
+): (message: WorkflowToolRunMessage) => boolean {
   let used = 0;
   let admitted = false;
-  return (message) => {
+  const admits = (message: WorkflowToolRunMessage) => {
     const size = serializedLength(message);
     if (admitted && used + size > RUN_MESSAGE_BATCH_MAX_CHARS) return false;
     used += size;
     admitted = true;
     return true;
   };
+  for (const message of taken) admits(message);
+  return admits;
 }
 
 function serializedLength(value: unknown): number {

@@ -55,6 +55,11 @@ export interface TurnState {
    * steer past, such as the budget prompt, or behind approved calls the model reads first.
    */
   readonly queued?: HarnessStepInput;
+  /**
+   * The queued input carries a message from the turn's own person that hasn't steered yet: its
+   * answers waited for a response policy first. It steers when the turn takes it.
+   */
+  readonly steers?: true;
   readonly suspended: readonly SuspendedStep[];
   /** Human approvals remembered by `once()` for the rest of the session. */
   readonly grants: readonly ApprovalGrant[];

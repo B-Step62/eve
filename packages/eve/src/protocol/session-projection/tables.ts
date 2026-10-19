@@ -132,6 +132,8 @@ export interface CallRow extends Introduced, Ended {
   readonly status: "requested" | "running" | "settled";
   readonly clearedBy?: ClearedBy;
   readonly taskId?: string;
+  /** The call runs in a workflow run of its own, which the turn waits on. */
+  readonly workflow?: true;
   readonly outcome?: CallOutcome;
   readonly output?: JsonValue;
   readonly outputRef?: ValueReference;

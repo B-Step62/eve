@@ -560,7 +560,9 @@
     "typecheck": "pnpm run check:web-template && pnpm run build:compiled && tsc -p tsconfig.json --noEmit",
     "generate:web-template": "node src/setup/build.ts --write",
     "check:web-template": "node src/setup/build.ts --check",
-    "test:tui": "pnpm run build:js && tsc -p tsconfig.tui.json --noEmit && node test/tui-client/run-all.mjs"
+    "test:tui": "pnpm run build:js && tsc -p tsconfig.tui.json --noEmit && node test/tui-client/run-all.mjs",
+    "spec:scheduler-compare": "node spec/scheduler-compare.mjs",
+    "spec:scheduler-mutants": "node spec/scheduler-mutants.mjs"
   },
   "dependencies": {
     "nitro": "3.0.260903-beta",

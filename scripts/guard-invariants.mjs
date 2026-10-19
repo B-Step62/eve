@@ -118,10 +118,11 @@
  *             `execution/tasks/render.ts`, which holds all of the tasks'
  *             model text.
  *   rule 47 — A caller hears from its session only at a turn's real end.
- *             Only `execution/session/program.ts` sends the caller's reply,
- *             after the turn loop returns, and `execution/session/finalization.ts`
- *             when the session ends. A held turn is still open, so nothing
- *             inside the turn loop or the harness may reply.
+ *             Only `execution/session/session-loop.ts` sends the caller's
+ *             reply, when the scheduler reports how a turn ended, and
+ *             `execution/session/finalization.ts` when the session ends. A
+ *             held turn is still open, so nothing inside a turn or the harness
+ *             may reply.
  *   rule 48 — Retired: remote agent protocol 1 and its directory were removed.
  *   rule 49 — Provided tool definitions carry a framework tool flag,
  *             so telemetry ownership survives renamed and namespaced tools.
@@ -561,7 +562,7 @@ function checkRule46(posix, lines, violations) {
 
 const CALLER_REPLY_DEFINITION_FILE = "packages/eve/src/subagents/parent-notification.ts";
 const CALLER_REPLY_FILES = new Set([
-  "packages/eve/src/execution/session/program.ts",
+  "packages/eve/src/execution/session/session-loop.ts",
   "packages/eve/src/execution/session/finalization.ts",
 ]);
 const CALLER_REPLY_CALL_RE = /\b(?:notifyTurnCallerStep|notifyCancelledTaskCallerStep)\(/;
@@ -581,7 +582,7 @@ function checkRule47(posix, lines, violations) {
       file: posix,
       line: idx + 1,
       message:
-        "sends a caller's reply outside execution/session/program.ts and execution/session/finalization.ts. A turn replies to its caller only at its real end, which the session program owns; finalization replies when the session ends.",
+        "sends a caller's reply outside execution/session/session-loop.ts and execution/session/finalization.ts. A turn replies to its caller only at its real end, which the scheduler reports to the session loop; finalization replies when the session ends.",
     });
   });
 }

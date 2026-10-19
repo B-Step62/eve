@@ -1,12 +1,11 @@
-import type { TurnPause } from "#execution/session/pending-turn-state.js";
+import type { TurnPause } from "#execution/session/step-decision.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import type { SessionView } from "#harness/session-machine/view.js";
 import type { SessionInbox, SessionInboxPayload } from "#execution/session-inbox/inbox.js";
-import { SessionInputQueue } from "#execution/session/input-queue.js";
-import { SessionExecution } from "#execution/session/turn.js";
-import { createTurnControl } from "#execution/session/turn-control.js";
+import { SessionLoop, type SessionLoopInput } from "#execution/session/session-loop.js";
+import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { cancelTasksStep } from "#execution/tasks/steps.js";
 import { turnStep } from "#execution/session/turn-step.js";
@@ -18,7 +17,12 @@ import {
   type SessionStateValues,
   type WithSessionStateDelta,
 } from "#execution/session/state-delta.js";
-import type { DurableStepResult, TurnStepInput } from "#execution/session/turn-step-types.js";
+import type {
+  DurableStepResult,
+  TurnStepInput,
+  TurnStepPayload,
+} from "#execution/session/turn-step-types.js";
+import { settleCancelledTurnStep } from "#execution/settle-cancelled-turn-step.js";
 import type { CoordinationDispatchResult } from "#execution/coordination-dispatch-shared.js";
 import type { RoutedDeliverResult } from "#execution/proxied-deliver-step.js";
 import {
@@ -81,6 +85,9 @@ vi.mock("#execution/tasks/steps.js", async (importOriginal) => ({
   ...(await importOriginal()),
   cancelTasksStep: vi.fn(async () => ({ stateDelta: {} })),
 }));
+vi.mock("#execution/settle-cancelled-turn-step.js", () => ({
+  settleCancelledTurnStep: vi.fn(async () => ({ stateDelta: {} })),
+}));
 vi.mock("#execution/route-child-delivery.js", () => ({
   routeDeliverToChildren: vi.fn(),
 }));
@@ -99,6 +106,7 @@ vi.mock("#execution/tools/workflow/apply-run-messages-step.js", async (importOri
 beforeEach(() => {
   // Tests that record publishing replace the real step; the rest apply messages for real.
   vi.mocked(applyRunMessagesStep).mockReset();
+  vi.mocked(settleCancelledTurnStep).mockClear();
   vi.mocked(routeDeliverToChildren)
     .mockReset()
     .mockImplementation(
@@ -131,7 +139,7 @@ const dispatchWork = stepWork<
 >;
 const routeWork = stepWork<Parameters<typeof routeDeliverToChildren>[0], RoutedDeliverResult>;
 
-describe("SessionExecution checkpoints", () => {
+describe("SessionLoop turns", () => {
   it("uses prepared cancellation and steering controls for the first step", async () => {
     const control = createTurnControl();
     vi.mocked(turnStep)
@@ -148,7 +156,7 @@ describe("SessionExecution checkpoints", () => {
         }),
       );
 
-    await createExecution({ inbox: idleInbox(), sessionState: state("") }).runTurn(undefined, {
+    await createExecution({ inbox: idleInbox(), sessionState: state("") }).runSession(undefined, {
       control,
     });
 
@@ -180,11 +188,11 @@ describe("SessionExecution checkpoints", () => {
           };
         }),
       );
-    await createExecution({ inbox, sessionState: state("") }).runTurn(undefined);
+    await createExecution({ inbox, sessionState: state("") }).runSession(undefined);
     expect(turnStep).toHaveBeenCalledTimes(2);
   });
 
-  it("reports a compaction from an earlier step when the turn settles", async () => {
+  it("moves a session that compacted in an earlier step to a fresh run once the turn settles", async () => {
     vi.mocked(turnStep)
       .mockReset()
       .mockImplementationOnce(
@@ -203,25 +211,21 @@ describe("SessionExecution checkpoints", () => {
           settled: { output: "Alice's plan is ready." },
         })),
       );
-    const outcome = await createExecution({
-      inbox: idleInbox(),
-      sessionState: state(""),
-    }).runTurn(undefined);
-    expect(outcome).toMatchObject({ compacted: true, kind: "park" });
+    const handoff = {
+      tryCompactionTransfer: vi.fn(async () => ({ kind: "transferred" as const })),
+      tryTransfer: vi.fn(),
+    };
+
+    await expect(
+      createExecution({ handoff, inbox: idleInbox(), sessionState: state("") }).runSession(
+        undefined,
+      ),
+    ).resolves.toEqual({ kind: "transferred" });
+    expect(handoff.tryCompactionTransfer).toHaveBeenCalledOnce();
   });
   it("binds the delegated caller on the turn's first step only", async () => {
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: () => [],
-      hasPending: () => false,
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(),
-      restore: vi.fn(),
-      onDelivery: () => () => {},
-      onInterrupt: () => () => {},
+      ...idleInbox(),
     };
     const caller: TurnCaller = {
       callId: "call-1",
@@ -241,7 +245,7 @@ describe("SessionExecution checkpoints", () => {
           };
         }),
       );
-    await createExecution({ inbox, sessionState: state("") }).runTurn(undefined, { caller });
+    await createExecution({ inbox, sessionState: state("") }).runSession(undefined, { caller });
     expect(callers).toEqual([caller, undefined]);
   });
   it.each(["cancel", "reset"] as const)(
@@ -251,15 +255,9 @@ describe("SessionExecution checkpoints", () => {
       let interrupt: (payload: SessionInboxPayload) => void = () => {};
       const pending: SessionInboxPayload[] = [];
       const inbox: SessionInbox = {
-        claimedTokens: [],
-        takeLeading: () => [],
-        claimSessionHook: vi.fn(),
-        claimSessionHooks: vi.fn(),
+        ...idleInbox(),
         drain: () => pending.splice(0),
         hasPending: () => pending.length > 0,
-        whenPending: () => new Promise<void>(() => {}),
-        next: vi.fn(),
-        restore: vi.fn(),
         onDelivery: (handler) => {
           deliver = handler;
           return () => {};
@@ -271,6 +269,13 @@ describe("SessionExecution checkpoints", () => {
       };
       vi.mocked(turnStep)
         .mockReset()
+        .mockImplementation(
+          turnStepWork(async (input) => ({
+            action: "done",
+            serializedContext: input.serializedContext,
+            sessionState: input.sessionState,
+          })),
+        )
         .mockImplementationOnce(
           turnStepWork(async (input) => {
             const correction = { kind: "deliver", payloads: [{ message: "Correction" }] } as const;
@@ -286,14 +291,20 @@ describe("SessionExecution checkpoints", () => {
             };
           }),
         );
-      await expect(
-        createExecution({ inbox, sessionState: state("") }).runTurn(undefined),
-      ).resolves.toEqual({
-        cancelled: true,
-        kind: "park",
-        cancelledBy: kind === "cancel" ? { deliveryId: "cancel-delivery" } : undefined,
+      await createExecution({ inbox, sessionState: state("") }).runSession(undefined);
+
+      // The turn stops as cancelled; the correction waits for the next turn.
+      expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+        expect.objectContaining({
+          control: kind === "cancel" ? { deliveryId: "cancel-delivery" } : undefined,
+        }),
+      );
+      const [settled] = vi.mocked(settleCancelledTurnStep).mock.invocationCallOrder;
+      const [, next] = vi.mocked(turnStep).mock.invocationCallOrder;
+      expect(settled).toBeLessThan(next!);
+      expect(vi.mocked(turnStep).mock.calls[1]?.[0].input).toEqual({
+        delivery: expect.objectContaining({ payloads: [{ message: "Correction" }] }),
       });
-      expect(turnStep).toHaveBeenCalledTimes(1);
     },
   );
   it("keeps a correction pumped during boundary admission attached to the next step", async () => {
@@ -309,10 +320,7 @@ describe("SessionExecution checkpoints", () => {
     };
     let drainingFirst = true;
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: () => {
         const snapshot = pending.splice(0);
         if (drainingFirst) {
@@ -325,10 +333,6 @@ describe("SessionExecution checkpoints", () => {
         return snapshot;
       },
       hasPending: () => pending.length > 0,
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(),
-      restore: vi.fn(),
-      onInterrupt: () => () => {},
       onDelivery: (handler) => {
         notify = handler;
         pending.forEach(handler);
@@ -370,23 +374,16 @@ describe("SessionExecution checkpoints", () => {
           };
         }),
       );
-    await createExecution({ inbox, sessionState: state("") }).runTurn(undefined);
+    await createExecution({ inbox, sessionState: state("") }).runSession(undefined);
     expect(turnStep).toHaveBeenCalledTimes(3);
   });
   it("signals generation steering, coalesces corrections in order, and continues without cancellation", async () => {
     let notify: (payload: SessionInboxPayload) => void = () => {};
     const pending: SessionInboxPayload[] = [];
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: () => pending.splice(0),
       hasPending: () => pending.length > 0,
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(),
-      restore: vi.fn(),
-      onInterrupt: () => () => {},
       onDelivery: (handler) => {
         notify = handler;
         return () => {};
@@ -428,8 +425,8 @@ describe("SessionExecution checkpoints", () => {
       );
     const execution = createExecution({ inbox, sessionState: state("") });
     await expect(
-      execution.runTurn({ delivery: { kind: "deliver", payloads: [{ message: "2026?" }] } }),
-    ).resolves.toMatchObject({ kind: "done", output: "Corrected" });
+      execution.runSession({ delivery: { kind: "deliver", payloads: [{ message: "2026?" }] } }),
+    ).resolves.toMatchObject({ kind: "done", outcome: { output: "Corrected" } });
     expect(cancelTasksStep).not.toHaveBeenCalled();
   });
 
@@ -449,16 +446,9 @@ describe("SessionExecution checkpoints", () => {
     let notify: (payload: SessionInboxPayload) => void = () => {};
     const pending: SessionInboxPayload[] = [];
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: () => pending.splice(0),
       hasPending: () => pending.length > 0,
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(),
-      restore: vi.fn(),
-      onInterrupt: () => () => {},
       onDelivery: (handler) => {
         notify = handler;
         return () => {};
@@ -490,11 +480,11 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      createExecution({ inbox, sessionState: state("") }).runTurn(
+      createExecution({ inbox, sessionState: state("") }).runSession(
         { delivery: { kind: "deliver", payloads: [{ message: "Fill Alice's notebook." }] } },
         { caller: firstCall },
       ),
-    ).resolves.toMatchObject({ caller: correction.caller, kind: "done" });
+    ).resolves.toMatchObject({ kind: "done", outcome: { caller: correction.caller } });
     expect(turnStep).toHaveBeenCalledTimes(2);
   });
 
@@ -510,16 +500,7 @@ describe("SessionExecution checkpoints", () => {
     async (payload) => {
       let notify: (payload: SessionInboxPayload) => void = () => {};
       const inbox: SessionInbox = {
-        claimedTokens: [],
-        takeLeading: () => [],
-        claimSessionHook: vi.fn(),
-        claimSessionHooks: vi.fn(),
-        drain: () => [],
-        hasPending: () => false,
-        whenPending: () => new Promise<void>(() => {}),
-        next: vi.fn(),
-        restore: vi.fn(),
-        onInterrupt: () => () => {},
+        ...idleInbox(),
         onDelivery: (handler) => {
           notify = handler;
           return () => {};
@@ -538,26 +519,17 @@ describe("SessionExecution checkpoints", () => {
             };
           }),
         );
-      await createExecution({ inbox, sessionState: state("") }).runTurn(undefined);
+      await createExecution({ inbox, sessionState: state("") }).runSession(undefined);
     },
   );
   it("cancels an admitted workflow action when cancellation already arrived at the step boundary", async () => {
     const sessionState = stateWithBlockingRun();
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: vi
         .fn()
         .mockReturnValueOnce([{ deliveryId: "cancel-delivery", kind: "cancel" }])
         .mockReturnValue([]),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(() => new Promise<never>(() => {})),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     const execution = createExecution({ inbox, sessionState });
     vi.mocked(turnStep)
@@ -579,12 +551,15 @@ describe("SessionExecution checkpoints", () => {
     );
 
     await expect(
-      execution.runTurn({
+      execution.runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Start Alice's deployment" }] },
       }),
-    ).resolves.toMatchObject({ cancelled: true, kind: "park" });
+    ).resolves.toEqual({ kind: "expired" });
     expect(dispatchCoordinationStep).toHaveBeenCalledTimes(1);
-    expect(inbox.next).not.toHaveBeenCalled();
+    // The turn stops before it waits on its call: the session reads its inbox only once it settled.
+    const [settled] = vi.mocked(settleCancelledTurnStep).mock.invocationCallOrder;
+    const [read] = vi.mocked(inbox.next).mock.invocationCallOrder;
+    expect(settled).toBeLessThan(read!);
     expect(cancelTasksStep).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "turn-cancelled", turnCalls: true }),
     );
@@ -592,7 +567,6 @@ describe("SessionExecution checkpoints", () => {
 
   it("consumes the cancelling command while retaining accepted follow-ups", async () => {
     const sessionState = state("");
-    const queue = new SessionInputQueue();
     const followUp: DeliverHookPayload = {
       kind: "deliver",
       payloads: [{ message: "Continue after cancellation." }],
@@ -600,49 +574,51 @@ describe("SessionExecution checkpoints", () => {
     };
     let interrupt: ((payload: SessionInboxPayload) => void) | undefined;
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: vi
         .fn()
         .mockReturnValueOnce([followUp, { deliveryId: "cancel-delivery", kind: "cancel" }])
         .mockReturnValue([]),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
       next: vi.fn(() => new Promise<never>(() => {})),
-      onDelivery: vi.fn(() => () => {}),
       onInterrupt: vi.fn((handler) => {
         interrupt = handler;
         return () => {};
       }),
-      restore: vi.fn(),
     };
-    const execution = createExecution({ inbox, queue, sessionState });
-    vi.mocked(turnStep).mockImplementationOnce(
-      turnStepWork(async (input) => {
-        interrupt?.({ deliveryId: "cancel-delivery", kind: "cancel" });
-        await vi.waitFor(() => expect(input.abortSignal?.aborted).toBe(true));
-        return {
-          action: "cancelled",
+    const execution = createExecution({ inbox, sessionState });
+    vi.mocked(turnStep)
+      .mockReset()
+      .mockImplementation(
+        turnStepWork(async (input) => ({
+          action: "done",
           serializedContext: input.serializedContext,
           sessionState: input.sessionState,
-        };
-      }),
-    );
+        })),
+      )
+      .mockImplementationOnce(
+        turnStepWork(async (input) => {
+          interrupt?.({ deliveryId: "cancel-delivery", kind: "cancel" });
+          await vi.waitFor(() => expect(input.abortSignal?.aborted).toBe(true));
+          return {
+            action: "cancelled",
+            serializedContext: input.serializedContext,
+            sessionState: input.sessionState,
+          };
+        }),
+      );
 
     await expect(
-      execution.runTurn({
+      execution.runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Start the work." }] },
       }),
-    ).resolves.toEqual({
-      cancelled: true,
-      cancelledBy: { deliveryId: "cancel-delivery" },
-      kind: "park",
-    });
+    ).resolves.toMatchObject({ kind: "done" });
+    expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+      expect.objectContaining({ control: { deliveryId: "cancel-delivery" } }),
+    );
 
+    // The follow-up starts the next turn.
     expect(inbox.restore).not.toHaveBeenCalled();
-    expect(queue.takeNext(undefined)).toMatchObject({ delivery: followUp, kind: "turn" });
+    expect(vi.mocked(turnStep).mock.calls[1]?.[0].input).toEqual({ delivery: followUp });
   });
 
   it("applies steering accepted during a blocking action before its result continues the turn", async () => {
@@ -658,17 +634,9 @@ describe("SessionExecution checkpoints", () => {
       toolName: "deploy",
     };
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: vi.fn().mockReturnValueOnce([steering]).mockReturnValue([]),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
       next: vi.fn(() => new Promise<never>(() => {})),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     const execution = createExecution({ inbox, sessionState });
     vi.mocked(turnStep)
@@ -700,10 +668,10 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      execution.runTurn({
+      execution.runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Start the work." }] },
       }),
-    ).resolves.toMatchObject({ kind: "done", output: "done" });
+    ).resolves.toMatchObject({ kind: "done", outcome: { output: "done" } });
 
     // Steering and the blocking action's result travel in one step, steering first.
     expect(turnStep).toHaveBeenCalledTimes(2);
@@ -719,21 +687,11 @@ describe("SessionExecution checkpoints", () => {
       kind: "deliver",
       payloads: [{ message: "One more thing." }],
     };
-    const queue = new SessionInputQueue();
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: vi.fn().mockReturnValueOnce([followUp]).mockReturnValue([]),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(() => new Promise<never>(() => {})),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
-    const execution = createExecution({ inbox, queue, sessionState: state("") });
+    const execution = createExecution({ inbox, sessionState: state("") });
     vi.mocked(turnStep)
       .mockReset()
       .mockImplementation(
@@ -746,16 +704,13 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      execution.runTurn({
+      execution.runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Start the work." }] },
       }),
-    ).resolves.toMatchObject({
-      kind: "park",
-      settled: { output: "Done." },
-    });
+    ).resolves.toEqual({ kind: "expired" });
 
-    expect(turnStep).toHaveBeenCalledTimes(1);
-    expect(queue.pendingCount).toBe(1);
+    expect(turnStep).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(turnStep).mock.calls[1]?.[0].input).toEqual({ delivery: followUp });
   });
 
   it.each([
@@ -770,17 +725,8 @@ describe("SessionExecution checkpoints", () => {
     "holds on pending input only when someone can answer it: %o",
     async ({ capabilities, holds, serializedContext }) => {
       const inbox: SessionInbox = {
-        claimedTokens: [],
-        takeLeading: () => [],
-        claimSessionHook: vi.fn(),
-        claimSessionHooks: vi.fn(),
-        drain: vi.fn(() => []),
-        hasPending: vi.fn(() => false),
-        whenPending: () => new Promise<void>(() => {}),
+        ...idleInbox(),
         next: vi.fn(() => new Promise<never>(() => {})),
-        onDelivery: vi.fn(() => () => {}),
-        onInterrupt: vi.fn(() => () => {}),
-        restore: vi.fn(),
       };
       const execution = createExecution({
         capabilities,
@@ -799,7 +745,7 @@ describe("SessionExecution checkpoints", () => {
           })),
         );
 
-      const turn = execution.runTurn({
+      const turn = execution.runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Deploy the release." }] },
       });
       if (holds) {
@@ -825,17 +771,8 @@ describe("SessionExecution checkpoints", () => {
     "fails a turn that needs a person when its caller speaks an earlier protocol: %o",
     async (pause) => {
       const inbox: SessionInbox = {
-        claimedTokens: [],
-        takeLeading: () => [],
-        claimSessionHook: vi.fn(),
-        claimSessionHooks: vi.fn(),
-        drain: vi.fn(() => []),
-        hasPending: vi.fn(() => false),
-        whenPending: () => new Promise<void>(() => {}),
+        ...idleInbox(),
         next: vi.fn(() => new Promise<never>(() => {})),
-        onDelivery: vi.fn(() => () => {}),
-        onInterrupt: vi.fn(() => () => {}),
-        restore: vi.fn(),
       };
       const execution = createExecution({
         capabilities: { requestInput: false },
@@ -858,7 +795,7 @@ describe("SessionExecution checkpoints", () => {
         );
 
       await expect(
-        execution.runTurn({
+        execution.runSession({
           delivery: { kind: "deliver", payloads: [{ message: "Deploy the release." }] },
         }),
       ).rejects.toThrow("speaks eve remote agent protocol 2");
@@ -873,28 +810,26 @@ describe("SessionExecution checkpoints", () => {
     };
     const cancel = { deliveryId: "cancel-delivery", kind: "cancel", turnId: "turn_0" } as const;
     let interrupt: (payload: SessionInboxPayload) => void = () => {};
-    const queue = new SessionInputQueue();
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
+      ...idleInbox(),
       drain: vi.fn().mockReturnValueOnce([cancel, followUp]).mockReturnValue([]),
-      hasPending: () => false,
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(),
-      restore: vi.fn(),
-      onDelivery: () => () => {},
       onInterrupt: (handler) => {
         interrupt = handler;
         return () => {};
       },
     };
     const completedState = state("http:completed");
-    const execution = createExecution({ inbox, queue, sessionState: state("") });
+    const execution = createExecution({ inbox, sessionState: state("") });
     vi.mocked(cancelTasksStep).mockClear();
     vi.mocked(turnStep)
       .mockReset()
+      .mockImplementation(
+        turnStepWork(async (input) => ({
+          action: "done",
+          serializedContext: input.serializedContext,
+          sessionState: input.sessionState,
+        })),
+      )
       .mockImplementationOnce(
         turnStepWork(async (input) => {
           interrupt(cancel);
@@ -907,13 +842,15 @@ describe("SessionExecution checkpoints", () => {
           };
         }),
       );
-    await expect(execution.runTurn(undefined)).resolves.toMatchObject({
-      kind: "park",
-      settled,
-    });
-    expect(execution.cursor.sessionState).toEqual(completedState);
+    await expect(execution.runSession(undefined)).resolves.toMatchObject({ kind: "done" });
+
+    // The cancel found the turn settled: the follow-up's turn starts from what the turn saved.
     expect(cancelTasksStep).not.toHaveBeenCalled();
-    expect(queue.pendingCount).toBe(1);
+    expect(settleCancelledTurnStep).not.toHaveBeenCalled();
+    expect(vi.mocked(turnStep).mock.calls[1]?.[0]).toMatchObject({
+      input: { delivery: followUp },
+      sessionState: completedState,
+    });
   });
 
   it("routes a proxied answer to a descendant while waiting for runtime results", async () => {
@@ -923,21 +860,11 @@ describe("SessionExecution checkpoints", () => {
       payloads: [{ answers: [{ interactionId: "child-request", text: "blue" }] }],
     };
     const runtimePayloads = [answer, { kind: "cancel" as const, deliveryId: "cancel-delivery" }];
-    const queue = new SessionInputQueue();
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: vi.fn(() => []),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
+      ...idleInbox(),
       next: vi.fn(async () => runtimePayloads.shift()),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
-    const execution = createExecution({ inbox, queue, sessionState });
+    const execution = createExecution({ inbox, sessionState });
     vi.mocked(turnStep).mockImplementation(
       turnStepWork(async () => ({
         action: "paused",
@@ -963,19 +890,19 @@ describe("SessionExecution checkpoints", () => {
     );
 
     await expect(
-      execution.runTurn({
+      execution.runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Start the work." }] },
       }),
-    ).resolves.toEqual({
-      cancelled: true,
-      cancelledBy: { deliveryId: "cancel-delivery" },
-      kind: "park",
-    });
+    ).resolves.toEqual({ kind: "expired" });
+    expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+      expect.objectContaining({ control: { deliveryId: "cancel-delivery" } }),
+    );
 
+    // The descendant took the whole answer: nothing is left for a turn of the session's own.
     expect(routeDeliverToChildren).toHaveBeenCalledWith(
       expect.objectContaining({ delivery: answer }),
     );
-    expect(queue.pendingCount).toBe(0);
+    expect(turnStep).toHaveBeenCalledOnce();
   });
 
   it("routes an answer to its question before the message beside it interrupts the waited call", async () => {
@@ -1007,21 +934,15 @@ describe("SessionExecution checkpoints", () => {
       { deliveryId: "cancel-delivery", kind: "cancel" },
     ];
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: vi.fn(() => []),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
+      ...idleInbox(),
       next: vi.fn(async () => runtimePayloads.shift()),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     vi.mocked(turnStep)
       .mockReset()
       .mockImplementation(
+        turnStepWork(async () => ({ action: "done", serializedContext: {}, sessionState })),
+      )
+      .mockImplementationOnce(
         turnStepWork(async () => ({
           action: "paused",
           ...callsPause({ callIds: ["deploy-call"] }),
@@ -1057,14 +978,13 @@ describe("SessionExecution checkpoints", () => {
       });
 
     await expect(
-      createExecution({ inbox, sessionState }).runTurn({
+      createExecution({ inbox, sessionState }).runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Deploy the release." }] },
       }),
-    ).resolves.toEqual({
-      cancelled: true,
-      cancelledBy: { deliveryId: "cancel-delivery" },
-      kind: "park",
-    });
+    ).resolves.toMatchObject({ kind: "done" });
+    expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+      expect.objectContaining({ control: { deliveryId: "cancel-delivery" } }),
+    );
 
     expect(routeDeliverToChildren).toHaveBeenCalledWith(
       expect.objectContaining({ delivery: answerAndCorrection }),
@@ -1073,7 +993,10 @@ describe("SessionExecution checkpoints", () => {
       hookToken: "deploy-control",
       runId: "deploy-run",
     });
+    // The correction outlived the cancelled turn: it starts the next one as its input, already
+    // routed once.
     expect(order).toEqual(["route", "interrupt"]);
+    expect(vi.mocked(turnStep).mock.calls[1]?.[0].input).toEqual({ delivery: correction });
   });
 
   it("reports turn.waiting once when task_wait parks on a working task", async () => {
@@ -1095,17 +1018,8 @@ describe("SessionExecution checkpoints", () => {
       { deliveryId: "cancel-delivery", kind: "cancel" },
     ];
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: vi.fn(() => []),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
+      ...idleInbox(),
       next: vi.fn(async () => runtimePayloads.shift()),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     vi.mocked(turnStep)
       .mockReset()
@@ -1125,14 +1039,13 @@ describe("SessionExecution checkpoints", () => {
     vi.mocked(cancelTasksStep).mockClear();
 
     await expect(
-      createExecution({ inbox, sessionState }).runTurn({
+      createExecution({ inbox, sessionState }).runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Wait for the research." }] },
       }),
-    ).resolves.toEqual({
-      cancelled: true,
-      cancelledBy: { deliveryId: "cancel-delivery" },
-      kind: "park",
-    });
+    ).resolves.toEqual({ kind: "expired" });
+    expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+      expect.objectContaining({ control: { deliveryId: "cancel-delivery" } }),
+    );
 
     // Only a task tool call is pending: nothing is dispatched, and the cancel has
     // no workflow tool run to stop.
@@ -1182,17 +1095,8 @@ describe("SessionExecution checkpoints", () => {
       { deliveryId: "cancel-delivery", kind: "cancel" },
     ];
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: vi.fn(() => []),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
+      ...idleInbox(),
       next: vi.fn(async () => payloads.shift()),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     vi.mocked(turnStep)
       .mockReset()
@@ -1209,29 +1113,16 @@ describe("SessionExecution checkpoints", () => {
       .mockImplementation(
         dispatchWork(async () => ({ results: [], serializedContext: {}, sessionState })),
       );
-    const cursor = new SessionStateCursor({
-      history: [],
-      inbox,
-      serializedContext: {},
-      sessionState,
-      sessionWritable: new WritableStream<Uint8Array>(),
-    });
-    const execution = new SessionExecution({
-      cursor,
-      inbox,
-      queue: new SessionInputQueue(),
-      sessionId: sessionState.sessionId,
-    });
+    const execution = createExecution({ inbox, sessionState });
 
     await expect(
-      execution.runTurn({
+      execution.runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Hold the release." }] },
       }),
-    ).resolves.toEqual({
-      cancelled: true,
-      cancelledBy: { deliveryId: "cancel-delivery" },
-      kind: "park",
-    });
+    ).resolves.toEqual({ kind: "expired" });
+    expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+      expect.objectContaining({ control: { deliveryId: "cancel-delivery" } }),
+    );
 
     // No call is open to own it, so the spend is the task's own late usage.
     expect(committed).toContainEqual(
@@ -1276,7 +1167,7 @@ describe("SessionExecution checkpoints", () => {
       { deliveryId: "cancel-delivery", kind: "cancel" },
     ];
     const inbox: SessionInbox = {
-      claimedTokens: [],
+      ...idleInbox(),
       takeLeading: <T extends SessionInboxPayload>(
         accepts: (payload: SessionInboxPayload) => payload is T,
       ): T[] => {
@@ -1287,15 +1178,8 @@ describe("SessionExecution checkpoints", () => {
         }
         return taken;
       },
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: vi.fn(() => []),
       hasPending: vi.fn(() => payloads.length > 0),
-      whenPending: () => new Promise<void>(() => {}),
       next: vi.fn(async () => payloads.shift()),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     const cursor = createCursor({ inbox, sessionState });
     publishIntoContext();
@@ -1316,14 +1200,13 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      createExecution({ cursor, inbox, sessionState }).runTurn({
+      createExecution({ cursor, inbox, sessionState }).runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Triage the open issues." }] },
       }),
-    ).resolves.toEqual({
-      cancelled: true,
-      cancelledBy: { deliveryId: "cancel-delivery" },
-      kind: "park",
-    });
+    ).resolves.toEqual({ kind: "expired" });
+    expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+      expect.objectContaining({ control: { deliveryId: "cancel-delivery" } }),
+    );
 
     expect(cursor.serializedContext[PUBLISHED]).toEqual(["child-1+child-2+Two reviewers started."]);
   });
@@ -1346,7 +1229,7 @@ describe("SessionExecution checkpoints", () => {
       { from, kind: "outcome", result: { output: "held", status: "completed" } },
     ];
     const inbox: SessionInbox = {
-      claimedTokens: [],
+      ...idleInbox(),
       takeLeading: <T extends SessionInboxPayload>(
         accepts: (payload: SessionInboxPayload) => payload is T,
       ): T[] => {
@@ -1357,18 +1240,12 @@ describe("SessionExecution checkpoints", () => {
         }
         return taken;
       },
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
       drain: vi
         .fn()
         .mockReturnValueOnce([report("First check passed."), report("Second check passed.")])
         .mockReturnValue([]),
       hasPending: vi.fn(() => pending.length > 0),
-      whenPending: () => new Promise<void>(() => {}),
       next: vi.fn(async () => pending.shift() ?? new Promise<never>(() => {})),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     const cursor = createCursor({ inbox, sessionState });
     publishIntoContext();
@@ -1397,7 +1274,7 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      createExecution({ cursor, inbox, sessionState }).runTurn({
+      createExecution({ cursor, inbox, sessionState }).runSession({
         delivery: {
           kind: "deliver",
           payloads: [{ message: "Hold the rollout until checks pass." }],
@@ -1454,17 +1331,8 @@ describe("SessionExecution checkpoints", () => {
     // The draft's outcome is delivered twice before the review finishes.
     const payloads = [outcome("draft", 300), outcome("draft", 300), outcome("review", 500)];
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: vi.fn(() => []),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
+      ...idleInbox(),
       next: vi.fn(async () => payloads.shift() ?? new Promise<never>(() => {})),
-      onDelivery: vi.fn(() => () => {}),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     vi.mocked(turnStep)
       .mockReset()
@@ -1491,7 +1359,7 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      createExecution({ inbox, sessionState }).runTurn({
+      createExecution({ inbox, sessionState }).runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Draft the plan and review it." }] },
       }),
     ).resolves.toMatchObject({ kind: "done" });
@@ -1522,13 +1390,7 @@ describe("SessionExecution checkpoints", () => {
     };
     let signalDelivery: (payload: SessionInboxPayload) => void = () => {};
     const inbox: SessionInbox = {
-      claimedTokens: [],
-      takeLeading: () => [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: vi.fn(() => []),
-      hasPending: vi.fn(() => false),
-      whenPending: () => new Promise<void>(() => {}),
+      ...idleInbox(),
       // The pump signals a delivery as it arrives, then the wait reads it.
       next: vi.fn(async () => {
         signalDelivery(steering);
@@ -1538,8 +1400,6 @@ describe("SessionExecution checkpoints", () => {
         signalDelivery = handler;
         return () => {};
       }),
-      onInterrupt: vi.fn(() => () => {}),
-      restore: vi.fn(),
     };
     vi.mocked(dispatchCoordinationStep)
       .mockReset()
@@ -1576,7 +1436,7 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      createExecution({ inbox, sessionState }).runTurn({
+      createExecution({ inbox, sessionState }).runSession({
         delivery: { kind: "deliver", payloads: [{ message: "Wait for the research." }] },
       }),
     ).resolves.toMatchObject({ kind: "done" });
@@ -1604,8 +1464,8 @@ describe("SessionExecution checkpoints", () => {
       .mockReturnValue([]);
 
     await expect(
-      createExecution({ cursor, inbox, sessionState: cursor.sessionState }).runTurn(undefined),
-    ).resolves.toMatchObject({ kind: "park", settled: { output: "Done." } });
+      createExecution({ cursor, inbox, sessionState: cursor.sessionState }).runSession(undefined),
+    ).resolves.toEqual({ kind: "expired" });
 
     expect(cursor.serializedContext[PUBLISHED]).toEqual([
       "planner-session+reviewer-session+Halfway through the sources.+writer-session",
@@ -1625,7 +1485,7 @@ describe("SessionExecution checkpoints", () => {
       );
 
     await expect(
-      createExecution({ cursor, inbox, sessionState }).runTurn(undefined),
+      createExecution({ cursor, inbox, sessionState }).runSession(undefined),
     ).resolves.toMatchObject({ kind: "done" });
 
     // The boundary still ran: it handled the task's report and dropped only the child.
@@ -1640,10 +1500,13 @@ describe("SessionExecution checkpoints", () => {
       interrupt = handler;
       return () => {};
     };
-    // Bob cancels while the turn waits, just as Alice's run opens a planner.
+    // Bob cancels while the turn waits, just as Alice's run opens a planner. The pump signals the
+    // cancel at once, and it stays in the inbox, behind the planner, for the turn to read.
+    const cancel = { deliveryId: "cancel-delivery", kind: "cancel" } as const;
+    const arrived: SessionInboxPayload[] = [planner, cancel];
     inbox.next = vi.fn(async () => {
-      interrupt({ deliveryId: "cancel-delivery", kind: "cancel" });
-      return planner;
+      interrupt(cancel);
+      return arrived.shift();
     });
     publishIntoContext();
     vi.mocked(turnStep)
@@ -1660,14 +1523,68 @@ describe("SessionExecution checkpoints", () => {
       dispatchWork(async () => ({ results: [], serializedContext: {}, sessionState })),
     );
 
-    await expect(createExecution({ inbox, sessionState }).runTurn(undefined)).resolves.toEqual({
-      cancelled: true,
-      kind: "park",
+    // The turn stops on the cancel it reads, which is the turn's cause, not a cancel that came
+    // after it and found nothing to stop.
+    await expect(createExecution({ inbox, sessionState }).runSession(undefined)).resolves.toEqual({
+      kind: "expired",
     });
+    expect(settleCancelledTurnStep).toHaveBeenCalledWith(
+      expect.objectContaining({ control: { deliveryId: "cancel-delivery" } }),
+    );
 
     const [announced] = vi.mocked(applyRunMessagesStep).mock.invocationCallOrder;
     const [cancelled] = vi.mocked(cancelTasksStep).mock.invocationCallOrder;
     expect(announced).toBeLessThan(cancelled!);
+  });
+});
+
+describe("SessionLoop between turns", () => {
+  it("carries the state a fully routed delivery leaves into routing the next one", async () => {
+    const sessionState = { ...state(""), hasProxyInputRequests: true };
+    const retired = { ...sessionState, hasProxyInputRequests: false };
+    const messages: SessionInboxPayload[] = [
+      { kind: "send", payload: { message: "child response" } },
+      { kind: "send", payload: { message: "parent turn" } },
+    ];
+    const inbox: SessionInbox = {
+      ...idleInbox(),
+      ...idleInbox(),
+      hasPending: () => messages.length > 0,
+      next: vi.fn(async () => messages.shift()),
+    };
+    vi.mocked(routeDeliverToChildren)
+      .mockResolvedValueOnce({
+        kind: "continue",
+        remainder: undefined,
+        stateDelta: { sessionState: { kind: "value", value: retired } },
+      })
+      .mockResolvedValueOnce({
+        kind: "continue",
+        remainder: { kind: "deliver", payloads: [{ message: "parent turn" }] },
+        stateDelta: {},
+      });
+    vi.mocked(turnStep)
+      .mockReset()
+      .mockImplementation(
+        turnStepWork(async (input) => ({
+          action: "done",
+          serializedContext: input.serializedContext,
+          sessionState: input.sessionState,
+        })),
+      );
+    const loop = new SessionLoop({
+      cursor: createCursor({ inbox, sessionState }),
+      inbox,
+      sessionId: sessionState.sessionId,
+      start: { kind: "parked" },
+    });
+
+    await expect(loop.run()).resolves.toMatchObject({ kind: "done" });
+
+    expect(vi.mocked(routeDeliverToChildren).mock.calls[1]?.[0].sessionState).toBe(retired);
+    expect(vi.mocked(turnStep).mock.calls[0]?.[0].input).toEqual({
+      delivery: { kind: "deliver", payloads: [{ message: "parent turn" }] },
+    });
   });
 });
 
@@ -1730,17 +1647,7 @@ function boundaryRunMessages() {
     },
   });
   const inbox: SessionInbox = {
-    claimedTokens: [],
-    takeLeading: () => [],
-    claimSessionHook: vi.fn(),
-    claimSessionHooks: vi.fn(),
-    drain: () => [],
-    hasPending: () => false,
-    whenPending: () => new Promise<void>(() => {}),
-    next: vi.fn(() => new Promise<never>(() => {})),
-    restore: vi.fn(),
-    onDelivery: () => () => {},
-    onInterrupt: () => () => {},
+    ...idleInbox(),
   };
   return {
     inbox,
@@ -1785,22 +1692,35 @@ function idleInbox(): SessionInbox {
   };
 }
 
+/**
+ * A session the test starts with a turn. `runSession` runs it until it ends: once its inbox has
+ * nothing left to read, it closes, and the session expires.
+ */
 function createExecution(input: {
   readonly capabilities?: SessionCapabilities;
   readonly cursor?: SessionStateCursor;
+  readonly handoff?: SessionLoopInput["handoff"];
   readonly inbox: SessionInbox;
-  readonly queue?: SessionInputQueue;
   readonly serializedContext?: Record<string, unknown>;
   readonly sessionState: DurableSessionState;
-}): SessionExecution {
+}) {
   const cursor = input.cursor ?? createCursor(input);
-  return new SessionExecution({
-    capabilities: input.capabilities,
+  return {
     cursor,
-    inbox: input.inbox,
-    queue: input.queue ?? new SessionInputQueue(),
-    sessionId: input.sessionState.sessionId,
-  });
+    runSession: (
+      turn: TurnStepPayload | undefined,
+      options: { readonly caller?: TurnCaller; readonly control?: TurnControl } = {},
+    ) =>
+      new SessionLoop({
+        caller: options.caller,
+        capabilities: input.capabilities,
+        cursor,
+        handoff: input.handoff,
+        inbox: input.inbox,
+        sessionId: input.sessionState.sessionId,
+        start: { input: turn?.delivery, kind: "turn" },
+      }).run({ control: options.control }),
+  };
 }
 
 /** A session whose turn waits on a workflow tool run, so cancelling it has a run to cancel. */

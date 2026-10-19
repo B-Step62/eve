@@ -8,7 +8,6 @@ import { validateHarnessModelMessages } from "#harness/messages.js";
 import { fail } from "#harness/session-machine/transitions.js";
 import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
 import type { Step } from "#harness/step/context.js";
-import { park } from "#harness/step/park.js";
 import type {
   HarnessSessionBase,
   HarnessToolLookup,
@@ -30,18 +29,20 @@ import { checkSessionUsageLimit } from "./budget.js";
 import { isEmptyInput } from "./delivery.js";
 
 // The session's human-in-the-loop rules, behind the few points where the rest of the harness
-// meets them: a delivery's answers and sign-in callbacks before its turn runs
-// (`admitHumanInput`, `settleHumanInput`), the work they decided once the turn has the delivery
+// meets them: a delivery's answers and sign-in callbacks before its turn runs (`weighAnswers`,
+// the world's part, then `takeAnswers`, a pure rule), the work they decided once the turn has the delivery
 // (`applyHumanDecisions`), a model step's gated calls and sign-ins, the budget gate before each
 // model call, and what the model reads about pending approvals. Outside readers use only the
 // read-only requests view exported here. Nothing here pauses the turn; the step's `park` does.
 
 export {
-  admitHumanInput,
   applyHumanDecisions,
-  settleHumanInput,
+  restoreAskingTools,
+  takeAnswers,
+  weighAnswers,
+  type AnswersGiven,
   type HumanDecisions,
-  type HumanInputIntake,
+  type TakenAnswers,
 } from "./intake.js";
 export { openDeferredApprovals, queueInput } from "./approvals.js";
 export { compactInput, turnInputOnly, withoutTurnInput } from "./delivery.js";
@@ -90,7 +91,7 @@ export async function stopForToolSignIn(
     }),
     step.session.history,
   );
-  return park(step);
+  return { session: step.session };
 }
 
 /**
@@ -115,7 +116,7 @@ export async function enforceBudget(
     if (openLimit(step.view())?.row.interactionId !== limit.ask.interactionId)
       await step.apply(requestLimit(step.view(), limit.ask), step.session.history);
     // The turn waits on the prompt; the answer resumes it or cancels it.
-    return park(step);
+    return { session: step.session };
   }
   await step.apply(
     fail(step.view(), {
@@ -125,7 +126,7 @@ export async function enforceBudget(
       terminal: { sessionId: step.session.sessionId },
     }),
   );
-  return { next: { done: true, output: "" }, session: step.session };
+  return { ended: { output: "" }, session: step.session };
 }
 
 /**

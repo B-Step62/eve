@@ -54,23 +54,22 @@ import {
 import { saveTransition, dropClosedRecords, sessionView } from "#harness/session-machine/commit.js";
 import { matchSignIns, receive } from "#harness/session-machine/transitions.js";
 import type { DeliverPayload } from "#channel/types.js";
-import { coalesceTurnInputs, validateHarnessModelMessages } from "#harness/messages.js";
+import { validateHarnessModelMessages } from "#harness/messages.js";
 import type { HarnessSession, HarnessStepInput, StepInput, StepResult } from "#harness/types.js";
-import { attributeAnswers } from "#execution/session/answer-caller.js";
 import type {
   DurableStepResult,
   TurnStepInput,
   TurnStepResult,
 } from "#execution/session/turn-step-types.js";
-import { pausedOrParked, resolveSessionStepResult } from "#execution/session/turn-step-result.js";
+import { resolveSessionStepResult } from "#execution/session/turn-step-result.js";
+import { announcesWaiting, decideStep, readStepState } from "#execution/session/step-decision.js";
 import { withSessionStateDelta } from "#execution/session/state-delta.js";
+import { openSessionEventPublisher } from "#execution/publish-session-events.js";
 import {
-  checksSessionEvents,
-  openSessionEventPublisher,
-} from "#execution/publish-session-events.js";
-import { stepDisagreement } from "#execution/session/step-decision-check.js";
-import { createLogger } from "#internal/logging.js";
-import { admitDeliveries, type DeliveryAdmission } from "#execution/session/delivery-facts.js";
+  takeDelivery,
+  type DeliveryAdmission,
+  type TakenDelivery,
+} from "#execution/session/delivery-facts.js";
 import { getAdapterKind } from "#channel/adapter.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import { fact } from "#harness/facts.js";
@@ -98,8 +97,6 @@ import {
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 
 export type { TurnStepInput };
-
-const log = createLogger("execution.turn-step");
 
 interface PendingStepAttributes {
   title?: Promise<void>;
@@ -297,6 +294,7 @@ async function runSessionStepBody(
     // the resulting HarnessStepInput values; runtime results ride the same input.
     let resolved: HarnessStepInput | undefined;
     let admission: DeliveryAdmission | undefined;
+    let taken: TakenDelivery | undefined;
     if (delivery !== undefined) {
       const delivered: { payload: DeliverPayload; input: StepInput | undefined }[] = [];
       try {
@@ -310,38 +308,29 @@ async function runSessionStepBody(
         await instrumentation?.flush();
         throw error;
       }
-      admission = admitDeliveries({
-        parent: ctx.get(ParentSessionKey),
-        sessionStarted: turnPosition(currentProjection(ctx)).sessionStarted,
+      taken = takeDelivery({
+        admitted: (deliveryId) => currentProjection(ctx).view.deliveries[deliveryId] !== undefined,
+        betweenTurns: startedBetweenTurns,
         channelKind: ctx.get(ChannelInstrumentationKey)?.kind ?? getAdapterKind(adapter),
         delivery: rawDelivery ?? delivery,
-        admitted: (deliveryId) => currentProjection(ctx).view.deliveries[deliveryId] !== undefined,
+        parent: ctx.get(ParentSessionKey),
         payloads: delivered,
+        sender: delivery.auth,
+        sessionStarted: turnPosition(currentProjection(ctx)).sessionStarted,
+        state: durableSession.state,
       });
-      resolved =
-        admission.inputs.length === 0 ? undefined : admission.inputs.reduce(coalesceTurnInputs);
+      admission = taken.admission;
+      resolved = taken.input;
     }
-    // A delivery without auth acts as the session's current identity, so
-    // only a delivery that names its sender can be answered by someone else.
-    const answers =
-      delivery?.auth === undefined
-        ? undefined
-        : attributeAnswers({
-            responder: delivery.auth,
-            state: durableSession.state,
-            stepInput: resolved,
-          });
-    if (answers !== undefined) {
+    if (taken?.acts === "as-before" && taken.attributed) {
       // The responder settles the request; the turn keeps its caller and
       // initiator. Adapter state from the answer stays: channels record the
       // responder and their prompt cards there, not the reply destination.
-      resolved = answers;
       if (previousAuth === undefined) ctx.delete(AuthKey);
       else ctx.set(AuthKey, previousAuth);
       if (!hadInitiator) ctx.delete(InitiatorAuthKey);
     }
-    const ignoredActiveDelivery =
-      delivery !== undefined && resolved === undefined && !startedBetweenTurns;
+    const ignoredActiveDelivery = taken?.ignored === true;
     if (ignoredActiveDelivery) {
       // The adapter sees the incoming caller, but an ignored correction must
       // not change the identity or reply destination of the interrupted work.
@@ -478,10 +467,10 @@ async function runSessionStepBody(
           ? { history: input.history, sessionState: input.sessionState }
           : createDurableSessionValues(aliased);
 
-      return pausedOrParked(aliased, {
+      return resolveSessionStepResult({ session: aliased }, () => ({
         serializedContext: nextSerializedContext,
         ...nextValues,
-      });
+      }));
     }
 
     const runtimeIdentity = buildRuntimeIdentity(effectiveNode);
@@ -603,8 +592,9 @@ async function runSessionStepBody(
                 ? completedAuths.map(({ challenge }) => challenge)
                 : undefined;
             const harnessResult = await runHarnessStep(schemaSession, stepInput, completions);
-            // Only the step knows whether it stopped for a person; the tables say who.
-            await publisher.finish({ announce: stoppedForPerson(harnessResult) });
+            // The session's state says whether the turn stopped to wait; the tables say on whom.
+            const decision = decideStep(readStepState(harnessResult.session));
+            await publisher.finish({ announce: announcesWaiting(decision) });
             return harnessResult;
           });
           // The waiting boundary may reach the client before this step returns.
@@ -643,26 +633,15 @@ async function runSessionStepBody(
     const nextSerializedContext = serializeContext(ctx);
     stepResult = { ...stepResult, session: aliased };
 
-    const durableResult = resolveSessionStepResult(stepResult, nextSerializedContext);
-    if (checksSessionEvents()) {
-      const disagreement = stepDisagreement(durableResult, currentProjection(ctx).view);
-      if (disagreement !== undefined && disagreement !== "dispatch-deferred")
-        log.warn("a turn step's decision disagrees with the session's tables", { disagreement });
-    }
+    const durableResult = resolveSessionStepResult(stepResult, (session) => ({
+      serializedContext: nextSerializedContext,
+      ...createDurableSessionValues(session),
+    }));
     if (durableResult.action === "done") await publisher.writer.close();
     return compacted ? { ...durableResult, compacted: true } : durableResult;
   } finally {
     publisher.writer.release();
   }
-}
-
-/**
- * The step stopped for a person: it says so, or it stopped with nothing of its own to wait on,
- * and the tables say whether that's a person (`announceWaiting`).
- */
-function stoppedForPerson(result: StepResult): boolean {
-  if (result.held !== undefined) return result.held.kind === "request";
-  return result.next === null && result.settledTurn === undefined;
 }
 
 /** A cancel the commit's hooks raised after it was written; the cancel already underway handles it. */

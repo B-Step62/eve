@@ -58,6 +58,22 @@ export interface ResponderCheck {
   readonly weigh: Readonly<Record<string, PendingResponder>>;
 }
 
+/** Who a step answers as, and when: what checking its answers reads from outside the session. */
+export interface Answering {
+  readonly now: number;
+  /** Who an answer attributed to no one came from: the step's caller. */
+  readonly caller: SessionAuthContext | null;
+  /** Who a response policy weighs such an answer as: the session's current identity. */
+  readonly sessionCaller: SessionAuthContext | null;
+}
+
+/** Who the step running now answers as. */
+export function currentAnswering(): Answering {
+  const context = contextStorage.getStore();
+  const sessionCaller = context?.get(SessionKey)?.auth.current ?? null;
+  return { caller: context?.get(AuthKey) ?? sessionCaller, now: Date.now(), sessionCaller };
+}
+
 /**
  * Checks who gave each of a delivery's answers. An approval without a response policy takes only
  * its requester's answer, or anyone's when its requester is anonymous; one with a policy records
@@ -66,7 +82,7 @@ export interface ResponderCheck {
 export function checkResponders(
   view: SessionView,
   delivery: HarnessStepInput | undefined,
-  now: number,
+  answering: Answering,
 ): ResponderCheck {
   const admit: string[] = [];
   const refused: { responseId?: string; reason: string }[] = [];
@@ -86,7 +102,7 @@ export function checkResponders(
     const gated = step.responseAuthRequiredRequestIds?.includes(request.interactionId) === true;
     if (!gated) {
       // An answer attributed to nobody stays nobody's; only an unattributed one is the caller's.
-      const responder = auth !== undefined ? auth : currentResponder();
+      const responder = auth !== undefined ? auth : answering.caller;
       const requester = step.requester ?? null;
       if (
         responder !== null &&
@@ -103,12 +119,12 @@ export function checkResponders(
     // A response policy decides Cancel as well as Approve, so a responder it rejects can
     // neither approve nor cancel someone else's request.
     if (decision === undefined || responseId === undefined) continue;
-    const responder = auth !== undefined ? auth : buildCallbackContext().session.auth.current;
+    const responder = auth !== undefined ? auth : answering.sessionCaller;
     if (responder === null) {
       refused.push({ reason: UNAUTHENTICATED_FEEDBACK, responseId });
       continue;
     }
-    weigh[responseId] = { expiresAt: now + RESPONSE_TTL_MS, responder };
+    weigh[responseId] = { expiresAt: answering.now + RESPONSE_TTL_MS, responder };
   }
   return { admit, refused, weigh };
 }
@@ -274,11 +290,6 @@ function stepAsking(view: SessionView, interactionId: string): SuspendedStep | u
   return view.turn.suspended.find((step) =>
     step.requests.some((request) => request.interactionId === interactionId),
   );
-}
-
-function currentResponder(): SessionAuthContext | null {
-  const context = contextStorage.getStore();
-  return context?.get(AuthKey) ?? context?.get(SessionKey)?.auth.current ?? null;
 }
 
 function decisionOf(response: Answer): "approve" | "deny" | undefined {

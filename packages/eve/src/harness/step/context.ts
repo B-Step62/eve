@@ -25,6 +25,7 @@ import {
   type Transition,
 } from "#harness/session-machine/commit.js";
 import { recordAppliedSession, type StepProjection } from "#harness/session-machine/current.js";
+import { Plan, type Change } from "#harness/session-machine/machine.js";
 import { fail, receive } from "#harness/session-machine/transitions.js";
 import {
   activeTurnId,
@@ -75,11 +76,18 @@ export interface Step {
   readonly finalReplyOnly: boolean;
   view(): SessionView;
   position(): TurnPosition;
-  /** Publishes a transition, or facts that change nothing private, as one commit. */
+  /** Starts a plan of the machine's rules from where the step stands. */
+  plan(): Plan;
+  /**
+   * Publishes a transition, or facts that change nothing private, as one commit, or applies an
+   * edit to private state.
+   */
   apply(
-    change: Transition | readonly SessionEvent[],
+    change: Change | readonly SessionEvent[],
     messages?: readonly ModelMessage[],
   ): Promise<void>;
+  /** Publishes what a plan's rules changed, in order. */
+  applyPlan(plan: Plan): Promise<void>;
   /** History as the model and hooks see it, under `state`, the session's by default. */
   projectHistory(
     messages: readonly ModelMessage[],
@@ -114,14 +122,24 @@ export function createStep(input: {
     finalReplyOnly: hasDelegatedCaller || ctx?.get(ScheduleIdKey) !== undefined,
     view: () => sessionView(live.read(), step.session.state),
     position: () => turnPosition(live.read()),
+    plan: () => new Plan({ projection: live.read(), session: step.session }),
     async apply(change, messages) {
-      const transition = "events" in change ? change : { events: change, turn: step.view().turn };
+      if ("edit" in change) {
+        step.session = change.edit(step.session);
+        if (ctx !== undefined) recordAppliedSession(ctx, step.session);
+        return;
+      }
+      const transition: Transition =
+        "events" in change ? change : { events: change, turn: step.view().turn };
       // Records whose rows the commit closed retire with it; the writer closes and scopes.
       step.session = dropClosedRecords(
         await applyTransition(step.session, transition, input.publish, messages),
         live.read(),
       );
       if (ctx !== undefined) recordAppliedSession(ctx, step.session);
+    },
+    async applyPlan(plan) {
+      for (const change of plan.changes) await step.apply(change);
     },
     projectHistory: (messages, state = step.session.state) =>
       input.prepareHistory(messages, state).messages,
@@ -221,7 +239,6 @@ export async function failConnectionResolution(step: Step, error: unknown): Prom
   );
   step.session = { ...step.session, outputSchema: undefined };
   return {
-    next: null,
     session: step.session,
     settledTurn: { isError: true, output: message },
   };
@@ -251,9 +268,7 @@ export async function failModelSelection(step: Step, error: unknown): Promise<St
     }),
   );
   return {
-    next: step.hasDelegatedCaller
-      ? { done: true, isError: true, output: message }
-      : { done: true, output: "" },
+    ended: step.hasDelegatedCaller ? { isError: true, output: message } : { output: "" },
     session: step.session,
   };
 }

@@ -18,6 +18,7 @@ import { createStreamChecker } from "#protocol/session-events/checker.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import { initialSessionProjection } from "#protocol/session-projection.js";
 import { storedProjection } from "#harness/session-machine/view.js";
+import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
 import type { HarnessSession } from "#harness/types.js";
 import { withOpenTurn, withPublished } from "#internal/testing/session-machine.js";
 
@@ -338,6 +339,31 @@ describe("controls and callbacks as deliveries", () => {
       type: "context.settled",
     });
     expect(accepted(session, events)).toEqual([]);
+  });
+
+  it("ends what the turn queued and never read, as a cancel or a clear ends the turn", () => {
+    // Alice typed "approve" while a response policy still weighed her approval, so the turn
+    // queued it, unread, behind the verdict.
+    const admitted = withPublished(waitingTurn(), [
+      { data: { deliveryId: "d-typed" }, type: "delivery.admitted" },
+    ]);
+    const queued = writeTurnState(admitted, {
+      ...readTurnState(admitted.state),
+      queued: { deliveries: [{ deliveryId: "d-typed", parts: [] }], message: "approve" },
+      steers: true,
+    });
+    for (const end of [
+      (view: ReturnType<typeof viewOf>) => cancel(view, { cause: { deliveryId: "cancel-1" } }),
+      (view: ReturnType<typeof viewOf>) =>
+        clear(view, { cause: { deliveryId: "clear-1" }, sessionId: "session-1" }),
+    ]) {
+      const transition = end(viewOf(queued));
+      expect(settledBy(cascade(viewOf(queued).projection.view, transition.events))).toMatchObject({
+        "delivery.settled:d-typed": "ignored",
+      });
+      expect(transition.turn).not.toHaveProperty("queued");
+      expect(transition.turn).not.toHaveProperty("steers");
+    }
   });
 
   it("completes a sign-in from its callback without recording the provider's payload", () => {

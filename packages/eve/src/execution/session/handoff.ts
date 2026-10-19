@@ -7,7 +7,7 @@ import type { HarnessModelMessage } from "#harness/messages.js";
 import { claimHookOwnership, disposeHook } from "#execution/hook-ownership.js";
 import { sessionHookTokens } from "#execution/session/hook-tokens.js";
 import type { SessionInboxHandle, SessionInboxPayload } from "#execution/session-inbox/inbox.js";
-import type { TurnSelection } from "#execution/session/input-queue.js";
+import type { TurnSelection } from "#execution/session/scheduler/held.js";
 import type { SessionHandoffStart, WorkflowEntryResult } from "#execution/session/entry-input.js";
 import { startSessionOwnerStep } from "#execution/workflow-runtime.js";
 import { sessionHandoffMarkerToken } from "#execution/session-inbox/address.js";

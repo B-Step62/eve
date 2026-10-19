@@ -12,6 +12,7 @@ import { defineAgent } from "#public/definitions/agent.js";
 import { defineDynamic } from "#dynamic/definition.js";
 import type { Approval, ApprovalResponsePolicy } from "#approval/definition.js";
 import { workflowEntry } from "#execution/session/entry.js";
+import { answersDeliveryId } from "#execution/session/scheduler/answers.js";
 import {
   sessionCommandHookToken,
   sessionInboxHookToken,
@@ -409,6 +410,8 @@ describe("approval caller", () => {
           answers: [{ interactionId: request.interactionId, optionId: "approve" }],
           message: "Bob here: also delete the staging database.",
         });
+        // The session holds Bob's message, and shows it before it waits on Alice again.
+        await run.next("Bob's message held");
         await run.approve(ALICE);
         // Bob's message waited for Alice's turn to end, then started his own.
         await run.next("Bob's turn");
@@ -426,6 +429,15 @@ describe("approval caller", () => {
       .flatMap((stage) => filterEventsByType(stage, "delivery.consumed"))
       .filter((event) => event.data.parts.length > 0);
     expect(received.map((event) => event.data.turnId)).toEqual(["turn_0", "turn_1"]);
+    // Bob's answers, taken now, and his message, taken by his own turn, are two deliveries,
+    // each admitted once and consumed by one turn.
+    const events = stages.flat();
+    const admitted = filterEventsByType(events, "delivery.admitted").map((e) => e.data.deliveryId);
+    expect(new Set(admitted).size).toBe(admitted.length);
+    const consumed = filterEventsByType(events, "delivery.consumed").map((e) => e.data.deliveryId);
+    expect(new Set(consumed).size).toBe(consumed.length);
+    const bobs = filterEventsByType(events, "response.submitted").at(0)?.data.deliveryId;
+    expect(bobs).toBe(answersDeliveryId(received.at(-1)!.data.deliveryId));
   }, 60_000);
 
   it("never credits an approval sent with null auth to the turn's caller", async () => {

@@ -143,16 +143,26 @@ export function dispatch(
 }
 
 /** Turn input the turn can't take yet waits, unreceived, for a later step. */
-export function queueInput(view: SessionView, input: HarnessStepInput | undefined): Transition {
-  return { events: [], turn: withQueued(view.turn, input) };
+export function queueInput(
+  view: SessionView,
+  input: HarnessStepInput | undefined,
+  options: { readonly steers?: boolean } = {},
+): Transition {
+  return { events: [], turn: withQueued(view.turn, input, options.steers === true) };
 }
 
-function withQueued(turn: TurnState, queued: HarnessStepInput | undefined): TurnState {
+function withQueued(
+  turn: TurnState,
+  queued: HarnessStepInput | undefined,
+  steers: boolean,
+): TurnState {
   if (queued === undefined || isEmptyInput(queued)) return turn;
-  return {
+  const next: { -readonly [K in keyof TurnState]: TurnState[K] } = {
     ...turn,
     queued: turn.queued === undefined ? queued : coalesceTurnInputs(turn.queued, queued),
   };
+  if (steers) next.steers = true;
+  return next;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,18 +190,31 @@ export function admitAnswers(
   }
   for (const responseId of check.admit) responses.admit(responseId);
   const refusal = check.refused.map(({ reason }) => reason).join("\n");
-  const refused: SessionEvent[] =
-    check.refused.length === 0
-      ? []
-      : (delivery?.deliveries ?? []).map(({ deliveryId }) => ({
-          data: { deliveryId, outcome: "refused", reason: refusal },
-          type: "delivery.settled",
-        }));
+  const refused: SessionEvent[] = [...refusedDeliveries(check, delivery)].map((deliveryId) => ({
+    data: { deliveryId, outcome: "refused", reason: refusal },
+    type: "delivery.settled",
+  }));
   return {
     events: [...responses.facts(), ...refused],
     responders: { upsert: check.weigh },
     turn: view.turn,
   };
+}
+
+/**
+ * The deliveries that carried a refused answer. A step's input can hold others, such as an answer
+ * of the same batch that already stands, and those aren't refused with it.
+ */
+export function refusedDeliveries(
+  check: ResponderCheck,
+  delivery: ResolvedStepInput | undefined,
+): ReadonlySet<string> {
+  const refused = new Set(check.refused.map(({ responseId }) => responseId));
+  return new Set(
+    (delivery?.answers ?? []).flatMap((answer) =>
+      refused.has(answer.responseId) && answer.deliveryId !== undefined ? [answer.deliveryId] : [],
+    ),
+  );
 }
 
 /** The answer that stands for each open interaction: its latest admitted response. */
@@ -485,6 +508,8 @@ export function requireSignIn(
     readonly challenges: readonly AuthorizationChallenge[];
     readonly callIdsByName?: ReadonlyMap<string, readonly string[]>;
     readonly queued?: HarnessStepInput;
+    /** The queued input's message steers once the turn takes it (`TurnState.steers`). */
+    readonly steers?: boolean;
   },
 ): Transition {
   const { turnId } = turnPosition(view.projection);
@@ -528,7 +553,7 @@ export function requireSignIn(
       }),
     ),
   ];
-  const turn = withQueued(view.turn, input.queued);
+  const turn = withQueued(view.turn, input.queued, input.steers === true);
   const signIns = withSignIns(view.signIns, input.challenges);
   const suspended = turn.suspended.map((step) =>
     [...stepCallIds(step)].some((callId) => stopped.has(callId))

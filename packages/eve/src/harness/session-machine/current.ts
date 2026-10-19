@@ -191,11 +191,20 @@ export function stepProjection(
     read: () => projection,
     record(publication) {
       // No publisher writes this step's lines, so the detached step is its own writer.
-      const events = cascade(projection.view, eventsOf(publication));
-      for (const line of linesOf(events, new Date().toISOString())) {
-        const events = "facts" in line ? line.facts : [line.progress];
-        projection = advance(projection, line, projection.view.position, events);
-      }
+      projection = projectionAfter(projection, eventsOf(publication));
     },
   };
+}
+
+/** The projection once the writer commits `events`: what they end closes, and each line folds. */
+export function projectionAfter(
+  projection: SessionProjection,
+  events: readonly SessionEvent[],
+): SessionProjection {
+  let next = projection;
+  for (const line of linesOf(cascade(projection.view, events), new Date().toISOString())) {
+    const lineEvents = "facts" in line ? line.facts : [line.progress];
+    next = advance(next, line, next.view.position, lineEvents);
+  }
+  return next;
 }

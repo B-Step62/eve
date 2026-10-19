@@ -3,10 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { DurableSession, DurableSessionState } from "#execution/durable-session-store.js";
 import type { SessionView } from "#harness/session-machine/view.js";
 import type { SessionEvent } from "#protocol/session-event.js";
-import type { SessionInbox } from "#execution/session-inbox/inbox.js";
-import { SessionInputQueue } from "#execution/session/input-queue.js";
+import type { SessionInbox, SessionInboxPayload } from "#execution/session-inbox/inbox.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
-import { SessionExecution } from "#execution/session/turn.js";
+import { SessionLoop } from "#execution/session/session-loop.js";
 import {
   createTask,
   readTaskTable,
@@ -65,8 +64,9 @@ function sessionWithTask(input: {
   readonly ownInputTokens: number;
 }): {
   readonly cursor: SessionStateCursor;
-  readonly execution: SessionExecution;
+  readonly execution: SessionLoop;
   readonly from: WorkflowToolRunRef;
+  readonly inbox: SessionInbox;
 } {
   const base = createTestSessionState({ sessionId: `${input.name}-parent` });
   const created = createTask(readTaskTable(undefined), {
@@ -90,6 +90,7 @@ function sessionWithTask(input: {
   );
   const inbox = {
     claimSessionHooks: vi.fn(),
+    hasPending: () => false,
     onDelivery: () => () => {},
     onInterrupt: () => () => {},
     takeLeading: () => [],
@@ -101,10 +102,9 @@ function sessionWithTask(input: {
     sessionState: { ...base, snapshot: { session: snapshot } },
     sessionWritable: new WritableStream<Uint8Array>(),
   });
-  const execution = new SessionExecution({
+  const execution = new SessionLoop({
     cursor,
     inbox,
-    queue: new SessionInputQueue(),
     sessionId: base.sessionId,
   });
   const from: WorkflowToolRunRef = {
@@ -117,7 +117,7 @@ function sessionWithTask(input: {
     toolName: input.name,
     turnId: "turn_1",
   };
-  return { cursor, execution, from };
+  return { cursor, execution, from, inbox };
 }
 
 function committed(cursor: SessionStateCursor): DurableSession {
@@ -143,27 +143,33 @@ describe("delegated agent usage", () => {
       output: "The plan looks ready.",
       usage: usage(300, 0.25),
     };
-    // The reply is delivered twice.
-    await alice.execution.handleWorkflowMessage(reply);
-    await alice.execution.handleWorkflowMessage(reply);
-
-    expect(spent(alice.cursor)).toEqual(usage(400, 0.25));
-
-    // Alice cancels the reviewer's next turn; no reply carries its usage.
-    await alice.execution.handleWorkflowMessage({ from, kind: "usage", usage: usage(600, 0.5) });
-
-    expect(spent(alice.cursor)).toEqual(usage(700, 0.5));
-    expect(getSessionUsageLimitViolation(committed(alice.cursor))).toBeNull();
-
     const outcome = {
       from,
       kind: "outcome" as const,
       result: { output: "Reviewed.", status: "completed" as const },
       usage: usage(900, 0.75),
     };
-    // The outcome is delivered twice too; the second arrives after the task's run finished.
-    await alice.execution.handleWorkflowMessage(outcome);
-    await alice.execution.handleWorkflowMessage(outcome);
+    // What the session spent before each message arrives between Alice's turns: the reply is
+    // delivered twice; then Alice cancels the reviewer's next turn, whose usage no reply carries;
+    // then the outcome is delivered twice, the second after the task's run finished.
+    const arrivals: [SessionInboxPayload | undefined, TokenUsage | undefined][] = [
+      [reply, undefined],
+      [reply, undefined],
+      [{ from, kind: "usage", usage: usage(600, 0.5) }, usage(400, 0.25)],
+      [outcome, usage(700, 0.5)],
+      [outcome, undefined],
+      [undefined, undefined],
+    ];
+    alice.inbox.next = async () => {
+      const [payload, spentBefore] = arrivals.shift()!;
+      if (spentBefore !== undefined) {
+        expect(spent(alice.cursor)).toEqual(spentBefore);
+        expect(getSessionUsageLimitViolation(committed(alice.cursor))).toBeNull();
+      }
+      return payload;
+    };
+
+    await expect(alice.execution.run()).resolves.toEqual({ kind: "expired" });
 
     expect(spent(alice.cursor)).toEqual(usage(1_000, 0.75));
     expect(getSessionUsageLimitViolation(committed(alice.cursor))).toEqual({
