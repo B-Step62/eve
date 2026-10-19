@@ -81,8 +81,8 @@ export interface ChatSdkChannelState extends Record<string, unknown>, PromptQueu
   anchorMessageId?: string | null;
   /**
    * Whether `adapter.editMessage` works for this session. Set to `false` once
-   * an edit throws {@link isNotImplemented}, which disables streaming edits for
-   * the rest of the session.
+   * a streaming edit fails, which disables streaming edits for the rest of the
+   * session.
    */
   editSupported?: boolean;
   /** Epoch ms of the last streaming edit, used to throttle edits. */
@@ -500,8 +500,7 @@ function defaultEvents<TAdapters extends ChatSdkAdapters>(
         await editMessage(channel.thread, anchor, message);
         channel.state.lastEditAtMs = Date.now();
       } catch (error) {
-        if (!isNotImplemented(error)) throw error;
-        channel.state.editSupported = false;
+        disableStreamingEdits(channel, error);
         clearStream(channel.state);
       }
     },
@@ -619,14 +618,25 @@ async function finalizeStreamedMessage(
     try {
       await editMessage(thread, anchor, message);
     } catch (error) {
-      if (!isNotImplemented(error)) throw error;
-      channel.state.editSupported = false;
+      disableStreamingEdits(channel, error);
       if (postWhenNoAnchor) await thread.post({ markdown: message });
     }
   } else if (postWhenNoAnchor) {
     await thread.post({ markdown: message });
   }
   clearStream(channel.state);
+}
+
+/**
+ * Stops streaming edits for the session after any failed edit. Adapters that
+ * cannot edit don't all throw `NotImplementedError` (WhatsApp throws a plain
+ * `Error`), and the final reply must still be posted either way.
+ */
+function disableStreamingEdits(channel: ChatSdkChannelContext, error: unknown): void {
+  if (!isNotImplemented(error)) {
+    log.warn("streaming edit failed; posting replies without edits", { error });
+  }
+  channel.state.editSupported = false;
 }
 
 /** Whether streamed edits are enabled and still supported by the adapter. */

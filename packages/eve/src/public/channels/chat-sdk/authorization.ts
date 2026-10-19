@@ -56,7 +56,13 @@ export function defaultAuthorizationEvents(): Pick<
       try {
         await editMessage(channel.thread, messageId, message);
       } catch (error) {
-        if (!isNotImplemented(error)) throw error;
+        // Adapters that can't edit don't all throw NotImplementedError (WhatsApp throws a
+        // plain Error), and the person must still learn how the sign-in ended.
+        if (!isNotImplemented(error)) {
+          logError(log, "sign-in status edit failed; posting it instead", error, {
+            threadId: channel.thread.id,
+          });
+        }
         channel.state.editSupported = false;
         await channel.thread.post({ markdown: message });
       }
