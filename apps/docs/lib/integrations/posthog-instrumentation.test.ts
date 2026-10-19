@@ -29,7 +29,7 @@ function posthogDistinctId(attributes: Record<string, unknown>): unknown {
 }
 
 describe("PostHog instrumentation template", () => {
-  it.fails("records the session initiator under a span attribute PostHog reads as the distinct id", async () => {
+  it("records the session initiator under a span attribute PostHog reads as the distinct id", async () => {
     await import("../../registry/instrumentation/posthog");
     const { runtimeContext } = captured;
     if (runtimeContext === undefined) throw new Error("template did not register runtimeContext");
