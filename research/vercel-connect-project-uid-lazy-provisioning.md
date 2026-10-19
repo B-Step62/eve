@@ -1,7 +1,7 @@
 ---
 issue: "TBD (maintainer-requested research; no matching issue found)"
 status: proposed
-last_updated: "2026-10-16"
+last_updated: "2026-10-17"
 ---
 
 # Lazy Vercel Connect provisioning with project-local UIDs
@@ -95,7 +95,7 @@ This extends the existing team flag rather than adding a new one or changing use
 
 ## Adapter and eve rollout
 
-`@vercel/connect/eve` currently posts the authored string as `uid`. Its managed OAuth path will send `projectUid` instead and use the returned connector ID for `getToken`, authorization start and completion, revocation, and cache eviction. It will map `connector_setup_required` to a non-retryable authorization failure that names the connector and the reason, and `connector_provisioning_in_progress` to a retryable one. On `404 project_uid_unavailable`, and on the `403` from Connect versions that reject OIDC project UIDs, it falls back to provisioning by team UID. Caches will be partitioned by project, environment, endpoint, key, and configuration; a cached ID is not proof the connector is still attached. Exact `scl_...` references and `autoProvision: false` keep working for intentionally team-wide references.
+`@vercel/connect/eve` currently posts the authored string as `uid`. Its managed OAuth path will send `projectUid` instead. For a few minutes after provisioning it will use the returned connector ID for `getToken`, authorization start and completion, revocation, and cache eviction, because Connect's lookup by key is eventually consistent and may not yet find a connector it just created; afterwards it addresses the connector by key again, so a later remapping takes effect. It will map `connector_setup_required` to a non-retryable authorization failure that names the connector and the reason, and `connector_provisioning_in_progress` to a retryable one. On `404 project_uid_unavailable`, and on the `403` from Connect versions that reject OIDC project UIDs, it falls back to provisioning by team UID. Cached IDs will be scoped to the key, the connection's server URL, the Connect endpoint, and an explicitly configured Vercel token; the project and environment are those of the deployment's own OIDC token. A cached ID is not proof the connector is still attached: when Connect rejects it, the adapter drops it and resolves the key again. Exact `scl_...` references and `autoProvision: false` keep working for intentionally team-wide references.
 
 Making bare `connect("linear")` lazy changes the meaning of an existing UID. Today `eve integration connect` patches source to the team-wide UID it created, typically `connect("mcp.linear.app/linear")`, and leaves the attachment without a project UID. The exact-UID rule above keeps that source working unchanged, with no second connector. Fresh `connect("linear")` source in a project that already has that connector reports `mapping_required` once; after a user maps it, the deployment uses the same connector and grants. When matching is ambiguous or the name is taken, a user must also set it up; `connect({ connector: "mcp.linear.app/linear", autoProvision: false })` remains available for exact references.
 
@@ -119,7 +119,7 @@ Step 4 is gated on the flag being on everywhere because, for a team with the fla
 - Clearing the project UID of a user-mapped connector reports `mapping_required` instead of remapping it; removing it from the project provisions a fresh connector.
 - Development-first creation works in production; production-first creation reports setup required in development; attaching the environment and retrying works without a redeploy. Custom environments stay exact-only.
 - Invalid server URLs, weaker egress or grants, name collisions, and ambiguous matches fail safely. Exact connector IDs and requests without `projectUid` keep their behavior.
-- The SDK uses the returned ID throughout the OAuth and token lifecycle. Tests cover Connect's real resolution and concurrency behavior, not just a mocked adapter.
+- Right after provisioning, the SDK uses the returned ID throughout the OAuth and token lifecycle, then returns to the key. Tests cover Connect's real resolution and concurrency behavior, not just a mocked adapter.
 - Registry entries switch only after the flag is on for every team, and each switched entry declares the minimum `@vercel/connect` version.
 
 Storage, locking, and resolver internals are documented with the Connect API rather than here.
