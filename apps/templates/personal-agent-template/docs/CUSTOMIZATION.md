@@ -81,7 +81,11 @@ Each category stores **one prose block**. Saves replace the entire block, not pa
 3. Add a UI component in `apps/web/app/components/chat/tool/` if the tool needs custom rendering
 4. Wire the component in [`apps/web/app/components/chat/message/MessageContentEve.vue`](../apps/web/app/components/chat/message/MessageContentEve.vue)
 
-See existing tools: [`agent/tools/weather.ts`](../agent/tools/weather.ts), [`agent/tools/save_memory.ts`](../agent/tools/save_memory.ts).
+See existing tools: [`agent/tools/weather.ts`](../agent/tools/weather.ts), [`agent/tools/save_memory.ts`](../agent/tools/save_memory.ts), [`agent/tools/transcribe_audio.ts`](../agent/tools/transcribe_audio.ts).
+
+### Voice note transcription
+
+[`agent/tools/transcribe_audio.ts`](../agent/tools/transcribe_audio.ts) reads an audio attachment from the sandbox and transcribes it with `transcribe()` from the AI SDK. Change `TRANSCRIPTION_MODEL` to any AI Gateway transcription model, such as `openai/whisper-1`. Transcription is billed per audio minute by the model you pick; see [AI Gateway pricing](https://vercel.com/docs/ai-gateway/pricing).
 
 ## 5. Add a skill
 

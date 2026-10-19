@@ -22,6 +22,10 @@ Chat with your agent in the browser. Threads resume across sessions, tool calls 
 
 DMs and @mentions on Slack. Link your Slack account to your web profile so memory and context follow you across channels.
 
+### Voice Notes — Talk Instead of Type
+
+Send a Slack voice clip or upload audio in web chat. The agent transcribes it with an [AI Gateway](https://vercel.com/docs/ai-gateway) transcription model through [`transcribe_audio`](./agent/tools/transcribe_audio.ts) and answers what you said. No extra credentials: it uses the same Gateway access as the chat model.
+
 ### iMessage — Text Your Agent
 
 Reach V over iMessage via [Sendblue](https://chat-sdk.dev/adapters/vendor-official/sendblue). Add your phone number in **Profile**, then message the Sendblue line — same memory and context as web and Slack.
