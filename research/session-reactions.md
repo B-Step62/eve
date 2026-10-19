@@ -8,21 +8,21 @@ last_updated: "2026-10-19"
 
 An eve agent can change during a session. Its model, tools, skills, instructions, connections, and
 subagents can depend on who is calling and what the conversation says, and hooks run code as the
-session progresses. This plan proposes one way to write all of them.
+session progresses.
 
-Today a dynamic value is a set of handlers on lifecycle events, and that has three costs:
+Today a dynamic value is a set of handlers on lifecycle events, which has a few drawbacks:
 
 - **Each kind has its own rules.** Models and tools can update before every model call; skills,
   instructions, connections, and subagents only when a session or turn starts. Which result wins
   when several events fire, what a steering message changes, and what happens when a handler
   throws all differ by kind.
-- **Surviving a restart takes a compiler.** A session can continue in another process, and a
+- **Surviving a restart requires a compiler.** A session can continue in another process, and a
   dynamic tool's callback has to be rebuilt there. eve rewrites authored callbacks at build time to
   save what they capture, so authors have to write callbacks in shapes the compiler understands.
-- **Hooks can watch, but can barely act.** Cancelling the turn is the only command a hook has. A
+- **Hooks can watch, but can't really act.** Cancelling the turn is the only command a hook has. A
   hook that throws is logged and the turn continues, so it can't enforce a check.
 
-A tool set per tenant shows the first two on `main`:
+Example from `main`, providing a different tool set for each tenant:
 
 ```ts
 // agent/tools/crm.ts (today)
@@ -40,9 +40,11 @@ export default defineDynamic({
 });
 ```
 
-It has to pick an event, it can't say "once per tenant", and its callbacks survive a restart only
-because a build step rewrote them. The plan replaces the handlers with one function, and adds
-`ctx.memo` for what the function learns from the outside world:
+The code has to pick an event, it can't say "once per tenant", and its callbacks survive a restart only
+because a build step rewrote them.
+
+The plan replaces the handlers with one function, and adds `ctx.memo` for storing what the function learns
+from the outside world:
 
 ```ts
 // agent/tools/crm.ts (proposed)
@@ -54,38 +56,9 @@ export default defineDynamic(async (ctx) => {
 });
 ```
 
-eve keeps the rows, not the tools. After a restart, the function runs again, `ctx.memo` returns the
-saved rows without querying the database, and `crmTool` builds the same tools with ordinary code.
-Nothing is compiled. Hooks get the same function form, plus `ctx.once` for effects and commands
-such as `ctx.cancel()` and `ctx.compact()`.
-
-## Background
-
-- A **session** is one durable conversation with an agent. It runs in **turns**: the agent reads
-  new input, then makes one or more **model calls**, running the tools the model asks for in
-  between.
-- A **step** is one durable unit of a session's work, such as the part of a turn between two model
-  calls. A step runs against the session's state and commits what it changed. Steps in one session
-  run one at a time.
-- A **dynamic value** is a capability written with `defineDynamic` instead of a static
-  definition: a file in `agent/tools/`, `skills/`, `instructions/`, `connections/`, or
-  `subagents/`, or the `model` field of `defineAgent`.
-- A **hook** is a file in `agent/hooks/` that runs code as the session progresses: auditing,
-  notifications, or enforcing a policy.
-- **Sessions outlive processes.** A turn can continue in a different process after a crash or
-  after waiting for an approval, and the next turn can run somewhere else entirely. Anything that
-  existed only in memory, such as a tool's callback, has to be rebuilt there. This doc calls that
-  a **cold start**.
-- The session's **stream** is an ordered log of **facts** about what happened, such as
-  `turn.started` and `call.settled`. Each time eve saves new facts is a **commit**. The **view**
-  folds the facts into tables a client can read. All three come from v27, the session-stream
-  rewrite in review.
-- A session moves to a new **deployment** only while it's idle.
-
-**Status.** [#4616](https://github.com/vercel/eve/pull/4616) prototypes this on the v27 stack,
-under the name _reactions_, with a three-callback API: `select`, `record`, and `render`. This plan
-replaces that API with one function, `ctx.memo`, and `ctx.once`. The prototype's runner, retry
-identities, command queue, and remote-child bindings carry over.
+eve keeps the db rows, as they're JSON-serializable. After a restart, the function runs again, 
+`ctx.memo` returns the saved rows without querying the database, and `crmTool` builds the same 
+tools with ordinary code.
 
 ## The main changes
 
@@ -150,9 +123,6 @@ values computed from the session as of its latest commit.
   ),
   ```
 
-- The contract names steps, not model calls, so a later step that needs a value, such as a limit
-  checked when a turn starts, uses the same function without new rules.
-
 **The cost.** The function runs often. Reading `ctx` is cheap, but comparing the result costs in
 proportion to its size: a file that returns 200 tools digests 200 declarations each time. Work that
 doesn't need to repeat goes in a memo ([change 2](#2-ctxmemo-keeps-what-eve-learns-from-outside)).
@@ -204,10 +174,6 @@ export default defineDynamic((ctx) =>
   ctx.session.auth.current?.attributes.role === "support" ? refund : null,
 );
 ```
-
-This is the one way to vary a capability: a `defineDynamic` file whose function returns it or
-`null`. Field-level forms, such as an `available` flag or a dynamic `description`, would be a second
-way to say the same thing, so this plan leaves them out.
 
 `reasoning`, `modelContextWindowTokens`, and `modelOptions` already vary with the model: the dynamic
 `model` field returns them together, because they're one decision.
