@@ -611,11 +611,11 @@ describe("chatSdkChannel", () => {
   });
 
   it.each([
-    ["is not implemented", new NotImplementedError("editMessage")],
-    ["fails", new Error("WhatsApp does not support editing messages.")],
+    ["is not implemented", new NotImplementedError("editMessage"), false],
+    ["fails", new Error("WhatsApp does not support editing messages."), undefined],
   ])(
     "posts a sign-in's result as a new message when editing the challenge %s",
-    async (_, editError) => {
+    async (_, editError, editSupported) => {
       const adapter = testAdapter();
       adapter.editError = editError;
       const bridge = chatSdkChannel({
@@ -647,6 +647,7 @@ describe("chatSdkChannel", () => {
         { message: { markdown: "Notion Workspace connected." }, threadId: THREAD_ID },
       ]);
       expect(state.pendingAuthMessageIds).toEqual({});
+      expect(state.editSupported).toBe(editSupported);
     },
   );
 
@@ -940,7 +941,7 @@ describe("chatSdkChannel", () => {
     expect(state.anchorMessageId).toBeNull();
   });
 
-  it("still posts the whole reply when the adapter rejects streaming edits", async () => {
+  it("posts the whole reply when a streaming edit fails, and keeps streaming later replies", async () => {
     const adapter = testAdapter();
     // The WhatsApp adapter rejects edits with a plain Error, not NotImplementedError.
     adapter.editError = new Error("WhatsApp does not support editing messages.");
@@ -953,70 +954,82 @@ describe("chatSdkChannel", () => {
     const state: ChatSdkChannelState = { thread: serializedThread() };
     const channelAdapter = withState(getAdapter(bridge.channel), state);
     const ctx = buildAdapterContext(channelAdapter, stubAccessor());
-
-    for (const [sequence, messageDelta] of ["The", " sky", " is blue."].entries()) {
+    async function streamReply(turnId: string, deltas: readonly string[]) {
+      for (const [sequence, messageDelta] of deltas.entries()) {
+        await callEvent(
+          channelAdapter,
+          makeEvent("message.appended", { messageDelta, sequence, stepIndex: 0, turnId }),
+          ctx,
+        );
+      }
       await callEvent(
         channelAdapter,
-        makeEvent("message.appended", { messageDelta, sequence, stepIndex: 0, turnId: "turn-1" }),
+        makeEvent("message.completed", {
+          finishReason: "stop",
+          message: deltas.join(""),
+          sequence: deltas.length,
+          stepIndex: 0,
+          turnId,
+        }),
         ctx,
       );
     }
-    await callEvent(
-      channelAdapter,
-      makeEvent("message.completed", {
-        finishReason: "stop",
-        message: "The sky is blue.",
-        sequence: 3,
-        stepIndex: 0,
-        turnId: "turn-1",
-      }),
-      ctx,
-    );
+
+    await streamReply("turn-1", ["The", " sky", " is blue."]);
 
     expect(adapter.posted).toEqual([
       { message: { markdown: "The" }, threadId: THREAD_ID },
       { message: { markdown: "The sky is blue." }, threadId: THREAD_ID },
     ]);
-    expect(state.editSupported).toBe(false);
+
+    // One failed edit doesn't turn editing off for the session.
+    adapter.editError = null;
+    await streamReply("turn-2", ["It", " is."]);
+
+    expect(adapter.posted.at(-1)).toEqual({ message: { markdown: "It" }, threadId: THREAD_ID });
+    expect(adapter.edited.at(-1)).toMatchObject({ message: { markdown: "It is." } });
   });
 
   it.each([
-    ["is not implemented", new NotImplementedError("editMessage")],
-    ["fails", new Error("WhatsApp does not support editing messages.")],
-  ])("falls back to a fresh post when the final streaming edit %s", async (_, editError) => {
-    const adapter = testAdapter();
-    adapter.editError = editError;
-    const bridge = chatSdkChannel({
-      adapters: { test: adapter },
-      state: memoryState(),
-      userName: "bot",
-    });
-    const state: ChatSdkChannelState = {
-      anchorMessageId: "posted-1",
-      editSupported: true,
-      streamStepIndex: 0,
-      thread: serializedThread(),
-    };
-    const channelAdapter = withState(getAdapter(bridge.channel), state);
-    const ctx = buildAdapterContext(channelAdapter, stubAccessor());
+    ["is not implemented", new NotImplementedError("editMessage"), false],
+    ["fails", new Error("WhatsApp does not support editing messages."), true],
+  ])(
+    "falls back to a fresh post when the final streaming edit %s",
+    async (_, editError, editSupported) => {
+      const adapter = testAdapter();
+      adapter.editError = editError;
+      const bridge = chatSdkChannel({
+        adapters: { test: adapter },
+        state: memoryState(),
+        userName: "bot",
+      });
+      const state: ChatSdkChannelState = {
+        anchorMessageId: "posted-1",
+        editSupported: true,
+        streamStepIndex: 0,
+        thread: serializedThread(),
+      };
+      const channelAdapter = withState(getAdapter(bridge.channel), state);
+      const ctx = buildAdapterContext(channelAdapter, stubAccessor());
 
-    await callEvent(
-      channelAdapter,
-      makeEvent("message.completed", {
-        finishReason: "stop",
-        message: "final answer",
-        sequence: 2,
-        stepIndex: 0,
-        turnId: "turn-1",
-      }),
-      ctx,
-    );
+      await callEvent(
+        channelAdapter,
+        makeEvent("message.completed", {
+          finishReason: "stop",
+          message: "final answer",
+          sequence: 2,
+          stepIndex: 0,
+          turnId: "turn-1",
+        }),
+        ctx,
+      );
 
-    expect(adapter.posted).toEqual([
-      { message: { markdown: "final answer" }, threadId: THREAD_ID },
-    ]);
-    expect(state.editSupported).toBe(false);
-  });
+      expect(adapter.posted).toEqual([
+        { message: { markdown: "final answer" }, threadId: THREAD_ID },
+      ]);
+      expect(state.editSupported).toBe(editSupported);
+    },
+  );
 
   it("finalizes the streamed anchor when a step completes with tool-calls", async () => {
     const adapter = testAdapter();

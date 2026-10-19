@@ -1,6 +1,6 @@
 import type { Thread } from "#compiled/chat/index.js";
 import { createLogger, logError } from "#internal/logging.js";
-import { isNotImplemented } from "#public/channels/chat-sdk/notImplemented.js";
+import { isNotImplemented, recordEditFailure } from "#public/channels/chat-sdk/notImplemented.js";
 import type { ChatSdkChannelEvents } from "#public/channels/chat-sdk/chatSdkChannel.js";
 
 const log = createLogger("chat-sdk.authorization");
@@ -56,14 +56,8 @@ export function defaultAuthorizationEvents(): Pick<
       try {
         await editMessage(channel.thread, messageId, message);
       } catch (error) {
-        // Adapters that can't edit don't all throw NotImplementedError (WhatsApp throws a
-        // plain Error), and the person must still learn how the sign-in ended.
-        if (!isNotImplemented(error)) {
-          logError(log, "sign-in status edit failed; posting it instead", error, {
-            threadId: channel.thread.id,
-          });
-        }
-        channel.state.editSupported = false;
+        // The person must still learn how the sign-in ended.
+        recordEditFailure(channel.state, error, log);
         await channel.thread.post({ markdown: message });
       }
       const next = { ...pending };
