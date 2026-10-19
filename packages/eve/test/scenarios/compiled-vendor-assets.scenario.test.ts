@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
+import { parseWithNitroRolldownAst } from "../../src/internal/bundler/nitro-rolldown.js";
 import { useTemporaryDirectories } from "../../src/internal/testing/use-temporary-app-roots.js";
 
 const EVE_PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -19,6 +20,8 @@ const EVE_CATALOG_FINGERPRINT_FILES = [
   "tsconfig.json",
 ] as const;
 const COMPILED_VENDOR_ROOT = join(EVE_PACKAGE_ROOT, ".generated", "compiled");
+// Everything the vendored `client` chunk group emits; browser bundles load it.
+const CLIENT_VENDOR_OUTPUT_ROOTS = ["_chunks/client", "zod", "zod-validation-error"] as const;
 const execFileAsync = promisify(execFile);
 const createTemporaryDirectory = useTemporaryDirectories();
 const require = createRequire(import.meta.url);
@@ -227,6 +230,36 @@ describe("compiled vendor assets", () => {
 
     expect(sourceMapFiles).toEqual([]);
     expect(javaScriptSources.some(containsSourceMapComment)).toBe(false);
+  });
+
+  it.fails("keeps class expressions out of shared declarations in browser chunks", async () => {
+    // webpack before 5.90 credits the declarators after `var a = class {}, b = f()`
+    // to the class. When the class is unused it drops the `f` import binding but
+    // keeps the call, so the bundle throws `f is not defined` (#5037).
+    const joinedClasses: string[] = [];
+    for (const root of CLIENT_VENDOR_OUTPUT_ROOTS) {
+      const entries = await readdir(join(COMPILED_VENDOR_ROOT, root), { recursive: true });
+      for (const entry of entries.filter((file) => file.endsWith(".js"))) {
+        const file = join(root, entry);
+        const source = await readFile(join(COMPILED_VENDOR_ROOT, file), "utf8");
+        const program = (await parseWithNitroRolldownAst(file, source)) as {
+          body: {
+            type: string;
+            declarations?: { id: { name?: string }; init: { type: string } | null }[];
+          }[];
+        };
+        for (const statement of program.body) {
+          if (statement.type !== "VariableDeclaration") continue;
+          for (const declarator of statement.declarations!.slice(0, -1)) {
+            if (declarator.init?.type === "ClassExpression") {
+              joinedClasses.push(`${file}: ${declarator.id.name}`);
+            }
+          }
+        }
+      }
+    }
+
+    expect(joinedClasses).toEqual([]);
   });
 
   it("copies the complete @vercel/blob declaration tree", async () => {
