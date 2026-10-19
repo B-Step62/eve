@@ -61,7 +61,7 @@ describe("buildBaseToolContext – getSandbox abort binding", () => {
     });
   });
 
-  it.fails("keeps custom provider session methods defined on a class", async () => {
+  it("keeps custom provider session methods defined on a class", async () => {
     const environment = defineSandboxProvider<undefined, undefined, null, null, AcmeSandboxSession>(
       {
         name: "acme",

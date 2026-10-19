@@ -10,6 +10,7 @@ import type {
   SandboxWriteFileOptions,
   SandboxWriteTextFileOptions,
 } from "#shared/sandbox-session.js";
+import { overrideSandboxSession } from "#execution/sandbox/override-session.js";
 
 /**
  * Returns a sandbox session that applies `abortSignal` to every operation.
@@ -22,8 +23,7 @@ export function bindSandboxAbortSignal<TSession extends SandboxSession>(
   const compose = (callSignal: AbortSignal | undefined): AbortSignal =>
     AbortSignal.any(callSignal === undefined ? [abortSignal] : [abortSignal, callSignal]);
 
-  const bound = {
-    ...session,
+  return overrideSandboxSession(session, {
     run: (options: SandboxRunOptions) =>
       session.run({ ...options, abortSignal: compose(options.abortSignal) }),
     spawn: (options: SandboxSpawnOptions) =>
@@ -42,8 +42,5 @@ export function bindSandboxAbortSignal<TSession extends SandboxSession>(
       session.writeTextFile({ ...options, abortSignal: compose(options.abortSignal) }),
     removePath: (options: SandboxRemovePathOptions) =>
       session.removePath({ ...options, abortSignal: compose(options.abortSignal) }),
-  } satisfies SandboxSession;
-
-  // The spread retains provider-specific lifecycle methods not declared on SandboxSession.
-  return bound as TSession;
+  } satisfies Omit<SandboxSession, "resolvePath">);
 }
