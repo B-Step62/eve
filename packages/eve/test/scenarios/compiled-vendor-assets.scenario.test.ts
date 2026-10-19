@@ -232,7 +232,7 @@ describe("compiled vendor assets", () => {
     expect(javaScriptSources.some(containsSourceMapComment)).toBe(false);
   });
 
-  it.fails("keeps class expressions out of shared declarations in browser chunks", async () => {
+  it("keeps class expressions out of shared declarations in browser chunks", async () => {
     // webpack before 5.90 credits the declarators after `var a = class {}, b = f()`
     // to the class. When the class is unused it drops the `f` import binding but
     // keeps the call, so the bundle throws `f is not defined` (#5037).
