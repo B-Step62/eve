@@ -267,6 +267,10 @@ timeout. Session expiration follows [run-data retention](#run-data-retention);
 a zero-retention session loses its stored payloads when it ends.
 
 Input tokens, output tokens, and model token cost are checked independently.
+The input limit counts only new input: uncached input plus cache writes. Cache
+reads, the history a provider replays from its prompt cache on every step, do
+not count, so long tool-heavy sessions are not stopped for re-reading their own
+context. When a provider reports no cache details, all input counts.
 The model call that crosses a limit is allowed to finish because exact usage
 arrives after the call completes. Before the next model call, eve pauses the
 turn (`turn.waiting`) and sends a deterministic continuation prompt with two options:
@@ -296,7 +300,7 @@ no inherited quota also fails instead of raising a continuation prompt that
 could only grant another zero-value window.
 
 When `maxInputTokensPerSession` is omitted, root sessions apply a default
-input budget of `40_000_000` provider-reported input tokens.
+input budget of `40_000_000` new input tokens.
 `maxOutputTokensPerSession` and `maxTokenCostUsdPerSession` are unset by
 default. `maxTokenCostUsdPerSession` is a US-dollar limit on model token cost,
 not tool or infrastructure spend. It uses the cost reported with each model

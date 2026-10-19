@@ -1921,8 +1921,9 @@ describe("createToolLoopHarness", () => {
 
   it.each([
     {
+      // The limit counts new input (14 minus 2 cache reads); details keep the raw total.
       details: {
-        inputTokens: 12,
+        inputTokens: 14,
         kind: "input",
         limit: 12,
         outputTokens: 3,
@@ -1936,7 +1937,7 @@ describe("createToolLoopHarness", () => {
         cacheReadTokens: 2,
         cacheWriteTokens: 1,
         costUsd: 0,
-        inputTokens: 12,
+        inputTokens: 14,
         outputTokens: 3,
         sawCost: false,
       },

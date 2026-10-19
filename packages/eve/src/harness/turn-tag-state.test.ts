@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { extractTokenUsageDelta } from "#harness/model-call/usage.js";
+import type { HarnessStepResult } from "#harness/step-hooks.js";
 import {
   accumulateSessionUsage,
   accumulateTurnUsage,
+  addTurnUsage,
   bumpSessionRuntimeUsageLimits,
   getSessionRemainingUsageQuota,
   getSessionRuntimeUsageLimits,
@@ -427,6 +430,57 @@ describe("session token limits", () => {
       costUsd: false,
       inputTokens: false,
       outputTokens: false,
+    });
+  });
+
+  describe("counts only new input", () => {
+    // One model step that replayed 90 cached tokens, wrote 4 to the cache and sent 6 uncached.
+    function sessionAfterStep(usage: Partial<NonNullable<HarnessStepResult["usage"]>>) {
+      return {
+        ...addTurnUsage(
+          makeSession(),
+          "turn_0",
+          extractTokenUsageDelta({
+            costUsd: undefined,
+            usage: usage as NonNullable<HarnessStepResult["usage"]>,
+          }),
+        ),
+        limits: { maxInputTokensPerSession: 30 },
+      };
+    }
+
+    it("excludes cache reads from the limit, the grant and the remaining quota", () => {
+      const session = sessionAfterStep({
+        inputTokens: 100,
+        inputTokenDetails: { cacheReadTokens: 90, cacheWriteTokens: 4, noCacheTokens: 6 },
+        outputTokens: 1,
+      });
+
+      // Telemetry keeps the raw totals.
+      expect(getSessionTokenUsage(session)).toMatchObject({
+        cacheReadTokens: 90,
+        cacheWriteTokens: 4,
+        inputTokens: 100,
+      });
+      expect(getSessionUsageLimitViolation(session)).toBeNull();
+      expect(getSessionRemainingUsageQuota(session)).toMatchObject({ inputTokens: 20 });
+      expect(getSessionRuntimeUsageLimits(bumpSessionRuntimeUsageLimits(session))).toEqual({
+        inputTokens: 40,
+      });
+    });
+
+    it("counts the full input when the provider reports no cache details", () => {
+      const session = sessionAfterStep({ inputTokens: 100, outputTokens: 1 });
+
+      expect(getSessionUsageLimitViolation(session)).toEqual({
+        kind: "input",
+        limit: 30,
+        usedTokens: 100,
+      });
+      expect(getSessionRemainingUsageQuota(session)).toMatchObject({ inputTokens: 0 });
+      expect(getSessionRuntimeUsageLimits(bumpSessionRuntimeUsageLimits(session))).toEqual({
+        inputTokens: 130,
+      });
     });
   });
 });
