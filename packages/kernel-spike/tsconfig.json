@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM"],
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "hosts/**/*.ts", "bench/**/*.ts", "*.ts"],
+  "exclude": ["node_modules", "target", ".spike-tmp", "hosts/workflow/.workflow-vitest"]
+}

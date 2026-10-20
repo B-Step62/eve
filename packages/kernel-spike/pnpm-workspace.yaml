@@ -1,0 +1,13 @@
+# Its own workspace, so the prototype's Workflow and durable-harness packages
+# never enter eve's lockfile or change how eve's dependencies resolve.
+packages:
+  - .
+
+allowBuilds:
+  "@swc/core": false # Prebuilt platform packages need no install script.
+  esbuild: true # Verifies the installed platform binary.
+
+minimumReleaseAge: 2880 # 2 days, as in eve's workspace.
+
+ignoredOptionalDependencies:
+  - cbor-extract # Optional native acceleration, ignored in eve's workspace too.

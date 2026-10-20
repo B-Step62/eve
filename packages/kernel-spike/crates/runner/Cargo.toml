@@ -1,0 +1,10 @@
+[package]
+name = "runner"
+version = "0.0.0"
+edition = "2021"
+description = "In-process runner: drives the kernel, runs effects on threads, and keeps an optional session store."
+
+[dependencies]
+kernel = { path = "../kernel" }
+serde = { workspace = true }
+serde_json = { workspace = true }

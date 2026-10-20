@@ -1,0 +1,24 @@
+{
+  "name": "@eve/kernel-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Prototype for research/fx-kernel-convergence.md: one no-I/O Rust kernel on three hosts.",
+  "type": "module",
+  "scripts": {
+    "spike:build": "node scripts/build.mjs",
+    "spike:test": "cargo test --manifest-path Cargo.toml && vitest run --config vitest.config.ts && vitest run --config hosts/workflow/vitest.config.ts",
+    "spike:bench": "node bench/napi.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@workflow/vitest": "5.0.5",
+    "@workflow/world-local": "5.1.1",
+    "durable-harness": "0.0.1-beta.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2",
+    "workflow": "5.2.2"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

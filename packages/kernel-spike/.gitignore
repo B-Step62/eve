@@ -1,0 +1,7 @@
+target/
+*.node
+*.wasm
+.workflow-data/
+.workflow-vitest/
+.spike-tmp/
+/.swc

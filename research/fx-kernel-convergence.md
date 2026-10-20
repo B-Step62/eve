@@ -787,3 +787,49 @@ local form.
    binary with the kernel, the in-process runner, and the local session log. Measure it against the 2 ms
    limit and the 7 MiB limit.
 6. Do the user-space items: R13, R15 to R17, R21, and R23 to R26.
+
+## 13. Prototype results
+
+`packages/kernel-spike` is a prototype of the kernel contract (section 7.1). Its
+README has the full results. The kernel in the prototype is small. It has
+model calls, tool calls, tool order, steer, cancel, the replay rule, and a
+port of the fx recovery policy. The prototype runs five scenarios on three
+hosts:
+
+- Host A: the in-process runner (fx CLI case), with real `abort()` crashes.
+- Host B: Workflow SDK workflows (eve case). The kernel runs in step code
+  (Node-API) or in workflow code (WebAssembly).
+- Host C: durable-harness (durable libfx case), with `SIGKILL` crashes.
+
+All scenarios pass on all hosts. The kernel has no host-specific code.
+
+These results change the proposal:
+
+1. **Open item 2.** Option B works on the default Workflow VM engine
+   (`node:vm`), because the synchronous WebAssembly constructors are
+   available. With option B, the `plain` turn has 5 steps instead of 11.
+   Option B does not work on the QuickJS engine, because QuickJS has no
+   WebAssembly.
+2. **R2 on Workflow.** A `never` step can use `getStepMetadata().attempt`. If
+   the attempt is more than 1, the step gives `interrupted`. The step must not
+   throw for a usual failure. We must confirm with the Workflow team that the
+   attempt count is correct on each World.
+3. **R7 on Workflow.** Workflow cannot stop a step that runs. The prototype
+   uses a marker that the step reads. eve must have a cancel channel for open
+   steps.
+4. **Section 7.5, gap 1.** durable-harness ran parallel effects in one drive
+   on world-local. This gap is smaller than the proposal says.
+5. **durable-harness inputs.** durable-harness has no cancel input kind. The
+   prototype uses `followUp`. libfx must have a cancel input kind.
+6. **State at the boundary.** Keep the kernel state in Rust between calls. A
+   call then takes approximately 1 µs. If the state crosses the boundary as
+   JSON on each call, the call takes approximately 1.1 ms for each MB.
+7. **Model requests.** Each `model.call` request copies the full history. This
+   costs approximately 1.5 ms for each MB. The normal model request (open
+   item 5) must refer to the history, not copy it.
+8. **Size of the port.** For pure logic, the Rust port is not shorter than
+   the Zig source. The recovery policy has 259 lines of Rust and 216 lines of
+   Zig. The line estimate for the kernel must increase until we port and
+   measure a module with much I/O and memory allocation.
+9. **fx CLI budget.** The `fx-mini` binary is 883 KB. It starts in
+   approximately 0.5 ms more than the time to start a process.

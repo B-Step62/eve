@@ -69,6 +69,11 @@
       "pinVersion": "4.5.4"
     },
     {
+      "label": "kernel-spike has its own pnpm workspace, so it has no catalog",
+      "packages": ["@eve/kernel-spike"],
+      "isIgnored": true
+    },
+    {
       "label": "Shared third-party deps must use the catalog: protocol",
       "policy": "catalog",
       "dependencies": [

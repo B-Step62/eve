@@ -1,0 +1,86 @@
+{
+  "config": {
+    "system": "You are a test agent.",
+    "step_limit": 0,
+    "tools": [
+      { "name": "read_file", "description": "Read a file.", "read_only": true, "replay": "safe" },
+      {
+        "name": "write_file",
+        "description": "Append to a file.",
+        "read_only": false,
+        "replay": "never"
+      }
+    ]
+  },
+  "scenarios": {
+    "plain": {
+      "prompt": "Combine a.txt and b.txt into out.txt.",
+      "files": { "a.txt": "alpha", "b.txt": "beta" },
+      "script": [
+        {
+          "tool_calls": [
+            { "id": "r1", "name": "read_file", "input": { "path": "a.txt", "delay_ms": 150 } },
+            { "id": "r2", "name": "read_file", "input": { "path": "b.txt", "delay_ms": 150 } },
+            {
+              "id": "w1",
+              "name": "write_file",
+              "input": { "path": "out.txt", "content": "alpha+beta\n" }
+            }
+          ]
+        },
+        { "text": "Done." }
+      ]
+    },
+    "crash_in_write": {
+      "prompt": "Write the report.",
+      "files": {},
+      "crash": { "at": "tool", "name": "write_file" },
+      "script": [
+        {
+          "tool_calls": [
+            {
+              "id": "w1",
+              "name": "write_file",
+              "input": { "path": "report.txt", "content": "report\n" }
+            }
+          ]
+        },
+        { "text": "The write may not have finished, so I did not retry it." }
+      ]
+    },
+    "crash_in_model": {
+      "prompt": "Read a.txt.",
+      "files": { "a.txt": "alpha" },
+      "crash": { "at": "model", "index": 1 },
+      "script": [
+        { "tool_calls": [{ "id": "r1", "name": "read_file", "input": { "path": "a.txt" } }] },
+        { "text": "It says alpha." }
+      ]
+    },
+    "steer": {
+      "prompt": "Summarize a.txt.",
+      "files": { "a.txt": "alpha", "b.txt": "beta" },
+      "steer": { "after_chunks": 2, "text": "Actually, look at b.txt instead." },
+      "script": [
+        {
+          "text": "I will look at a.txt and then summarize it for you.",
+          "chunks": 6,
+          "chunk_ms": 40
+        },
+        { "text": "OK, looking at b.txt instead." }
+      ]
+    },
+    "cancel": {
+      "prompt": "Read a.txt slowly.",
+      "files": { "a.txt": "alpha" },
+      "cancel": { "after_tool_start": "read_file" },
+      "script": [
+        {
+          "tool_calls": [
+            { "id": "r1", "name": "read_file", "input": { "path": "a.txt", "delay_ms": 5000 } }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "fx-mini"
+version = "0.0.0"
+edition = "2021"
+description = "A tiny fx-shaped CLI on the in-process runner: scripted model, file tools, real crashes."
+
+[dependencies]
+kernel = { path = "../kernel" }
+runner = { path = "../runner" }
+serde = { workspace = true }
+serde_json = { workspace = true }
