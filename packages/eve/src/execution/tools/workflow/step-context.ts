@@ -16,21 +16,22 @@ export interface WorkflowStepContext {
   readonly authorizationResults: readonly WorkflowStepAuthorizationResult[];
 }
 
-export type WorkflowStepResult =
-  | ({ readonly authorized: readonly string[] } & (
-      | { readonly kind: "result"; readonly output: unknown }
-      | { readonly kind: "authorization-required"; readonly signal: AuthorizationSignal }
-    ))
+export type WorkflowStepResult = { readonly authorized: readonly string[] } & (
+  | { readonly kind: "result"; readonly output: unknown }
+  | { readonly kind: "authorization-required"; readonly signal: AuthorizationSignal }
   /**
    * A `retryable: false` authorization failure, returned rather than thrown: a thrown error
-   * reaches the workflow body without the `reason` and `retryable` the session records.
+   * reaches the workflow body without the `reason`, `retryable` and sign-in the session records.
    */
   | {
       readonly kind: "authorization-failed";
       readonly connectionName: string;
       readonly message: string;
       readonly reason?: string;
-    };
+      /** The sign-in whose completion or token raised the failure. */
+      readonly signIn?: string;
+    }
+);
 
 /** Compiler-owned envelope; contextIndexes marks arguments replaced with step-local context. */
 export interface WorkflowStepInvocation {

@@ -1,5 +1,5 @@
 import { createHook, getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
-import { ConnectionAuthorizationFailedError } from "#connections/errors.js";
+import { attributeSignInFailure, ConnectionAuthorizationFailedError } from "#connections/errors.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { AuthorizationCallback } from "#shared/connection-types.js";
 import type { ToolContext } from "#tools/definition.js";
@@ -18,7 +18,6 @@ import type {
   WorkflowStepResult,
 } from "#execution/tools/workflow/step-context.js";
 
-type StepOutcome = Exclude<WorkflowStepResult, { readonly kind: "authorization-failed" }>;
 type IdentifiedAuthorizationChallenge = AuthorizationChallenge & { readonly attemptId: string };
 
 interface WorkflowContextArgument {
@@ -69,7 +68,7 @@ async function executeAuthorizedStep(
   for (;;) {
     const callback = createHook<unknown>();
     try {
-      let result: StepOutcome;
+      let result: WorkflowStepResult;
       try {
         result = await invokeAuthorizedStep({
           args,
@@ -98,6 +97,16 @@ async function executeAuthorizedStep(
         await reportPendingAsFailed(run, ctx.abortSignal, pending);
         return result.output;
       }
+      if (result.kind === "authorization-failed") {
+        const failure = new ConnectionAuthorizationFailedError(result.connectionName, {
+          message: result.message,
+          ...(result.reason !== undefined && { reason: result.reason }),
+          retryable: false,
+        });
+        if (result.signIn !== undefined) attributeSignInFailure(failure, result.signIn);
+        await reportPendingAsFailed(run, ctx.abortSignal, pending, failure);
+        throw failure;
+      }
 
       await collectAuthorizationCallbacks({
         authorizationResults,
@@ -120,7 +129,7 @@ async function invokeAuthorizedStep(input: {
   readonly ctx: ToolContext;
   readonly execute: (invocation: WorkflowStepInvocation) => Promise<unknown>;
   readonly receiver: unknown;
-}): Promise<StepOutcome> {
+}): Promise<WorkflowStepResult> {
   const { args, authorizationResults, callbackToken, ctx, execute, receiver } = input;
   const context: WorkflowStepContext = {
     callId: ctx.callId,
@@ -136,15 +145,7 @@ async function invokeAuthorizedStep(input: {
     context,
     contextIndexes: args.flatMap((arg, index) => (arg === ctx ? [index] : [])),
   };
-  const result = (await execute.call(receiver, invocation)) as WorkflowStepResult;
-  if (result.kind === "authorization-failed") {
-    throw new ConnectionAuthorizationFailedError(result.connectionName, {
-      message: result.message,
-      ...(result.reason !== undefined && { reason: result.reason }),
-      retryable: false,
-    });
-  }
-  return result;
+  return (await execute.call(receiver, invocation)) as WorkflowStepResult;
 }
 
 async function reconcileCompletedAuthorizations(

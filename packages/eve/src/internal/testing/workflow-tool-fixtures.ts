@@ -313,3 +313,55 @@ async function failedSignInStep(ctx: WorkflowToolContext): Promise<string> {
   };
   return (await ctx.getToken(provider)).token;
 }
+
+/** Signs in to `oauth/a`, then reads `oauth/b`, whose token read fails terminally. */
+export async function signInThenFailWorkflow(_input: unknown, ctx: WorkflowToolContext) {
+  "use workflow";
+  return await signInThenFailStep(ctx);
+}
+
+async function signInThenFailStep(ctx: WorkflowToolContext): Promise<string> {
+  "use step";
+  const a = (await ctx.getToken(signInA())).token;
+  const b: AuthorizationDefinition = {
+    principalType: "user",
+    async getToken() {
+      throw new ConnectionAuthorizationFailedError("b", {
+        message: "B is not installed.",
+        reason: "b_not_installed",
+        retryable: false,
+      });
+    },
+  };
+  return `${a}:${(await ctx.getToken(b)).token}`;
+}
+
+/** Signs in to `oauth/a`. */
+export async function signInAWorkflow(_input: unknown, ctx: WorkflowToolContext) {
+  "use workflow";
+  return await signInAStep(ctx);
+}
+
+async function signInAStep(ctx: WorkflowToolContext): Promise<string> {
+  "use step";
+  return (await ctx.getToken(signInA())).token;
+}
+
+function signInA(): AuthorizationDefinition {
+  return {
+    principalType: "user",
+    vercelConnect: { connector: "oauth/a" },
+    async getToken() {
+      throw new ConnectionAuthorizationRequiredError("a");
+    },
+    async startAuthorization({ callbackUrl }) {
+      return {
+        challenge: { displayName: "A", url: `https://idp.example/authorize?cb=${callbackUrl}` },
+        resume: { nonce: "a-nonce" },
+      };
+    },
+    async completeAuthorization() {
+      return { token: "a-token" };
+    },
+  };
+}

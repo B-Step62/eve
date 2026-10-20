@@ -1,4 +1,4 @@
-import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
+import { failedSignIn, isConnectionAuthorizationFailedError } from "#connections/errors.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { AuthorizationPrincipal } from "#protocol/message.js";
 import type { ConnectionPrincipal } from "#shared/connection-types.js";
@@ -20,8 +20,15 @@ export function authorizationEventFields(challenge: AuthorizationChallenge) {
   };
 }
 
-/** The `authorization.completed` fields of a sign-in that ended with `failure`. */
-export function failedSignInFields(failure: unknown) {
+/**
+ * The `authorization.completed` fields of the sign-in `challenge` once its call failed with
+ * `failure`. Only the sign-in that raised a failure carries its `retryable`: another sign-in's
+ * failure says nothing about whether this one can be retried.
+ */
+export function failedSignInFields(
+  challenge: Pick<AuthorizationChallenge, "name">,
+  failure: unknown,
+) {
   const reason = isConnectionAuthorizationFailedError(failure)
     ? (failure.reason ?? failure.message)
     : failure instanceof Error
@@ -32,7 +39,8 @@ export function failedSignInFields(failure: unknown) {
   return {
     outcome: "failed" as const,
     ...(reason !== undefined && { reason }),
-    ...(isConnectionAuthorizationFailedError(failure) && { retryable: failure.retryable }),
+    ...(isConnectionAuthorizationFailedError(failure) &&
+      failedSignIn(failure) === challenge.name && { retryable: failure.retryable }),
   };
 }
 

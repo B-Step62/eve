@@ -658,7 +658,7 @@ export function runSignIn(
   }
   return createAuthorizationCompletedEvent({
     ...fields,
-    ...(outcome === "authorized" ? { outcome } : failedSignInFields(outcome.failure)),
+    ...(outcome === "authorized" ? { outcome } : failedSignInFields(challenge, outcome.failure)),
   });
 }
 

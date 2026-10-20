@@ -91,7 +91,9 @@ export async function runApprovedCalls(input: {
         createAuthorizationCompletedEvent({
           ...authorizationEventFields(challenge),
           ...at,
-          ...(failure === undefined ? { outcome: "authorized" } : failedSignInFields(failure)),
+          ...(failure === undefined
+            ? { outcome: "authorized" }
+            : failedSignInFields(challenge, failure)),
         }),
       );
     }
