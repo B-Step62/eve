@@ -13,16 +13,6 @@ export const EVE_PRODUCTION_CRON_ROUTE_PATTERN = `${EVE_ROUTE_PREFIX}/cron/:toke
 export const EVE_HEALTH_ROUTE_PATH = `${EVE_ROUTE_PREFIX}/health`;
 
 /**
- * `eve start` passes a per-launch token to its built server under this
- * environment variable, and the health route echoes it in
- * {@link EVE_START_TOKEN_HEADER}, so `eve start` can tell its own server from
- * another process on the same port.
- */
-export const EVE_START_TOKEN_ENV = "EVE_START_TOKEN";
-
-export const EVE_START_TOKEN_HEADER = "x-eve-start-token";
-
-/**
  * Stable framework-owned route exposing the JSON inspection payload for
  * the current agent. The eve channel registers and authenticates this route
  * with the same `auth` input as its session routes.

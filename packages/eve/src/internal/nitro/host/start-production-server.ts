@@ -8,10 +8,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { loadDevelopmentEnvironmentFiles } from "#cli/dev/environment.js";
 import type { ProductionServerHandle } from "#internal/nitro/host/types.js";
 import {
-  EVE_HEALTH_ROUTE_PATH,
   EVE_START_TOKEN_ENV,
   EVE_START_TOKEN_HEADER,
-} from "#protocol/routes.js";
+} from "#internal/nitro/host/start-token-plugin.js";
+import { EVE_HEALTH_ROUTE_PATH } from "#protocol/routes.js";
 
 const DEFAULT_PRODUCTION_SERVER_HOST = "0.0.0.0";
 const DEFAULT_PRODUCTION_SERVER_PORT = 3000;
@@ -158,7 +158,7 @@ async function waitForReady(input: {
     if (probe === "own") {
       return knownUrl;
     }
-    if (probe === "foreign") {
+    if (probe === "foreign" && parseServerUrlFromOutput(input.getOutput()) === undefined) {
       throw portInUseError(input);
     }
 

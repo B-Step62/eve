@@ -5,7 +5,6 @@ import type { SessionAuthContext } from "#channel/types.js";
 import { workflowEntryReference } from "#execution/workflow-runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
 import type { MessageStreamEvent } from "#protocol/message.js";
-import { EVE_START_TOKEN_ENV, EVE_START_TOKEN_HEADER } from "#protocol/routes.js";
 import type { ChannelCors } from "#public/definitions/channel.js";
 import {
   defaultEveAuth,
@@ -20,15 +19,11 @@ import {
 const log = createLogger("eve.channel");
 
 export function healthResponse(): Response {
-  const startToken = process.env[EVE_START_TOKEN_ENV];
-  return Response.json(
-    {
-      ok: true,
-      status: "ready",
-      workflowId: workflowEntryReference.workflowId,
-    },
-    startToken === undefined ? undefined : { headers: { [EVE_START_TOKEN_HEADER]: startToken } },
-  );
+  return Response.json({
+    ok: true,
+    status: "ready",
+    workflowId: workflowEntryReference.workflowId,
+  });
 }
 
 /** Clients display the error text directly; keep operator details in structured fields. */

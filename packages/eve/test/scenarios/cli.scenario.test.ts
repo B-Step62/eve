@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, realpath, writeFile } from "node:fs/promises";
+import { access, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -9,7 +9,10 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/run.js";
-import { resolveInstalledPackageInfo } from "../../src/internal/application/package.js";
+import {
+  resolveInstalledPackageInfo,
+  resolvePackageRoot,
+} from "../../src/internal/application/package.js";
 import { useScenarioApp } from "../../src/internal/testing/scenario-app.js";
 import { WEATHER_AGENT_DESCRIPTOR } from "../../src/internal/testing/scenario-apps/weather-agent.js";
 import { COMPOSED_TOOL_SCHEMAS_DESCRIPTOR } from "../../src/internal/testing/scenario-apps/composed-tool-schemas.js";
@@ -404,6 +407,27 @@ describe("runCli", () => {
       expect(result.code).not.toBe(0);
     } finally {
       await new Promise((resolveClose) => occupant.close(resolveClose));
+    }
+  }, 120_000);
+
+  it("reports ready when the app disables the eve channel", async () => {
+    const { buildApplication } = await import("../../src/internal/nitro/host.js");
+    const appRoot = await createMinimalAppRoot("eve-cli-start-no-eve-channel-");
+    await mkdir(join(appRoot, "agent", "channels"));
+    await writeFile(
+      join(appRoot, "agent", "channels", "eve.mjs"),
+      'import { disableRoute } from "eve/channels";\nexport default disableRoute();\n',
+    );
+    await mkdir(join(appRoot, "node_modules"));
+    await symlink(resolvePackageRoot(), join(appRoot, "node_modules", "eve"), "junction");
+    await buildApplication(appRoot, { skipSandboxPrewarm: true });
+
+    const server = await startPackagedEveStart(appRoot);
+    try {
+      const response = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url));
+      expect(response.status).toBe(404);
+    } finally {
+      await server.stop();
     }
   }, 120_000);
 

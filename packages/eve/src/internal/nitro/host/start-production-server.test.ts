@@ -63,7 +63,9 @@ describe("startProductionServer", () => {
       return true;
     });
     delete process.env.PORT;
-    globalThis.fetch = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
   });
 
   afterEach(() => {
