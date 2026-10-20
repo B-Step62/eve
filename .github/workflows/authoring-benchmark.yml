@@ -26,8 +26,10 @@ on:
         type: string
         default: "1"
 
+# Every label creates a run, so key the group on the label too; otherwise
+# adding an unrelated label would cancel a benchmark in progress.
 concurrency:
-  group: authoring-benchmark-${{ github.event.pull_request.number || github.ref }}
+  group: authoring-benchmark-${{ github.event.pull_request.number || github.ref }}-${{ github.event.label.name || 'dispatch' }}
   cancel-in-progress: true
 
 permissions:
@@ -55,6 +57,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # pull_request checks out the merge commit by default; pin the runner
+          # and cases to the same commit as the eve package under test.
+          ref: ${{ env.HEAD_SHA }}
           persist-credentials: false
 
       - name: Setup Node.js
@@ -128,6 +133,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # pull_request checks out the merge commit by default; pin the runner
+          # and cases to the same commit as the eve package under test.
+          ref: ${{ env.HEAD_SHA }}
           persist-credentials: false
 
       - name: Setup pnpm
