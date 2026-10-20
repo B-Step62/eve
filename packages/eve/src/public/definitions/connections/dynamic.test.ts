@@ -11,9 +11,6 @@ describe("defineDynamic connections", () => {
         url: "https://mcp.example.com/current",
       });
 
-    expect(defineDynamic({ events: { beforeSession: handler } })).toMatchObject({
-      events: { beforeSession: handler },
-      kind: "eve:dynamic",
-    });
+    expect(defineDynamic(handler)).toMatchObject({ evaluate: handler, kind: "eve:dynamic" });
   });
 });

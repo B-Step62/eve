@@ -130,8 +130,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   dynamicTool: {
-    current: 89,
-    supported: [89],
+    current: 90,
+    supported: [90],
     dropped: {
       1: "v27 dynamic tool contexts and keyed approval grants replace the previous approval APIs; rebuild the extension.",
       2: "v27 dynamic tool contexts and keyed approval grants replace the previous approval APIs; rebuild the extension.",
@@ -221,6 +221,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       86: "v27 dynamic tool contexts and keyed approval grants replace the previous approval APIs; rebuild the extension.",
       87: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       88: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      89: "Dynamic values now use defineDynamic(fn) with ctx.memo; rebuild the extension.",
     },
   },
   channel: {
@@ -336,8 +337,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   subagent: {
-    current: 41,
-    supported: [41],
+    current: 42,
+    supported: [42],
     dropped: {
       1: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
       2: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
@@ -379,11 +380,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       38: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       39: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       40: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      41: "Dynamic values now use defineDynamic(fn) with ctx.memo; rebuild the extension.",
     },
   },
   connection: {
-    current: 54,
-    supported: [54],
+    current: 55,
+    supported: [55],
     dropped: {
       1: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
       2: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
@@ -438,11 +440,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       51: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       52: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       53: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      54: "Dynamic values now use defineDynamic(fn) with ctx.memo; rebuild the extension.",
     },
   },
   hook: {
-    current: 49,
-    supported: [49],
+    current: 50,
+    supported: [50],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -492,6 +495,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       46: "Hooks now receive the v27 fact and session context contracts; rebuild the extension.",
       47: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       48: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      49: "Hooks now read the committed session context and act with ctx.cancel; rebuild the extension.",
     },
   },
   skill: {
@@ -504,8 +508,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   dynamicSkill: {
-    current: 41,
-    supported: [41],
+    current: 42,
+    supported: [42],
     dropped: {
       1: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       2: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
@@ -547,6 +551,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       38: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       39: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       40: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      41: "Dynamic values now use defineDynamic(fn) with ctx.memo; rebuild the extension.",
     },
   },
   instructions: {
@@ -558,8 +563,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   dynamicInstructions: {
-    current: 42,
-    supported: [42],
+    current: 43,
+    supported: [43],
     dropped: {
       1: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       2: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
@@ -602,6 +607,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       39: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       40: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       41: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      42: "Dynamic values now use defineDynamic(fn) with ctx.memo; rebuild the extension.",
     },
   },
   config: { current: 2, supported: [1, 2], dropped: {} },

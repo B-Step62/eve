@@ -3,7 +3,7 @@ import type { JsonObject } from "#shared/json.js";
 import type { ModuleSourceRef } from "#shared/source-ref.js";
 import {
   isDynamicSentinel,
-  type DynamicResolveContext,
+  type DynamicModelContext,
   type DynamicSentinel,
 } from "#dynamic/definition.js";
 
@@ -93,9 +93,6 @@ export type InternalAgentModelDefinition = {
  */
 export type PublicAgentStaticModelDefinition = string | LanguageModel;
 
-/** Context passed to dynamic model event handlers; the shared dynamic resolver context. */
-export type AgentModelResolveContext = DynamicResolveContext;
-
 export interface PublicAgentModelSelectionDefinition {
   readonly model: PublicAgentStaticModelDefinition;
   /** Override the agent reasoning effort for this selection; omitted values inherit it. */
@@ -110,12 +107,14 @@ export type PublicAgentDynamicModelResult =
   | PublicAgentStaticModelDefinition
   | PublicAgentModelSelectionDefinition;
 
-export type AgentModelResolver = (
-  event: unknown,
-  ctx: AgentModelResolveContext,
-) => PublicAgentDynamicModelResult | Promise<PublicAgentDynamicModelResult>;
-
-export type PublicAgentDynamicModelDefinition = DynamicSentinel<PublicAgentDynamicModelResult>;
+/**
+ * A `model` chosen per model call: `defineDynamic()` from `eve` or `eve/models`, or `auto()`. Its
+ * function runs before the model is chosen, so its context has no `model`.
+ */
+export type PublicAgentDynamicModelDefinition = DynamicSentinel<
+  PublicAgentDynamicModelResult,
+  DynamicModelContext
+>;
 
 export function isDynamicModelDefinition(
   value: unknown,
@@ -124,7 +123,8 @@ export function isDynamicModelDefinition(
 }
 
 /**
- * The model handle you assign to an agent's `model` field.
+ * The model handle you assign to an agent's `model` field: a static model, or one chosen per
+ * session with `defineDynamic()` from `eve/models` or `auto()`.
  */
 export type PublicAgentModelDefinition =
   | PublicAgentStaticModelDefinition
@@ -426,7 +426,10 @@ export type PublicAgentDefinition = PublicAgentDefinitionBase &
         readonly modelOptions?: AgentModelOptionsDefinition;
       }
     | {
-        /** Resolver that must select a concrete model before model-dependent work. */
+        /**
+         * The model chosen per session. `render` returns the model with its context window,
+         * options, and reasoning, so those fields don't sit beside it.
+         */
         readonly model: PublicAgentDynamicModelDefinition;
         readonly modelContextWindowTokens?: never;
         readonly modelOptions?: never;

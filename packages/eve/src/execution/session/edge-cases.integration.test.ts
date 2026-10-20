@@ -250,11 +250,7 @@ async function withSession(
   const runtime = await createTestRuntime({
     agent: {
       definition: defineAgent({
-        model: defineDynamic({
-          events: {
-            beforeModel: () => ({ model: options.model, modelContextWindowTokens: 200_000 }),
-          },
-        }),
+        model: defineDynamic(() => ({ model: options.model, modelContextWindowTokens: 200_000 })),
       }),
       name,
     },

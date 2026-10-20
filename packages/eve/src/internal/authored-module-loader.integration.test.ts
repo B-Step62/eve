@@ -197,45 +197,6 @@ export default defineWorkflowTool({ description: "Probe", inputSchema: { type: "
     },
   );
 
-  it("stamps dynamic callbacks while building the generation module map", async () => {
-    const app = await createApp({
-      files: {
-        "agent/agent.ts": `export default { model: "openai/gpt-5.4" };
-`,
-        "agent/tools/dynamic.ts": [
-          'import { defineDynamic, defineTool } from "eve/tools";',
-          "",
-          "const marker = defineTool({",
-          '  description: "Return a marker.",',
-          '  inputSchema: { type: "object" },',
-          '  execute: () => ({ marker: "generation" }),',
-          "});",
-          "",
-          "export default defineDynamic({",
-          "  events: {",
-          '    "beforeSession": () => marker,',
-          "  },",
-          "});",
-          "",
-        ].join("\n"),
-      },
-      name: "generation-dynamic-callback",
-    });
-    const discovered = await discoverAgent({
-      agentRoot: join(app.appRoot, "agent"),
-      appRoot: app.appRoot,
-    });
-    const manifest = await compileAgentManifest(discovered.manifest);
-
-    const { code } = await bundleAuthoredModuleMapForGeneration({
-      appRoot: app.appRoot,
-      manifest,
-      moduleMapPath: join(app.appRoot, ".eve", "compile", "module-map.mjs"),
-    });
-
-    expect(code).toContain("eve:durable-dynamic-callback");
-  });
-
   it("explains when an installed package contains Node-incompatible extensionless ESM", async () => {
     const app = await createApp({
       files: {

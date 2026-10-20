@@ -1,102 +1,68 @@
 import type { ChannelInfo } from "#shared/channel-info.js";
 import type { HistoryMessage as ModelMessage } from "#shared/history-message.js";
 
-import type { SessionAuth, SessionPredecessor } from "#context/keys.js";
-import type {
-  SessionStartedPoint,
-  StepStartedPoint,
-  TurnStartedPoint,
-} from "#harness/session-machine/change-points.js";
+import type { SessionAuth, SessionParent, SessionPredecessor } from "#context/keys.js";
+import type { SessionSchedule } from "#context/session-schedule.js";
+import type { UserPart } from "#protocol/session-events/envelope.js";
+import type { SessionView } from "#protocol/session-projection/session-view.js";
 import { stampDefinitionKey } from "#internal/authored-definition/source-identity.js";
 import type { ConversationContext } from "#shared/conversation-context.js";
 
-/** The change points dynamic resolvers name: a session's first turn, a turn, and each model run. */
-export type DynamicToolEventName = "beforeSession" | "beforeTurn" | "beforeModel";
-
-/** The typed fact at each resolver change point, not a subscription name. */
-export type DynamicResolverEvent<K extends DynamicToolEventName> = {
-  beforeSession: SessionStartedPoint["fact"];
-  beforeTurn: TurnStartedPoint["fact"];
-  beforeModel: StepStartedPoint["fact"];
-}[K];
-
-/** Maps private machine points to the authored resolver key. */
-export function dynamicEventKey(type: DynamicScopeEvent["type"]): DynamicToolEventName {
-  return type === "session.started"
-    ? "beforeSession"
-    : type === "turn.started"
-      ? "beforeTurn"
-      : "beforeModel";
+/**
+ * The session's latest turn, running or not. Its `id` keys a memo that runs once per turn: it
+ * stays the same through the turn's tool calls, pauses, and steering, until the next turn starts.
+ */
+export interface DynamicTurn {
+  readonly id: string;
+  readonly status: "running" | "paused" | "settled";
+  /** The parts of the messages the turn opened with. Messages that steer it later don't count. */
+  readonly input: readonly UserPart[];
 }
 
 /**
- * What a dynamic resolver's handler receives at its change point: the point's name and where the
- * session is. A private payload, not a stream event.
+ * One run of a memo, a `once`, or a hook handler. A retry of the same run, after a process failed
+ * before its step was saved, has the same `idempotencyKey`.
  */
-export type DynamicScopeEvent = SessionStartedPoint | TurnStartedPoint | StepStartedPoint;
-
-/** A session's or a turn's start: the events every resolver but the model's and tools' answers. */
-export type DynamicSessionOrTurnEvent = Exclude<DynamicScopeEvent, { type: "step.started" }>;
-
-/** The kinds of dynamic resolver, by the slot they're authored in. */
-export type DynamicResolverKind =
-  | "connection"
-  | "instructions"
-  | "model"
-  | "skill"
-  | "subagent"
-  | "tool";
-
-/**
- * The events each kind of dynamic resolver handles. Instructions, skills, connections, and
- * subagents stay stable within a turn, so the model input doesn't change between its steps.
- */
-export const DYNAMIC_RESOLVER_EVENTS = {
-  connection: ["beforeSession", "beforeTurn"],
-  instructions: ["beforeSession", "beforeTurn"],
-  model: ["beforeSession", "beforeTurn", "beforeModel"],
-  skill: ["beforeSession", "beforeTurn"],
-  subagent: ["beforeSession", "beforeTurn"],
-  tool: ["beforeSession", "beforeTurn", "beforeModel"],
-} as const satisfies Record<DynamicResolverKind, readonly DynamicToolEventName[]>;
-
-/** Fails the build when a resolver of `kind` handles an event it never receives. */
-export function assertDynamicResolverEvents(
-  kind: DynamicResolverKind,
-  eventNames: readonly string[],
-  message: string,
-): void {
-  const supported: readonly string[] = DYNAMIC_RESOLVER_EVENTS[kind];
-  const unsupported = eventNames.find((eventName) => !supported.includes(eventName));
-  if (unsupported === undefined) return;
-  const names = supported.map((eventName) => `"${eventName}"`);
-  throw new Error(
-    `${message} Dynamic ${kind} resolvers support only ${names.slice(0, -1).join(", ")} and ${names.at(-1)!} handlers. Unsupported event: "${unsupported}".`,
-  );
+export interface Occurrence {
+  /** Pass it to an external service, so a retried effect doesn't happen twice. */
+  readonly idempotencyKey: string;
+  readonly abortSignal: AbortSignal;
 }
 
 /**
- * Context passed to a dynamic resolver's event handler.
- *
- * Exposes read-only session identity, auth, and channel metadata. State
- * is not exposed here; resolvers read it through `defineState` handles or
- * the session context inside tool `execute` functions.
+ * A memo key: any JSON value, compared as canonical JSON, such as a tenant ID or
+ * `["tables", ctx.session.id]`. `undefined` reads as `null`.
  */
-export interface DynamicResolveContext {
-  /** Active cancellation signal when resolving a dynamic model. */
-  readonly abortSignal?: AbortSignal;
-  /** Effective model for this resolver, or `null` before dynamic model selection. */
-  readonly model: { readonly id: string } | null;
+export type DynamicKey = unknown;
+
+/**
+ * Runs `fn` the first time the session sees `key` from this definition, keeps the JSON it returns,
+ * and returns the kept result for the same key afterwards, in any process. Code outside a memo
+ * runs again at every evaluation.
+ */
+export type Memo = <T>(
+  key: DynamicKey,
+  fn: (occurrence: Occurrence) => T | Promise<T>,
+) => Promise<T>;
+
+/** The session as of its latest commit: what every dynamic value and hook handler reads. */
+export interface SessionFrame {
   readonly session: {
     readonly id: string;
     readonly auth: SessionAuth;
-    readonly schedule?: import("#context/session-schedule.js").SessionSchedule;
+    /** Present only for scheduled work. */
+    readonly schedule?: SessionSchedule;
     /**
-     * Present when eve started this session in place of a stranded session,
-     * one that another eve version built. It names the earlier session, whose recorded stream
+     * Present when eve started this session in place of a stranded session, one that another eve
+     * version built. It names the earlier session, whose recorded stream
      * `sessions.attach(predecessor.sessionId)` from `eve/server` reads.
      */
     readonly predecessor?: SessionPredecessor;
+    /**
+     * Present only in a delegated session. `sessionId`, `callId`, and `turn` name the immediate
+     * parent and the call that opened this session; `rootSessionId` names the top-level session.
+     */
+    readonly parent?: SessionParent;
   };
   /** Channel metadata for the request that triggered this resolve. */
   readonly channel: ChannelInfo;
@@ -105,121 +71,93 @@ export interface DynamicResolveContext {
    * Absent on sessions persisted before this context key existed.
    */
   readonly conversation?: ConversationContext;
-  /** Conversation history visible at this resolve point, oldest first. */
-  readonly messages: readonly ModelMessage[];
+  /** The session's tables, as a client folds them from the stream. */
+  readonly view: SessionView;
+  /** The session's latest turn, or `null` before its first. */
+  readonly turn: DynamicTurn | null;
+  /** The time of the session's latest commit, so it reads the same in every process. */
+  readonly now: Date;
 }
 
-/**
- * Base event handler map accepted by `defineDynamic`. Intentionally
- * wide so it accepts both tool-returning and skill-returning handlers:
- * the slot directory (tools/ vs skills/) determines the required return,
- * validated at runtime by the respective resolver.
- *
- * Each handler receives a typed fact at its change point: `beforeSession` and `beforeTurn`
- * receive the corresponding start facts, and `beforeModel` receives `model.requested`, whose `scope` names its
- * model run and the turn it serves, or the context change for a compaction's summary run.
- */
-export type DynamicEvents<TResult = unknown> = {
-  readonly [K in DynamicToolEventName]?: (
-    event: DynamicResolverEvent<K>,
-    ctx: DynamicResolveContext,
-  ) => TResult | Promise<TResult>;
-};
+/** What a dynamic agent `model` reads. The model isn't chosen yet, so there's no `ctx.model`. */
+export interface DynamicModelContext extends SessionFrame {
+  readonly memo: Memo;
+  /** The conversation history as of the latest commit, assembled when something reads it. */
+  messages(): Promise<readonly ModelMessage[]>;
+}
 
-type DynamicEventMapHandler<TEvents extends DynamicEvents> = Extract<
-  NonNullable<TEvents[keyof TEvents]>,
-  (...args: never[]) => unknown
->;
-type DynamicEventMapResult<TEvents extends DynamicEvents> = Awaited<
-  ReturnType<DynamicEventMapHandler<TEvents>>
->;
+/** What a dynamic value reads: the session as of its latest commit, and the model chosen for it. */
+export interface DynamicContext extends DynamicModelContext {
+  /** The model chosen for the session. */
+  readonly model: { readonly id: string };
+}
 
-/**
- * Marker discriminator for a `defineDynamic({ events })` export.
- */
+/** Marker discriminator for a `defineDynamic()` export. */
 export const DYNAMIC_SENTINEL_KIND = "eve:dynamic" as const;
 
-/**
- * Return value of `defineDynamic`: the runtime shape of a dynamic export,
- * stamped with a sentinel kind the compiler/normalizer detects.
- */
-export type DynamicSentinel<TResult = unknown> = {
+/** A `defineDynamic()` value, which the compiler detects by its `kind`. */
+export interface DynamicSentinel<TResult = unknown, TContext = DynamicContext> {
   readonly kind: typeof DYNAMIC_SENTINEL_KIND;
-  readonly events: DynamicEvents<TResult>;
-};
+  readonly evaluate: (ctx: TContext) => TResult | Promise<TResult>;
+}
+
+/** `defineDynamic()` typed for the folder it's authored in. */
+export type DefineDynamic<TResult, TContext = DynamicContext> = (
+  fn: (ctx: TContext) => TResult | Promise<TResult>,
+) => DynamicSentinel<TResult, TContext>;
 
 /**
- * Defines a dynamic resolver evaluated at runtime from stream-event
- * handlers. It is shared across tools, skills, connections, and agent definitions;
- * the directory it is authored in (not this function) decides what each
- * handler must return and which events are honored. The file's path-derived
- * slug names the single-entry case; a `Record<string, ...>` return names each
- * entry by its bare key, prefixed with the mount namespace for an extension's
- * resolver. Return `null` to contribute nothing for that event.
+ * Defines a value that depends on the session: a function of the session as of its latest
+ * commit. eve calls it in each step that needs the value, before each model call today, and
+ * installs what it returns, or nothing for `null`. The folder or field decides what it returns:
+ * tools in `agent/tools/`, skills in `agent/skills/`, a model in an agent's `model` field.
  *
- * Per-slot return shape:
- * - `agent/tools/`: return a single `defineTool(...)`, a
- *   `Record<string, defineTool(...)>`, or `null`.
- * - `agent/skills/`: return a single `defineSkill(...)`, a
- *   `Record<string, defineSkill(...)>`, or `null`.
- * - `agent/connections/`: return one connection definition, a
- *   `Record<string, connection definition>`, or `null`.
- * - `agent/subagents/<name>/agent.ts`: return `defineAgent(...)` to configure
- *   and expose the subagent, or `null` to omit it.
- *
- * Per-slot keys: tool and model resolvers run at `beforeSession`,
- * `beforeTurn`, and `beforeModel`. Skill, instruction, connection, and
- * subagent resolvers run only at `beforeSession` and `beforeTurn`. A
- * handler keyed on any other event fails the build.
+ * Work that shouldn't repeat goes in `ctx.memo(key, fn)`: `fn` runs once per key, and a later
+ * evaluation, in any process, gets the result it kept.
  *
  * ```ts
- * import { defineDynamic, defineTool } from "eve/tools";
- * import { z } from "zod";
+ * import { defineDynamic } from "eve/tools";
  *
- * export default defineDynamic({
- *   events: {
- *     "beforeSession": async (event, ctx) => ({
- *       export: defineTool({
- *         description: "Export data",
- *         inputSchema: z.object({ format: z.string() }),
- *         async execute(input) {
- *           return doExport(input.format);
- *         },
- *       }),
- *     }),
- *   },
+ * export default defineDynamic(async (ctx) => {
+ *   const tenantId = ctx.session.auth.current?.attributes.tenantId;
+ *   if (!tenantId) return null;
+ *   const rows = await ctx.memo(tenantId, () => db.crmTools(tenantId));
+ *   return Object.fromEntries(rows.map((row) => [row.slug, crmTool(row)]));
  * });
  * ```
- *
- * A single return is named after the file slug. A map names each entry by its
- * bare key — there is no automatic slug prefix, so namespace keys yourself
- * (e.g. `team__playbook`) when a bare name might collide. Tool names must match
- * the tool filename charset, and a name under a connection's `<name>__` prefix
- * is rejected. A dynamic tool/skill whose name matches an authored one
- * overrides it; two dynamic resolvers emitting the same name is an error.
  */
-export function defineDynamic<const TEvents extends DynamicEvents>(definition: {
-  readonly events: TEvents;
-}): DynamicSentinel<DynamicEventMapResult<TEvents>>;
-export function defineDynamic<TResult = unknown>(definition: {
-  readonly events: DynamicEvents<TResult>;
-}): DynamicSentinel<TResult> {
-  const sentinel = {
-    kind: DYNAMIC_SENTINEL_KIND,
-    events: definition.events,
-  } as DynamicSentinel<TResult>;
-  stampDefinitionKey(sentinel, `dynamic:${Object.keys(definition.events).join(",")}`);
+export function defineDynamic<TResult, TContext extends DynamicModelContext = DynamicContext>(
+  fn: (ctx: TContext) => TResult | Promise<TResult>,
+): DynamicSentinel<TResult, TContext> {
+  assertDynamicFunction(fn, "defineDynamic()");
+  const sentinel = { evaluate: fn, kind: DYNAMIC_SENTINEL_KIND };
+  stampDefinitionKey(sentinel, "dynamic");
   return sentinel;
 }
 
-export function assertResolverOnlyDynamicSentinel(
-  sentinel: DynamicSentinel,
-  message: string,
-): void {
-  const unknownKeys = Object.keys(sentinel).filter((key) => key !== "events" && key !== "kind");
-  if (unknownKeys.length > 0) {
-    throw new Error(`${message} Unknown key(s): ${unknownKeys.join(", ")}.`);
+function assertDynamicFunction(value: unknown, subject: string): void {
+  if (typeof value === "function") return;
+  if (typeof value === "object" && value !== null && "events" in value) {
+    throw new Error(
+      `${subject} takes a function of the session, not an events map: defineDynamic(async (ctx) => value). Key work that should run once per session, turn, or tenant with ctx.memo(key, fn).`,
+    );
   }
+  throw new Error(`${subject} takes a function: defineDynamic(async (ctx) => value).`);
+}
+
+const FRAMEWORK_DEFINITION = Symbol.for("eve.framework-definition");
+
+/**
+ * Marks a definition eve generates, such as a memory slot's tools: its function receives eve's
+ * own evaluation context, with the step's state.
+ */
+export function asFrameworkDefinition<T extends object>(definition: T): T {
+  Object.defineProperty(definition, FRAMEWORK_DEFINITION, { value: true });
+  return definition;
+}
+
+export function isFrameworkDefinition(value: unknown): boolean {
+  return typeof value === "object" && value !== null && FRAMEWORK_DEFINITION in value;
 }
 
 export function isDynamicSentinel(value: unknown): value is DynamicSentinel {
@@ -228,4 +166,18 @@ export function isDynamicSentinel(value: unknown): value is DynamicSentinel {
     value !== null &&
     (value as { kind?: unknown }).kind === DYNAMIC_SENTINEL_KIND
   );
+}
+
+/**
+ * Throws unless `sentinel` is a `defineDynamic(fn)` value: the function and nothing beside it.
+ * The compiler and the runtime loader both use it, so every source agrees.
+ */
+export function assertDynamicSentinelKeys(sentinel: DynamicSentinel, message: string): void {
+  assertDynamicFunction(sentinel.evaluate ?? sentinel, `${message} defineDynamic()`);
+  const unknownKeys = Object.keys(sentinel).filter((key) => key !== "kind" && key !== "evaluate");
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `${message} defineDynamic() takes only a function; unknown key(s): ${unknownKeys.join(", ")}. Packaging configuration such as build.externalDependencies belongs on the root agent.ts.`,
+    );
+  }
 }
