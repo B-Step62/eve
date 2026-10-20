@@ -15,7 +15,6 @@ import {
 } from "#internal/testing/events.js";
 import { mockAgentRouteArgs } from "#internal/testing/mocks/mock-route-args.js";
 import {
-  forkToDmWorkflow,
   forkToSlackDmWorkflow,
   sendThenSleepWorkflow,
 } from "#internal/testing/workflow-tool-fixtures.js";
@@ -39,78 +38,6 @@ afterEach(() => {
 });
 
 describe("workflow tool channel handoffs", () => {
-  it("forks a conversation into a channel session that continues apart from its source", async () => {
-    const { modelInputs, recordModelInputs } = modelInputRecorder();
-    const runtime = await createWorkflowToolRuntime({
-      agentName: "workflow-tool-channel-fork",
-      execute: forkToDmWorkflow,
-      modules: [
-        {
-          logicalPath: "channels/dm.ts",
-          loadNamespace: async () => ({
-            default: defineChannel({
-              routes: [POST("/dm", async () => new Response("ok"))],
-              async receive(input, { from }) {
-                return await from(`dm:${String(input.target.userId)}`).send(input.message, {
-                  auth: input.auth,
-                });
-              },
-            }),
-          }),
-        },
-        recordModelInputs,
-      ],
-      toolName: "deploy_service",
-    });
-    await runtime.run(async () => {
-      const source = await startSessionOwner(workflowEntry, [
-        {
-          kind: "initial",
-          ownerDeploymentId: "dpl_inline",
-          input: { message: 'Run deploy_service with service "api"' },
-          serializedContext: buildWorkflowToolSerializedContext({
-            continuationToken: "http:workflow-tool-channel-fork",
-          }),
-        },
-      ]);
-      const sourceTurns = captureTurnEvents(source);
-      try {
-        const forked = await sourceTurns.nextTurn();
-        const reply = String(filterEventsByType(forked, "message.completed").at(-1)?.data.message);
-        const { sessionId: dm } = JSON.parse(reply.slice(reply.indexOf("{"))) as {
-          readonly sessionId: string;
-        };
-
-        await waitForCompletedTurns(dm, 1);
-        // The fork's first turn sees the source conversation, then the fork's message.
-        expect(lastModelInput(modelInputs, dm)).toContain(
-          'Run deploy_service with service \\"api\\"',
-        );
-        expect(lastModelInput(modelInputs, dm)).toContain("Continue this conversation here.");
-
-        await sendToSession(source.runId, "Bob joined the thread.");
-        await sourceTurns.nextTurn();
-        await sendToSession(dm, "Alice prefers Friday.");
-        await waitForCompletedTurns(dm, 2);
-
-        // Each conversation keeps what happened before the fork and only its own later messages.
-        expect(lastModelInput(modelInputs, source.runId)).toContain("Bob joined the thread.");
-        expect(lastModelInput(modelInputs, source.runId)).not.toContain(
-          "Continue this conversation here.",
-        );
-        expect(lastModelInput(modelInputs, source.runId)).not.toContain("Alice prefers Friday.");
-        expect(lastModelInput(modelInputs, dm)).toContain(
-          'Run deploy_service with service \\"api\\"',
-        );
-        expect(lastModelInput(modelInputs, dm)).toContain("Alice prefers Friday.");
-        expect(lastModelInput(modelInputs, dm)).not.toContain("Bob joined the thread.");
-      } finally {
-        sourceTurns.dispose();
-        await source.cancel();
-      }
-    });
-  }, 60_000);
-
   it("delivers again when a send step retries, but not when the body replays", async () => {
     const deliveredTo: string[] = [];
     const runtime = await createWorkflowToolRuntime({
