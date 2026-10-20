@@ -31,6 +31,11 @@ import { isCardElement, type CardElement, type FileUpload } from "#compiled/chat
 import { createLogger, logError } from "#internal/logging.js";
 import { cardToBlocks, cardToFallbackText } from "#public/channels/slack/blocks.js";
 import { resolveSlackInboundMrkdwn } from "#public/channels/slack/inbound-content.js";
+import {
+  CODE_CHANNEL_THREAD_TS,
+  setSlackCodeChannelStatus,
+  slackThreadTsParam,
+} from "#public/channels/slack/code-channel.js";
 import { truncateTypingStatus } from "#public/channels/slack/limits.js";
 import { slackMrkdwnToGfm } from "#public/channels/slack/mrkdwn.js";
 import {
@@ -293,8 +298,9 @@ export interface SlackThread {
   /**
    * Show a typing/status indicator in this thread via Slack's
    * `assistant.threads.setStatus`. Called with no argument, clears the
-   * indicator (empty status). Failures are logged and swallowed: the
-   * indicator is a UX nicety, never a reason to fail a turn.
+   * indicator (empty status). In a code channel, sets the session status to
+   * `processing`, or `active` when cleared. Failures are logged and swallowed:
+   * the indicator is a UX nicety, never a reason to fail a turn.
    */
   startTyping(status?: string): Promise<void>;
 
@@ -497,7 +503,7 @@ export function buildSlackBinding(input: {
       ...apiOptions,
       channelId: channelId || undefined,
       initialComment: options?.initialComment,
-      threadTs: threadTs || undefined,
+      threadTs: slackThreadTsParam(threadTs),
     });
     if (threadTs && channelId === input.channelId && threadTs === currentThreadTs) {
       input.onPosted?.();
@@ -511,7 +517,8 @@ export function buildSlackBinding(input: {
     // Scoped inside the coalescing check so no caller can start an
     // uncoalesced fetch.
     async function fetchAndReplace(): Promise<void> {
-      if (!input.channelId || !currentThreadTs) {
+      // A code channel's history is the whole channel, not one thread.
+      if (!input.channelId || !currentThreadTs || currentThreadTs === CODE_CHANNEL_THREAD_TS) {
         messages = [];
         return;
       }
@@ -546,7 +553,9 @@ export function buildSlackBinding(input: {
     latest: string,
     size: number,
   ): Promise<readonly SlackThreadMessage[] | undefined> {
-    if (!input.channelId || !currentThreadTs) return undefined;
+    if (!input.channelId || !currentThreadTs || currentThreadTs === CODE_CHANNEL_THREAD_TS) {
+      return undefined;
+    }
     let window: Record<string, unknown>[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < WINDOW_MAX_PAGES; page += 1) {
@@ -650,6 +659,11 @@ export function buildSlackBinding(input: {
     },
     async startTyping(status) {
       if (!input.channelId || !currentThreadTs) return;
+      // Slack shows its own working state while a code channel's session processes.
+      if (currentThreadTs === CODE_CHANNEL_THREAD_TS) {
+        await setSlackCodeChannelStatus(request, input.channelId, status ? "processing" : "active");
+        return;
+      }
       try {
         const normalizedStatus = status === undefined ? "" : truncateTypingStatus(status);
         const body: Record<string, unknown> = {
@@ -718,7 +732,7 @@ function buildPostMessageOptions(
   const base: SlackMessageOptions = {
     ...apiOptions,
     channel: channelId,
-    threadTs: threadTs || undefined,
+    threadTs: slackThreadTsParam(threadTs),
     unfurlLinks: false,
     unfurlMedia: false,
   };

@@ -1,12 +1,17 @@
 ---
 issue: TBD
-status: proposed
+status: in-progress
 last_updated: "2026-10-20"
 ---
 
 # Slack code channels
 
 > **AI status:** Written entirely by AI; human review pending.
+
+> **Implementation status:** Phase 1 is partly in. Shipped: detection, `C123:0` keying, top-level
+> replies, session status, stop, the manifest option, and `participants: "owner" | "all"` (default
+> `"owner"`). Not yet: `"confirm"`, replies in the user's thread inside a code channel, the
+> membership check, and phases 2 and 3.
 
 ## Summary
 

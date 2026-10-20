@@ -302,6 +302,26 @@ export default slackChannel({
 
 Reset returns `{ status: "reset", previousSessionId }` when the thread had a session, or `{ status: "no_active_session" }` when it was already free. Both outcomes are successful. Returning `null` after reset consumes the triggering message as a command; return `{ auth }` instead to deliver that message as the first turn of the fresh session. Custom `onInteraction` handlers receive the same flat operations, which is useful for a New conversation button.
 
+#### Serve Slack code channels
+
+A [Slack code channel](https://docs.slack.dev/ai/slack-code) is a channel dedicated to one agent task. eve serves the whole code channel as one session: every message in it, top-level or threaded, reaches the same session, and replies post top-level. While a turn runs, eve sets the Slack session status to `processing` in place of the thread status line, `suspended` while the turn waits on a person, and `active` when the turn ends. When someone stops the session in Slack, eve cancels the active turn.
+
+Set `codeChannels` to answer messages in a code channel without a mention:
+
+```ts title="agent/channels/slack.ts"
+import { connectSlackCredentials } from "@vercel/connect/eve";
+import { slackChannel } from "eve/channels/slack";
+
+export default slackChannel({
+  credentials: connectSlackCredentials("slack/my-agent"),
+  codeChannels: { participants: "owner" },
+});
+```
+
+`participants` decides who can start turns. The default, `"owner"`, admits only the person who opened the code channel and ignores other members' messages. `"all"` admits every member, with auth derived from each message's author. The policy applies to mentions too, including when `codeChannels` is omitted.
+
+eve detects a code channel with Slack's `conversations.info` API, so the app needs `channels:read` (and `groups:read` for private code channels). With `codeChannels` set, the generated app manifest enables the code channels feature, adds the `code_channels:manage`, `channels:history`, `channels:read`, `groups:history`, and `groups:read` bot scopes, and subscribes to the `message.session` and `agent_session_stopped` events. For Vercel Connect, add the same scopes and events under **Advanced** when you create the connector. In message hooks, `ctx.isCodeChannel()` returns whether the message was posted in a code channel.
+
 ### Other Events API callbacks
 
 Use `onEvent` for subscribed events such as `reaction_added`, `team_join`, or `channel_created`. It receives the raw, open-ended Slack event and owns control flow. Call `ctx.send(message, { target, auth, title, history })` zero, one, or many times to start turns. `title` sets the run title without changing the message sent to the model, and `history` adds prior conversation before the message (see [Start from prior history](./eve#start-from-prior-history)). Each call returns the resulting session.

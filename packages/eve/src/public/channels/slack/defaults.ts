@@ -17,6 +17,7 @@ import {
   formatConnectionDisplayName,
   type ConnectionAuthorizationOutcome,
 } from "#public/channels/slack/connections.js";
+import { CODE_CHANNEL_THREAD_TS } from "#public/channels/slack/code-channel.js";
 import type { SlackMessage } from "#public/channels/slack/inbound.js";
 import { approvalEvents } from "#public/channels/slack/approval-cards.js";
 import { deliverCompletedSlackReply } from "#public/channels/slack/reply-delivery.js";
@@ -354,6 +355,8 @@ export const defaultEvents: SlackChannelInternalEvents = {
   },
 
   async "turn.failed"(event, channel, _ctx) {
+    // A thread's status clears when the error posts; a code channel's session stays `processing`.
+    if (channel.slack.threadTs === CODE_CHANNEL_THREAD_TS) await clearStatus(channel);
     if (event.terminal) return;
     const errorId = extractErrorId(event.details);
     const semanticSummary = extractSemanticErrorSummary(event);

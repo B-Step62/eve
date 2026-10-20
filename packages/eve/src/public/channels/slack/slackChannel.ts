@@ -47,6 +47,13 @@ import {
 } from "#public/channels/slack/attachments.js";
 import { defaultInputRequestedHandler } from "#public/channels/slack/approval-cards.js";
 import {
+  admitsCodeChannelParticipant,
+  CODE_CHANNEL_THREAD_TS,
+  isSlackCodeChannelOriginContext,
+  lookupSlackCodeChannel,
+  type SlackCodeChannelsConfig,
+} from "#public/channels/slack/code-channel.js";
+import {
   defaultEvents,
   defaultOnMessage,
   defaultReceived,
@@ -109,6 +116,10 @@ import { defineChannel, POST, type Channel } from "#public/definitions/channel.j
 import { normalizeChannelAudience, type ChannelAudience } from "#shared/channel-audience.js";
 import { markEventHandled } from "./utils.js";
 
+export type {
+  SlackCodeChannelParticipants,
+  SlackCodeChannelsConfig,
+} from "#public/channels/slack/code-channel.js";
 export type {
   SlackRespondOptions,
   SlackSendOptions,
@@ -220,8 +231,10 @@ export interface SlackChannelState {
   audience?: ChannelAudience;
   /** Slack channel id seeded by the inbound mention. */
   channelId: string | null;
-  /** Slack thread root ts. */
+  /** Slack thread root ts. A code channel session uses the placeholder `"0"`. */
   threadTs: string | null;
+  /** Whether this session serves a Slack code channel. */
+  codeChannel?: boolean;
   /** Slack team id, when the inbound event carried one. */
   teamId: string | null;
   /** Slack message ts that triggered the active turn. */
@@ -454,6 +467,8 @@ export interface SlackInboundMessageContext extends SlackContext, SlackSessionOp
   isDMOrPrivateChannel(): Promise<boolean>;
   /** Returns whether this message belongs to a thread with an active eve session. */
   isSubscribed(): Promise<boolean>;
+  /** Returns whether the message was posted in a Slack code channel. */
+  isCodeChannel(): boolean;
   /** Returns whether the inbound event explicitly mentions this bot. */
   isBotMentioned(): boolean;
 }
@@ -654,6 +669,14 @@ export interface SlackChannelConfig {
   readonly route?: string;
   /** Policy for accepted messages that arrive while a turn is active. */
   readonly turnPolicy?: TurnPolicy;
+
+  /**
+   * Serves Slack code channels: one session per channel, top-level replies,
+   * and un-mentioned messages as turns. Adds the code channel scopes, events,
+   * and feature flag to the app manifest. eve serves a mention in a code
+   * channel without this option, admitting only the channel's owner.
+   */
+  readonly codeChannels?: SlackCodeChannelsConfig;
 
   /**
    * Inbound upload policy applied to file attachments before they reach
@@ -967,7 +990,10 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
     events,
   });
   const credentials = config.credentials as { readonly vercelConnect?: unknown } | undefined;
-  const manifest = defineSlackAppManifest({ botName: config.botName });
+  const manifest = defineSlackAppManifest({
+    botName: config.botName,
+    codeChannels: config.codeChannels !== undefined,
+  });
   setChannelBuildMetadata(channel, (channelName) => ({
     externalCredentials: credentials?.vercelConnect,
     manifest: manifest.build(channelName),
@@ -1118,6 +1144,22 @@ async function handleEventPost(input: {
   const receivingBotUserId = slackEventReceivingBotUserId(envelope);
   const installationTeamId = slackEventInstallationTeamId(envelope);
 
+  // Slack requires an agent to stop when a person stops a code channel session.
+  const stopped = envelope.event;
+  if (
+    stopped.type === "agent_session_stopped" &&
+    typeof stopped.channel === "string" &&
+    stopped.thread_ts === undefined
+  ) {
+    const source = input.from(slackContinuationToken(stopped.channel, CODE_CHANNEL_THREAD_TS));
+    input.waitUntil(
+      source.cancel().catch((error: unknown) => {
+        logError(log, "agent_session_stopped cancel failed", error, { channelId: stopped.channel });
+      }),
+    );
+    return new Response("ok");
+  }
+
   // Handler precedence, in fall-through order:
   // 1) an authored mention/DM handler for its own event kind,
   // 2) an authored generic `onEvent` fallback,
@@ -1130,12 +1172,15 @@ async function handleEventPost(input: {
       kind: "app_mention" | "channel_message" | "direct_message",
       message: SlackMessage,
       handler: NonNullable<SlackChannelConfig["onMessage"]>,
+      codeChannelOnly = false,
     ) =>
     () =>
       dispatchSlackMessage({
         api: input.api,
         appId,
         botUserId,
+        codeChannelOnly,
+        codeChannels: config.codeChannels,
         receivingBotUserId,
         from: input.from,
         resolveSession: input.resolveSession,
@@ -1173,6 +1218,20 @@ async function handleEventPost(input: {
       if (botUserId === undefined || !message.text.includes(`<@${botUserId}`)) {
         dispatch = dispatchMessage("channel_message", message, onMessage);
       }
+    }
+  }
+
+  // Slack asks agents to answer in a code channel without a mention.
+  if (dispatch === null && builtinDefault === null && config.codeChannels !== undefined) {
+    const message = parseMessageEvent(envelope);
+    if (
+      message !== null &&
+      message.author?.isBot === false &&
+      !isSelfAuthoredSlackMessage({ appId, botUserId }, message) &&
+      !isSlackCodeChannelOriginContext(message.raw) &&
+      (botUserId === undefined || !message.text.includes(`<@${botUserId}`))
+    ) {
+      builtinDefault = dispatchMessage("channel_message", message, defaultOnMessage, true);
     }
   }
 
@@ -1230,6 +1289,9 @@ async function dispatchSlackMessage(input: {
   readonly api: SlackTransportOptions | undefined;
   readonly appId: string | undefined;
   readonly botUserId: string | undefined;
+  /** Drops the message unless it was posted in a code channel. */
+  readonly codeChannelOnly: boolean;
+  readonly codeChannels: SlackCodeChannelsConfig | undefined;
   readonly receivingBotUserId: string | undefined;
   readonly from: ChannelFrom<SlackChannelState>;
   readonly resolveSession: ChannelResolveSession;
@@ -1243,26 +1305,52 @@ async function dispatchSlackMessage(input: {
   readonly threadContext: LoadThreadContextMessagesOptions | undefined;
   readonly uploadPolicy: UploadPolicy;
 }): Promise<void> {
-  const continuationToken = slackContinuationToken(input.message.channelId, input.message.threadTs);
+  const author = input.message.author;
+  const request = buildSlackWorkspaceHandle({
+    api: input.api,
+    botToken: input.credentials?.botToken,
+    installationTeamId: input.installationTeamId,
+    teamId: input.message.teamId,
+  }).request;
+  // Code channel detection and the privacy check read the same conversation.
+  let conversationInfo: ReturnType<typeof request> | undefined;
+  const conversationRequest: typeof request = (operation, body) =>
+    operation === "conversations.info"
+      ? (conversationInfo ??= request(operation, body))
+      : request(operation, body);
+  const codeChannel =
+    input.kind === "direct_message"
+      ? null
+      : await lookupSlackCodeChannel(input.message.channelId, conversationRequest);
+  if (
+    codeChannel === null
+      ? input.codeChannelOnly
+      : !admitsCodeChannelParticipant(input.codeChannels, codeChannel, author?.userId)
+  ) {
+    return;
+  }
+  // A code channel is one session: every message in it, threaded or not, shares its address.
+  const threadTs = codeChannel === null ? input.message.threadTs : CODE_CHANNEL_THREAD_TS;
+  const continuationToken = slackContinuationToken(input.message.channelId, threadTs);
   const { thread, slack } = buildSlackBinding({
     api: input.api,
     appId: input.appId,
     botToken: input.credentials?.botToken,
     botUserId: input.botUserId,
     channelId: input.message.channelId,
-    threadTs: input.message.threadTs,
+    threadTs,
     threadHasReplies: input.message.threadTs !== input.message.ts,
     installationTeamId: input.installationTeamId,
     teamId: input.message.teamId,
   });
-  const author = input.message.author;
   const channelState: SlackChannelState = {
     channelId: input.message.channelId,
     installationTeamId: input.installationTeamId ?? null,
     teamId: input.message.teamId ?? null,
-    threadTs: input.message.threadTs,
+    threadTs,
     triggeringMessageTs: input.message.ts,
     triggeringUserId: author?.userId ?? null,
+    ...(codeChannel !== null && { codeChannel: true }),
   };
   const sessionOperations = bindSlackSessionOperations({
     address: continuationToken,
@@ -1275,7 +1363,7 @@ async function dispatchSlackMessage(input: {
             installationTeamId: input.installationTeamId,
             isBot: author.isBot,
             teamId: input.message.teamId,
-            threadTs: input.message.threadTs,
+            threadTs,
             userId: author.userId,
             userName: author.userName,
           }),
@@ -1288,7 +1376,7 @@ async function dispatchSlackMessage(input: {
     (privateConversation ??= isPrivateSlackConversation({
       channelId: input.message.channelId,
       raw: input.message.raw,
-      request: slack.request,
+      request: conversationRequest,
     }));
   const isBotMentioned =
     input.kind === "app_mention" ||
@@ -1296,6 +1384,7 @@ async function dispatchSlackMessage(input: {
   const ctx: SlackInboundMessageContext = {
     ...sessionOperations,
     isBotMentioned: () => isBotMentioned,
+    isCodeChannel: () => codeChannel !== null,
     isDMOrPrivateChannel,
     isSubscribed: async () => (await sessionOperations.resolveSession()) !== undefined,
     slack,
