@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { templateManifest } from "./manifest";
@@ -18,4 +20,12 @@ describe("template previews", () => {
       expect(tools.filter((tool) => !names.has(tool))).toEqual([]);
     },
   );
+
+  it.each(
+    withPreview
+      .filter((entry) => entry.preview?.icon)
+      .map((entry) => [entry.slug, entry.preview?.icon ?? ""] as const),
+  )("%s icon exists in public/", (_slug, icon) => {
+    expect(existsSync(fileURLToPath(new URL(`../../public${icon}`, import.meta.url)))).toBe(true);
+  });
 });
