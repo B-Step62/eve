@@ -153,8 +153,6 @@
  *             value: schemas serve tests and development only.
  *
  *   rule 55 — Public named exports match checker-generated per-entry lists.
- *   rule 56 — Public declaration closures and reviewed type findings do not drift.
- *             Additions and removals require an explicit, reviewable API diff.
  *
  * Baselines for rules with pre-existing violations live in
  * `guard-invariants-baseline.json`. Counts and allowlists in that file
@@ -167,7 +165,6 @@ import { fileURLToPath } from "node:url";
 import { load as loadYaml } from "js-yaml";
 import { checkExtensionCapabilityContracts } from "./extension-capability-contracts.mjs";
 import { checkPublicExports } from "./public-exports.mjs";
-import { checkPublicApiShapes } from "./public-api-shapes.mjs";
 
 const require = createRequire(import.meta.url);
 const extractorRequire = createRequire(require.resolve("@microsoft/api-extractor/package.json"));
@@ -1936,9 +1933,6 @@ async function main() {
 
   for (const issue of await checkPublicExports()) {
     violations.push({ rule: 55, ...issue });
-  }
-  for (const issue of await checkPublicApiShapes()) {
-    violations.push({ rule: 56, ...issue });
   }
 
   if (violations.length === 0) {

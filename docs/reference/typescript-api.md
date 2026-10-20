@@ -49,8 +49,7 @@ using another entry does not require them.
 Connect events additionally require a Connect release that supplies its events bridge.
 The packed-consumer matrix checks every typed public entry with `skipLibCheck: false`,
 using only required peers for core entries and explicit integration peers for the rest.
-It has no diagnostic baseline. Declaration shape reports separately record peer boundaries;
-SDK-backed handles keep the app's SDK identity rather than copied classes.
+It has no diagnostic baseline. SDK-backed handles keep the app's SDK identity rather than copied classes.
 
 The AI SDK is a required peer and has its own Zod peer requirement. Client inspection types
 (`AgentInfoResult`, its entry types, and `HealthResult`) are eve-owned data contracts, not
