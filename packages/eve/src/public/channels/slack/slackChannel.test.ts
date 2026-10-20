@@ -6524,6 +6524,7 @@ describe("slackChannel() code channels", () => {
   it("cancels the session's turn when Slack stops the code channel session", async () => {
     useCodeChannels([]);
     const channel = slackChannel({
+      codeChannels: true,
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
     });
     const body = buildEventBody({
@@ -6536,6 +6537,25 @@ describe("slackChannel() code channels", () => {
 
     expect(cancel).toHaveBeenCalledWith({ continuationToken: "C_CODE_STOP:0" });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("leaves a stop to onEvent without codeChannels", async () => {
+    useCodeChannels([]);
+    const onEvent = vi.fn();
+    const channel = slackChannel({
+      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+      onEvent,
+    });
+    const body = buildEventBody({
+      channel: "C_STOP_OFF",
+      type: "agent_session_stopped",
+      user: "U1",
+    });
+
+    const { cancel } = await firePost(channel, buildSignedRequest({ body }));
+
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalled());
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("cancels once for a stop in a code channel thread, even when Slack redelivers it", async () => {

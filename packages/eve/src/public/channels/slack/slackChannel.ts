@@ -1158,19 +1158,19 @@ async function handleEventPost(input: {
   // The stop names the channel, or a thread in it; both are the channel's one session.
   const stopped = envelope.event;
   if (
+    config.codeChannels === true &&
     stopped.type === "agent_session_stopped" &&
     typeof stopped.channel === "string" &&
     (stopped.thread_ts === undefined ||
-      (config.codeChannels === true &&
-        (await isSlackCodeChannel(
-          stopped.channel,
-          buildSlackWorkspaceHandle({
-            api: input.api,
-            botToken: config.credentials?.botToken,
-            installationTeamId,
-            teamId: typeof envelope.team_id === "string" ? envelope.team_id : undefined,
-          }).request,
-        ))))
+      (await isSlackCodeChannel(
+        stopped.channel,
+        buildSlackWorkspaceHandle({
+          api: input.api,
+          botToken: config.credentials?.botToken,
+          installationTeamId,
+          teamId: typeof envelope.team_id === "string" ? envelope.team_id : undefined,
+        }).request,
+      )))
   ) {
     // A redelivered stop must not cancel a turn that started after the first one.
     if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) return new Response("ok");
