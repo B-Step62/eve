@@ -39,6 +39,7 @@ import type {
   TurnStepPayload,
 } from "#execution/session/turn-step-types.js";
 import { turnStep } from "#execution/session/turn-step.js";
+import { deliveryText, WorkflowKernel } from "#harness/kernel/workflow.js";
 import { ActiveTurn } from "#execution/session/active-turn.js";
 import type { TurnControl } from "#execution/session/turn-control.js";
 import {
@@ -82,6 +83,8 @@ export interface SessionExecutionInput {
  */
 export class SessionExecution {
   private readonly input: SessionExecutionInput;
+  /** EXPERIMENTAL (kernel-spike): the kernel in workflow code, for `eve.kernelMode: "wasm"`. */
+  private workflowKernel: WorkflowKernel | undefined;
 
   constructor(input: SessionExecutionInput) {
     this.input = input;
@@ -177,6 +180,14 @@ export class SessionExecution {
     delivery: TurnStepPayload | undefined,
   ): Promise<TurnOutcome> {
     let nextStepInput: TurnStepPayload | undefined = delivery;
+    const kernel = this.kernelInWorkflow();
+    const kernelPrompt = delivery?.delivery === undefined ? "" : deliveryText(delivery.delivery);
+    if (kernel !== undefined && nextStepInput?.delivery !== undefined) {
+      nextStepInput = {
+        ...nextStepInput,
+        kernel: kernel.configured ? kernel.startTurn(kernelPrompt) : { describe: true },
+      };
+    }
     // Only the first step binds the caller. A caller that steers in mid-turn is
     // replied to at its own address (`TurnOutcome.caller`) and is bound by the
     // next turn, so this turn's forwarding keeps its original caller.
@@ -269,9 +280,25 @@ export class SessionExecution {
 
       if (result.action === "park") return { kind: "park", settled: result.settled };
 
+      if (kernel !== undefined && result.action === "continue" && result.kernel !== undefined) {
+        if (result.kernel.config !== undefined) {
+          kernel.configure(result.kernel.config);
+          nextStepInput = { kernel: kernel.startTurn(kernelPrompt) };
+        } else {
+          nextStepInput = { kernel: kernel.afterStep(result.kernel) };
+        }
+        continue;
+      }
+
       const steering = await turn.takeSteering();
       nextStepInput = steering === undefined ? undefined : { delivery: steering };
     }
+  }
+
+  private kernelInWorkflow(): WorkflowKernel | undefined {
+    if (this.input.cursor.serializedContext["eve.kernelMode"] !== "wasm") return undefined;
+    this.workflowKernel ??= new WorkflowKernel();
+    return this.workflowKernel;
   }
 
   /**

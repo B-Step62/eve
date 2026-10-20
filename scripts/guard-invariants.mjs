@@ -589,6 +589,8 @@ const CALL_EVENT_BUILDER_RE = /\bcreateAction(?:Result|sRequested)Event\b/;
 /** Where the model step streams its calls, their inline results, and the calls they made. */
 const STREAM_CONTENT_FILES = new Set([
   "packages/eve/src/harness/emission.ts",
+  // EXPERIMENTAL (kernel-spike): the kernel's model step builds its calls and results here.
+  "packages/eve/src/harness/kernel/effects.ts",
   "packages/eve/src/harness/nested-actions.ts",
   "packages/eve/src/harness/step-hooks.ts",
   "packages/eve/src/harness/stream-actions.ts",

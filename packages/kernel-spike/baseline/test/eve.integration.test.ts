@@ -85,7 +85,9 @@ function scriptedModel(scenario: Scenario) {
   });
 }
 
-async function runEve(name: string, turns: number) {
+type Mode = "eve" | "eve-native" | "eve-wasm";
+
+async function runEve(name: string, turns: number, mode: Mode = "eve") {
   const scenario = loadScenarios().scenarios[name]!;
   const ws = mkdtempSync(join(tmpdir(), `kernel-spike-eve-${name}-`));
   seedWorkspace(ws, scenario);
@@ -103,7 +105,12 @@ async function runEve(name: string, turns: number) {
         kind: "initial",
         ownerDeploymentId: "dpl_inline",
         input: { message: scenario.prompt },
-        serializedContext: buildSerializedContext({ channelKind: "http" }),
+        serializedContext: {
+          ...buildSerializedContext({ channelKind: "http" }),
+          ...(mode === "eve"
+            ? {}
+            : { "eve.kernelMode": mode === "eve-native" ? "native" : "wasm" }),
+        },
       },
     ]);
     const stream = captureTurnEvents(run);
@@ -124,7 +131,7 @@ async function runEve(name: string, turns: number) {
       }
       const totalMs = performance.now() - start;
       const metrics = await measureRun((await getWorld()) as never, run.runId);
-      return { host: "eve", name, turns, ws, totalMs, turnMs, metrics, lastTurnEvents: last };
+      return { host: mode, name, turns, ws, totalMs, turnMs, metrics, lastTurnEvents: last };
     } finally {
       stream.dispose();
       await run.cancel();
@@ -132,40 +139,42 @@ async function runEve(name: string, turns: number) {
   });
 }
 
-function save(result: { name: string; turns: number }) {
+function save(result: { host: string; name: string; turns: number }) {
   mkdirSync(OUT, { recursive: true });
   writeFileSync(
-    join(OUT, `eve-${result.name}-${result.turns}.json`),
+    join(OUT, `${result.host}-${result.name}-${result.turns}.json`),
     JSON.stringify(result, null, 2),
   );
 }
 
 const median = (xs: number[]) => xs.toSorted((a, b) => a - b)[Math.floor(xs.length / 2)]!;
 
-describe("eve baseline", () => {
-  beforeAll(async () => {
-    // The first session pays for bundle loading and compilation.
-    await runEve("plain", 1);
-  });
-
-  it("plain", async () => {
-    const runs = [];
-    for (let i = 0; i < 5; i++) runs.push(await runEve("plain", 1));
-    const r = runs.at(-1)!;
-    save({
-      ...r,
-      totalMs: median(runs.map((x) => x.totalMs)),
-      samplesMs: runs.map((x) => x.totalMs),
+for (const mode of ["eve", "eve-native", "eve-wasm"] as const) {
+  describe(mode, () => {
+    beforeAll(async () => {
+      // The first session pays for bundle loading and compilation.
+      await runEve("plain", 1, mode);
     });
-    expect(readFileSync(join(r.ws, "out.txt"), "utf8")).toBe("alpha+beta\n");
-    expect(JSON.stringify(r.lastTurnEvents)).toContain("Done.");
-  });
 
-  for (const turns of [1, 5, 10, 20]) {
-    it(`growth, ${turns} turns`, async () => {
-      const r = await runEve("growth", turns);
-      save(r);
-      expect(JSON.stringify(r.lastTurnEvents)).toContain("5000 characters");
+    it("plain", async () => {
+      const runs = [];
+      for (let i = 0; i < 5; i++) runs.push(await runEve("plain", 1, mode));
+      const r = runs.at(-1)!;
+      save({
+        ...r,
+        totalMs: median(runs.map((x) => x.totalMs)),
+        samplesMs: runs.map((x) => x.totalMs),
+      });
+      expect(readFileSync(join(r.ws, "out.txt"), "utf8")).toBe("alpha+beta\n");
+      expect(JSON.stringify(r.lastTurnEvents)).toContain("Done.");
     });
-  }
-});
+
+    for (const turns of [1, 5, 10, 20]) {
+      it(`growth, ${turns} turns`, async () => {
+        const r = await runEve("growth", turns, mode);
+        save(r);
+        expect(JSON.stringify(r.lastTurnEvents)).toContain("5000 characters");
+      });
+    }
+  });
+}

@@ -87,6 +87,7 @@ import {
   type CompletedModelCallCheckpoint,
 } from "#execution/cancelled-model-call-batch.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
+import { KernelStepInputKey, KernelStepOutputKey } from "#harness/kernel/keys.js";
 
 function channelDeliveryErrorCode(error: unknown): string {
   if (typeof error === "object" && error !== null && "code" in error) {
@@ -521,6 +522,9 @@ async function runSessionStepBody(
         runStep: async ({ firstCall, session, stepInput }) => {
           const result = await runStep(ctx, session, async (enrichedSession) => {
             ctx.setVirtualContext(HandleEventKey, handleEvent);
+            if (input.input?.kernel !== undefined) {
+              ctx.setVirtualContext(KernelStepInputKey, input.input.kernel);
+            }
             ctx.setVirtualContext(StaticModelReferenceKey, effectiveAgent.turnAgent.model ?? null);
             let schemaSession =
               firstCall && resolved?.outputSchema !== undefined
@@ -587,7 +591,10 @@ async function runSessionStepBody(
     const nextSerializedContext = serializeContext(ctx);
     stepResult = { ...stepResult, session: aliased };
 
-    const durableResult = resolveSessionStepResult(stepResult, nextSerializedContext);
+    const resolvedResult = resolveSessionStepResult(stepResult, nextSerializedContext);
+    const kernelOutput = ctx.get(KernelStepOutputKey);
+    const durableResult =
+      kernelOutput === undefined ? resolvedResult : { ...resolvedResult, kernel: kernelOutput };
     if (durableResult.action === "done") await publisher.writer.close();
     return compacted ? { ...durableResult, compacted: true } : durableResult;
   } finally {

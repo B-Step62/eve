@@ -20,12 +20,15 @@ const dir = join(spikeRoot(), ".spike-tmp/baseline");
 const rows: Row[] = readdirSync(dir)
   .filter((f) => f.endsWith(".json"))
   .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as Row);
-const hosts = ["eve", "b-steps", "b-wasm"];
+const hosts = ["eve", "eve-native", "eve-wasm"];
 const find = (host: string, name: string, turns: number) =>
   rows.find((r) => r.host === host && r.name === name && r.turns === turns);
 const kb = (b: number) => `${(b / 1024).toFixed(1)} KB`;
 
 console.log("plain turn (2 model calls, 3 tool calls), median of 5");
+console.log(
+  "eve = today's harness; eve-native = kernel (Node-API) in turnStep; eve-wasm = kernel (WASM) in eve's workflow code",
+);
 console.table(
   hosts.map((h) => {
     const r = find(h, "plain", 1)!;

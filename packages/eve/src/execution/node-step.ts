@@ -7,6 +7,9 @@ import { preparePersistedStepDynamicToolMetadata } from "#context/dynamic-tool-l
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import type { ExecutionInstrumentation } from "#instrumentation/runtime.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { contextStorage } from "#context/container.js";
+import { createKernelHarness } from "#harness/kernel/harness.js";
+import { KernelModeKey } from "#harness/kernel/keys.js";
 import type { HandleEventFn, HarnessToolMap, StepFn } from "#harness/types.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import { createLogger } from "#internal/logging.js";
@@ -99,7 +102,12 @@ export function createExecutionNodeStep(input: CreateExecutionNodeStepInput): St
   const tools = createNodeHarnessTools({ node: input.node });
   const instrumentation = input.instrumentation;
   const sessionInstrumentation = instrumentation?.prepareExecution();
-  const step = createToolLoopHarness({
+  const kernelMode = contextStorage.getStore()?.get(KernelModeKey);
+  const createHarness: typeof createToolLoopHarness =
+    kernelMode === undefined || input.clearOnly === true || input.compactOnly === true
+      ? createToolLoopHarness
+      : (config) => createKernelHarness(config, kernelMode);
+  const step = createHarness({
     steeringSignal: input.steeringSignal,
     abortSignal: input.abortSignal,
     capabilities: input.capabilities,

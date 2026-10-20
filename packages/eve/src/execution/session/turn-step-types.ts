@@ -6,6 +6,7 @@ import type { HarnessModelMessage } from "#harness/messages.js";
 import type { SettledTurn } from "#harness/types.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
 import type { TokenUsage } from "#shared/token-usage.js";
+import type { KernelStepInput, KernelStepOutput } from "#harness/kernel/contract.js";
 
 /** Trusted runtime-action results collected by the session owner. */
 export interface RuntimeActionResultStepInput {
@@ -23,6 +24,8 @@ export interface RuntimeActionResultStepInput {
 export interface TurnStepPayload {
   readonly control?: "clear" | "compact";
   readonly delivery?: DeliverHookPayload;
+  /** EXPERIMENTAL (kernel-spike): what the workflow's kernel asks this step to run. */
+  readonly kernel?: KernelStepInput;
   readonly runtimeResults?: RuntimeActionResultStepInput;
 }
 
@@ -40,6 +43,8 @@ export interface TurnStepInput {
 }
 
 interface DurableStepResultFields {
+  /** EXPERIMENTAL (kernel-spike): what this step ran, for the workflow's kernel. */
+  readonly kernel?: KernelStepOutput;
   readonly serializedContext: Record<string, unknown>;
   readonly sessionState: DurableSessionState;
   readonly history: HarnessModelMessage[];
