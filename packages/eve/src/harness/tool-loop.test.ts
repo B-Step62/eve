@@ -1,4 +1,4 @@
-import { AgentSpanIdGenerator } from "#compiled/@eve/tracing/index.js";
+import { AgentSpanIdGenerator } from "#compiled/@vercel/agent-runs/index.js";
 import { context as otelContext, trace } from "#compiled/@opentelemetry/api/index.js";
 import {
   type FilePart,
@@ -62,7 +62,7 @@ import { applyTransition, sessionView } from "#harness/session-machine/commit.js
 import { requireSignIn } from "#harness/hitl/approvals.js";
 import { createAuthorizationRequiredEvent } from "#protocol/message.js";
 import { finishTurn, ownOpenRequestIds } from "#harness/session-machine/transitions.js";
-import { runtimeWait, storedProjection } from "#harness/session-machine/view.js";
+import { answeredCallIds, runtimeWait, storedProjection } from "#harness/session-machine/view.js";
 import {
   foldingHandler,
   parkedSteps,
@@ -6461,17 +6461,13 @@ describe("createToolLoopHarness", () => {
       const parked = parkedSteps(result.session);
       expect(parked).toHaveLength(1);
       expect(parked[0]?.requests).toEqual([]);
-      expect(parked[0]?.messages).toEqual([{ content: [delegateCall], role: "assistant" }]);
-      for (const message of result.session.history) {
-        if (!Array.isArray(message.content)) continue;
-        expect(
-          message.content.filter(
-            (part) =>
-              (part.type === "tool-call" || part.type === "tool-result") &&
-              part.toolCallId === signInCall.toolCallId,
-          ),
-        ).toHaveLength(0);
-      }
+      // The call the sign-in stopped waits in the step, unanswered, to run once it completes.
+      expect(parked[0]?.messages).toEqual([
+        { content: [delegateCall, signInCall], role: "assistant" },
+      ]);
+      expect(parked[0]?.approved?.map((call) => call.action.callId)).toEqual([
+        signInCall.toolCallId,
+      ]);
       expect(ToolLoopAgent).toHaveBeenCalledTimes(1);
     });
 
@@ -6578,42 +6574,11 @@ describe("createToolLoopHarness", () => {
       // A sign-in interrupt is not a tool result on the v26 stream.
       const actionResults = events.filter((event) => event.type === "action.result");
       expect(actionResults).toHaveLength(0);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "tool"
-            ? message.content.filter(
-                (part) => part.type === "tool-result" && part.toolCallId === "call-1",
-              )
-            : [],
-        ),
-      ).toHaveLength(0);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "assistant" && Array.isArray(message.content)
-            ? message.content.filter(
-                (part) => part.type === "tool-call" && part.toolCallId === "call-1",
-              )
-            : [],
-        ),
-      ).toHaveLength(0);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "tool"
-            ? message.content.filter(
-                (part) => part.type === "tool-result" && part.toolCallId === "call-2",
-              )
-            : [],
-        ),
-      ).toHaveLength(1);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "assistant" && Array.isArray(message.content)
-            ? message.content.filter(
-                (part) => part.type === "tool-call" && part.toolCallId === "call-2",
-              )
-            : [],
-        ),
-      ).toHaveLength(1);
+      // The step waits whole: the sign-in's call has no result, so nothing reaches history yet.
+      const [parked] = parkedSteps(result.session);
+      expect(parked?.approved?.map((call) => call.action.callId)).toEqual(["call-1"]);
+      expect(answeredCallIds(parked?.messages ?? [])).toEqual(new Set(["call-2"]));
+      expect(JSON.stringify(result.session.history)).not.toContain("call-");
     });
   });
 
@@ -10322,6 +10287,46 @@ describe("createToolLoopHarness", () => {
           scope: expect.objectContaining({ attemptIndex: 0 }),
           type: "step.attempt.completed",
         }),
+        expect.anything(),
+      );
+    });
+
+    it("completes rather than fails the attempt when the turn is cancelled mid-call", async () => {
+      const abortController = new AbortController();
+      vi.mocked(ToolLoopAgent).mockImplementation(function (this: ToolLoopAgent) {
+        this.stream = vi.fn().mockImplementation(async () => {
+          // A cancellation can reach the step without its reason, so the stream
+          // rejects with the platform's plain AbortError.
+          abortController.abort();
+          throw abortController.signal.reason;
+        });
+        return this;
+      } as MockAgentConstructor);
+      const attemptCompleted = vi.fn();
+      const attemptFailed = vi.fn();
+      const hooks = createInstrumentationHooks([
+        {
+          events: {
+            "step.attempt.completed": attemptCompleted,
+            "step.attempt.failed": attemptFailed,
+          },
+          name: "attempt",
+        },
+      ]);
+      const runStep = createToolLoopHarness(
+        createTestConfig(undefined, {
+          abortSignal: abortController.signal,
+          instrumentation: bindHookInstrumentation(hooks),
+        }),
+      );
+
+      await expect(runStep(createTestSession(), { message: "hi" })).rejects.toBeInstanceOf(
+        TurnCancelledError,
+      );
+
+      expect(attemptFailed).not.toHaveBeenCalled();
+      expect(attemptCompleted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ type: "step.attempt.completed" }),
         expect.anything(),
       );
     });
