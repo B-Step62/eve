@@ -19,6 +19,8 @@ import type {
   DiscordChannelState,
   DiscordCommandResult,
   DiscordContext,
+  DiscordHandle,
+  DiscordHitlPrompt,
 } from "#public/channels/discord/discordChannel.js";
 
 const log = createLogger("discord.defaults");
@@ -61,6 +63,26 @@ export function defaultOnCommand(
   interaction: DiscordCommandInteraction,
 ): DiscordCommandResult {
   return { auth: defaultDiscordAuth(interaction) };
+}
+
+/**
+ * Edits a posted prompt the way a resolved one reads: its prompt kept, its
+ * choices replaced by `label`. Throws when Discord refuses the edit.
+ */
+export async function editDiscordResolvedPrompt(
+  discord: Pick<DiscordHandle, "channelId" | "request">,
+  prompt: Pick<DiscordHitlPrompt, "content" | "messageId">,
+  label: string,
+): Promise<void> {
+  const content = `${prompt.content}\n\n${label}`.slice(0, DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
+  const response = await discord.request(
+    `/channels/${encodeURIComponent(discord.channelId)}/messages/${encodeURIComponent(prompt.messageId)}`,
+    { components: [], content },
+    { botAuth: true, method: "PATCH" },
+  );
+  if (!response.ok) {
+    throw new Error(`Discord prompt edit failed with HTTP ${response.status}.`);
+  }
 }
 
 type DiscordEventChannel = Parameters<
@@ -144,20 +166,8 @@ async function editDiscordSettledRequest(
   if (prompt === undefined) return;
   channel.state.hitlPrompts = rest;
   const label = resolvedPromptLabel(settlement, prompt.options);
-  const content = `${prompt.content}\n\n${label}`.slice(0, DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
-  const path = `/channels/${encodeURIComponent(channel.discord.channelId)}/messages/${encodeURIComponent(prompt.messageId)}`;
   try {
-    const response = await channel.discord.request(
-      path,
-      { components: [], content },
-      { botAuth: true, method: "PATCH" },
-    );
-    if (!response.ok) {
-      log.warn("Discord answered prompt edit failed", {
-        requestId: settlement.interactionId,
-        status: response.status,
-      });
-    }
+    await editDiscordResolvedPrompt(channel.discord, prompt, label);
   } catch (error) {
     log.warn("Discord answered prompt edit failed", { error, requestId: settlement.interactionId });
   }

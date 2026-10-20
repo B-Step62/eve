@@ -18,6 +18,7 @@ import type {
   ResponseValue,
 } from "#protocol/session-events/families/response.js";
 import type { ApprovalAsk } from "#harness/session-machine/state.js";
+import type { ConnectionPrincipal } from "#shared/connection-types.js";
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -75,6 +76,10 @@ export function signInOpened(
   if (details.expiresAt !== undefined) visible.expiresAt = details.expiresAt;
   if (details.instructions !== undefined) visible.instructions = details.instructions;
   if (challenge.hookUrl !== undefined) visible.callbackUrl = challenge.hookUrl;
+  // Who and what it grants, so a later call can tell it asks for the same sign-in.
+  if (challenge.grant !== undefined) visible.grant = challenge.grant;
+  const principal = signInPrincipal(challenge.principal);
+  if (principal !== undefined) visible.principal = principal;
   const request: Mutable<InteractionRequest> = {
     kind: "sign-in",
     prompt: input.prompt ?? details.instructions ?? `Authorization required for ${challenge.name}`,
@@ -90,6 +95,15 @@ export function signInOpened(
     data.audience = { principalIds: [challenge.principalId] };
   if (input.origin !== undefined) data.origin = input.origin;
   return { type: "interaction.opened", data };
+}
+
+/** The principal's identity: its attributes stay out of the stream, which every client reads. */
+function signInPrincipal(principal: ConnectionPrincipal | undefined): SignInChallenge["principal"] {
+  if (principal === undefined) return undefined;
+  if (principal.type === "app") return { type: "app" };
+  return principal.issuer === undefined
+    ? { id: principal.id, type: "user" }
+    : { id: principal.id, issuer: principal.issuer, type: "user" };
 }
 
 /** An interaction ends. `cause` names the response that decided it, or what else settled it. */
