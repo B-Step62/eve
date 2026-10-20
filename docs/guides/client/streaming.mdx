@@ -143,7 +143,7 @@ The most common UI events are:
 
 For the complete catalog, see [Sessions, runs & streaming](../../concepts/sessions-runs-and-streaming).
 
-For `call.input`, the conversation's `tool` part reads `status: "streaming"` and accumulates the deltas in `inputText`, cumulative raw text that may be incomplete JSON. `call.requested` replaces it with the validated `input`.
+For `call.input`, the conversation's `tool` part reads `state: "streaming"` and accumulates the deltas in `inputText`, cumulative raw text that may be incomplete JSON. `call.requested` replaces it with the validated `input`.
 
 A call to a tool that runs as a [task](/docs/tools/workflows#run-calls-as-tasks-task) starts with `call.started` carrying its `taskId` and settles later with its own `call.settled`. The model receives the result in its history.
 

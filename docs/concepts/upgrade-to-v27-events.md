@@ -238,8 +238,8 @@ The OpenTelemetry trace schema remains version 4, with the same span names and a
   Observe `view` and lifecycle callbacks for execution. `resume()` resolves after bounded catch-up,
   without waiting for an active turn to end. The lower-level `MessageResponse.result()` still reads
   its response through completion.
-- **Read the native tables.** Frontend snapshots expose `view` (also `data.view`) and
-  `data.previews`. Replace `data.activeTurnId` with `activeTurn(view)?.turnId`,
+- **Read the native tables.** Frontend snapshots expose `view` and
+  `previews`. Replace `data.activeTurnId` with `activeTurn(view)?.turnId`,
   `data.turns[turnId].waiting` with `waiting(view, turnId)`, and `data.tasks[taskId].calls`
   with calls in `view.calls` whose `taskId` matches. Turns have `status: "running" | "settled"`
   and a separate `outcome`, just like the event fold. The reduced `ConversationTurn`,
