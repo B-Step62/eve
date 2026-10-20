@@ -1,5 +1,4 @@
 import { LogoEveSvg } from "@vercel/geistdocs/assets/logos/logo-eve-svg";
-import { ArrowUpIcon, ChevronRightIcon, TerminalIcon, WrenchIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
   TemplateIntegration,
@@ -30,12 +29,19 @@ export const TemplatePreview = ({ integrations, preview, title }: TemplatePrevie
 
 const Conversation = ({ agent, preview }: { agent: string; preview: TemplatePreviewData }) => {
   if (preview.surface === "imessage") {
-    return <IMessage agent={agent} messages={preview.messages} />;
+    return <IMessage agent={agent} icon={preview.icon} messages={preview.messages} />;
   }
   if (preview.surface === "slack") {
-    return <Slack agent={agent} channel={preview.context} messages={preview.messages} />;
+    return (
+      <Slack
+        agent={agent}
+        channel={preview.context}
+        icon={preview.icon}
+        messages={preview.messages}
+      />
+    );
   }
-  return <WebChat agent={agent} messages={preview.messages} />;
+  return <WebChat address={preview.context} messages={preview.messages} />;
 };
 
 const Window = ({ children, header }: { children: ReactNode; header: ReactNode }) => (
@@ -62,67 +68,73 @@ const ToolCalls = ({ tools }: { tools?: string[] }) =>
     </div>
   ) : null;
 
-/**
- * A scaled-down, static copy of the eve Web Chat registry UI
- * (`registry/channel/web`): centered agent-name header, primary user bubbles,
- * collapsed tool rows, and the floating rounded composer.
- */
-const WebChat = ({ agent, messages }: { agent: string; messages: TemplatePreviewMessage[] }) => (
-  <div className="absolute inset-x-5 top-5 -bottom-px flex flex-col overflow-hidden rounded-t-lg border border-gray-alpha-400 bg-background-200 text-[11.5px] leading-[1.4] text-gray-1000 shadow-sm">
-    <div className="flex h-6 shrink-0 items-center justify-center px-10">
-      <span className="truncate text-[10.5px] text-gray-900">{agent}</span>
-    </div>
-    <div className="flex flex-col gap-2 px-3.5">
-      {messages.map((message) =>
-        message.from === "user" ? (
-          <p
-            className="ml-auto w-fit max-w-[85%] rounded-xl bg-gray-1000 px-2.5 py-1.5 text-background-100"
-            key={message.text}
-          >
-            {message.text}
-          </p>
-        ) : (
-          <div className="flex flex-col gap-1" key={message.text}>
-            {message.tools?.map((tool) => (
-              <WebToolCall key={tool} name={tool} />
-            ))}
-            <p>{message.text}</p>
-          </div>
-        ),
-      )}
-    </div>
-    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-background-200 to-transparent px-3.5 pt-2.5 pb-2">
-      <div className="relative flex h-7 items-center rounded-xl border border-gray-alpha-400 bg-background-100 px-2.5 text-gray-700 shadow-sm">
-        Send a message…
-        <span className="absolute right-1 flex size-5 items-center justify-center rounded-full bg-gray-1000 text-background-100">
-          <ArrowUpIcon className="size-3" />
-        </span>
-      </div>
-    </div>
-  </div>
+const WebChat = ({
+  address,
+  messages,
+}: {
+  address?: string;
+  messages: TemplatePreviewMessage[];
+}) => (
+  <Window
+    header={
+      <>
+        <span className="size-1.5 rounded-full bg-gray-alpha-400" />
+        <span className="size-1.5 rounded-full bg-gray-alpha-400" />
+        <span className="size-1.5 rounded-full bg-gray-alpha-400" />
+        {address ? <span className="ml-2 text-[10.5px]">{address}</span> : null}
+      </>
+    }
+  >
+    {messages.map((message) =>
+      message.from === "user" ? (
+        <p
+          className="max-w-[78%] self-end rounded-xl rounded-br-sm bg-gray-1000 px-2.5 py-1.5 text-background-100"
+          key={message.text}
+        >
+          {message.text}
+        </p>
+      ) : (
+        <div className="flex max-w-[90%] flex-col gap-1.5" key={message.text}>
+          <ToolCalls tools={message.tools} />
+          <p>{message.text}</p>
+        </div>
+      ),
+    )}
+  </Window>
 );
 
-/** Mirrors the Web Chat `ToolHeader` for a completed, collapsed tool call. */
-const WebToolCall = ({ name }: { name: string }) => {
-  const Icon = name === "bash" ? TerminalIcon : WrenchIcon;
-  return (
-    <span className="flex items-center gap-1.5 text-gray-900">
-      <Icon className="size-3 shrink-0" />
-      <span>{name}</span>
-      <ChevronRightIcon className="size-2.5 shrink-0" />
+const SLACK_USER = "Alex";
+
+/** The template's own icon when it has one, otherwise the eve logo on `fallbackClassName`. */
+const AgentIcon = ({
+  className,
+  fallbackClassName,
+  icon,
+  logoHeight,
+}: {
+  className: string;
+  fallbackClassName: string;
+  icon?: string;
+  logoHeight: number;
+}) =>
+  icon ? (
+    // oxlint-disable-next-line nextjs/no-img-element -- tiny decorative avatar
+    <img alt="" className={`${className} object-cover`} src={icon} />
+  ) : (
+    <span className={`${className} ${fallbackClassName} flex items-center justify-center`}>
+      <LogoEveSvg height={logoHeight} />
     </span>
   );
-};
-
-const SLACK_USER = "Alex";
 
 const Slack = ({
   agent,
   channel,
+  icon,
   messages,
 }: {
   agent: string;
   channel?: string;
+  icon?: string;
   messages: TemplatePreviewMessage[];
 }) => (
   <Window
@@ -137,15 +149,18 @@ const Slack = ({
       const isAgent = message.from === "agent";
       return (
         <div className="flex gap-2" key={message.text}>
-          <div
-            className={
-              isAgent
-                ? "flex size-5.5 shrink-0 items-center justify-center rounded-[5px] bg-gray-1000 text-background-100"
-                : "flex size-5.5 shrink-0 items-center justify-center rounded-[5px] bg-purple-700 font-semibold text-[9.5px] text-white"
-            }
-          >
-            {isAgent ? <LogoEveSvg height={7} /> : SLACK_USER[0]}
-          </div>
+          {isAgent ? (
+            <AgentIcon
+              className="size-5.5 shrink-0 rounded-[5px]"
+              fallbackClassName="bg-gray-1000 text-background-100"
+              icon={icon}
+              logoHeight={7}
+            />
+          ) : (
+            <div className="flex size-5.5 shrink-0 items-center justify-center rounded-[5px] bg-purple-700 font-semibold text-[9.5px] text-white">
+              {SLACK_USER[0]}
+            </div>
+          )}
           <div className="flex min-w-0 flex-col gap-1">
             <div className="flex items-center gap-1">
               <span className="font-semibold">{isAgent ? agent : SLACK_USER}</span>
@@ -177,32 +192,72 @@ const Mentions = ({ text }: { text: string }) =>
     ),
   );
 
-const IMessage = ({ agent, messages }: { agent: string; messages: TemplatePreviewMessage[] }) => (
-  <div className="absolute top-4 -bottom-8 left-1/2 w-52 -translate-x-1/2 overflow-hidden rounded-[22px] border border-gray-alpha-400 bg-background-100 text-[11.5px] leading-[1.3] shadow-sm">
-    <div className="flex flex-col items-center gap-0.5 border-b border-gray-alpha-400 py-1.5">
-      <span className="flex size-5.5 items-center justify-center rounded-full bg-gray-1000 text-background-100">
-        <LogoEveSvg height={7} />
+/** Liquid glass: translucent fill, blurred backdrop, a bright top edge, and a soft drop shadow. */
+const GLASS =
+  "bg-white/70 backdrop-blur-md backdrop-saturate-150 shadow-[0_2px_6px_rgba(0,0,0,0.08),inset_0_0.5px_0_rgba(255,255,255,0.9),inset_0_0_0_0.5px_rgba(0,0,0,0.06)] dark:bg-white/12 dark:shadow-[0_2px_6px_rgba(0,0,0,0.5),inset_0_0.5px_0_rgba(255,255,255,0.25),inset_0_0_0_0.5px_rgba(255,255,255,0.08)]";
+
+// Bubble tails: a bubble-colored corner plus a screen-colored cutout that carves the curve.
+const SENT_TAIL =
+  "before:absolute before:bottom-0 before:-right-[5px] before:size-3.5 before:rounded-bl-[11px_10px] before:bg-inherit before:content-[''] after:absolute after:bottom-0 after:-right-[18px] after:h-3.5 after:w-[18px] after:rounded-bl-[7px] after:bg-background-100 after:content-['']";
+const RECEIVED_TAIL =
+  "before:absolute before:bottom-0 before:-left-[5px] before:size-3.5 before:rounded-br-[11px_10px] before:bg-inherit before:content-[''] after:absolute after:bottom-0 after:-left-[18px] after:h-3.5 after:w-[18px] after:rounded-br-[7px] after:bg-background-100 after:content-['']";
+
+const IMessage = ({
+  agent,
+  icon,
+  messages,
+}: {
+  agent: string;
+  icon?: string;
+  messages: TemplatePreviewMessage[];
+}) => (
+  <div className="absolute top-3 -bottom-10 left-1/2 w-64 -translate-x-1/2 overflow-hidden rounded-[30px] border border-gray-alpha-400 bg-background-100 text-[10.5px] leading-[1.3] text-gray-1000 shadow-sm">
+    <div className="flex flex-col items-center pt-2.5">
+      <span
+        className={`absolute top-3.5 left-3 flex size-6 items-center justify-center rounded-full ${GLASS}`}
+      >
+        <svg aria-hidden="true" className="h-2.5" fill="none" viewBox="0 0 7 12">
+          <path
+            d="M6 1 1 6l5 5"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+          />
+        </svg>
       </span>
-      <span className="text-[9.5px] text-gray-900">{agent}</span>
+      <AgentIcon
+        className="relative z-10 size-8 rounded-full shadow-[0_1px_4px_rgba(0,0,0,0.18)] ring-[0.5px] ring-black/5 dark:ring-white/15"
+        fallbackClassName="bg-linear-to-b from-[#a6abb8] to-[#858994] text-white"
+        icon={icon}
+        logoHeight={8}
+      />
+      <span className={`-mt-1 rounded-full px-2 py-0.5 font-semibold text-[9.5px] ${GLASS}`}>
+        {agent}
+        <span className="ml-0.5 font-normal text-[#8e8e93]">›</span>
+      </span>
     </div>
-    <div className="flex flex-col gap-1.5 px-2.5 py-2">
-      {messages.map((message) =>
-        message.from === "user" ? (
+    <div className="flex flex-col px-3.5 pt-2">
+      {messages.map((message, index) => {
+        const sent = message.from === "user";
+        const next = messages[index + 1];
+        const tail = !next || next.from !== message.from;
+        return (
           <p
-            className="max-w-[80%] self-end rounded-2xl bg-[#0a84ff] px-2.5 py-1.5 text-white"
+            className={[
+              "relative max-w-[78%] rounded-[14px] px-2.5 py-[5px]",
+              sent
+                ? "self-end bg-[#0a84ff] text-white"
+                : "self-start bg-[#e9e9eb] dark:bg-[#262628]",
+              tail ? (sent ? SENT_TAIL : RECEIVED_TAIL) : "",
+              tail && next ? "mb-1.5" : "mb-0.5",
+            ].join(" ")}
             key={message.text}
           >
             {message.text}
           </p>
-        ) : (
-          <p
-            className="max-w-[80%] self-start rounded-2xl bg-gray-alpha-200 px-2.5 py-1.5 text-gray-1000"
-            key={message.text}
-          >
-            {message.text}
-          </p>
-        ),
-      )}
+        );
+      })}
     </div>
   </div>
 );
