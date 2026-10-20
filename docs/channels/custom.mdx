@@ -412,7 +412,21 @@ The supplied `auth` identifies who started the session, available to tools and e
 
 The destination's `receive` hook defines the target fields and how they map to a session. See [Slack proactive sessions](./slack#proactive-sessions) for its target options. To let people continue the conversation, configure the destination's inbound handlers to accept follow-ups.
 
-`ctx.to(...)` is a route-handler API, not a method on every platform callback. [Handler-form schedules](../schedules#handler-form-run) provide the same operation as `to(...)`.
+Both `send` and `create` accept `history`, prior conversation the session starts from, in the same shape as [`history` on the eve channel](./eve#start-from-prior-history). eve passes it to the destination's `receive` hook as `input.history` and adds it to the session unless the hook's own `from(...).send(...)` passes `history`.
+
+To start new work without joining a conversation that already exists, call `create` instead of `send`. It starts a session only when no session owns the target, and returns `{ created, session }`:
+
+```ts
+const { created, session } = await ctx.to(slack, { channelId: "C0123ABC" }).create({
+  auth,
+  history,
+  message: "Summarize the open incidents.",
+});
+```
+
+With `message`, the new session runs its first turn. Without it, the session waits for its first message. When a session already owns the target, `created` is `false` and nothing is sent. The destination's `receive` hook needs no changes: during `create`, its `from(address).send(message, options)` call creates the session at that address instead of continuing one. The hook may pass `auth`, `state`, `history`, `title`, and `initiatorAuth`. Passing `context`, `outputSchema`, `callback`, or `turnPolicy` fails the hand-off. Work the hook does before calling `send`, such as posting a seed message, still runs when `created` is `false`.
+
+`ctx.to(...)` is a route-handler API, not a method on every platform callback. [Handler-form schedules](../schedules#handler-form-run) provide the same operation as `to(...)`, and [workflow tools](../tools/workflows#start-channel-sessions-ctxto) provide it by channel name.
 
 For notifications that don't need an agent turn, use the platform's API instead. See [Durable cross-channel notifications](../patterns/durable-cross-channel-notifications) when those posts also need retries.
 

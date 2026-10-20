@@ -20,13 +20,16 @@ import {
   confirmTwoStepsWorkflow,
   deployServiceWorkflow,
   failingDeployWorkflow,
+  openInboxSessionWorkflow,
   reportingDeployWorkflow,
   returnAskAnswerWorkflow,
   stepReferenceWorkflow,
   workflowContextMisuseWorkflow,
 } from "#internal/testing/workflow-tool-fixtures.js";
 import type { InputRequestedStreamEvent, MessageStreamEvent } from "#protocol/message.js";
+import { defineChannel, POST } from "#public/channels/index.js";
 import { defineHook } from "#public/definitions/hook.js";
+import { sessions } from "#public/server/index.js";
 import {
   buildWorkflowToolSerializedContext,
   createWorkflowToolRuntime,
@@ -57,6 +60,68 @@ describe("workflow tools", () => {
     expect(output).toContain('"argument":"plan:api"');
     expect(output).toContain('"receiver":"api"');
   });
+  it("starts a channel session from a workflow tool only while the target is free", async () => {
+    const runtime = await createWorkflowToolRuntime({
+      agentName: "workflow-tool-channel-create",
+      execute: openInboxSessionWorkflow,
+      modules: [
+        {
+          logicalPath: "channels/inbox.ts",
+          loadNamespace: async () => ({
+            default: defineChannel({
+              routes: [POST("/inbox", async () => new Response("ok"))],
+              async receive(input, { from }) {
+                return await from(`inbox:${String(input.target.ref)}`).send(input.message, {
+                  auth: input.auth,
+                });
+              },
+            }),
+          }),
+        },
+      ],
+      toolName: "deploy_service",
+    });
+
+    const { output, received } = await runtime.run(async () => {
+      const run = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: 'Run deploy_service with service "api"' },
+          serializedContext: buildWorkflowToolSerializedContext({
+            continuationToken: "schedule:workflow-tool-channel-create",
+          }),
+        },
+      ]);
+      const reply = String(await readFirstTurnReply(run));
+      const output = JSON.parse(reply.slice(reply.indexOf("{"))) as {
+        readonly first: { readonly created: boolean; readonly sessionId: string };
+        readonly second: { readonly created: boolean; readonly sessionId: string };
+      };
+      const received: MessageStreamEvent[] = [];
+      for await (const event of sessions.attach(output.first.sessionId).stream()) {
+        if (event.type === "history.imported" || event.type === "message.received") {
+          received.push(event);
+        }
+        if (event.type === "message.received") break;
+      }
+      return { output, received };
+    });
+
+    expect(output.first.created).toBe(true);
+    // The target already has a session, so the second create delivers nothing.
+    expect(output.second).toEqual({ created: false, sessionId: output.first.sessionId });
+    expect(received).toMatchObject([
+      {
+        type: "history.imported",
+        data: {
+          messages: [{ id: "h1", role: "user", text: "Alice asked for the api rollout plan." }],
+        },
+      },
+      { type: "message.received", data: { message: "Continue the rollout plan." } },
+    ]);
+  }, 60_000);
+
   it("runs the framework sleep tool through the workflow tool path", async () => {
     const runtime = await createWorkflowToolRuntime({
       agentName: "workflow-tool-sleep",

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CHANNEL_SENTINEL, type CompiledChannel } from "#channel/compiled-channel.js";
+import type { ChannelReceiveContext } from "#channel/channel-operations.js";
 import {
   createCrossChannelToFn,
+  createNamedCrossChannelTargetHandle,
   type CrossChannelTarget,
   type CrossChannelToFn,
 } from "#channel/cross-channel-receive.js";
@@ -200,5 +202,103 @@ describe("createCrossChannelToFn", () => {
     await fn(slack.definition, {}).send("go", { auth });
 
     expect(slack.receive.mock.calls[0]![0]).toEqual(expect.objectContaining({ auth }));
+  });
+});
+
+describe("cross-channel handoff delivery", () => {
+  const history = [{ role: "user" as const, text: "Alice asked for the rollout plan." }];
+
+  /** A channel whose receive() resolves the target to an address, as built-in channels do. */
+  function inboxChannel(sendOptions: Record<string, unknown> = {}): CrossChannelTarget {
+    const definition: CompiledChannel = {
+      __kind: CHANNEL_SENTINEL,
+      routes: [{ method: "POST", path: "/inbox", handler: async () => new Response("ok") }],
+      adapter: { kind: "channel:inbox" },
+      async receive(input, { from }: ChannelReceiveContext) {
+        return await from(`inbox:${String(input.target.ref)}`).send(input.message, {
+          auth: input.auth,
+          ...sendOptions,
+        });
+      },
+    };
+    return { name: "inbox", definition, receive: definition.receive, adapter: definition.adapter };
+  }
+
+  it("makes the channel's send() a create at the same address for create()", async () => {
+    const runtime = makeRuntime();
+    vi.mocked(runtime.resolveContinuation)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ sessionId: "sess_new" });
+    vi.mocked(runtime.createSession).mockResolvedValue({
+      events: new ReadableStream(),
+      sessionId: "sess_new",
+    });
+    const inbox = createNamedCrossChannelTargetHandle(runtime, [inboxChannel()], "inbox", {
+      ref: 1,
+    });
+
+    const result = await inbox.create({ auth: null, history, message: "Continue." });
+
+    expect(result).toMatchObject({ created: true, session: { id: "sess_new" } });
+    expect(runtime.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuationToken: "inbox:inbox:1",
+        input: { history, message: "Continue." },
+      }),
+    );
+    expect(runtime.dispatchContinuation).not.toHaveBeenCalled();
+
+    const owned = makeRuntime();
+    vi.mocked(owned.resolveContinuation).mockResolvedValue({ sessionId: "sess_owner" });
+    await expect(
+      createNamedCrossChannelTargetHandle(owned, [inboxChannel()], "inbox", { ref: 1 }).create({
+        auth: null,
+        message: "Continue.",
+      }),
+    ).resolves.toMatchObject({ created: false, session: { id: "sess_owner" } });
+    expect(owned.createSession).not.toHaveBeenCalled();
+    expect(owned.dispatchContinuation).not.toHaveBeenCalled();
+  });
+
+  it("adds the handoff's history to a channel send() that passes none", async () => {
+    const runtime = makeRuntime();
+    vi.mocked(runtime.dispatchContinuation).mockResolvedValue({
+      sessionId: "sess_owner",
+      status: "accepted",
+    });
+    const inbox = createNamedCrossChannelTargetHandle(runtime, [inboxChannel()], "inbox", {
+      ref: 1,
+    });
+
+    await inbox.send("Continue.", { auth: null, history });
+
+    expect(runtime.dispatchContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ payload: expect.objectContaining({ history }) }),
+      }),
+    );
+  });
+
+  it("rejects send-only options a channel passes during create()", async () => {
+    const runtime = makeRuntime();
+    const inbox = createNamedCrossChannelTargetHandle(
+      runtime,
+      [inboxChannel({ context: ["Thread context"] })],
+      "inbox",
+      { ref: 1 },
+    );
+
+    await expect(inbox.create({ auth: null })).rejects.toThrow(
+      'channel "inbox" receive() passed context to from().send(), which create() does not support.',
+    );
+    expect(runtime.createSession).not.toHaveBeenCalled();
+  });
+
+  it("names the available channels when a name matches none", () => {
+    expect(() =>
+      createNamedCrossChannelTargetHandle(makeRuntime(), [inboxChannel()], "slack", {}),
+    ).toThrow(
+      'no channel named "slack". Pass the path-derived name of a file in agent/channels/: "inbox".',
+    );
   });
 });

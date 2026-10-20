@@ -279,3 +279,16 @@ export async function failingServeWorkflow(): Promise<never> {
   "use workflow";
   throw new Error("Live serve workflow must not execute.");
 }
+
+/** Starts a session on the `inbox` channel, then tries again at the same target. */
+export async function openInboxSessionWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
+  "use workflow";
+  const inbox = ctx.to("inbox", { ref: input.service });
+  const first = await inbox.create({
+    auth: null,
+    history: [{ id: "h1", role: "user", text: "Alice asked for the api rollout plan." }],
+    message: "Continue the rollout plan.",
+  });
+  const second = await inbox.create({ auth: null, message: "Start over." });
+  return { first, second };
+}

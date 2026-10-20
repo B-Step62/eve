@@ -204,6 +204,9 @@ export function createChannelAddress<TState = undefined>(input: {
         metadata.channelName !== undefined
           ? createChannelDeliveryMetadata(metadata as ChannelDeliverySource)
           : undefined;
+      const createInput: { -readonly [K in keyof RunInput["input"]]: RunInput["input"][K] } = {};
+      if (history !== undefined) createInput.history = history;
+      if (message !== undefined) createInput.message = message;
       // A first message starts the session the way a send to a free address does, but a run
       // that loses the address forwards nothing: `created: false` means nothing was delivered.
       const started = await input.runtime.createSession({
@@ -220,10 +223,7 @@ export function createChannelAddress<TState = undefined>(input: {
         continuationToken: namespacedToken,
         delivery,
         initiatorAuth: options.initiatorAuth,
-        input: {
-          ...(history === undefined ? {} : { history }),
-          ...(message === undefined ? {} : { message }),
-        },
+        input: createInput,
         requestId: metadata.requestId,
         title: options.title,
       });

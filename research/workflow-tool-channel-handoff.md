@@ -44,12 +44,12 @@ export default defineWorkflowTool({
     "use workflow";
     const channelId = await createCodeChannel(name); // "use step"
     const history = await readTranscript(ctx.session.id); // "use step"
-    const { created, session } = await ctx.to<typeof slack>("slack", { channelId }).create({
+    const { created, sessionId } = await ctx.to<typeof slack>("slack", { channelId }).create({
       auth: ctx.session.auth.current,
       history,
       message,
     });
-    return { channelId, created, sessionId: session.id };
+    return { channelId, created, sessionId };
   },
 });
 ```
@@ -66,11 +66,12 @@ evaluate the channel in the workflow sandbox. A type-only import keeps the targe
 | `.create({ auth, history?, message? })` | starts a session seeded with `history`; runs a turn only with `message` | `created: false`, nothing delivered | `created: false`, nothing delivered |
 
 `send()` hands work to a conversation that may already exist, such as posting a long workflow's
-result into the user's thread. `create()` spawns. Both return the session; `create()` returns
-`{ created, session }`.
+result into the user's thread. `create()` spawns. In a workflow body, `send()` returns
+`{ sessionId }` and `create()` returns `{ created, sessionId }`, since session handles cannot cross
+the step boundary.
 
-The same handle gains `.create()` and `history` in routes and schedules, which share the `to()`
-builder.
+The same handle gains `.create()` and `history` in routes and handler-form schedules, which share
+the `to()` builder. Schedule subscription callbacks keep their send-only `to()`.
 
 ### `message` on `create()`
 

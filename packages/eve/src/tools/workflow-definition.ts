@@ -3,12 +3,16 @@ import type {
   StandardSchemaV1,
 } from "#compiled/@standard-schema/spec/index.js";
 import type { ToolApproval } from "#approval/definition.js";
+import type { ChannelReference } from "#channel/compiled-channel.js";
+import type { InferReceiveTarget } from "#channel/receive-target.js";
+import type { SessionAuthContext } from "#channel/types.js";
 import type { MessageResult, SendTurnOptions } from "#client/types.js";
 import type {
   AgentModelOptionsDefinition,
   AgentReasoningDefinition,
 } from "#shared/agent-definition.js";
 import type { JsonObject } from "#shared/json.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import {
   stampToolDefinition,
   type PublicToolDefinition,
@@ -96,6 +100,47 @@ export interface AgentSession {
   ): Promise<AgentResponse<TOutput>>;
 }
 
+/** Options for {@link WorkflowChannelTarget.send}. */
+export interface WorkflowChannelSendOptions {
+  /** Who the session runs as. Pass `ctx.session.auth.current` to act as the caller. */
+  readonly auth: SessionAuthContext | null;
+  /** Prior conversation added before the message. */
+  readonly history?: readonly SessionHistoryMessage[];
+}
+
+/** Options for {@link WorkflowChannelTarget.create}. */
+export interface WorkflowChannelCreateOptions {
+  /** Who the session runs as. Pass `ctx.session.auth.current` to act as the caller. */
+  readonly auth: SessionAuthContext | null;
+  /** Prior conversation the session starts with. */
+  readonly history?: readonly SessionHistoryMessage[];
+  /** First message, which runs the first turn only when this call starts the session. */
+  readonly message?: string;
+}
+
+/**
+ * A channel target selected with `ctx.to()`. Each operation runs as a step
+ * through the channel's `receive()` hook. The session belongs to the channel:
+ * it has no parent and outlives the workflow run.
+ */
+export interface WorkflowChannelTarget {
+  /**
+   * Starts a session at the target, or continues the one that owns it. A step
+   * that fails after delivering retries, so the message may arrive twice.
+   */
+  send(
+    message: string,
+    options: WorkflowChannelSendOptions,
+  ): Promise<{ readonly sessionId: string }>;
+  /**
+   * Starts a session at the target only when no session owns it; otherwise
+   * returns the owner with `created: false` and delivers nothing. Safe to retry.
+   */
+  create(
+    options: WorkflowChannelCreateOptions,
+  ): Promise<{ readonly created: boolean; readonly sessionId: string }>;
+}
+
 /** Members the context of every workflow tool entry point shares. */
 export type WorkflowSharedContext = Pick<
   ToolContext,
@@ -114,6 +159,15 @@ export type WorkflowSharedContext = Pick<
    * `options.signal` or the call's `abortSignal` aborts.
    */
   ask(request: ToolInputRequest, options?: ToolInputRequestOptions): PromiseLike<ToolInputResponse>;
+  /**
+   * Selects a target on one of the agent's channels, named by its path
+   * (`agent/channels/slack.ts` is `"slack"`). Type the target with a
+   * type-only import: `ctx.to<typeof slack>("slack", { channelId })`.
+   */
+  to<TChannel extends ChannelReference<unknown> = ChannelReference>(
+    channel: string,
+    target: InferReceiveTarget<TChannel>,
+  ): WorkflowChannelTarget;
 };
 
 /**
