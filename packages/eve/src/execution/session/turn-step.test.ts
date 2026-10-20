@@ -984,7 +984,6 @@ describe("dispatchCoordinationStep", () => {
 
     await dispatchCoordinationStep({
       workflowToolRunOwner: { inbox: "generated-owner-token" },
-      sessionWritable: createTestWritable(),
       serializedContext: serializeContext(ctx),
       sessionState: createStubSessionState(),
     });
@@ -1042,7 +1041,6 @@ describe("dispatchCoordinationStep", () => {
       const sessionState = createStubSessionState();
       const dispatched = await dispatchCoordinationStep({
         workflowToolRunOwner: { inbox: "owner-inbox" },
-        sessionWritable: createTestWritable(),
         serializedContext: createSerializedContext(),
         sessionState,
       });
