@@ -3,11 +3,12 @@ name: Authoring Benchmark
 # Runs the apps/benchmarks authoring cases against a branch's own code and eve
 # package. Both triggers use the workflow, runner, and cases from the branch.
 #
-# - Add the `run-authoring-benchmark` label to a same-repository PR. Choose
-#   models and cases with an optional line in the PR body:
+# - Add the `run-authoring-benchmark` label to a same-repository PR whose body
+#   has a line naming what to run. Nothing runs without that line.
 #     authoring-benchmark: models=kimi-k3,gpt-6-sol-high cases=author-008-restock-agent runs=3
-#   `models=all` selects every supported model. Remove and re-add the label to
-#   run again after a push or a body edit.
+#   `models` is required (`all` selects every supported model); `cases`
+#   defaults to the published cases and `runs` to 1. Remove and re-add the
+#   label to run again after a push or a body edit.
 # - Or dispatch this workflow from the Actions tab on any branch with the same
 #   options as inputs.
 on:
@@ -16,8 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       models:
-        description: Comma-separated model ids, or "all" (default claude-sonnet-5)
+        description: Comma-separated model ids, or "all"
         type: string
+        required: true
       cases:
         description: Comma-separated case names (default the published cases)
         type: string
@@ -49,6 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
+      run: ${{ steps.selection.outputs.run }}
       models: ${{ steps.selection.outputs.models }}
       cases: ${{ steps.selection.outputs.cases }}
       runs: ${{ steps.selection.outputs.runs }}
@@ -74,7 +77,6 @@ jobs:
           INPUT_MODELS: ${{ inputs.models }}
           INPUT_CASES: ${{ inputs.cases }}
           INPUT_RUNS: ${{ inputs.runs }}
-          DEFAULT_MODEL: ${{ vars.EVE_BENCHMARK_MODEL }}
         run: node .github/scripts/resolve-authoring-benchmark.mjs
 
       # The benchmark runner only accepts published canaries. The Vercel eve-pkg
@@ -82,6 +84,7 @@ jobs:
       # does not affect the eve package, in which case main's package applies.
       - name: Resolve the eve package
         id: canary
+        if: steps.selection.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -112,6 +115,7 @@ jobs:
   benchmark:
     name: Benchmark ${{ matrix.model }}
     needs: request
+    if: needs.request.outputs.run == 'true'
     runs-on: ubuntu-latest
     # Each case can take up to EVE_BENCHMARK_TIMEOUT (15 minutes) plus sandbox
     # setup, and cases run sequentially within a model.
