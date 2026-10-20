@@ -2264,6 +2264,38 @@ The MCP server can edit and publish content; use [tool filters and approval gate
     keywords: ["mcp", "traffic", "market data", "competitive intelligence", "oauth", "connect"],
     authModes: ["user"],
   },
+  shop: {
+    logo: "shop",
+    docsHref: "https://shop.dev/docs",
+    keywords: ["mcp", "shopping", "checkout", "orders", "shop pay", "commerce", "oauth", "connect"],
+    authModes: ["user"],
+    quickStart: `Create \`agent/connections/shop.ts\`:
+
+\`\`\`ts
+import { connect } from "@vercel/connect/eve";
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://mcp.shop.com",
+  description:
+    "Shop: find products, manage carts, checkouts, orders, and delegated budgets, and approve purchases.",
+  auth: connect("shop"),
+});
+\`\`\`
+
+Each authenticated user signs in to their Shop account in the browser before the first tool call. See the [Shop skill](https://mcp.shop.com/skill.md) for guidance on using its tools.`,
+    configure: `Shop does not register OAuth clients automatically. Get a client ID and secret from [Shopify Partners](https://www.shopify.com/partners), then link your project, create the connector, and pull OIDC locally:
+
+\`\`\`bash
+vercel link
+vercel connect create shop --name shop --connection-method mcp
+vercel env pull
+\`\`\`
+
+\`vercel connect create\` prompts for the client ID and secret. In non-interactive shells, pass them with \`--data '{"clientId":"...","clientSecret":"..."}'\`. Copy the returned connector UID into \`connect()\`.
+
+Shop can complete checkouts and approve spend requests; use [tool filters and approval gates](/docs/connections/mcp#tool-filters) to control these actions.`,
+  },
   shopify: {
     logo: "shopify",
     docsHref: "https://shopify.dev/docs/apps/build/storefront-mcp",
