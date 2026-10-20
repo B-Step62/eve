@@ -25,12 +25,22 @@ export function defineSlackAppManifest(
 ): SlackAppManifestBuildDefinition {
   return {
     build(channelName) {
+      if ((input.app?.description?.length ?? 0) > 140) {
+        throw new Error("slackChannel app.description must be at most 140 characters.");
+      }
+      if (
+        input.app?.backgroundColor !== undefined &&
+        !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(input.app.backgroundColor)
+      ) {
+        throw new Error("slackChannel app.backgroundColor must be a #RGB or #RRGGBB hex color.");
+      }
       const name = (input.app?.name ?? channelName).slice(0, 35);
       const displayName =
         (input.bot?.displayName ?? channelName)
           .toLowerCase()
           .replace(/[^a-z0-9._-]+/g, "-")
-          .slice(0, 35) || "eve";
+          .slice(0, 80)
+          .replace(/^-+|-+$/g, "") || "eve";
       const required = new Set(["app_mentions:read", "chat:write", ...(input.scopes ?? [])]);
       const optional = [...new Set(input.optionalScopes ?? [])].filter(
         (scope) => !required.has(scope),

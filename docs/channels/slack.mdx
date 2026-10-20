@@ -56,16 +56,23 @@ eve always includes `app_mentions:read`, `chat:write`, and the `app_mention`
 event. Additional events and scopes are explicit; eve does not analyze handler
 bodies to infer permissions. Optional scopes appear in both Slack's `bot` and
 `bot_optional` lists. A required scope cannot become optional through overlap.
-Name defaults come from the channel file; bot display names are normalized to
-lowercase letters, digits, dots, underscores, and hyphens, with a 35-character limit.
+
+Name defaults come from the channel file. eve limits `app.name` to 35 characters.
+For `bot.displayName`, eve lowercases the name, replaces characters outside
+`a-z`, `0-9`, `.`, `_`, and `-` with `-`, limits it to 80 characters, then trims
+leading and trailing hyphens. Empty results use `eve`.
+
+`app.description` must have at most 140 characters. `app.backgroundColor` must
+use `#RGB` or `#RRGGBB` hex notation. Invalid values fail manifest generation.
+Slack lets you update an app's background color, but not remove it once set.
+
 `app.name` and `bot.displayName` replace the previous `botName` setting.
 
 Building only declares desired configuration. It does not create an app, grant
 permissions, install it in a workspace, or change a running connector. Connect
 owns provider callbacks, configuration reconciliation, workspace installation,
 and project event destinations. Existing runtime credentials and delivery keep
-working independently of this metadata. Deployment review availability depends
-on the Connect rollout; guided setup remains available separately.
+working independently of this metadata. Use `eve add channel/slack` for guided setup.
 
 ### Resume setup
 

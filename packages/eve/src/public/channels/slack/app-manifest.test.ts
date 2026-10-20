@@ -40,7 +40,7 @@ describe("Slack app manifests", () => {
         description: "Support agent",
         background_color: "#000000",
       },
-      features: { bot_user: { display_name: "support-bot-" } },
+      features: { bot_user: { display_name: "support-bot" } },
       oauth_config: {
         scopes: {
           bot: ["app_mentions:read", "chat:write", "im:history", "reactions:write"],
@@ -49,5 +49,32 @@ describe("Slack app manifests", () => {
       },
       settings: { event_subscriptions: { bot_events: ["app_mention", "message.im"] } },
     });
+  });
+
+  it.each([
+    ["x".repeat(81), "x".repeat(80)],
+    ["!!!", "eve"],
+  ])("normalizes the bot display name %s", (displayName, expected) => {
+    expect(defineSlackAppManifest({ bot: { displayName } }).build("support")).toMatchObject({
+      features: { bot_user: { display_name: expected } },
+    });
+  });
+
+  it("accepts the description limit and shorthand hex colors", () => {
+    expect(
+      defineSlackAppManifest({
+        app: { description: "x".repeat(140), backgroundColor: "#aBc" },
+      }).build("support"),
+    ).toMatchObject({
+      display_information: { description: "x".repeat(140), background_color: "#aBc" },
+    });
+  });
+
+  it.each([
+    [{ description: "x".repeat(141) }, "app.description"],
+    [{ backgroundColor: "red" }, "app.backgroundColor"],
+    [{ backgroundColor: "#1234" }, "app.backgroundColor"],
+  ])("rejects invalid presentation %j during manifest generation", (app, field) => {
+    expect(() => defineSlackAppManifest({ app }).build("support")).toThrow(field);
   });
 });
