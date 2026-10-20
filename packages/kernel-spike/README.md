@@ -230,6 +230,74 @@ the boundary costs. The WASM column explains most of the replay cost above.
 Host B (the kernel on bare Workflow, without eve) also writes its numbers to
 `.spike-tmp/baseline/`, but it is not a comparison with eve.
 
+## fx and fx with the kernel linked in
+
+`fx/` compares fx (Zig) with fx that has the kernel linked in statically as
+its agent loop. `fx/fx-kernel.patch` is the fx change, written against fx
+`0b31a736`:
+
+- `build.zig` gets a `-Dkernel-lib=<libkernel_ffi.a>` option.
+- `src/core/cli/kernel_ask.zig` is the kernel path. `cli_ask.zig` uses it
+  when the kernel is linked in and `FX_KERNEL=1` is set.
+- The kernel path uses fx's own code for the work:
+  - model calls go through `gateway_step.streamModelCompletion`;
+  - `read_file` runs through `dispatchAuthorizedToolCall`;
+  - `write_file` runs through fx's file mutation pipeline;
+  - the result reaches `fx ask --json` through the same deps the orchestrator
+    uses.
+- The kernel itself is `crates/kernel-ffi`, a C ABI over the kernel crate.
+  The state stays in Rust.
+
+```sh
+fx/build.sh <clean fx checkout> <out dir>     # needs Zig 0.17.0
+node fx/run.mjs --bin <out>/fx-baseline --label fx
+FX_KERNEL=1 node fx/run.mjs --bin <out>/fx-kernel --label fx+kernel
+```
+
+`fx/run.mjs` runs `fx ask --json --no-save` in full access against a
+scripted gateway (`fx/fake-gateway.mjs`, the same wire format as fx's e2e
+fake gateway), and checks the files and the final reply. Both binaries are
+`ReleaseSafe`, which is how fx builds its releases. ReleaseSafe also strips
+the binary here.
+
+### Binary size and startup
+
+| Binary                    | Size                          | `fx help` | `fx --version` |
+| ------------------------- | ----------------------------- | --------- | -------------- |
+| fx                        | 11,951,632 B                  | 3.2 ms    | 2.7 ms         |
+| fx with the kernel linked | 12,488,992 B (+537 KB, +4.5%) | 2.8 ms    | 2.8 ms         |
+
+Starting a process with `/usr/bin/true` takes 1.9 ms on the same machine, so
+the startup difference is noise.
+
+The +537 KB is the kernel plus the Rust standard library and serde_json. fx's
+own agent loop is still in the binary. A real port would remove that loop,
+but I did not measure how much that would save.
+
+### Time (median of 10 runs, two rounds)
+
+| Scenario                 | fx     | fx with the kernel | Model calls |
+| ------------------------ | ------ | ------------------ | ----------- |
+| plain (2 reads, 1 write) | 54 ms  | 37 ms              | 2           |
+| steps-1                  | 53 ms  | 38 ms              | 2           |
+| steps-5                  | 109 ms | 90 ms              | 6           |
+| steps-10                 | 181 ms | 162 ms             | 11          |
+| steps-20                 | 315 ms | 295 ms             | 21          |
+
+- **Read this as a lower bound for a kernel path, not a speedup.** The
+  kernel path saves about 16 ms on each run. The cost of each additional
+  model step is the same on both, about 13 ms. The 16 ms is work that fx's
+  loop does and the toy kernel path skips:
+  - building the stable prompt prefix: the skill catalog, project context,
+    and the runtime overlay;
+  - observer hooks and admission;
+  - presentation and step bookkeeping.
+    The requests show this: they are 7–13% smaller on the kernel path.
+- **The kernel itself takes no measurable time.** Each step costs the same
+  on both. The time goes to the model round trip, the tools, and the process.
+- **With `FX_KERNEL` unset, the kernel binary is fx.** Its times match the
+  baseline.
+
 ## What this prototype does not test
 
 - **Crashes on Workflow are simulated.** Host B throws in-process instead of

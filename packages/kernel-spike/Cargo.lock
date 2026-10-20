@@ -142,6 +142,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-ffi"
+version = "0.0.0"
+dependencies = [
+ "kernel",
+ "serde_json",
+]
+
+[[package]]
 name = "kernel-napi"
 version = "0.0.0"
 dependencies = [

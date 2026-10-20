@@ -1,0 +1,12 @@
+[package]
+name = "kernel-ffi"
+version = "0.0.0"
+edition = "2021"
+description = "C ABI for the kernel, as a static library for the fx binary."
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+kernel = { path = "../kernel" }
+serde_json = { workspace = true }

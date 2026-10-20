@@ -881,3 +881,29 @@ These results change the proposal:
    eve's harness. But this difference is small compared to the step cost.
 5. **R9.** eve ran the write at the same time as the two reads. The kernel
    runs the write after the reads. eve has no write fence today.
+
+### 13.2 Comparison with fx
+
+The prototype also links the kernel into the fx binary (`packages/kernel-spike/fx`).
+The kernel replaces the agent loop of `fx ask`. fx's own code does the model
+calls and the tool calls. Both binaries are `ReleaseSafe` builds of fx
+`0b31a736`.
+
+| Item                                   | fx           | fx with the kernel            |
+| -------------------------------------- | ------------ | ----------------------------- |
+| Binary size                            | 11,951,632 B | 12,488,992 B (+537 KB, +4.5%) |
+| `fx --version`                         | 2.7 ms       | 2.8 ms                        |
+| One turn (2 model calls, 3 tool calls) | 54 ms        | 37 ms                         |
+| 20 model steps                         | 315 ms       | 295 ms                        |
+
+These results change the proposal:
+
+1. **Size.** The kernel, the Rust standard library, and serde_json add
+   537 KB. fx's own agent loop is still in the binary. The 7 MiB limit for fx
+   releases applies to a PGSO build, which this prototype did not make.
+2. **Startup.** Linking in the kernel does not change startup time. The
+   kernel loads only when a turn starts.
+3. **Time.** Each model step takes the same time on both. The kernel path is
+   16 ms faster on each run only because it does less work than fx's loop.
+   It does not build the full prompt prefix, and it does not run observer
+   hooks or admission. This is not a speedup that a full kernel would keep.

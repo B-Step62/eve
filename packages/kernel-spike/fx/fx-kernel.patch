@@ -1,0 +1,337 @@
+diff --git a/build.zig b/build.zig
+index 6070ed8e..a7bd4303 100644
+--- a/build.zig
++++ b/build.zig
+@@ -51,6 +51,9 @@ pub fn build(b: *std.Build) void {
+     // Whether this is a libfx artifact, which leaves out what only the fx
+     // binary uses, such as its E2E test controls.
+     build_options.addOption(bool, "libfx", false);
++    // EXPERIMENTAL (kernel-spike): link the Rust kernel staticlib for `FX_KERNEL=1 fx ask`.
++    const kernel_lib = b.option([]const u8, "kernel-lib", "Path to the Rust kernel static library (libkernel_ffi.a)");
++    build_options.addOption(bool, "rust_kernel", kernel_lib != null);
+ 
+     const exe = b.addExecutable(.{
+         .name = "fx",
+@@ -68,6 +71,7 @@ pub fn build(b: *std.Build) void {
+         }),
+     });
+     exe.root_module.addImport("build_options", build_options.createModule());
++    if (kernel_lib) |path| exe.root_module.addObjectFile(.{ .cwd_relative = path });
+     const session_manager = addSessionManager(b, exe.root_module, target, optimize, null);
+ 
+     b.installArtifact(exe);
+diff --git a/src/core/cli/cli_ask.zig b/src/core/cli/cli_ask.zig
+index 11e26248..6551d10c 100644
+--- a/src/core/cli/cli_ask.zig
++++ b/src/core/cli/cli_ask.zig
+@@ -3,6 +3,10 @@ const testing_allocator = @import("../shared/testing_allocator.zig");
+ const std_builtin = @import("builtin");
+ const command_admission = @import("../permissions/command_admission.zig");
+ const agent_runtime = @import("../agent/agent_runtime.zig");
++const build_options = @import("build_options");
++/// EXPERIMENTAL (kernel-spike): the Rust kernel as the agent loop, when linked.
++const kernel_linked = @hasDecl(build_options, "rust_kernel") and build_options.rust_kernel;
++const kernel_ask = if (kernel_linked) @import("kernel_ask.zig") else struct {};
+ const agent_stream_provider = @import("../agent/stream_provider.zig");
+ const app_lifecycle = @import("../app/app_lifecycle.zig");
+ const shared_theme = @import("../shared/theme.zig");
+@@ -4103,6 +4107,9 @@ fn testInitializeSessionStoresOneOffDenied(_: *AskContext) !void {
+ }
+ 
+ fn processQueuedPromptDefault(agent: *agent_runtime.Agent, deps: *const agent_runtime.AgentRuntimeDeps, semantic_presentation: ?agent_runtime.SemanticPresentationSink, lifecycle: agent_runtime.LifecycleContext, config: agent_runtime.Config, job: worker_runtime.QueuedPrompt) !void {
++    if (comptime kernel_linked) {
++        if (kernel_ask.enabled()) return kernel_ask.process(agent, deps, semantic_presentation, lifecycle, config, job);
++    }
+     return agent_runtime.processAgentPrompt(agent, deps, semantic_presentation, lifecycle, config, job);
+ }
+ 
+diff --git a/src/core/cli/kernel_ask.zig b/src/core/cli/kernel_ask.zig
+new file mode 100644
+index 00000000..efeafe8f
+--- /dev/null
++++ b/src/core/cli/kernel_ask.zig
+@@ -0,0 +1,284 @@
++//! EXPERIMENTAL (kernel-spike): `fx ask` with the Rust kernel as the agent loop.
++//!
++//! Built only with `-Dkernel-lib=<libkernel_ffi.a>`, and used only when
++//! `FX_KERNEL=1`. The kernel decides; fx does the work: model calls go
++//! through fx's gateway client, `read_file` through fx's tool dispatch, and
++//! `write_file` through fx's file mutation pipeline. Results reach `fx ask`
++//! through the same deps the orchestrator uses, so `--json` output is fx's.
++//!
++//! Tools run in the order the kernel lists them, which satisfies its order
++//! constraints; this prototype does not run read-only groups in parallel.
++
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++
++const agent_runtime = @import("../agent/agent_runtime.zig");
++const agent_stream_provider = @import("../agent/stream_provider.zig");
++const gateway_step = @import("../agent/runtime/gateway_step.zig");
++const worker_runtime = @import("../agent/worker_runtime.zig");
++const model_capabilities = @import("../config/model_capabilities.zig");
++const vercel_model_policy = @import("../../gateway/vercel_model_policy.zig");
++const builtin_tools = @import("../../builtins/tools.zig");
++const tool_dispatch = @import("../tooling/tool_dispatch.zig");
++const file_mutation_execution = @import("../tooling/file_mutation_execution.zig");
++const permissions = @import("../permissions/permissions.zig");
++const types = @import("../shared/types.zig");
++const io_mod = @import("../shared/io.zig");
++
++const Kernel = opaque {};
++extern "c" fn fxk_new(config: [*]const u8, len: usize) ?*Kernel;
++extern "c" fn fxk_advance(k: *Kernel, inputs: [*]const u8, len: usize, out_len: *usize) [*]u8;
++extern "c" fn fxk_free(buf: [*]u8, len: usize) void;
++extern "c" fn fxk_drop(k: *Kernel) void;
++
++pub fn enabled() bool {
++    const value = io_mod.getenv("FX_KERNEL") orelse return false;
++    return std.mem.eql(u8, value, "1");
++}
++
++const Value = std.json.Value;
++
++/// A tool effect result: `completed` with `output`, or `failed` with `error`.
++const ToolResultJson = struct { status: []const u8, output: []const u8, @"error": []const u8 };
++
++fn toolResult(arena: Allocator, ok: bool, text: []const u8) ![]const u8 {
++    return try std.json.Stringify.valueAlloc(arena, ToolResultJson{
++        .status = if (ok) "completed" else "failed",
++        .output = if (ok) text else "",
++        .@"error" = if (ok) "" else text,
++    }, .{});
++}
++
++fn advance(arena: Allocator, k: *Kernel, inputs_json: []const u8) !Value {
++    var n: usize = 0;
++    const p = fxk_advance(k, inputs_json.ptr, inputs_json.len, &n);
++    defer fxk_free(p, n);
++    const bytes = p[0..n];
++    if (n > 0 and bytes[0] == '!') return error.KernelInputRejected;
++    return try std.json.parseFromSliceLeaky(Value, arena, bytes, .{ .allocate = .alloc_always });
++}
++
++fn field(v: Value, name: []const u8) ?Value {
++    return switch (v) {
++        .object => |o| o.get(name),
++        else => null,
++    };
++}
++
++fn str(v: ?Value) []const u8 {
++    return switch (v orelse return "") {
++        .string => |s| s,
++        else => "",
++    };
++}
++
++fn items(v: ?Value) []const Value {
++    return switch (v orelse return &.{}) {
++        .array => |a| a.items,
++        else => &.{},
++    };
++}
++
++pub fn process(
++    agent: *agent_runtime.Agent,
++    deps: *const agent_runtime.AgentRuntimeDeps,
++    semantic_presentation: ?agent_runtime.SemanticPresentationSink,
++    lifecycle: agent_runtime.LifecycleContext,
++    config: agent_runtime.Config,
++    job: worker_runtime.QueuedPrompt,
++) !void {
++    _ = agent;
++    _ = semantic_presentation;
++    _ = lifecycle;
++    var arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
++    defer arena_state.deinit();
++    const arena = arena_state.allocator();
++
++    const kernel_config = try std.json.Stringify.valueAlloc(arena, .{
++        .system = config.system_prompt,
++        .step_limit = 0,
++        .tools = .{
++            .{ .name = "read_file", .description = builtin_tools.read_file.description, .read_only = true, .replay = "safe" },
++            .{ .name = "write_file", .description = builtin_tools.write_file.description, .read_only = false, .replay = "never" },
++        },
++    }, .{});
++    const k = fxk_new(kernel_config.ptr, kernel_config.len) orelse return error.KernelConfigRejected;
++    defer fxk_drop(k);
++
++    const prompt_input = try std.json.Stringify.valueAlloc(arena, .{.{ .type = "prompt", .id = "prompt", .text = job.prompt }}, .{});
++    var out = try advance(arena, k, prompt_input);
++    var final_text: []const u8 = "";
++    var outcome: types.TurnPresentationOutcome = .completed;
++
++    while (true) {
++        for (items(field(out, "events"))) |event| {
++            const kind = str(field(event, "type"));
++            if (std.mem.eql(u8, kind, "message_completed")) final_text = str(field(event, "text"));
++            if (std.mem.eql(u8, kind, "turn_ended") and !std.mem.eql(u8, str(field(event, "reason")), "completed")) outcome = .failed;
++        }
++        const effects = items(field(out, "effects"));
++        if (effects.len == 0) break;
++        var inputs: std.ArrayList(u8) = .empty;
++        try inputs.append(arena, '[');
++        for (effects, 0..) |effect_request, i| {
++            if (i > 0) try inputs.append(arena, ',');
++            const key = str(field(effect_request, "key"));
++            const effect = field(effect_request, "effect") orelse return error.KernelEffectMalformed;
++            const kind = str(field(effect, "kind"));
++            const result = if (std.mem.eql(u8, kind, "model_call"))
++                try modelCall(arena, deps, config, job, field(effect, "request") orelse return error.KernelEffectMalformed)
++            else if (std.mem.eql(u8, kind, "tool_call"))
++                try toolCall(arena, config, effect)
++            else
++                try std.json.Stringify.valueAlloc(arena, .{ .status = "completed", .output = null }, .{});
++            try inputs.print(arena, "{{\"type\":\"effect_result\",\"key\":{f},\"result\":{s}}}", .{ std.json.fmt(key, .{}), result });
++        }
++        try inputs.append(arena, ']');
++        out = try advance(arena, k, inputs.items);
++    }
++
++    try deps.push_text(deps.ctx, .{ .assistant_source = final_text });
++    try deps.finalize_turn(deps.ctx, job.turn_id, outcome, null);
++    const finished = try types.dupeFinishedPrompt(std.heap.c_allocator, .{
++        .turn = .{ .assistant = .{ .user = .{ .text = job.prompt }, .assistant = @constCast(final_text) } },
++        .terminal_outcome = outcome,
++    });
++    try deps.push_event(deps.ctx, .{ .finish_prompt = finished });
++}
++
++/// One model call through fx's own gateway client. Returns the kernel effect result as JSON.
++fn modelCall(
++    arena: Allocator,
++    deps: *const agent_runtime.AgentRuntimeDeps,
++    config: agent_runtime.Config,
++    job: worker_runtime.QueuedPrompt,
++    request: Value,
++) ![]const u8 {
++    var messages: std.ArrayList(types.ChatMessage) = .empty;
++    for (items(field(request, "messages"))) |m| {
++        const role = str(field(m, "role"));
++        if (std.mem.eql(u8, role, "user") or std.mem.eql(u8, role, "steering")) {
++            try messages.append(arena, .{ .role = .user, .content = str(field(m, "text")) });
++        } else if (std.mem.eql(u8, role, "assistant")) {
++            var calls: std.ArrayList(types.ToolCall) = .empty;
++            for (items(field(m, "tool_calls"))) |c| {
++                try calls.append(arena, .{
++                    .id = str(field(c, "id")),
++                    .name = str(field(c, "name")),
++                    .arguments_json = try std.json.Stringify.valueAlloc(arena, field(c, "input") orelse Value{ .null = {} }, .{}),
++                });
++            }
++            const text = str(field(m, "text"));
++            try messages.append(arena, .{ .role = .assistant, .content = if (text.len == 0) null else text, .tool_calls = calls.items });
++        } else if (std.mem.eql(u8, role, "tool")) {
++            try messages.append(arena, .{
++                .role = .tool,
++                .content = str(field(m, "content")),
++                .tool_call_id = str(field(m, "call_id")),
++                .tool_name = str(field(m, "name")),
++            });
++        }
++    }
++    const instructions = [_]types.ChatMessage{.{ .role = .system, .content = str(field(request, "system")) }};
++    var delivery = agent_stream_provider.DeliveryCertainty.init();
++    var evidence: agent_stream_provider.AttemptEvidence = .{};
++    const Sink = struct {
++        fn emit(_: *anyopaque, _: agent_stream_provider.Event) void {}
++    };
++    var sink_context: u8 = 0;
++    const result = try gateway_step.streamModelCompletion(deps.agent_stream_provider, arena, .{
++        .credential = .{ .direct = .{
++            .secret_bytes = job.api_key,
++            .source = job.credential_source orelse .ai_gateway_api_key,
++            .account_id = job.account_id,
++            .tenant_context = job.gateway_team,
++        } },
++        .model = job.model,
++        .retry_count = config.gateway_retry_count,
++        .instructions = &instructions,
++        .messages = messages.items,
++        .tools = .{
++            .registry = deps.tool_registry,
++            .advertised_names = config.advertised_tool_names,
++            .advertised_functions = config.advertised_functions,
++        },
++        .tool_choice = .auto,
++        .provider_options = model_capabilities.resolveProviderOptionsForCapabilities(
++            vercel_model_policy.capabilitiesForModel(job.model),
++            config.effort,
++            config.fast_mode,
++        ),
++        .trace_ctx = .{},
++        .content_capture_limit = null,
++        .delivery = &delivery,
++        .attempt_evidence = &evidence,
++        .events = .{ .context = &sink_context, .emit_fn = Sink.emit },
++        .cancel_flag = config.cancel_flag,
++        .provider_attempt_owner = .agent,
++    });
++    switch (result) {
++        .completed => |completed| {
++            const completion = completed.completion;
++            var calls: std.ArrayList(struct { id: []const u8, name: []const u8, input: Value }) = .empty;
++            for (completion.tool_calls) |call| {
++                const input = std.json.parseFromSliceLeaky(Value, arena, call.arguments_json, .{ .allocate = .alloc_always }) catch Value{ .null = {} };
++                try calls.append(arena, .{ .id = call.id, .name = call.name, .input = input });
++            }
++            return try std.json.Stringify.valueAlloc(arena, .{
++                .status = "completed",
++                .output = .{ .text = completion.content orelse "", .tool_calls = calls.items },
++            }, .{});
++        },
++        .failed => |failure| return try std.json.Stringify.valueAlloc(arena, .{
++            .status = "failed",
++            .@"error" = failure.detail orelse @tagName(failure.kind),
++        }, .{}),
++    }
++}
++
++/// One built-in tool call through fx's own tool code. Returns the kernel effect result as JSON.
++fn toolCall(arena: Allocator, config: agent_runtime.Config, effect: Value) ![]const u8 {
++    const call: types.ToolCall = .{
++        .id = str(field(effect, "call_id")),
++        .name = str(field(effect, "name")),
++        .arguments_json = try std.json.Stringify.valueAlloc(arena, field(effect, "input") orelse Value{ .null = {} }, .{}),
++    };
++    if (std.mem.eql(u8, call.name, "write_file")) return try writeFile(arena, config, call);
++    const dispatched = try tool_dispatch.dispatchAuthorizedToolCall(.{
++        .allocator = arena,
++        .workspace_root = config.workspace_root,
++    }, builtin_tools.registry, call);
++    return try toolResult(arena, dispatched.status == .success, dispatched.body);
++}
++
++/// `write_file` must go through fx's file mutation pipeline, which binds the
++/// write to the file it checked. This prototype authorizes it as full access.
++fn writeFile(arena: Allocator, config: agent_runtime.Config, call: types.ToolCall) ![]const u8 {
++    var call_arena_state = std.heap.ArenaAllocator.init(std.heap.c_allocator);
++    defer call_arena_state.deinit();
++    const call_arena = call_arena_state.allocator();
++    const tool = &builtin_tools.write_file;
++    const tool_input = switch (try tool.decode(.{ .allocator = call_arena }, call.arguments_json)) {
++        .failure => return try toolResult(arena, false, "invalid write_file arguments"),
++        .input => |input| input,
++    };
++    const input = tool.take_file_mutation_input_fn.?(tool_input, call_arena);
++    // Full access, as fx's own preflight does it: prepare the targets, then authorize them.
++    var prepared = switch (try permissions.prepareFileMutationTargets(call_arena, config.workspace_root, input)) {
++        .target_resolution_failure => return try toolResult(arena, false, "write_file target could not be resolved"),
++        .prepared => |value| value,
++    };
++    const evaluated = try permissions.authorizePreparedFileMutationTargets(call_arena, &prepared);
++    const targets = switch (evaluated) {
++        .evaluated => |t| t,
++        else => return try toolResult(arena, false, "write_file target was refused"),
++    };
++    const executed = try file_mutation_execution.execute(.{
++        .call_allocator = call_arena,
++        .result_allocator = arena,
++        .call = call,
++        .authorization = .{ .input = input, .policy_targets = targets, .approval_intent = .mutation },
++        .maybe_cancel_flag = config.cancel_flag,
++    });
++    return try toolResult(arena, executed.status == .success, executed.model_output);
++}

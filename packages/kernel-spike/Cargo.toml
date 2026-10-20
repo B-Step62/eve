@@ -6,6 +6,7 @@ members = [
   "crates/fx-mini",
   "crates/kernel-napi",
   "crates/kernel-wasm",
+  "crates/kernel-ffi",
 ]
 
 [workspace.dependencies]
