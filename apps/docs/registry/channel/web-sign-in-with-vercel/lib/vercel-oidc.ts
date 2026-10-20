@@ -2,7 +2,7 @@ import { getVercelOidcToken } from "@vercel/oidc";
 import type { BetterAuthPlugin } from "better-auth";
 import { validateAuthorizationCode } from "better-auth/oauth2";
 
-// Bridge for Better Auth 1.6.x. Replace with the built-in Vercel tokenEndpointAuth
+// Bridge until Better Auth exposes Vercel client assertions. Replace with the built-in Vercel tokenEndpointAuth
 // option after https://github.com/better-auth/better-auth/pull/11948 is released.
 export function vercelOidcClientAuthentication(clientId: string): BetterAuthPlugin {
   return {
