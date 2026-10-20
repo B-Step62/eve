@@ -3,6 +3,8 @@
   "AgentResponse",
   "AgentSendOptions",
   "AgentSession",
+  "AgentSessionModelSelection",
+  "AgentSessionOptions",
   "ApprovalResponder",
   "ApprovedCall",
   "DisabledToolSentinel",

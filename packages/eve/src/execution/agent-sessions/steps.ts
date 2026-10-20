@@ -1,9 +1,14 @@
 import type { MessageContent } from "#shared/message-content.js";
-import { getStepMetadata, getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
+import {
+  FatalError,
+  getStepMetadata,
+  getWorkflowMetadata,
+} from "#compiled/@workflow/core/index.js";
 import { SessionStrandedError } from "#channel/session-stranded-error.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import type { SessionAuth } from "#context/session-context.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
+import type { AgentSessionRuntimeOverrides } from "#execution/agent-sessions/runtime-overrides.js";
 import {
   resolveAgentAction,
   resolveAgentStartTarget,
@@ -27,7 +32,12 @@ import { createEveCallbackRoutePath } from "#protocol/routes.js";
 import { resolveDurableCompiledArtifactsSource } from "#runtime/durable-compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 import type { CompiledBundle } from "#runtime/sessions/runtime-context-keys.js";
+import {
+  InvalidRuntimeModelSelectionError,
+  resolveRuntimeModelSelection,
+} from "#runtime/agent/resolve-model.js";
 import type { ResolvedRuntimeRemoteAgentNode } from "#runtime/types.js";
+import { toErrorMessage } from "#shared/errors.js";
 import type { JsonObject } from "#shared/json.js";
 import type { SubagentParentContext } from "#subagents/invocation.js";
 import {
@@ -41,6 +51,7 @@ import { buildSubagentRunInput } from "#subagents/tool.js";
 import { resolveConversationId } from "#shared/conversation-identity.js";
 import { stubToolPath } from "#tool-stubs/target.js";
 import { agentDelegation } from "#tracing/eve/delegation.js";
+import type { AgentSessionModelSelection } from "#tools/workflow-definition.js";
 
 const log = createLogger("execution.agent-sessions");
 
@@ -103,6 +114,7 @@ export async function openAgentSessionStep(
   input: AgentSessionMessage & {
     readonly context: AgentSessionContext;
     readonly key: string;
+    readonly model?: AgentSessionModelSelection;
     readonly name: string;
   },
 ): Promise<AgentSessionAddress> {
@@ -122,12 +134,49 @@ export async function openAgentSessionStep(
     dynamicSelections: context.dynamicSelections,
     isRootSession: context.parent.rootSessionId === context.parent.sessionId,
   });
-  const start = { auth: input.auth, bundle, context, key: input.key, replyTo: input.replyTo };
+  if (input.model !== undefined && target.kind === "remote") {
+    throw new FatalError(
+      `ctx.agent("${input.name}", { model }) cannot override a remote agent's model. Configure the model on the receiving agent.`,
+    );
+  }
+  const runtimeOverrides =
+    input.model === undefined
+      ? undefined
+      : await normalizeRuntimeOverrides(input.name, input.model);
+  const start = {
+    auth: input.auth,
+    bundle,
+    context,
+    key: input.key,
+    replyTo: input.replyTo,
+    runtimeOverrides,
+  };
   const execute = () =>
     target.kind === "remote"
       ? startRemoteSession({ ...start, target })
       : startLocalSession({ ...start, target });
   return await agentDelegation.resume({ context, agentName: action.name }, execute);
+}
+
+async function normalizeRuntimeOverrides(
+  name: string,
+  model: AgentSessionModelSelection,
+): Promise<AgentSessionRuntimeOverrides> {
+  try {
+    const selection = await resolveRuntimeModelSelection({
+      durability: "durable",
+      selection: model,
+      state: new ContextContainer(),
+    });
+    return { model: selection.reference };
+  } catch (error) {
+    if (error instanceof InvalidRuntimeModelSelectionError) {
+      throw new FatalError(
+        `ctx.agent("${name}", { model }) could not resolve the model selection: ${toErrorMessage(error)}`,
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -281,6 +330,7 @@ interface SessionStart<Target extends SubagentStartTarget> {
   readonly context: AgentSessionContext;
   readonly key: string;
   readonly replyTo: string;
+  readonly runtimeOverrides?: AgentSessionRuntimeOverrides;
   readonly target: Target;
 }
 
@@ -311,6 +361,7 @@ async function startLocalSession(
     source: target.source,
   });
   const childRuntime = createWorkflowRuntime({
+    agentSessionRuntimeOverrides: input.runtimeOverrides,
     compiledArtifactsSource: bundle.compiledArtifactsSource,
     dynamicSubagentAgentConfig: target.dynamicSubagentAgentConfig,
     nodeId: action.nodeId,

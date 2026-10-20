@@ -82,6 +82,7 @@ import {
   StrandedSessionOwnerError,
 } from "#execution/session-inbox/owner.js";
 import { describeStrandedSession, SessionStrandedError } from "#channel/session-stranded-error.js";
+import type { AgentSessionRuntimeOverrides } from "#execution/agent-sessions/runtime-overrides.js";
 import type { DynamicSubagentAgentConfig } from "#runtime/subagents/dynamic-agent-config.js";
 import { initializeSessionInstrumentation } from "#instrumentation/runtime.js";
 import {
@@ -138,6 +139,7 @@ export const connectionEventDeliveryWorkflowReference = {
  * whose original run retains the public event stream across owner handoffs.
  */
 export function createWorkflowRuntime(config: {
+  readonly agentSessionRuntimeOverrides?: AgentSessionRuntimeOverrides;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly dynamicSubagentAgentConfig?: DynamicSubagentAgentConfig;
   readonly nodeId?: string;
@@ -175,6 +177,7 @@ export function createWorkflowRuntime(config: {
       validateToolStubTargets(input.toolStubs.rules, bundle.graph);
     }
     const ctx = buildRunContext({
+      agentSessionRuntimeOverrides: config.agentSessionRuntimeOverrides,
       bundle,
       dynamicSubagentAgentConfig: config.dynamicSubagentAgentConfig,
       run: input,

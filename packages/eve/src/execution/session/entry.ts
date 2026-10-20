@@ -27,6 +27,7 @@ import {
 } from "#execution/session/timeout-control.js";
 import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
 import { hasDelegatedSessionContext } from "#execution/delegated-session-context.js";
+import type { AgentSessionRuntimeOverrides } from "#execution/agent-sessions/runtime-overrides.js";
 import type { DynamicSubagentAgentConfig } from "#runtime/subagents/dynamic-agent-config.js";
 import { attachClientContext, readClientContext } from "#internal/client-context.js";
 import { closeSessionStreamStep } from "#execution/close-session-stream-step.js";
@@ -182,6 +183,9 @@ export async function bootInitialOwner(
   let owner: OwnedInitialSession | undefined;
   try {
     const sessionCreationPromise = createSessionStep({
+      agentSessionRuntimeOverrides: serializedContext["eve.agentSessionRuntimeOverrides"] as
+        | AgentSessionRuntimeOverrides
+        | undefined,
       compiledArtifactsSource: serializedBundle.source,
       continuationToken,
       dynamicSubagentAgentConfig: serializedContext["eve.dynamicSubagentAgentConfig"] as

@@ -436,6 +436,24 @@ export interface ConnectionEvent {
 }
 ```
 
+### src/shared/agent-definition.d.ts
+
+```ts
+export interface AgentAnthropicPromptCacheDefinition {
+  readonly ttl?: AnthropicPromptCacheTtl;
+}
+export interface AgentModelOptionsDefinition {
+  readonly providerOptions?: Record<string, JsonObject>;
+  readonly promptCache?: AgentPromptCacheDefinition;
+}
+export interface AgentPromptCacheDefinition {
+  readonly anthropic?: AgentAnthropicPromptCacheDefinition;
+}
+export type AgentReasoningDefinition =
+  "provider-default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type AnthropicPromptCacheTtl = "5m" | "1h";
+```
+
 ### src/shared/connection-events.d.ts
 
 ```ts
@@ -1263,6 +1281,9 @@ export interface AgentSession {
     options?: AgentSendOptions<TOutput>,
   ): Promise<AgentResponse<TOutput>>;
 }
+export interface AgentSessionOptions {
+  readonly model?: AgentSessionModelSelection;
+}
 export interface WorkflowAgentMetadata {
   readonly description: string;
 }
@@ -1282,11 +1303,19 @@ export type AgentMessageResult<TOutput = unknown> = Pick<
     readonly message: string;
   };
 };
+export type AgentSessionModelSelection =
+  | string
+  | {
+      readonly model: string;
+      readonly modelContextWindowTokens?: number;
+      readonly modelOptions?: AgentModelOptionsDefinition;
+      readonly reasoning?: AgentReasoningDefinition;
+    };
 export type WorkflowSharedContext = Pick<
   ToolContext,
   "session" | "toolName" | "getToken" | "requireAuth"
 > & {
-  agent(name: string): AgentSession;
+  agent(name: string, options?: AgentSessionOptions): AgentSession;
   agents: Readonly<Record<string, WorkflowAgentMetadata>>;
   ask(request: ToolQuestion, options?: ToolAskOptions): PromiseLike<ToolAnswer>;
 };

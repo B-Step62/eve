@@ -28,8 +28,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   tool: {
-    current: 96,
-    supported: [96],
+    current: 97,
+    supported: [97],
     dropped: {
       1: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
       2: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
@@ -126,6 +126,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       93: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       94: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       95: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      96: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   dynamicTool: {
