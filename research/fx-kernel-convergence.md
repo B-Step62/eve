@@ -903,10 +903,11 @@ These results change the proposal:
    releases applies to a PGSO build, which this prototype did not make.
 2. **Startup.** Linking in the kernel does not change startup time. The
    kernel loads only when a turn starts.
-3. **Time.** Each model step takes the same time on both. The kernel path is
-   16 ms faster on each run only because it does less work than fx's loop.
-   It does not build the full prompt prefix, and it does not run observer
-   hooks or admission. This is not a speedup that a full kernel would keep.
+3. **Time.** Each model step takes the same time on both. The kernel path
+   was 16 ms faster on each run only because it did less work than fx's
+   loop. It did not build the full prompt prefix, and it did not run observer
+   hooks or admission. Most of the time on both is a wait in fx's gateway
+   client, not work (see 13.3, item 7).
 
 ### 13.3 Kernel version 2: approval and compaction
 
@@ -925,13 +926,16 @@ eve, and eve with the native kernel (`baseline/test/hitl.integration.test.ts`):
 
 fx, and fx with the kernel (`ReleaseSafe`, fx `0b31a736`, median of 5 runs):
 
-| Session                        | fx: time, model calls | fx with the kernel: time, model calls |
-| ------------------------------ | --------------------- | ------------------------------------- |
-| `plain`                        | 49 ms, 2              | 47 ms, 2                              |
-| Review returns `clear`         | 48 ms, 3              | 65 ms, 3                              |
-| Review returns `caution`       | 48 ms, 3              | 66 ms, 3                              |
-| `ask` mode, no person          | 37 ms, 1              | 36 ms, 1                              |
-| 20 reads in a 16k-token window | 340 ms, 23            | 321 ms, 22                            |
+| Session                        | fx: time, model calls | fx with the kernel: time, model calls | fx, 1 ms poll | fx with the kernel, 1 ms poll |
+| ------------------------------ | --------------------- | ------------------------------------- | ------------- | ----------------------------- |
+| `plain`                        | 49 ms, 2              | 47 ms, 2                              | 16 ms         | 17 ms                         |
+| Review returns `clear`         | 48 ms, 3              | 65 ms, 3                              | 15 ms         | 15 ms                         |
+| Review returns `caution`       | 48 ms, 3              | 66 ms, 3                              | 14 ms         | 15 ms                         |
+| `ask` mode, no person          | 37 ms, 1              | 36 ms, 1                              | 12 ms         | 11 ms                         |
+| 20 reads in a 16k-token window | 340 ms, 23            | 321 ms, 22                            | 51 ms         | 49 ms                         |
+
+The "1 ms poll" columns use the same binaries with one change in fx: its
+gateway cancel watcher sleeps 1 ms, not 10 ms (`fx/gateway-poll-1ms.patch`).
 
 Binary size with kernel version 2: 12,524,592 B (+573 KB, +4.8%). Version 2
 adds 36 KB to the version 1 kernel.
@@ -961,11 +965,15 @@ These results change the proposal:
 6. **fx compacts earlier.** fx compacts at 80% with its own notes, two times
    in the 20-read session. The kernel compacts at 90%, one time. This is the
    decided change for fx.
-7. **The review sessions are 17 ms slower on the kernel path.** The time is
-   in the review call. fx sends its review through its own reviewer
-   transport. The fx host sends the kernel's review through fx's agent
-   stream client, which takes about 13 ms more for each call here. The fix
-   is to send `permission_review` calls through fx's reviewer transport.
+7. **The kernel adds no measurable time. The slow part is a wait in fx.**
+   Each streamed gateway request in fx starts a watcher thread that sleeps
+   10 ms between checks. At the end of the request, fx waits for that thread
+   to stop. This costs up to 10 ms on each model call. With a 1 ms sleep,
+   20 model steps take 48 ms, not 318 ms, and fx with the kernel takes the
+   same time as fx in each session. The review sessions were 17 ms slower on
+   the kernel path for this reason only: fx's own reviewer uses a transport
+   with no watcher, and the kernel's review used fx's agent stream client.
+   The fix in fx is to wake the watcher when the request ends.
 8. **One difference stays in the prompt.** After an approval, eve keeps a
    `[Pending approvals]` message in the model history. The kernel does not
    add it. The protocol events are the same, but the prompts are not.
