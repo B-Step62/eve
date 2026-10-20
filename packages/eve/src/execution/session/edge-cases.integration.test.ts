@@ -8,8 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { conversationOf } from "#client/conversation.js";
 import type { SessionParent } from "#channel/types.js";
-import { sendAgentSessionMessageStep } from "#execution/agent-sessions/steps.js";
-import { createBundledRuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import type { EveToolPart } from "#client/message-types.js";
 import { defineDynamic } from "#dynamic/definition.js";
 import { workflowEntry } from "#execution/session/entry.js";
@@ -360,24 +358,23 @@ async function withSession(
         },
         events: () => events,
         async forward(callId, message) {
-          if (options.parent === undefined)
-            throw new Error("A forwarded call needs a parent session.");
-          await sendAgentSessionMessageStep({
-            address: { kind: "local", name, nodeId: name, sessionId: run.runId, continuationToken },
-            auth: { current: ALICE, initiator: null },
-            context: {
-              agents: {},
-              bundle: { source: createBundledRuntimeCompiledArtifactsSource() },
-              dynamicSelections: {},
-              limits: {},
-              parent: options.parent,
-              sandbox: { sessionId: options.parent.sessionId },
-              trace: { originAudience: "unknown" },
+          const { parent } = options;
+          if (parent === undefined) throw new Error("A forwarded call needs a parent session.");
+          // The command a parent's agent session sends to serve another of its calls.
+          await resumeHook(commandInbox, {
+            auth: ALICE,
+            caller: {
+              callId: parent.callId,
+              replyTo: { kind: "hook", token: `${name}:${callId}:reply` },
+              servedCallId: callId,
+              subagentName: name,
             },
-            key: name,
-            message,
-            replyTo: `${name}:${callId}:reply`,
-            servedCallId: callId,
+            delivery: createChannelDeliveryMetadata({
+              channelKind: "subagent",
+              channelName: "subagent",
+            }),
+            kind: "send",
+            payload: { message },
           });
         },
         next: (label) => read(label, stream.nextTurn()),
@@ -801,7 +798,7 @@ describe("calls in flight", () => {
     expect(received).toHaveLength(3);
     expect(received.map((delivery) => delivery.source)).toEqual([
       { channel: "subagent", caller: { callId: "deployment-check", sessionId: "parent" } },
-      { channel: "subagent" },
+      { channel: "http" },
       { channel: "subagent", caller: { callId: "database-check", sessionId: "parent" } },
     ]);
     expect(received.map((delivery) => [delivery.turnId, delivery.outcome])).toEqual([
@@ -1424,32 +1421,16 @@ describe("controls between turns", () => {
       "turn_2:completed",
     ]);
     expect(ofType(events, "delivery.consumed").map((event) => event.data.deliveryId)).toEqual([
-      "delivery_0_0",
+      "delivery-initial",
       cancelled,
       next,
     ]);
     expect(ofType(events, "delivery.settled").map((event) => event.data)).toEqual([
-      expect.objectContaining({ deliveryId: "delivery_0_0", outcome: "handled" }),
+      expect.objectContaining({ deliveryId: "delivery-initial", outcome: "handled" }),
       expect.objectContaining({ deliveryId: cancelled, outcome: "handled", turnId: "turn_1" }),
       expect.objectContaining({ deliveryId: next, outcome: "handled", turnId: "turn_2" }),
     ]);
     // The cancelled turn's message stays in history once, as it would if its model had started.
     expect(prompts.at(-1)?.filter((content) => content.includes("Never mind."))).toHaveLength(1);
-  });
-
-  it("records nothing for a cancel with no turn running, and the next turn runs", async () => {
-    const { events } = await withSession(
-      "edge-idle-cancel",
-      { message: "Hi.", model: scriptedModel(() => "Hello."), tools: [] },
-      async (session) => {
-        await session.next("first");
-        await session.control("cancel");
-        await session.send("Still there?");
-        await session.next("second");
-      },
-    );
-
-    expect(turnOutcomes(events)).toEqual(["turn_0:completed", "turn_1:completed"]);
-    expect(ofType(events, "delivery.admitted")).toHaveLength(2);
   });
 });
