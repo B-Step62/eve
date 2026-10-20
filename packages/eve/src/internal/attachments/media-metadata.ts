@@ -1,3 +1,5 @@
+import { constants as zlibConstants, inflateSync } from "node:zlib";
+
 /**
  * Byte-level media facts read once when a file enters the session, so token
  * estimates never need the payload again.
@@ -22,6 +24,10 @@ const MAX_IMAGE_TOKENS = 4_784;
 // Providers render each PDF page as text plus a page image; ~3,000 tokens per
 // page is the upper end of that range.
 const PDF_PAGE_TOKENS = 3_000;
+
+// Page dictionaries take about 200 bytes each, so this covers tens of
+// thousands of pages while capping what a crafted object stream can inflate.
+const MAX_OBJECT_STREAM_BYTES = 16 * 1024 * 1024;
 
 /** Reads the dimensions or page count of a payload, as far as its header allows. */
 export function readMediaMetadata(bytes: Uint8Array, mediaType: string): MediaMetadata {
@@ -174,11 +180,41 @@ function readJpegDimensions(
 }
 
 function countPdfPages(bytes: Uint8Array): number | undefined {
-  const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("latin1");
-  // Page objects in compressed object streams are invisible here; the
-  // estimate then falls back to the payload size.
-  const pages = text.match(/\/Type\s*\/Page(?![A-Za-z])/g)?.length ?? 0;
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const text = buffer.toString("latin1");
+  const pages = countPageObjects(text) || countObjectStreamPages(buffer, text);
   return pages > 0 ? pages : undefined;
+}
+
+function countPageObjects(text: string): number {
+  return text.match(/\/Type\s*\/Page(?![A-Za-z])/g)?.length ?? 0;
+}
+
+/**
+ * Counts the page objects PDF 1.5+ writers pack into FlateDecode object
+ * streams. One stream that fails to inflate within the shared budget makes
+ * the whole count unknown, so no file can force more inflation than the budget.
+ */
+function countObjectStreamPages(buffer: Buffer, text: string): number {
+  let pages = 0;
+  let budget = MAX_OBJECT_STREAM_BYTES;
+  for (const { index } of text.matchAll(/\/Type\s*\/ObjStm(?![A-Za-z])/g)) {
+    const keyword = text.indexOf("stream", index);
+    const end = text.indexOf("endstream", keyword);
+    if (keyword < 0 || end < 0) return 0;
+    const start = keyword + (text.startsWith("stream\r\n", keyword) ? 8 : 7);
+    try {
+      const objects = inflateSync(buffer.subarray(start, end), {
+        finishFlush: zlibConstants.Z_SYNC_FLUSH,
+        maxOutputLength: budget,
+      });
+      budget -= objects.byteLength;
+      pages += countPageObjects(objects.toString("latin1"));
+    } catch {
+      return 0;
+    }
+  }
+  return pages;
 }
 
 function readAscii(bytes: Uint8Array, start: number, end: number): string {

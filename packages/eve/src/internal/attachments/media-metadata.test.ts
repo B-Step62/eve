@@ -44,6 +44,19 @@ function webpBytes(chunk: "VP8 " | "VP8L" | "VP8X", width: number, height: numbe
   return bytes;
 }
 
+// PDF 1.5+ writers such as pdf-lib and most scanners store page objects in
+// FlateDecode object streams, so `/Type /Page` never appears in the raw bytes.
+function objectStreamPdf(objects: Buffer): Buffer {
+  return Buffer.concat([
+    Buffer.from(
+      `%PDF-1.5\n1 0 obj\n<< /Type /ObjStm /Filter /FlateDecode /Length ${objects.byteLength} >>\nstream\n`,
+      "latin1",
+    ),
+    objects,
+    Buffer.from("\nendstream\nendobj\n", "latin1"),
+  ]);
+}
+
 describe("readMediaMetadata", () => {
   it.each([
     ["PNG", pngBytes(640, 480), "image/png"],
@@ -65,22 +78,18 @@ describe("readMediaMetadata", () => {
     expect(readMediaMetadata(pdf, "application/pdf")).toMatchObject({ pages: 2 });
   });
 
-  it.fails("counts PDF page objects packed in a compressed object stream", () => {
-    // PDF 1.5+ writers such as pdf-lib and most scanners store page objects in
-    // FlateDecode object streams, so `/Type /Page` never appears in the raw bytes.
-    const objects = deflateSync(
-      "2 0 3 48 4 80\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\n<< /Type /Page /Parent 2 0 R >>\n<< /Type /Page /Parent 2 0 R >>",
+  it("counts PDF page objects packed in a compressed object stream", () => {
+    const pdf = objectStreamPdf(
+      deflateSync("<< /Type /Pages /Count 2 >> << /Type /Page >> << /Type/Page >>"),
     );
-    const pdf = Buffer.concat([
-      Buffer.from(
-        `%PDF-1.5\n1 0 obj\n<< /Type /ObjStm /N 3 /First 14 /Filter /FlateDecode /Length ${objects.byteLength} >>\nstream\n`,
-        "latin1",
-      ),
-      objects,
-      Buffer.from("\nendstream\nendobj\n", "latin1"),
-    ]);
 
     expect(readMediaMetadata(pdf, "application/pdf")).toMatchObject({ pages: 2 });
+  });
+
+  it("leaves the PDF page count out when an object stream inflates past the budget", () => {
+    const pdf = objectStreamPdf(deflateSync(`<< /Type /Page >>${" ".repeat(17 * 1024 * 1024)}`));
+
+    expect(readMediaMetadata(pdf, "application/pdf").pages).toBeUndefined();
   });
 
   it("leaves dimensions out when the header is not a known image format", () => {
