@@ -1,5 +1,5 @@
 import { LogoEveSvg } from "@vercel/geistdocs/assets/logos/logo-eve-svg";
-import { ChevronRightIcon, TerminalIcon, WrenchIcon } from "lucide-react";
+import { ChevronRightIcon, MicIcon, PhoneOffIcon, TerminalIcon, WrenchIcon } from "lucide-react";
 import { Lato } from "next/font/google";
 import type { ReactNode } from "react";
 import type {
@@ -52,17 +52,57 @@ const Conversation = ({ agent, preview }: { agent: string; preview: TemplatePrev
       />
     );
   }
+  if (preview.surface === "voice") {
+    return <VoiceCall address={preview.context} messages={preview.messages} />;
+  }
   return <WebChat address={preview.context} messages={preview.messages} />;
 };
 
-const Window = ({ children, header }: { children: ReactNode; header: ReactNode }) => (
+const Window = ({
+  children,
+  footer,
+  header,
+}: {
+  children: ReactNode;
+  footer?: ReactNode;
+  header: ReactNode;
+}) => (
   <div className="absolute top-5 -right-3 -bottom-5 left-6 overflow-hidden rounded-lg border border-gray-alpha-400 bg-background-100 text-[11.5px] leading-[1.35] text-gray-1000 shadow-sm">
     <div className="flex h-7 items-center gap-1.5 border-b border-gray-alpha-400 px-3 text-gray-800">
       {header}
     </div>
     <div className="flex flex-col gap-2 px-3 py-2.5">{children}</div>
+    {footer}
   </div>
 );
+
+const BrowserBar = ({ address }: { address?: string }) => (
+  <>
+    <span className="size-1.5 rounded-full bg-gray-alpha-400" />
+    <span className="size-1.5 rounded-full bg-gray-alpha-400" />
+    <span className="size-1.5 rounded-full bg-gray-alpha-400" />
+    {address ? <span className="ml-2 text-[10.5px]">{address}</span> : null}
+  </>
+);
+
+const ChatMessages = ({ messages }: { messages: TemplatePreviewMessage[] }) =>
+  messages.map((message) =>
+    message.from === "user" ? (
+      <p
+        className="ml-auto w-fit max-w-[85%] rounded-xl bg-gray-1000 px-2.5 py-1.5 text-background-100"
+        key={message.text}
+      >
+        {message.text}
+      </p>
+    ) : (
+      <div className="flex flex-col gap-1" key={message.text}>
+        {message.tools?.map((tool) => (
+          <WebToolCall key={tool} name={tool} />
+        ))}
+        <p>{message.text}</p>
+      </div>
+    ),
+  );
 
 const WebChat = ({
   address,
@@ -71,33 +111,38 @@ const WebChat = ({
   address?: string;
   messages: TemplatePreviewMessage[];
 }) => (
+  <Window header={<BrowserBar address={address} />}>
+    <ChatMessages messages={messages} />
+  </Window>
+);
+
+/**
+ * The eve Voice template's web app: a live transcript with tool calls in
+ * place and its in-call controls (mute and a destructive "End call" button)
+ * pinned to the visible bottom of the card.
+ */
+const VoiceCall = ({
+  address,
+  messages,
+}: {
+  address?: string;
+  messages: TemplatePreviewMessage[];
+}) => (
   <Window
-    header={
-      <>
-        <span className="size-1.5 rounded-full bg-gray-alpha-400" />
-        <span className="size-1.5 rounded-full bg-gray-alpha-400" />
-        <span className="size-1.5 rounded-full bg-gray-alpha-400" />
-        {address ? <span className="ml-2 text-[10.5px]">{address}</span> : null}
-      </>
+    footer={
+      <div className="absolute inset-x-0 bottom-5 flex items-center justify-center gap-1.5 bg-linear-to-t from-background-100 from-60% to-transparent pt-4 pb-2">
+        <span className="flex size-6 items-center justify-center rounded-md border border-gray-alpha-400 bg-background-100">
+          <MicIcon className="size-3" />
+        </span>
+        <span className="flex h-6 items-center gap-1 rounded-md bg-red-800 px-2 font-medium text-[10.5px] text-white">
+          <PhoneOffIcon className="size-3" />
+          End call
+        </span>
+      </div>
     }
+    header={<BrowserBar address={address} />}
   >
-    {messages.map((message) =>
-      message.from === "user" ? (
-        <p
-          className="ml-auto w-fit max-w-[85%] rounded-xl bg-gray-1000 px-2.5 py-1.5 text-background-100"
-          key={message.text}
-        >
-          {message.text}
-        </p>
-      ) : (
-        <div className="flex flex-col gap-1" key={message.text}>
-          {message.tools?.map((tool) => (
-            <WebToolCall key={tool} name={tool} />
-          ))}
-          <p>{message.text}</p>
-        </div>
-      ),
-    )}
+    <ChatMessages messages={messages} />
   </Window>
 );
 
@@ -193,8 +238,16 @@ const Slack = ({
         {channel ?? "general"}
       </div>
       <div className="flex flex-col pt-2">
-        {messages.map((message) => {
+        {messages.map((message, index) => {
           const isAgent = message.from === "agent";
+          // Slack folds a follow-up from the same sender under the first message's header.
+          if (messages[index - 1]?.from === message.from) {
+            return (
+              <p className="-mt-2 break-words py-0.5 pr-5 pl-[64px]" key={message.text}>
+                <Mentions text={message.text} />
+              </p>
+            );
+          }
           return (
             <div className="flex gap-2 px-5 py-2" key={message.text}>
               {isAgent ? (

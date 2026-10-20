@@ -27,15 +27,15 @@ export type TemplateIntegration =
 
 export type TemplateSource = "GitHub" | "Vercel Templates";
 
-export type TemplatePreviewSurface = "imessage" | "slack" | "web";
+export type TemplatePreviewSurface = "imessage" | "slack" | "voice" | "web";
 
 export interface TemplatePreviewMessage {
   from: "agent" | "user";
   text: string;
   /**
    * Tool or skill names shown as completed calls. Each must match a path in
-   * `files`. Only the `web` surface renders them; Slack and iMessage do not
-   * show tool calls.
+   * `files`. Only the `web` and `voice` surfaces render them; Slack and
+   * iMessage do not show tool calls.
    */
   tools?: string[];
 }
@@ -55,7 +55,7 @@ export interface TemplatePreview {
    * so leave padding around the mark. Defaults to the eve logo.
    */
   icon?: string;
-  /** Slack channel name or web chat URL shown in the window header. */
+  /** Slack channel name, or the web chat or voice app URL shown in the window header. */
   context?: string;
   messages: TemplatePreviewMessage[];
 }
@@ -121,7 +121,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     ],
     preview: {
       surface: "web",
-      context: "lisbon-planner.vercel.app",
+      context: "trips.example.com",
       messages: [
         { from: "user", text: "Plan a weekend in Lisbon for me" },
         {
@@ -157,7 +157,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     ],
     preview: {
       surface: "web",
-      context: "tasks.vercel.app",
+      context: "tasks.example.com",
       messages: [
         { from: "user", text: 'Add "ship v2 docs" and summarize my open tasks' },
         {
@@ -195,6 +195,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "apps/web/app/api/live/client-secret/route.ts",
       "apps/web/components/voice-call.tsx",
     ],
+    preview: {
+      surface: "voice",
+      context: "voice.example.com",
+      messages: [
+        { from: "user", text: "Remind me to call Mom at 6" },
+        {
+          from: "agent",
+          tools: ["create_reminder"],
+          text: "Approve it on screen and I'll remind you at six.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-slack-agent",
@@ -221,6 +233,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/skills/plan_a_trip.md",
       "agent/tools/get_weather.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "assistant",
+      context: "general",
+      messages: [
+        { from: "user", text: "@assistant what's the weather in Tokyo?" },
+        {
+          from: "agent",
+          text: "18°C and clear (sample data). Swap in a real weather API and I'm ready to go.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-company-brain-template",
@@ -292,6 +316,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/lib/github.ts",
       "agent/sandbox.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "coder",
+      context: "eng",
+      messages: [
+        { from: "user", text: "@coder checkout 500s on an empty cart, can you fix it?" },
+        {
+          from: "agent",
+          text: "Found it: pricing.ts reads the first item of an empty cart. Opened PR #482 with a fix and a test.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-data-analyst-template",
@@ -315,6 +351,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/tools/run_sql.ts",
       "agent/tools/post_slack_chart.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "analyst",
+      context: "data",
+      messages: [
+        { from: "user", text: "@analyst what was our MRR last month?" },
+        {
+          from: "agent",
+          text: "$48.2K in September, up 6% from August. Chart of the last 12 months below.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-contentful-agent-template",
@@ -340,6 +388,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/tools/update_contentful_fields.ts",
       "agent/tools/publish_contentful_entry.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "contentful",
+      context: "content",
+      messages: [
+        { from: "user", text: "@contentful turn this outline into a blog post draft" },
+        {
+          from: "agent",
+          text: 'Drafted "Spring Launch Recap" in Contentful. Want me to request approval to publish?',
+        },
+      ],
+    },
   },
   {
     slug: "eve-vercel-drives-starter",
@@ -362,6 +422,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/sandbox.ts",
       "agent/tools/save_to_drive.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "knowledge",
+      context: "team",
+      messages: [
+        { from: "user", text: "@knowledge how much PTO do new hires get?" },
+        {
+          from: "agent",
+          text: "15 days in year one, accrued monthly. From handbook/time-off.md on the team Drive.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-memory-agent-template",
@@ -384,6 +456,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/memory/user-preferences.ts",
       "agent/tools/agent.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "memory",
+      context: "general",
+      messages: [
+        { from: "user", text: "@memory keep my summaries to three bullets from now on" },
+        {
+          from: "agent",
+          text: "Saved. Every summary I write for you will be three bullets, in any channel.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-tanstack-start-template",
@@ -407,6 +491,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "apps/web/app/routes/index.tsx",
       "apps/web/app/_components/agent-chat.tsx",
     ],
+    preview: {
+      surface: "web",
+      context: "chat.example.com",
+      messages: [
+        { from: "user", text: "Compare Postgres hosts for a side project" },
+        {
+          from: "agent",
+          tools: ["render_ui"],
+          text: "Here's a table of free tiers. Neon fits best if you want branching.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-software-factory-template",
@@ -461,6 +557,17 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/subagents/seo/agent.ts",
       "agent/subagents/social-media-coordinator/agent.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "marketing",
+      icon: "/templates/icons/marketing-team.png",
+      context: "launch",
+      messages: [
+        { from: "user", text: "@marketing can you draft Thursday's launch posts?" },
+        { from: "agent", text: "On it. Briefing the social media coordinator." },
+        { from: "agent", text: "Done. X, LinkedIn, and Bluesky drafts are in Typefully." },
+      ],
+    },
   },
   {
     slug: "openinstinct-eve-template",
@@ -554,6 +661,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/subagents/reviewer/agent.ts",
       "agent/tools/lint_against_style.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "social",
+      context: "social",
+      messages: [
+        { from: "user", text: "@social turn the v2 launch brief in Notion into an X thread" },
+        {
+          from: "agent",
+          text: "Drafted a 5-post thread in Typefully, queued for Thursday 9 AM. Want a LinkedIn version too?",
+        },
+      ],
+    },
   },
   {
     slug: "eve-sre-agent-template",
@@ -582,6 +701,19 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/tools/evidence_record.ts",
       "agent/tools/watch_slack_channel.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "sre",
+      icon: "/templates/icons/sre.png",
+      context: "incidents",
+      messages: [
+        { from: "user", text: "@sre checkout 5xx spiked at 14:02, what happened?" },
+        {
+          from: "agent",
+          text: "A deploy went out at 14:01. All errors come from the new payments client. Rollback is the fastest fix.",
+        },
+      ],
+    },
   },
   {
     slug: "sanity-copilot-eve-template",
@@ -608,6 +740,19 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/subagents/reviewer/agent.ts",
       "agent/tools/upload_asset.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "sanity",
+      icon: "/templates/icons/sanity.svg",
+      context: "content",
+      messages: [
+        { from: "user", text: "@sanity which blog posts are missing an SEO description?" },
+        {
+          from: "agent",
+          text: "12 published posts. Want me to draft descriptions in a new release for review?",
+        },
+      ],
+    },
   },
   {
     slug: "eve-design-template",
@@ -634,6 +779,19 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/tools/web_search.ts",
       "agent/tools/write_file.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "design",
+      icon: "/templates/icons/design.png",
+      context: "design",
+      messages: [
+        { from: "user", text: "@design what's our minimum tap target on mobile?" },
+        {
+          from: "agent",
+          text: "44×44px, per the interaction guidelines. Pad small icons instead of scaling them up.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-llm-council-template",
