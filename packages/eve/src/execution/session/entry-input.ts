@@ -47,8 +47,6 @@ export type SessionHandoffStart =
        * successor parks until the next input arrives.
        */
       readonly delivery?: DeliverHookPayload;
-      /** Compaction does not extend the session's lifetime. */
-      readonly sessionTimeoutDeadline?: Date;
     };
 
 /** A successor owner started by a previous owner during a handoff. */
