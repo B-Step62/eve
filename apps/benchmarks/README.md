@@ -2,7 +2,14 @@
 
 This private workspace measures how coding agents create and modify eve projects. It uses
 `@vercel/agent-eval`, Vercel Sandbox, and deterministic Vitest graders. These benchmarks do not
-run in CI or as part of `pnpm test`.
+run automatically in CI or as part of `pnpm test`.
+
+To benchmark a same-repository pull request, add the `run-authoring-benchmark` label. The
+[Authoring Benchmark workflow](../../.github/workflows/authoring-benchmark.yml) waits for the PR's
+`pkg.eve.dev` package (or uses `main`'s when the PR does not affect the eve package), runs the
+PR's published cases once with the guided treatment, and attaches the results as an artifact. It
+uses `claude-sonnet-5` unless the `EVE_BENCHMARK_MODEL` repository variable names another model.
+Remove and re-add the label to benchmark a newer commit.
 
 ## Run
 
