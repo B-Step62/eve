@@ -1,12 +1,12 @@
 // The shared fold: client, server, and anyone else fold a session's lines into the same tables.
 //
 // The fold is tolerant, as every reader must be. It ignores unknown fact and progress types,
-// facts about entities it never saw introduced (or no longer retains), a second terminal, and
-// a terminal whose outcome is outside its closed set: the first terminal wins, and nothing is
-// inferred. It folds a line in place, replacing the rows the line changes, because a session can
+// facts about entities it never saw introduced (or no longer retains), and repeated terminals:
+// the first terminal wins, including outcomes a newer writer added, and nothing is inferred. It folds a line in place, replacing the rows the line changes, because a session can
 // run to many thousands of lines; take `copyView` before a fold to keep the state before it.
 
 import { FACT_CATALOG, isFactType, isProgressType } from "#protocol/session-events/catalog.js";
+import { isObject } from "#protocol/session-events/json.js";
 import {
   type Family,
   isOpen,
@@ -56,26 +56,30 @@ export type TableName =
 
 const ZERO: Usage = { cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 0, outputTokens: 0 };
 
+function dictionary<T>(source?: Readonly<Record<string, T>>): Record<string, T> {
+  return Object.assign(Object.create(null) as Record<string, T>, source);
+}
+
 export function emptySessionView(): SessionView {
   return {
-    calls: {},
-    changes: {},
-    children: {},
-    deliveries: {},
-    interactions: {},
-    parts: {},
+    calls: dictionary(),
+    changes: dictionary(),
+    children: dictionary(),
+    deliveries: dictionary(),
+    interactions: dictionary(),
+    parts: dictionary(),
     position: 0,
-    responses: {},
-    runs: {},
+    responses: dictionary(),
+    runs: dictionary(),
     session: { status: "new", turnCount: 0 },
-    tasks: {},
-    turns: {},
-    usage: { byKind: {}, total: ZERO },
+    tasks: dictionary(),
+    turns: dictionary(),
+    usage: { byKind: dictionary(), total: ZERO },
   };
 }
 
 export function emptyPreviews(): SessionPreviews {
-  return { calls: {}, parts: {} };
+  return { calls: dictionary(), parts: dictionary() };
 }
 
 type Writable<T> = { -readonly [K in keyof T]: T[K] };
@@ -153,7 +157,7 @@ export function foldEvents<TEvent extends ReceivedEvent>(
     while (end < events.length && events[end]!.meta.position.line === line) end += 1;
     const group = events.slice(start, end);
     const last = group.at(-1)!;
-    if (end === events.length && last.meta.endOfLine === false) return group;
+    if (last.meta.endOfLine === false) return events.slice(start);
     const first = group[0]!;
     const stored: StoredLine =
       group.length === 1 && isProgressType(first.type)
@@ -184,16 +188,16 @@ export function viewOfEvents(events: readonly ReceivedEvent[]): {
 export function copyView(view: SessionView): SessionView {
   return {
     ...view,
-    calls: { ...view.calls },
-    changes: { ...view.changes },
-    children: { ...view.children },
-    deliveries: { ...view.deliveries },
-    interactions: { ...view.interactions },
-    parts: { ...view.parts },
-    responses: { ...view.responses },
-    runs: { ...view.runs },
-    tasks: { ...view.tasks },
-    turns: { ...view.turns },
+    calls: dictionary(view.calls),
+    changes: dictionary(view.changes),
+    children: dictionary(view.children),
+    deliveries: dictionary(view.deliveries),
+    interactions: dictionary(view.interactions),
+    parts: dictionary(view.parts),
+    responses: dictionary(view.responses),
+    runs: dictionary(view.runs),
+    tasks: dictionary(view.tasks),
+    turns: dictionary(view.turns),
   };
 }
 
@@ -233,6 +237,13 @@ function foldFact(
   const fact = raw as Fact;
   if (!isFactType(fact.type) || fact.data === null || typeof fact.data !== "object") return;
   if (view.session.status === "ended") return;
+  if (
+    (fact.type === "model.requested" ||
+      fact.type === "call.requested" ||
+      fact.type === "child.opened") &&
+    !isObject(fact.data.owner)
+  )
+    return;
   const introduced = { introducedAt: at.position, startedAt: at.at };
 
   if (foldLifecycle(view, fact, introduced, at)) {
@@ -265,7 +276,7 @@ function foldFact(
       const { kind, owner, usage } = fact.data;
       if (usage === null || typeof usage !== "object") return;
       view.usage = addToTotals(view.usage, kind, usage);
-      if (owner === undefined) return;
+      if (!isObject(owner)) return;
       if ("runId" in owner) {
         const run = view.runs[owner.runId];
         if (run !== undefined) view.runs[run.runId] = { ...run, usage: addUsage(run.usage, usage) };
@@ -303,7 +314,13 @@ const LIFECYCLE: Partial<
   "context.settled": { status: "settled", table: "changes" },
   "context.started": { status: "running", table: "changes" },
   "delivery.admitted": { status: "admitted", table: "deliveries" },
-  "delivery.consumed": { from: "admitted", status: "consumed", table: "deliveries" },
+  // Imported history can be long, and only readers of the fact show it.
+  "delivery.consumed": {
+    from: "admitted",
+    omit: ["history"],
+    status: "consumed",
+    table: "deliveries",
+  },
   "delivery.settled": { status: "settled", table: "deliveries" },
   "interaction.opened": { status: "open", table: "interactions" },
   "interaction.settled": { status: "settled", table: "interactions" },
@@ -319,6 +336,17 @@ const LIFECYCLE: Partial<
   "turn.settled": { rename: { cause: "endedBy" }, status: "settled", table: "turns" },
   "turn.started": { omit: ["trace"], status: "running", table: "turns" },
 };
+
+const FOLD_FIELDS = new Set([
+  "introducedAt",
+  "startedAt",
+  "closedAt",
+  "endedAt",
+  "consumedAt",
+  "step",
+  "runs",
+  "status",
+]);
 
 /**
  * Folds a lifecycle fact by its role: an introduction adds its entity's row from the fact, an
@@ -336,7 +364,9 @@ function foldLifecycle(
   const { idField, role } = FACT_CATALOG[fact.type];
   const data = Object.fromEntries(
     Object.entries(fact.data).flatMap(([key, value]) =>
-      rule.omit?.includes(key) === true ? [] : [[rule.rename?.[key] ?? key, value]],
+      rule.omit?.includes(key) === true || FOLD_FIELDS.has(key)
+        ? []
+        : [[rule.rename?.[key] ?? key, value]],
     ),
   );
   const id = data[idField];
@@ -620,7 +650,7 @@ function addUsage(a: Usage | undefined, b: Usage): Usage {
 
 function addToTotals(totals: UsageTotals, kind: string, usage: Usage): UsageTotals {
   return {
-    byKind: { ...totals.byKind, [kind]: addUsage(totals.byKind[kind], usage) },
+    byKind: dictionary({ ...totals.byKind, [kind]: addUsage(totals.byKind[kind], usage) }),
     total: addUsage(totals.total, usage),
   };
 }

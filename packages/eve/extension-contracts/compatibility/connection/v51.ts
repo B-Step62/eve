@@ -1,13 +1,9 @@
-// Epoch 51 of the connection capability: the authoring contract of epoch 50 still compiles.
 import { defineMcpClientConnection } from "#public/connections/index.js";
 
-// Epoch 49 Connect providers carry connector metadata without an events bridge.
+// Epoch 51 had no `history` option or `history.imported` event; epoch 52 adds both, which is additive.
 export default defineMcpClientConnection({
-  description: "Read issues from the tracker.",
-  url: "https://tracker.example.com/mcp",
-  auth: {
-    principalType: "app",
-    getToken: async () => ({ token: "service-credential" }),
-    vercelConnect: { connector: "oauth/issues" },
-  },
+  description: "Specialist tools.",
+  url: "https://specialist.example.test/eve/v1/mcp",
+  protocolVersionDiscovery: false,
+  approval: ({ session }) => (session.auth.current === null ? "denied" : "user-approval"),
 });

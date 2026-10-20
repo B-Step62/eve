@@ -1,13 +1,12 @@
-// Epoch 39 of the dynamicSkill capability: the authoring contract of epoch 38 still compiles.
 import { defineDynamic, defineSkill } from "#public/skills/index.js";
 
-// Epoch 37 `action.result` errors had no `name`; epoch 38 adds it as optional.
+// Epoch 39 had no `history` option or `history.imported` event; epoch 40 adds both, which is additive.
 export default defineDynamic({
   events: {
     "turn.started": (_event, ctx) =>
       defineSkill({
-        description: "Review the active request.",
-        markdown: `Review evidence for session ${ctx.session.id}.`,
+        description: `Review evidence for session ${ctx.session.id}.`,
+        markdown: "Check claims against sources.",
       }),
   },
 });

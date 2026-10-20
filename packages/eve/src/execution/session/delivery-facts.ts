@@ -83,21 +83,26 @@ export function admitDeliveries(input: {
       facts.push(fact("delivery.settled", { deliveryId, outcome: "ignored" }));
       continue;
     }
-    const consumed: ConsumedDelivery = {
+    const consumed: ConsumedDelivery = defined({
       deliveryId,
+      history: (stepInput.history?.length ?? 0) > 0 ? stepInput.history : undefined,
       parts: stepInput.message === undefined ? [] : userPartsOf(stepInput.message),
-    };
+    });
     const { answers, ...rest } = stepInput;
     inputs.push(
       answers === undefined || answers.length === 0
         ? { ...rest, deliveries: [consumed] }
         : {
             ...rest,
-            answers: answers.map((answer, index) => ({
-              ...answer,
-              deliveryId,
-              responseId: `response_${deliveryId}_${String(index)}`,
-            })),
+            answers: answers.map((answer, index) =>
+              defined({
+                interactionId: answer.interactionId,
+                optionId: answer.optionId,
+                text: answer.text,
+                deliveryId,
+                responseId: `response_${deliveryId}_${String(index)}`,
+              }),
+            ),
             deliveries: [consumed],
           },
     );

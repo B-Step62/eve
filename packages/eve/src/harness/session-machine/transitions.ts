@@ -30,7 +30,10 @@ import {
   responseSubmitted,
   signInInteractionId,
 } from "#harness/interaction-facts.js";
-import type { DeliverySource } from "#protocol/session-events/families/delivery.js";
+import type {
+  DeliverySource,
+  ImportedMessage,
+} from "#protocol/session-events/families/delivery.js";
 import type { ControlDelivery } from "#harness/types.js";
 import type { ResponseSubmittedData } from "#protocol/session-events/families/response.js";
 import type { SessionEvent } from "#protocol/session-event.js";
@@ -40,6 +43,7 @@ import type { FactOf } from "#protocol/session-events/facts.js";
 import {
   activeTurnIdOf,
   nextChangeId,
+  openRunOf,
   type SessionProjection,
 } from "#protocol/session-projection.js";
 import type { SessionView as PublicView } from "#protocol/session-projection/tables.js";
@@ -83,6 +87,8 @@ const unchanged = (view: SessionView, events: readonly SessionEvent[]) => ({
 export interface ConsumedDelivery {
   readonly deliveryId: string;
   readonly parts: readonly UserPart[];
+  /** Earlier conversation the delivery brought, which its consumption records. */
+  readonly history?: readonly ImportedMessage[];
 }
 
 /** The turn the next turn follows: the newest, unless a context change chose another or none. */
@@ -110,6 +116,7 @@ function waitingDeliveries(
 function consumed(delivery: ConsumedDelivery, turnId: string): SessionEvent {
   return fact("delivery.consumed", {
     deliveryId: delivery.deliveryId,
+    history: (delivery.history?.length ?? 0) > 0 ? delivery.history : undefined,
     parts: delivery.parts,
     turnId,
   });
@@ -191,14 +198,17 @@ export function fail(
   const error = errorInfoOf(failure);
   const turnId = activeTurnIdOf(view.projection);
   // A terminal failure ends the session, which ends the turn with it, in one commit.
-  const events =
-    failure.terminal === undefined
+  const runId = turnId === undefined ? undefined : openRunOf(view.projection, turnId);
+  const events = [
+    ...(runId === undefined ? [] : runSettledFacts({ runId, outcome: "failed", error })),
+    ...(failure.terminal === undefined
       ? turnSettled(view.projection, { error, outcome: "failed" })
       : sessionEndedFacts(view.projection, {
           cause: turnId === undefined ? undefined : { turnId },
           error,
           outcome: "failed",
-        });
+        })),
+  ];
   return {
     commit: stopped.flatMap(cancelledTranscript),
     events,
@@ -482,6 +492,13 @@ export function relay(
   for (const event of payload.events) {
     const interactionId = event.data.interactionId;
     const mirror = tables.interactions[interactionId];
+    if (
+      event.type !== "interaction.opened" &&
+      (mirror?.origin === undefined ||
+        !("callId" in mirror.subject) ||
+        mirror.subject.callId !== payload.callId)
+    )
+      continue;
     switch (event.type) {
       case "interaction.opened": {
         if (mirror !== undefined) break;
@@ -564,9 +581,9 @@ function forwardedAnswer(
 
 /**
  * Answers to requests this session relays went on to their askers. Each delivery that carried
- * such answers is admitted here, with the answers it forwarded: a message that answered joins
- * the turn that asked, one that also carries input for this session goes on to its turn, and
- * any other took effect once forwarded. A question this session decides settles now; an
+ * such answers is admitted here, with the answers it forwarded. An answer joins the open turn
+ * that asked; a delivery that also carries input for this session goes on to its turn. Between
+ * turns, forwarding alone applies the delivery. A question this session decides settles now; an
  * approval stays open until its asker settles it.
  */
 export function routeAnswer(
@@ -576,7 +593,7 @@ export function routeAnswer(
       readonly deliveryId: string;
       readonly principal?: Principal;
       readonly source?: DeliverySource;
-      /** A message that answered: the turn that asked consumes it. */
+      /** The open asking turn consumes the answer, with any message parts it carried. */
       readonly consumed?: { readonly turnId: string; readonly parts: readonly UserPart[] };
       /** The delivery also carries input for this session, whose turn consumes and settles it. */
       readonly continues?: true;

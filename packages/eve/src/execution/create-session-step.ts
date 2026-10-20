@@ -13,7 +13,10 @@ import { resolveInheritedTokenLimit } from "#execution/run-session-limits.js";
 import type { RunSessionLimits } from "#channel/types.js";
 import type { JsonObject } from "#shared/json.js";
 import { resolveEffectiveAgentRuntimeFromConfig } from "#execution/effective-agent-config.js";
+import type { AgentSessionRuntimeOverrides } from "#execution/agent-sessions/runtime-overrides.js";
 import type { DynamicSubagentAgentConfig } from "#runtime/subagents/dynamic-agent-config.js";
+import { withPendingHistory } from "#execution/session/pending-history.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 
 /**
  * Result returned by {@link createSessionStep}.
@@ -33,9 +36,12 @@ export interface CreateSessionStepResult {
  * the root agent.
  */
 export async function createSessionStep(input: {
+  readonly agentSessionRuntimeOverrides?: AgentSessionRuntimeOverrides;
   readonly compiledArtifactsSource: DurableCompiledArtifactsSource;
   readonly continuationToken: string;
   readonly dynamicSubagentAgentConfig?: DynamicSubagentAgentConfig;
+  /** History from `create()`, held until the first message's turn adds it. */
+  readonly history?: readonly SessionHistoryMessage[];
   readonly inheritedLimits?: RunSessionLimits;
   readonly outputSchema?: JsonObject;
   readonly nodeId?: string;
@@ -51,6 +57,7 @@ export async function createSessionStep(input: {
   const effectiveAgent = resolveEffectiveAgentRuntimeFromConfig(
     bundle,
     input.dynamicSubagentAgentConfig,
+    input.agentSessionRuntimeOverrides,
   );
 
   // Both token axes resolve tighter-wins against the cap inherited from the
@@ -84,6 +91,9 @@ export async function createSessionStep(input: {
     turnAgent: effectiveAgent.turnAgent,
   });
 
-  const { history, sessionState } = createDurableSessionValues(session);
+  const state = withPendingHistory(session.state, input.history);
+  const { history, sessionState } = createDurableSessionValues(
+    state === session.state ? session : { ...session, state },
+  );
   return { history, state: sessionState };
 }

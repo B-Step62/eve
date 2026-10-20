@@ -211,17 +211,19 @@ describe("closing what a turn leaves open", () => {
       fail(view, { code: "BOOM", message: "It broke." }),
     );
 
-    // Only what failed fails: what the turn held is interrupted with it.
+    // The failing model run keeps the error; its unfinished calls are interrupted.
     expect(settledBy(events)).toMatchObject({
       "call.settled:tool": "interrupted",
       "interaction.settled:approval-1": "interrupted",
-      "model.settled:test_turn_0_0": "interrupted",
+      "model.settled:test_turn_0_0": "failed",
       "turn.settled:turn_0": "failed",
     });
     expect(events.some((event) => event.type === "task.ended")).toBe(false);
-    expect(events.find((event) => event.type === "turn.settled")).toMatchObject({
-      data: { error: { code: "BOOM", message: "It broke." } },
-    });
+    for (const type of ["model.settled", "turn.settled"]) {
+      expect(events.find((event) => event.type === type)).toMatchObject({
+        data: { error: { code: "BOOM", message: "It broke." } },
+      });
+    }
   });
 
   it("cancels the turn, interrupting what it asked and stopping its work", () => {
@@ -560,6 +562,46 @@ describe("calls a sign-in stopped", () => {
 });
 
 describe("routing answers", () => {
+  it("ignores a child settlement for a local request or another call's mirror", () => {
+    const parent = runningCall();
+    const mirror = withPublished(
+      parent,
+      relay(viewOf(parent), {
+        payload: {
+          kind: "subagent-interaction",
+          callId: "probe",
+          childSessionId: "child-1",
+          subagentName: "deployer",
+          events: [
+            {
+              type: "interaction.opened",
+              data: {
+                interactionId: "remote",
+                request: { kind: "question", prompt: "Continue?" },
+                subject: { turnId: "child-turn" },
+              },
+            },
+          ],
+        },
+      }).events,
+    );
+    for (const [session, interactionId, callId] of [
+      [waitingTurn(), "approval-1", "tool"],
+      [mirror, "remote", "another-call"],
+    ] as const) {
+      const ending = relay(viewOf(session), {
+        payload: {
+          kind: "subagent-interaction",
+          callId,
+          childSessionId: "child-1",
+          subagentName: "deployer",
+          events: [{ type: "interaction.settled", data: { interactionId, outcome: "accepted" } }],
+        },
+      });
+      expect(ending.events).toEqual([]);
+    }
+  });
+
   it("submits a forwarded answer only for an open request and a delivery it knows", () => {
     const session = waitingTurn();
     const { events } = routeAnswer(viewOf(session), {
@@ -579,7 +621,29 @@ describe("routing answers", () => {
   });
 
   it("admits a forwarded answer once the asker admits it, while its batch waits", () => {
-    const forwarded = withPublished(waitingTurn(), [
+    const parent = runningCall();
+    const mirrored = withPublished(
+      parent,
+      relay(viewOf(parent), {
+        payload: {
+          callId: "probe",
+          childSessionId: "child-1",
+          kind: "subagent-interaction",
+          subagentName: "deployer",
+          events: [
+            {
+              type: "interaction.opened",
+              data: {
+                interactionId: "approval-1",
+                subject: { turnId: "child-turn" },
+                request: { kind: "approval", prompt: "Deploy?" },
+              },
+            },
+          ],
+        },
+      }).events,
+    );
+    const forwarded = withPublished(mirrored, [
       { data: { deliveryId: "d-answer" }, type: "delivery.admitted" },
       {
         data: { deliveryId: "d-answer", interactionId: "approval-1", responseId: "r-1" },
@@ -589,7 +653,7 @@ describe("routing answers", () => {
     const admitted = (deliveryId: string) =>
       relay(viewOf(forwarded), {
         payload: {
-          callId: "tool",
+          callId: "probe",
           childSessionId: "child-1",
           events: [
             { data: { deliveryId, interactionId: "approval-1" }, type: "response.admitted" },
@@ -608,7 +672,7 @@ describe("routing answers", () => {
     expect(
       relay(viewOf(twice), {
         payload: {
-          callId: "tool",
+          callId: "probe",
           childSessionId: "child-1",
           events: [
             {

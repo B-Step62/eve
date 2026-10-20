@@ -78,6 +78,7 @@ import {
   REMOTE_AGENT_PROTOCOL_VERSION,
   formatEarlierRemoteChildStreamError,
 } from "#protocol/remote-agent-protocol.js";
+import { type SessionHistoryMessage, validateSessionHistory } from "#shared/session-history.js";
 import type { ParsedCreateBody } from "#eve-channel/create-request.js";
 import {
   findRemoteAgentBinding,
@@ -374,6 +375,9 @@ export function eveChannel(input: EveChannelInput): EveChannel {
                   {
                     message: body.message,
                     context: messageResult.context,
+                    history: validateSessionHistory(
+                      "history" in messageResult ? messageResult.history : undefined,
+                    ),
                     outputSchema: body.outputSchema,
                   },
                   messageResult.clientContext,
@@ -430,6 +434,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
 
         let clientContext = resolveTurnClientContext(undefined, body.context);
         let context: readonly string[] | undefined;
+        let history: readonly SessionHistoryMessage[] | undefined;
         let title: string | undefined;
         let dispatchAuth: SessionAuthContext | null = forwarded.auth;
         if (body.message !== undefined) {
@@ -444,6 +449,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
           if (messageResult instanceof Response) return messageResult;
           clientContext = messageResult.clientContext;
           context = messageResult.context;
+          history = messageResult.history;
           title = messageResult.title;
           dispatchAuth = messageResult.auth;
         }
@@ -456,6 +462,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
               auth: dispatchAuth,
               callback: body.callback,
               context,
+              history,
               outputSchema: body.outputSchema,
               turnPolicy: body.turnPolicy,
               title,

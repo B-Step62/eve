@@ -278,12 +278,12 @@ export default defineAgent({
 });
 ```
 
-`sessionTimeoutMs` sets the lifetime for every session, including delegated
-sessions. It defaults to 30 days and starts at creation. Each successful
-deployment handoff or legacy-session import restarts the original configured
-duration. Process restarts, ordinary messages, compaction handoffs, and failed
-or skipped handoffs keep the existing deadline. At the deadline, eve lets an active turn settle,
-then ends it (`session.ended` with `outcome: "completed"`) and releases every continuation address; the next
+`sessionTimeoutMs` sets how long a session may sit idle before eve completes it,
+including delegated sessions. It defaults to 30 days. The idle window starts at
+creation and restarts each time a turn settles. A session never expires while
+a turn is open, including while tasks work or a person must answer. Process
+restarts do not change the window. When it elapses, eve emits `session.ended`
+with `outcome: "completed"` and releases every continuation address; the next
 qualifying channel message starts fresh. Set it to `false` to disable the
 timeout. Session expiration follows [run-data retention](#run-data-retention);
 a zero-retention session loses its stored payloads when it ends.

@@ -3,6 +3,7 @@ import type { Interaction } from "#protocol/session-reader.js";
 import { callLabel } from "#protocol/session-projection/selectors.js";
 import type { EveMessage, EveMessagePart, EveToolPart } from "#client/message-types.js";
 import type { UserPart } from "#protocol/session-events/envelope.js";
+import type { ImportedMessage } from "#protocol/session-events/families/delivery.js";
 import { callOutputSource } from "#protocol/session-projection/selectors.js";
 import type {
   CallPreview,
@@ -264,6 +265,25 @@ export function userMessage(row: DeliveryRow): EveMessage | undefined {
     parts: receivedParts(row.parts),
     role: "user",
   };
+}
+
+/**
+ * The earlier conversation a delivery imported, as messages. They name no turn, so a turn's reply
+ * never streams into an imported assistant message.
+ */
+export function importedMessages(
+  deliveryId: string,
+  history: readonly ImportedMessage[],
+): readonly EveMessage[] {
+  return history.map((message, index) => ({
+    id: `${deliveryId}:imported:${String(index)}`,
+    metadata:
+      message.id === undefined
+        ? { imported: true, status: "complete" }
+        : { historyId: message.id, imported: true, status: "complete" },
+    parts: [{ state: "done", text: message.text, type: "text" }],
+    role: message.role,
+  }));
 }
 
 /** A person's parts as message parts: text, and files by their metadata. */

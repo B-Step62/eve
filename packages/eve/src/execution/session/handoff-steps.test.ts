@@ -284,6 +284,7 @@ function validate(checkpoint: SessionCheckpoint) {
 
 function createCheckpoint(): SessionCheckpoint {
   return {
+    admittedDeliveryKeys: [],
     version: SESSION_CHECKPOINT_VERSION,
     history: [],
     sessionTimeoutMs: false,

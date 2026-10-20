@@ -54,6 +54,8 @@ export {
   type AgentResponse,
   type AgentSendOptions,
   type AgentSession,
+  type AgentSessionModelSelection,
+  type AgentSessionOptions,
   type WorkflowAgentMetadata,
 } from "#tools/workflow-definition.js";
 export type { ToolQuestion, ToolAskOptions, ToolAnswer } from "#tools/definition.js";

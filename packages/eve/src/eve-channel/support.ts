@@ -2,6 +2,7 @@ import type { MessageContent } from "#shared/message-content.js";
 
 import { SessionStrandedError } from "#channel/session-stranded-error.js";
 import type { SessionAuthContext } from "#channel/types.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import { workflowEntryReference } from "#execution/workflow-runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
 import type { ChannelCors } from "#public/definitions/channel.js";
@@ -153,6 +154,7 @@ interface OnMessageOutcome {
   /** Model-ready turn context: `onMessage`'s replacement, or the request's labeled entries. */
   readonly clientContext?: readonly string[];
   readonly context?: readonly string[];
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
 }
 
@@ -199,6 +201,7 @@ export async function resolveOnMessage(input: {
     auth: result.auth,
     clientContext: resolveTurnClientContext(result.clientContext, input.clientContext),
     context: result.context,
+    history: result.history,
     title: result.title,
   };
 }

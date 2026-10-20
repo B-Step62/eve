@@ -18,6 +18,7 @@ import type { ResponseOutcome } from "#protocol/session-events/families/response
 import type { ChannelAdapter } from "#channel/adapter.js";
 import type { AgentLimitsDefinition } from "#shared/agent-definition.js";
 import type { JsonObject } from "#shared/json.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import type { InstrumentationDecision } from "#shared/instrumentation-decision.js";
 import type { ForwardedTraceAssertion } from "#shared/forwarded-trace-policy.js";
 import type { ConversationContext } from "#shared/conversation-context.js";
@@ -186,6 +187,8 @@ export interface DeliverPayload {
   readonly answers?: readonly Answer[];
   readonly message?: MessageContent;
   readonly context?: readonly string[];
+  /** Prior conversation added as user and assistant turns before this delivery's input. */
+  readonly history?: readonly SessionHistoryMessage[];
   readonly outputSchema?: JsonObject;
   readonly [key: string]: unknown;
 }
@@ -199,6 +202,7 @@ export const DEFAULT_TURN_POLICY: TurnPolicy = "steer";
 /** One command accepted by a durable session inbox. */
 export type SessionCommand =
   | {
+      readonly idempotencyKey?: string;
       readonly auth?: SessionAuthContext | null;
       readonly caller?: TurnCaller;
       /** Initial workflow title when delivering to a prewarmed session. */
@@ -291,6 +295,7 @@ export interface DispatchSessionInput<TCommand extends SessionCommand = SessionC
  * metadata so both cross the durable hook boundary outside adapter-owned data.
  */
 export interface DeliverHookPayload {
+  readonly idempotencyKey?: string;
   readonly schedule?: import("#context/session-schedule.js").SessionSchedule;
   /** Initial workflow title; ignored once session initialization has run. */
   readonly title?: string;
@@ -475,6 +480,8 @@ export interface SessionCapabilities {
  * subagent tool wrapper).
  */
 export interface RunInput {
+  /** Optional stable identity of the initial delivery, scoped to this logical session. */
+  readonly idempotencyKey?: string;
   /**
    * @internal Set by the server after it authorizes tool stubs.
    * Local subagents match rules qualified by their full path, such as researcher/list_tasks.
@@ -561,6 +568,8 @@ export interface RunInput {
     /** Omitted only when creating a conversation session before its first turn. */
     readonly message?: MessageContent;
     readonly context?: readonly string[];
+    /** Prior conversation; with no message, it waits for the first message's turn. */
+    readonly history?: readonly SessionHistoryMessage[];
     readonly outputSchema?: JsonObject;
     /** Channel payload state for the first delivery, as later deliveries carry it. */
     readonly state?: unknown;
@@ -654,9 +663,13 @@ export interface Runtime {
   /**
    * Resolves the session that currently owns a continuation token without
    * delivering input or starting a run. Returns `undefined` when no session
-   * owns the token.
+   * owns the token. With `runnable`, throws `SessionStrandedError` when the
+   * owner is stranded and can run nothing.
    */
-  resolveContinuation(continuationToken: string): Promise<{ sessionId: string } | undefined>;
+  resolveContinuation(
+    continuationToken: string,
+    options?: { readonly runnable?: boolean },
+  ): Promise<{ sessionId: string } | undefined>;
 
   /**
    * Returns a readable stream of lifecycle events for an existing session.

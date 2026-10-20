@@ -26,6 +26,8 @@ export {
   type ChannelReceiveContext,
   type ChannelResolveSession,
   type ChannelRespondOptions,
+  type ChannelCreateOptions,
+  type ChannelCreateResult,
   type ChannelSendOptions,
   type ChannelSource,
   type ChannelCors,
@@ -75,6 +77,7 @@ export type {
   MessagePart,
   MessageTextPart,
 } from "#shared/message-content.js";
+export { InvalidSessionHistoryError, type SessionHistoryMessage } from "#shared/session-history.js";
 export {
   createWebSocketUpgradeServer,
   type WebSocketUpgradeServerBridge,

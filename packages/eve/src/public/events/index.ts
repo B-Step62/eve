@@ -114,6 +114,7 @@ export type {
 
 export type {
   DeliverySource,
+  ImportedMessage,
   DeliveryAdmittedData,
   DeliveryConsumedData,
   DeliveryOutcome,

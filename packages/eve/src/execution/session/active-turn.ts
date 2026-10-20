@@ -100,6 +100,7 @@ export class ActiveTurn {
     }
     if (
       delivery.kind === "deliver" &&
+      !this.input.queue.isDuplicate(delivery) &&
       isSteeringMessage(delivery, this.identity) &&
       !this.input.cursor.sessionState.hasProxyInputRequests
     )

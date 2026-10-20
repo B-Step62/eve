@@ -2,6 +2,7 @@ import { createChannelDeliveryMetadata } from "#channel/delivery-metadata.js";
 import { readRemoteChildBinding } from "#execution/child-binding.js";
 import type { SessionStreamEvent } from "#protocol/session-event.js";
 import { validateToolStubTargets } from "#tool-stubs/validate-targets.js";
+import { validateDeliveryIdempotencyKey } from "#channel/delivery-idempotency.js";
 import { context, trace } from "#compiled/@opentelemetry/api/index.js";
 import {
   EntityConflictError,
@@ -81,6 +82,7 @@ import {
   StrandedSessionOwnerError,
 } from "#execution/session-inbox/owner.js";
 import { describeStrandedSession, SessionStrandedError } from "#channel/session-stranded-error.js";
+import type { AgentSessionRuntimeOverrides } from "#execution/agent-sessions/runtime-overrides.js";
 import type { DynamicSubagentAgentConfig } from "#runtime/subagents/dynamic-agent-config.js";
 import { initializeSessionInstrumentation } from "#instrumentation/runtime.js";
 import {
@@ -137,6 +139,7 @@ export const connectionEventDeliveryWorkflowReference = {
  * whose original run retains the public event stream across owner handoffs.
  */
 export function createWorkflowRuntime(config: {
+  readonly agentSessionRuntimeOverrides?: AgentSessionRuntimeOverrides;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly dynamicSubagentAgentConfig?: DynamicSubagentAgentConfig;
   readonly nodeId?: string;
@@ -146,6 +149,7 @@ export function createWorkflowRuntime(config: {
     input: RunInput,
     predecessor?: SessionPredecessor,
   ): Promise<RunHandle> => {
+    validateDeliveryIdempotencyKey(input.idempotencyKey);
     if (input.input.message !== undefined && input.delivery === undefined) {
       input = {
         ...input,
@@ -173,6 +177,7 @@ export function createWorkflowRuntime(config: {
       validateToolStubTargets(input.toolStubs.rules, bundle.graph);
     }
     const ctx = buildRunContext({
+      agentSessionRuntimeOverrides: config.agentSessionRuntimeOverrides,
       bundle,
       dynamicSubagentAgentConfig: config.dynamicSubagentAgentConfig,
       run: input,
@@ -197,6 +202,7 @@ export function createWorkflowRuntime(config: {
     const workflowInput: {
       -readonly [K in keyof InitialWorkflowEntryInput]: InitialWorkflowEntryInput[K];
     } = {
+      idempotencyKey: input.idempotencyKey,
       kind: "initial",
       input: input.input,
       ownerDeploymentId: await resolveCurrentWorkflowDeploymentId(),
@@ -252,9 +258,23 @@ export function createWorkflowRuntime(config: {
       throw error;
     }
 
+    let sessionId = run.runId;
+    if (input.idempotencyKey !== undefined && input.continuationToken !== undefined) {
+      // Keyed contenders must return the winning session, not their discarded candidate.
+      const owner = await pollUntil(
+        () => resolveContinuation(input.continuationToken!),
+        SESSION_HOOK_HANDOVER_TIMEOUT_MS,
+      );
+      if (owner === undefined) {
+        throw new Error(
+          "Delivery accepted, but its session identity is not ready. Retry with the same idempotencyKey.",
+        );
+      }
+      sessionId = owner.sessionId;
+    }
     let events: ReadableStream<SessionStreamEvent> | undefined;
     const getEvents = () => {
-      events ??= readSessionEventStream(run.runId);
+      events ??= readSessionEventStream(sessionId);
       return events;
     };
 
@@ -262,7 +282,7 @@ export function createWorkflowRuntime(config: {
       get events() {
         return getEvents();
       },
-      sessionId: run.runId,
+      sessionId,
       ...(input.delivery !== undefined && { deliveryId: input.delivery.deliveryId }),
     };
   };
@@ -501,9 +521,11 @@ function isInactiveCommandTarget(error: unknown): boolean {
 /** The session holding a continuation token's inbox, if any does. */
 export async function resolveContinuation(
   continuationToken: string,
+  options?: { readonly runnable?: boolean },
 ): Promise<{ sessionId: string } | undefined> {
+  let owner: { sessionId: string };
   try {
-    return await resolveSessionInbox(continuationToken);
+    owner = await resolveSessionInbox(continuationToken);
   } catch (error) {
     if (HookNotFoundError.is(error)) {
       return undefined;
@@ -513,6 +535,16 @@ export async function resolveContinuation(
     });
     throw error;
   }
+  if (options?.runnable !== true) return owner;
+  try {
+    await assertRunnableSessionInbox(
+      sessionInboxHookToken(sessionCommandHookToken(owner.sessionId)),
+    );
+  } catch (error) {
+    if (error instanceof StrandedSessionOwnerError) throw sessionStrandedError(error);
+    throw error;
+  }
+  return owner;
 }
 
 /**

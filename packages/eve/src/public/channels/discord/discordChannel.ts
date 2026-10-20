@@ -1,6 +1,7 @@
 import type { ChannelEventContext, ChannelEventOf } from "#public/definitions/channel.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import type { DiscordInstrumentationMetadata } from "#public/channels/discord/index.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import type { ChannelFrom } from "#channel/channel-operations.js";
 import {
   INACTIVE_REQUEST_NOTICE,
@@ -145,6 +146,8 @@ export type DiscordCommandResult = {
   readonly auth: SessionAuthContext | null;
   readonly ephemeral?: boolean;
   readonly context?: readonly string[];
+  /** Prior conversation added as user and assistant turns before this message. */
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
 } | null;
 
@@ -684,6 +687,7 @@ async function dispatchCommand(input: {
       .send(turnMessage, {
         auth: input.result.auth,
         context: [contextBlock, ...channelContext],
+        history: input.result.history,
         state: input.state,
         title: input.result.title,
       });

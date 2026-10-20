@@ -1,16 +1,10 @@
-// Epoch 93 of the tool capability: the authoring contract of epoch 92 still compiles.
+import { z } from "zod";
 import { defineTool } from "#public/tools/index.js";
 
-// Existing Connect auth providers still work without event support.
+// Epoch 93 had no `history` option or `history.imported` event; epoch 94 adds both, which is additive.
 export default defineTool({
-  description: "Check that the issue service is authorized.",
-  inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  async execute(_input, ctx) {
-    const { token } = await ctx.getToken({
-      principalType: "app",
-      getToken: async () => ({ token: "service-credential" }),
-      vercelConnect: { connector: "oauth/issues" },
-    });
-    return { authorized: token.length > 0 };
-  },
+  description: "Report the authenticated caller.",
+  inputSchema: z.object({}),
+  outputSchema: z.object({ principalId: z.string().nullable() }),
+  execute: (_input, ctx) => ({ principalId: ctx.session.auth.current?.principalId ?? null }),
 });
