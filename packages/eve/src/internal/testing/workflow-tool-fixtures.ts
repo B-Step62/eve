@@ -13,6 +13,8 @@ import {
 } from "#compiled/@workflow/core/index.js";
 
 import type { WorkflowToolContext } from "#tools/workflow-definition.js";
+import { transcriptReducer } from "#client/transcript-reducer.js";
+import { sessions } from "#public/server/index.js";
 import {
   ConnectionAuthorizationFailedError,
   ConnectionAuthorizationRequiredError,
@@ -280,15 +282,29 @@ export async function failingServeWorkflow(): Promise<never> {
   throw new Error("Live serve workflow must not execute.");
 }
 
-/** Starts a session on the `inbox` channel, then tries again at the same target. */
-export async function openInboxSessionWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
+/**
+ * "Fork this to my DMs": copies the calling session's transcript into a new
+ * session on the `dm` channel, then tries again at the same target.
+ */
+export async function forkToDmWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
   "use workflow";
-  const inbox = ctx.to("inbox", { ref: input.service });
-  const first = await inbox.create({
-    auth: null,
-    history: [{ id: "h1", role: "user", text: "Alice asked for the api rollout plan." }],
-    message: "Continue the rollout plan.",
+  const history = await readTranscriptStep(ctx.session.id);
+  const dm = ctx.to("dm", { userId: input.service });
+  const first = await dm.create({
+    auth: ctx.session.auth.current,
+    history,
+    message: "Continue this conversation here.",
   });
-  const second = await inbox.create({ auth: null, message: "Start over." });
+  const second = await dm.create({ auth: ctx.session.auth.current, message: "Start over." });
   return { first, second };
+}
+
+async function readTranscriptStep(sessionId: string) {
+  "use step";
+  const reducer = transcriptReducer();
+  let transcript = reducer.initial();
+  for await (const event of sessions.attach(sessionId).stream({ follow: false })) {
+    transcript = reducer.reduce(transcript, event);
+  }
+  return transcript.messages;
 }

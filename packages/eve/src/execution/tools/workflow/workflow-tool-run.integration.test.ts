@@ -20,7 +20,7 @@ import {
   confirmTwoStepsWorkflow,
   deployServiceWorkflow,
   failingDeployWorkflow,
-  openInboxSessionWorkflow,
+  forkToDmWorkflow,
   reportingDeployWorkflow,
   returnAskAnswerWorkflow,
   stepReferenceWorkflow,
@@ -60,18 +60,18 @@ describe("workflow tools", () => {
     expect(output).toContain('"argument":"plan:api"');
     expect(output).toContain('"receiver":"api"');
   });
-  it("starts a channel session from a workflow tool only while the target is free", async () => {
+  it("forks the conversation into a channel session only while the target is free", async () => {
     const runtime = await createWorkflowToolRuntime({
-      agentName: "workflow-tool-channel-create",
-      execute: openInboxSessionWorkflow,
+      agentName: "workflow-tool-channel-fork",
+      execute: forkToDmWorkflow,
       modules: [
         {
-          logicalPath: "channels/inbox.ts",
+          logicalPath: "channels/dm.ts",
           loadNamespace: async () => ({
             default: defineChannel({
-              routes: [POST("/inbox", async () => new Response("ok"))],
+              routes: [POST("/dm", async () => new Response("ok"))],
               async receive(input, { from }) {
-                return await from(`inbox:${String(input.target.ref)}`).send(input.message, {
+                return await from(`dm:${String(input.target.userId)}`).send(input.message, {
                   auth: input.auth,
                 });
               },
@@ -89,7 +89,7 @@ describe("workflow tools", () => {
           ownerDeploymentId: "dpl_inline",
           input: { message: 'Run deploy_service with service "api"' },
           serializedContext: buildWorkflowToolSerializedContext({
-            continuationToken: "schedule:workflow-tool-channel-create",
+            continuationToken: "schedule:workflow-tool-channel-fork",
           }),
         },
       ]);
@@ -111,14 +111,13 @@ describe("workflow tools", () => {
     expect(output.first.created).toBe(true);
     // The target already has a session, so the second create delivers nothing.
     expect(output.second).toEqual({ created: false, sessionId: output.first.sessionId });
+    // The fork starts from the calling session's transcript, then runs its first turn.
     expect(received).toMatchObject([
       {
         type: "history.imported",
-        data: {
-          messages: [{ id: "h1", role: "user", text: "Alice asked for the api rollout plan." }],
-        },
+        data: { messages: [{ role: "user", text: 'Run deploy_service with service "api"' }] },
       },
-      { type: "message.received", data: { message: "Continue the rollout plan." } },
+      { type: "message.received", data: { message: "Continue this conversation here." } },
     ]);
   }, 60_000);
 
