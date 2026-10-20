@@ -1,3 +1,4 @@
+import { ANONYMOUS_SESSION_AUTH_CONTEXT } from "#channel/principal-identity.js";
 import { readHitlState } from "./requests.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import { buildCallbackContext } from "#context/build-callback-context.js";
@@ -39,6 +40,7 @@ import type { Answer } from "#shared/input.js";
 import type { ApprovalAsk } from "#harness/session-machine/state.js";
 
 const UNAUTHENTICATED_APPROVAL_FEEDBACK = "Authentication is required to respond to this approval.";
+const INVALID_APPROVAL_FEEDBACK = "Respond to this approval with Approve or Cancel.";
 const REQUESTER_ONLY_APPROVAL_FEEDBACK =
   "Only the person who requested this action can respond to this approval.";
 const UNAVAILABLE_TOOL_APPROVAL_REASON =
@@ -64,8 +66,7 @@ interface ApprovalDeliveryResult {
     | "continue"
     | "continue-coordination"
     | "authorization-required"
-    | "responses-completed"
-    | "park";
+    | "responses-completed";
   readonly session: HarnessSession;
   readonly stepInput?: HarnessStepInput;
 }
@@ -76,7 +77,7 @@ interface ApprovalDeliveryResult {
  * | State | Input | Transition |
  * | --- | --- | --- |
  * | pending request | Approve or Cancel | create responder-bound candidate |
- * | pending candidate | coordinator pass | run current authorizer |
+ * | pending candidate | coordinator pass or repeated answer | run current authorizer |
  * | pending candidate | allowed | settle with its decision; competitors go stale |
  * | pending candidate | rejected/error/expiry | append terminal history |
  * | pending candidate | authorization required | persist private challenge |
@@ -109,36 +110,13 @@ export async function coordinateApprovalDelivery(input: {
     const view = sessionView(storedProjection(session.state), session.state);
     session = saveTransition(session, matchSignIns(view, { attemptIds: [...expiredChallengeIds] }));
   }
-  const audit = getApprovalAuditState(session.state);
   const batches = suspendedSteps(session.state).filter((step) => step.requests.length > 0);
   const pendingRequestIds = new Set(
     batches.flatMap((batch) => batch.requests.map((request) => request.interactionId)),
   );
-  const pendingSettlements = audit.settlements.filter((settlement) =>
-    pendingRequestIds.has(settlement.requestId),
-  );
-  const settledRequestIds = new Set(audit.settlements.map((settlement) => settlement.requestId));
-  // A direct response settles its individual request before the whole batch
-  // resolves. Keep that response while its request is still pending so a
-  // later response can complete the batch; only discard responses for requests
-  // that have left pending input entirely.
-  const deduplicableSettledRequestIds = new Set(
-    [...settledRequestIds].filter((requestId) => !pendingRequestIds.has(requestId)),
-  );
-  const discardedDuplicate = hasResponseForRequest(input.stepInput, deduplicableSettledRequestIds);
-  const deduplicatedInput = discardedDuplicate
-    ? removeConsumedResponses(input.stepInput, deduplicableSettledRequestIds)
-    : input.stepInput;
-  if (
-    discardedDuplicate &&
-    pendingSettlements.length === 0 &&
-    !hasMeaningfulInput(deduplicatedInput)
-  ) {
-    return deliveryResult(session, deduplicatedInput, "park");
-  }
-  if (batches.length === 0) return deliveryResult(session, deduplicatedInput);
+  if (batches.length === 0) return deliveryResult(session, input.stepInput);
 
-  const stepInput = deduplicatedInput;
+  const stepInput = input.stepInput;
   const authorizationRequiredRequestIds = new Set(
     batches.flatMap((batch) => batch.responseAuthRequiredRequestIds ?? []),
   );
@@ -155,6 +133,9 @@ export async function coordinateApprovalDelivery(input: {
   const consumed = new Set<string>();
   let didCommit = false;
   const candidatesAtStart = getApprovalAuditState(session.state).activeCandidates;
+  const settlements = new Map(
+    getApprovalAuditState(session.state).settlements.map((entry) => [entry.requestId, entry]),
+  );
 
   const deliveredResponses = [
     ...(stepInput?.attributedAnswers ?? []),
@@ -163,15 +144,28 @@ export async function coordinateApprovalDelivery(input: {
   for (const { auth: attributedResponder, response } of deliveredResponses) {
     const request = requests.get(response.interactionId);
     if (request === undefined) continue;
+    const decision = toCandidateDecision(response.optionId);
+    if (decision === undefined) {
+      consumed.add(response.interactionId);
+      refuse(response, INVALID_APPROVAL_FEEDBACK);
+      continue;
+    }
+    // The answer that settled a request comes back with later deliveries while its batch waits:
+    // it already passed its checks, so it speaks for its settlement unchecked, whoever carried it.
+    const settlement = settlements.get(response.interactionId);
+    if (
+      settlement !== undefined &&
+      settlement.outcome === (decision === "approve" ? "allowed" : "cancelled") &&
+      settlement.candidateId === responseBindingFor(stepInput, response)?.responseId
+    )
+      continue;
 
-    const requiresAuthorization = authorizationRequiredRequestIds.has(response.interactionId);
-    if (!requiresAuthorization) {
+    if (!authorizationRequiredRequestIds.has(response.interactionId)) {
       const context = contextStorage.getStore();
       const responder =
         attributedResponder !== undefined
           ? attributedResponder
           : (context?.get(AuthKey) ?? context?.get(SessionKey)?.auth.current ?? null);
-      const decision = toCandidateDecision(response.optionId);
       // Without a response policy, only the requester may settle the call. An
       // unauthenticated or anonymous requester has no identity to match, so
       // any responder may settle it. A tool opts into other responders by
@@ -180,38 +174,36 @@ export async function coordinateApprovalDelivery(input: {
         suspendedSteps(session.state).find((step) =>
           step.requests.some((request) => request.interactionId === response.interactionId),
         )?.requester ?? null;
-      if (
-        responder !== null &&
-        decision !== undefined &&
-        requester !== null &&
-        !sameResponder(requester, responder)
-      ) {
+      if (requester !== null && responder === null) {
+        consumed.add(response.interactionId);
+        refuse(response, UNAUTHENTICATED_APPROVAL_FEEDBACK);
+        continue;
+      }
+      if (requester !== null && responder !== null && !sameResponder(requester, responder)) {
         consumed.add(response.interactionId);
         refuse(response, REQUESTER_ONLY_APPROVAL_FEEDBACK);
         continue;
       }
-      if (responder !== null && decision !== undefined) {
-        // The batch is still open, so a later answer revises this one.
-        const settled = settleDirectApprovalResponse({
-          actor: responder,
-          outcome: decision === "approve" ? "allowed" : "cancelled",
-          requestId: response.interactionId,
-          responseId: responseBindingFor(stepInput, response)?.responseId,
-          revisionPending: true,
-          settledAt: now,
-          state: session.state,
-        });
-        session = { ...session, state: settled.state };
-        didCommit ||= settled.changed;
-      }
+      // The batch is still open, so a later answer revises this one. A direct settlement needs no
+      // authorizer pass. An unauthenticated responder, allowed only when the call has no
+      // requester, settles as the anonymous principal `none()` gives such callers.
+      const settled = settleDirectApprovalResponse({
+        actor: responder ?? ANONYMOUS_SESSION_AUTH_CONTEXT,
+        outcome: decision === "approve" ? "allowed" : "cancelled",
+        requestId: response.interactionId,
+        responseId: responseBindingFor(stepInput, response)?.responseId,
+        revisionPending: true,
+        settledAt: now,
+        state: session.state,
+        text: response.text,
+      });
+      session = { ...session, state: settled.state };
       continue;
     }
     consumed.add(response.interactionId);
 
     // A response policy decides Cancel as well as Approve, so a responder it
     // rejects can neither approve nor cancel someone else's request.
-    const decision = toCandidateDecision(response.optionId);
-    if (decision === undefined) continue;
     const responder =
       attributedResponder !== undefined
         ? attributedResponder
@@ -231,24 +223,25 @@ export async function coordinateApprovalDelivery(input: {
       requestId: request.interactionId,
       responder,
       state: session.state,
+      text: response.text,
     });
     session = { ...session, state: created.state };
     didCommit ||= created.changed;
   }
 
   const remainingStepInput = removeConsumedResponses(stepInput, consumed);
-  if (consumed.size > 0) {
+  // A new candidate commits before any authorizer runs, and the next pass authorizes it. Every
+  // other delivery, such as a repeated answer or a direct settlement, runs the pending candidates
+  // now: no later pass is scheduled for them.
+  if (didCommit) {
     return deliveryResult(
       session,
       remainingStepInput,
-      didCommit ? "continue-coordination" : "continue",
+      "continue-coordination",
       [],
       feedback,
       refused,
     );
-  }
-  if (didCommit) {
-    return deliveryResult(session, remainingStepInput, "continue", [], feedback, refused);
   }
 
   // Candidates are persisted in an earlier pass. Run pending candidates and
@@ -289,12 +282,11 @@ export async function coordinateApprovalDelivery(input: {
     session = processed.session;
     didCommit ||= processed.didCommit;
     challenges.push(...processed.challenges);
-    const settlement = getApprovalAuditState(session.state).settlements.find(
-      (entry) => entry.requestId === candidate.requestId,
-    );
-    if (settlement !== undefined) pendingSettlements.push(settlement);
   }
 
+  const pendingSettlements = getApprovalAuditState(session.state).settlements.filter((settlement) =>
+    pendingRequestIds.has(settlement.requestId),
+  );
   const resumedStepInput = appendSettledResponses(remainingStepInput, pendingSettlements);
   // Only a terminal candidate pass completes response processing. Ingestion must
   // still commit before policy work, and live candidates still own their park.
@@ -302,18 +294,20 @@ export async function coordinateApprovalDelivery(input: {
     (didCommit || expiredCandidates.length > 0) &&
     getApprovalAuditState(session.state).activeCandidates.length === 0
   ) {
-    return deliveryResult(session, resumedStepInput, "responses-completed");
+    return deliveryResult(session, resumedStepInput, "responses-completed", [], feedback, refused);
   }
   if (pendingSettlements.length > 0) {
-    return deliveryResult(session, resumedStepInput, "continue");
+    return deliveryResult(session, resumedStepInput, "continue", [], feedback, refused);
   }
   return didCommit
-    ? deliveryResult(session, resumedStepInput, "continue-coordination")
+    ? deliveryResult(session, resumedStepInput, "continue-coordination", [], feedback, refused)
     : deliveryResult(
         session,
         resumedStepInput,
         challenges.length > 0 ? "authorization-required" : "continue",
         challenges,
+        feedback,
+        refused,
       );
 }
 
@@ -489,31 +483,12 @@ function failCandidate(input: {
   };
 }
 
-function hasResponseForRequest(
-  stepInput: HarnessStepInput | undefined,
-  requestIds: ReadonlySet<string>,
-): boolean {
-  return (
-    stepInput?.attributedAnswers?.some(({ response }) => requestIds.has(response.interactionId)) ===
-      true ||
-    stepInput?.answers?.some((response) => requestIds.has(response.interactionId)) === true
-  );
-}
-
-function hasMeaningfulInput(stepInput: HarnessStepInput | undefined): boolean {
-  return (
-    stepInput?.message !== undefined ||
-    (stepInput?.attributedAnswers?.length ?? 0) > 0 ||
-    (stepInput?.answers?.length ?? 0) > 0 ||
-    (stepInput?.runtimeActionResults?.length ?? 0) > 0
-  );
-}
-
 function appendSettledResponses(
   stepInput: HarnessStepInput | undefined,
   settlements: readonly ApprovalSettlementAuditRecord[],
 ): HarnessStepInput | undefined {
   if (settlements.length === 0) return stepInput;
+  // An answer the delivery still carries speaks for itself; a settlement fills in the rest.
   const existingRequestIds = new Set([
     ...(stepInput?.answers ?? []).map((response) => response.interactionId),
     ...(stepInput?.attributedAnswers ?? []).map(({ response }) => response.interactionId),
@@ -530,6 +505,8 @@ function appendSettledResponses(
       ...missingSettlements.map((settlement) => ({
         interactionId: settlement.requestId,
         optionId: settlement.outcome === "allowed" ? "approve" : "deny",
+        // The deciding answer's note, such as why it was cancelled, still reaches the model.
+        ...(settlement.text !== undefined && { text: settlement.text }),
       })),
     ],
   };

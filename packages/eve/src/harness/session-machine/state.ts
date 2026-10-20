@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 
+import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { SessionStateMap, HarnessStepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
@@ -27,7 +28,20 @@ export interface ApprovalAsk {
 }
 
 /**
- * A model step whose calls can't all settle yet: some await an approval, others the runtime.
+ * A call that runs on the turn's next model call, whatever asked for it: a person approved it, or
+ * the sign-ins it waited on called back.
+ */
+export interface ApprovedCall {
+  readonly call: ApprovalAsk["call"];
+  /** The approval that cleared the call; absent for a call only sign-ins stopped. */
+  readonly interactionId?: string;
+  /** The sign-ins the call stopped on: its outcome settles them. */
+  readonly signIns?: readonly AuthorizationChallenge[];
+}
+
+/**
+ * A model step whose calls can't all settle yet: some await an approval or a sign-in, others the
+ * runtime.
  * Its response stays out of history until every call it made has a result there, so a call
  * never reaches the model without its result.
  */
@@ -39,9 +53,11 @@ export interface SuspendedStep {
   readonly requests: readonly ApprovalAsk[];
   /**
    * Calls a person approved that haven't run. They run when the turn next calls the model, after
-   * its step starts and its budget allows it, as calls the model makes do.
+   * its step starts and its budget allows it, as calls the model makes do. A call a sign-in
+   * stopped is one of them, once the sign-ins it lists have called back, so the call that asked
+   * runs, rather than the model deciding again.
    */
-  readonly approved?: readonly ApprovalAsk[];
+  readonly approved?: readonly ApprovedCall[];
   /** Workflow and agent calls the runtime runs for the step. */
   readonly tasks: readonly RuntimeWorkflowTaskRequest[];
   readonly responseAuthRequiredRequestIds?: readonly string[];
