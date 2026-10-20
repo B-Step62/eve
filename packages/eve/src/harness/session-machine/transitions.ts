@@ -41,6 +41,7 @@ import type { FactOf } from "#protocol/session-events/facts.js";
 import {
   activeTurnIdOf,
   nextChangeId,
+  openRunOf,
   type SessionProjection,
 } from "#protocol/session-projection.js";
 import type { SessionView as PublicView } from "#protocol/session-projection/tables.js";
@@ -192,14 +193,17 @@ export function fail(
   const error = errorInfoOf(failure);
   const turnId = activeTurnIdOf(view.projection);
   // A terminal failure ends the session, which ends the turn with it, in one commit.
-  const events =
-    failure.terminal === undefined
+  const runId = turnId === undefined ? undefined : openRunOf(view.projection, turnId);
+  const events = [
+    ...(runId === undefined ? [] : runSettledFacts({ runId, outcome: "failed", error })),
+    ...(failure.terminal === undefined
       ? turnSettled(view.projection, { error, outcome: "failed" })
       : sessionEndedFacts(view.projection, {
           cause: turnId === undefined ? undefined : { turnId },
           error,
           outcome: "failed",
-        });
+        })),
+  ];
   return {
     commit: stopped.flatMap(cancelledTranscript),
     events,
@@ -487,6 +491,13 @@ export function relay(
   for (const event of payload.events) {
     const interactionId = event.data.interactionId;
     const mirror = tables.interactions[interactionId];
+    if (
+      event.type !== "interaction.opened" &&
+      (mirror?.origin === undefined ||
+        !("callId" in mirror.subject) ||
+        mirror.subject.callId !== payload.callId)
+    )
+      continue;
     switch (event.type) {
       case "interaction.opened": {
         if (mirror !== undefined) break;

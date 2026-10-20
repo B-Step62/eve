@@ -1,13 +1,13 @@
 import { expect, it } from "vitest";
 
 import type { AuthorizationChallenge } from "#harness/authorization.js";
-import { writeHitlState } from "#harness/hitl/requests.js";
+import { readHitlState, writeHitlState } from "#harness/hitl/requests.js";
 import type { SessionProjection } from "#protocol/session-projection.js";
 import type { StoredLine } from "#protocol/session-events/envelope.js";
 import { emptySessionView, foldLines } from "#protocol/session-projection/fold.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 
-import { sessionView } from "./commit.js";
+import { dropClosedRecords, sessionView } from "./commit.js";
 
 const challenge: AuthorizationChallenge = {
   attemptId: "attempt-1",
@@ -62,4 +62,74 @@ it("waits on no sign-in whose interaction closed, as when its call settled witho
     [{ data: { interactionId: "attempt-1", outcome: "interrupted" }, type: "interaction.settled" }],
   ]);
   expect(sessionView(closed, state).signIns).toEqual([]);
+});
+
+it("keeps a relay answerable until its asker settles the interaction", () => {
+  const view = emptySessionView();
+  const at = "2026-10-10T00:00:00.000Z";
+  foldLines(
+    view,
+    [
+      {
+        at,
+        facts: [
+          { type: "session.started", data: {} },
+          { type: "delivery.admitted", data: { deliveryId: "initial" } },
+          {
+            type: "turn.started",
+            data: { turnId: "turn_0", follows: null, cause: { deliveryId: "initial" } },
+          },
+          {
+            type: "interaction.opened",
+            data: {
+              interactionId: "approval",
+              subject: { turnId: "turn_0" },
+              origin: { sessionId: "child", interactionId: "approval" },
+              request: { kind: "approval", prompt: "Continue?" },
+            },
+          },
+          { type: "delivery.admitted", data: { deliveryId: "answer" } },
+          {
+            type: "response.submitted",
+            data: {
+              deliveryId: "answer",
+              interactionId: "approval",
+              responseId: "response",
+              value: { optionId: "approve" },
+            },
+          },
+          { type: "response.admitted", data: { responseId: "response" } },
+        ],
+      },
+    ],
+    0,
+  );
+  const session = writeHitlState(
+    {
+      agent: { modelReference: { id: "test" }, system: "", tools: [] },
+      compaction: { recentWindowSize: 10, threshold: 0.8 },
+      continuationToken: "parent",
+      sessionId: "session-1",
+      state: undefined,
+    },
+    { relays: { upsert: { approval: { childContinuationToken: "child" } } } },
+  );
+  const projection = { counters: { changes: 0, runs: 0 }, view };
+  const pending = dropClosedRecords(session, projection);
+  expect(readHitlState(pending.state).relays.get("approval")).toEqual({
+    childContinuationToken: "child",
+  });
+  foldLines(
+    view,
+    [
+      {
+        at,
+        facts: [
+          { type: "interaction.settled", data: { interactionId: "approval", outcome: "accepted" } },
+        ],
+      },
+    ],
+    1,
+  );
+  expect(readHitlState(dropClosedRecords(pending, projection).state).relays.size).toBe(0);
 });
