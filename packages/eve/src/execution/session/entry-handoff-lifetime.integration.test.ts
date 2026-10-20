@@ -466,12 +466,25 @@ async function readSessionTimer(ownerRunId: string): Promise<{ runId: string; de
   let timer: { runId: string; deadline: Date } | undefined;
   await vi.waitFor(async () => {
     const steps = await world.steps.list({ runId: ownerRunId, resolveData: "all" });
-    const start = steps.data.find((step) => step.stepName.endsWith("//startSessionTimeoutStep"));
-    expect(start?.output).toBeDefined();
-    const result = (await hydrateStepReturnValue(start!.output, ownerRunId, undefined)) as {
-      runId: string;
-    };
-    const run = await world.runs.get(result.runId);
+    let timerRunId: string | undefined;
+    for (const step of steps.data) {
+      if (
+        step.output === undefined ||
+        !["//startSessionTimeoutStep", "//retrySessionTimeoutStep", "//turnStep"].some((name) =>
+          step.stepName.endsWith(name),
+        )
+      ) {
+        continue;
+      }
+      const result = (await hydrateStepReturnValue(step.output, ownerRunId, undefined)) as {
+        runId?: string;
+        sessionTimeoutRunId?: string;
+      };
+      timerRunId = result.runId ?? result.sessionTimeoutRunId;
+      if (timerRunId !== undefined) break;
+    }
+    expect(timerRunId).toBeDefined();
+    const run = await world.runs.get(timerRunId!);
     const [input] = (await hydrateWorkflowArguments(run.input, run.runId, undefined)) as [
       { deadline: Date },
     ];

@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionTimeoutControl } from "#execution/session/timeout-control.js";
 import {
   cancelSessionTimeoutStep,
+  retrySessionTimeoutStep,
   startSessionTimeoutStep,
 } from "#execution/session/timeout-steps.js";
 
 vi.mock("./timeout-steps.js", () => ({
   cancelSessionTimeoutStep: vi.fn(),
+  retrySessionTimeoutStep: vi.fn(),
   startSessionTimeoutStep: vi.fn(),
 }));
 
@@ -20,6 +22,25 @@ afterEach(() => {
 });
 
 describe("createSessionTimeoutControl", () => {
+  it("retries uncommitted timer startup separately and does not restart an adopted timer", async () => {
+    vi.mocked(retrySessionTimeoutStep).mockResolvedValue({ runId: "retried-timer" });
+    const control = createSessionTimeoutControl({
+      deadline: new Date("2026-02-01T00:00:00.000Z"),
+      deferToTurn: true,
+      sessionId: "wrun_1",
+    });
+    await control.start();
+    const input = control.takeTurnInput();
+    await control.start();
+    expect(retrySessionTimeoutStep).not.toHaveBeenCalled();
+    await control.recover();
+    await control.recover();
+    expect(retrySessionTimeoutStep).toHaveBeenCalledExactlyOnceWith(input);
+    expect(control.takeTurnInput()).toBeUndefined();
+    await control.dispose();
+    expect(cancelSessionTimeoutStep).toHaveBeenCalledExactlyOnceWith({ runId: "retried-timer" });
+  });
+
   it("defers startup to one turn and cancels it even when that turn never returns its run ID", async () => {
     const deadline = new Date("2026-02-01T00:00:00.000Z");
     const control = createSessionTimeoutControl({

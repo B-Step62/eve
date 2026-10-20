@@ -3,6 +3,7 @@ import { getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
 
 import {
   cancelSessionTimeoutStep,
+  retrySessionTimeoutStep,
   startSessionTimeoutStep,
 } from "#execution/session/timeout-steps.js";
 import { sessionCommandHookToken } from "#execution/session-inbox/address.js";
@@ -12,6 +13,7 @@ export interface SessionTimeoutControl {
   adopt(runId: string): void;
   takeTurnInput(): SessionTimeoutWorkflowInput | undefined;
   dispose(): Promise<void>;
+  recover(): Promise<void>;
   start(): Promise<void>;
 }
 
@@ -34,6 +36,7 @@ export function createSessionTimeoutControl(input: {
   return {
     adopt(runId) {
       active = { runId };
+      pendingTurnInput = undefined;
     },
 
     takeTurnInput() {
@@ -54,6 +57,16 @@ export function createSessionTimeoutControl(input: {
       active = undefined;
       pendingTurnInput = undefined;
       await cancelSessionTimeoutStep(current);
+    },
+
+    async recover(): Promise<void> {
+      const pending = pendingTurnInput;
+      if (active !== undefined || pending === undefined) return;
+      startup ??= (async () => {
+        active = await retrySessionTimeoutStep(pending);
+        pendingTurnInput = undefined;
+      })();
+      await startup;
     },
 
     async start(): Promise<void> {

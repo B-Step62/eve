@@ -52,6 +52,62 @@ afterEach(() => {
 });
 
 describe("workflowEntry integration", () => {
+  it("retries failed timeout publication without repeating successful first-turn work", async () => {
+    const agentStarted = vi.fn();
+    const runtime = await createTestRuntime({
+      agent: { name: "workflow-entry-timeout-retry" },
+      modules: [
+        {
+          logicalPath: "hooks/observe-turn.ts",
+          loadNamespace: async () => ({
+            default: defineHook({ events: { "turn.started": agentStarted } }),
+          }),
+        },
+      ],
+    });
+    await runtime.run(async () => {
+      const world = await getWorld();
+      const queue = world.queue.bind(world);
+      const timerAttempts: string[] = [];
+      const publication = vi.spyOn(world, "queue").mockImplementation(async (...args) => {
+        const message = args[1] as { runId: string; runInput?: { workflowName?: string } };
+        if (message.runInput?.workflowName === sessionTimeoutWorkflowReference.workflowId) {
+          timerAttempts.push(message.runId);
+          if (timerAttempts.length === 1) throw new Error("Timer queue temporarily unavailable");
+        }
+        return await queue(...args);
+      });
+      const run = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: "Say hello." },
+          serializedContext: buildSerializedContext({ channelKind: "http" }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+      let completed = false;
+      try {
+        const events = await stream.nextTurn();
+        await vi.waitFor(() => expect(timerAttempts).toHaveLength(2));
+        expect(new Set(timerAttempts).size).toBe(1);
+        expect(agentStarted).toHaveBeenCalledOnce();
+        expect(filterEventsByType(events, "turn.failed")).toHaveLength(0);
+        await resumeHook(sessionInboxHookToken(sessionCommandHookToken(run.runId)), {
+          kind: "reset",
+          reason: "Test cleanup",
+        });
+        await run.returnValue;
+        completed = true;
+        expect(agentStarted).toHaveBeenCalledOnce();
+      } finally {
+        publication.mockRestore();
+        stream.dispose();
+        if (!completed) await run.cancel();
+      }
+    });
+  });
+
   it("starts the first agent turn before a delayed timeout creation finishes", async () => {
     const agentStarted = vi.fn();
     const timeoutStarted = Promise.withResolvers<void>();
@@ -76,12 +132,14 @@ describe("workflowEntry integration", () => {
     await runtime.run(async () => {
       const world = await getWorld();
       const createEvent = world.events.create.bind(world.events);
+      let timerCreations = 0;
       const creation = vi.spyOn(world.events, "create").mockImplementation(async (...args) => {
         const event = args[1] as { eventType: string; eventData?: { workflowName?: string } };
         if (
           event.eventType === "run_created" &&
           event.eventData?.workflowName === sessionTimeoutWorkflowReference.workflowId
         ) {
+          timerCreations++;
           timeoutStarted.resolve();
           await releaseTimeout.promise;
         }
@@ -109,6 +167,7 @@ describe("workflowEntry integration", () => {
         });
         await run.returnValue;
         completed = true;
+        expect(timerCreations).toBe(1);
       } finally {
         releaseTimeout.resolve();
         creation.mockRestore();

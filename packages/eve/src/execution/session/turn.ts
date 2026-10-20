@@ -201,6 +201,7 @@ export class SessionExecution {
       if (result.sessionTimeoutRunId !== undefined) {
         this.input.sessionTimeoutControl?.adopt(result.sessionTimeoutRunId);
       }
+      if (result.action !== "done") await this.input.sessionTimeoutControl?.recover();
       if (result.compacted === true) turn.compacted = true;
       const pendingCallIds =
         result.action === "park" ? result.pendingCoordinationCallIds : undefined;

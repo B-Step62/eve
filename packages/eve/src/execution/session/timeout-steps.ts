@@ -47,6 +47,15 @@ export async function startSessionTimeoutRun(
   return { runId: run.runId };
 }
 
+/** Retries timer startup without repeating a successfully committed agent step. */
+export async function retrySessionTimeoutStep(
+  input: SessionTimeoutWorkflowInput,
+): Promise<{ readonly runId: string }> {
+  "use step";
+
+  return await startSessionTimeoutRun(input);
+}
+
 function timeoutChildId(input: SessionTimeoutWorkflowInput): string {
   // Keep the timestamp and routing bits; retries replace only the random suffix.
   // A retry of the containing turn must target the same child run.

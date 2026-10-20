@@ -121,7 +121,8 @@ export async function turnStep(input: TurnStepInput): Promise<TurnStepResult> {
     // Retries reuse this timer. The session controller cancels it on terminal failure.
     throw actionResult.reason;
   }
-  if (timerResult.status === "rejected") throw timerResult.reason;
+  // Commit successful agent work before retrying timer startup in its own step.
+  if (timerResult.status === "rejected") return actionResult.value;
   if (timerResult.value === undefined) return actionResult.value;
   return {
     ...actionResult.value,

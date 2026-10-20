@@ -1147,7 +1147,7 @@ describe("turnStep", () => {
     });
   });
 
-  it("propagates timeout startup failure after joining agent work", async () => {
+  it("commits successful agent work when timeout startup fails", async () => {
     vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_current");
     const failure = new Error("timeout start failed");
     startMock.mockRejectedValue(failure);
@@ -1169,7 +1169,7 @@ describe("turnStep", () => {
         serializedContext: createSerializedContext(),
         sessionState: createStubSessionState(),
       }),
-    ).rejects.toBe(failure);
+    ).resolves.toMatchObject({ action: "done" });
     expect(execute).toHaveBeenCalledOnce();
   });
 
