@@ -19,7 +19,11 @@ import {
   addPhotonAttachmentDownloads,
   addPhotonAttachmentRehydration,
 } from "#public/channels/photon/attachments.js";
-import { photonInboundContent } from "#public/channels/photon/inboundContent.js";
+import { formatReplyContext } from "#public/channels/chat-sdk/reply-context.js";
+import {
+  photonInboundContent,
+  photonQuotedMessage,
+} from "#public/channels/photon/inboundContent.js";
 
 /** Photon project credentials used by {@link photonIMessageChannel}. */
 export type PhotonIMessageChannelCredentials = iMessageCredentialProvider;
@@ -149,10 +153,14 @@ async function dispatchMessage(
   await addPhotonAttachmentDownloads(message, adapter);
   const content = photonInboundContent(message);
   if (content === undefined) return;
+  const quoted = photonQuotedMessage(message);
   await bridge.send(content, {
     idempotencyKey: message.id,
     auth: result.auth,
-    context: [...(result.context ?? [])],
+    context: [
+      ...(result.context ?? []),
+      ...(quoted ? [formatReplyContext(quoted, message.text)] : []),
+    ],
     history: result.history,
     thread,
     title: result.title,
