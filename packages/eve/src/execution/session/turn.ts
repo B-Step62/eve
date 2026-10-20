@@ -38,6 +38,7 @@ import type {
   TurnOutcome,
   TurnStepPayload,
 } from "#execution/session/turn-step-types.js";
+import type { SessionTimeoutControl } from "#execution/session/timeout-control.js";
 import { turnStep } from "#execution/session/turn-step.js";
 import { ActiveTurn } from "#execution/session/active-turn.js";
 import type { TurnControl } from "#execution/session/turn-control.js";
@@ -73,6 +74,7 @@ export interface SessionExecutionInput {
   readonly inbox: SessionInboxReader;
   readonly queue: SessionInputQueue;
   readonly sessionId: string;
+  readonly sessionTimeoutControl?: SessionTimeoutControl;
 }
 
 /**
@@ -193,8 +195,12 @@ export class SessionExecution {
           caller,
           input: nextStepInput,
           steeringSignal: turn.steeringSignal,
+          sessionTimeout: this.input.sessionTimeoutControl?.takeTurnInput(),
         }),
       );
+      if (result.sessionTimeoutRunId !== undefined) {
+        this.input.sessionTimeoutControl?.adopt(result.sessionTimeoutRunId);
+      }
       if (result.compacted === true) turn.compacted = true;
       const pendingCallIds =
         result.action === "park" ? result.pendingCoordinationCallIds : undefined;

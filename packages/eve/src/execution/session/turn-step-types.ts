@@ -1,3 +1,4 @@
+import type { SessionTimeoutWorkflowInput } from "#execution/session/timeout-workflow.js";
 import type { DeliverHookPayload, TurnCaller } from "#channel/types.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import type { WithSessionStateDelta } from "#execution/session/state-delta.js";
@@ -28,6 +29,7 @@ export interface TurnStepPayload {
 
 /** Input for one atomic, session-owner-executed turn step. */
 export interface TurnStepInput {
+  readonly sessionTimeout?: SessionTimeoutWorkflowInput;
   readonly abortSignal?: AbortSignal;
   /** The delegated caller to bind into the context before the step runs; sent on a turn's first step. */
   readonly caller?: TurnCaller;
@@ -84,7 +86,9 @@ export type DurableStepResult = (
   };
 
 /** What `turnStep` returns: its result, with the session state as a delta. */
-export type TurnStepResult = WithSessionStateDelta<DurableStepResult>;
+export type TurnStepResult = WithSessionStateDelta<DurableStepResult> & {
+  readonly sessionTimeoutRunId?: string;
+};
 
 /** The only two ways a locally executed conversational turn can settle. */
 export type TurnOutcome = {

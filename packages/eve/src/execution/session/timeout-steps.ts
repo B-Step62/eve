@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   EntityConflictError,
   HookNotFoundError,
@@ -24,6 +26,41 @@ export async function startSessionTimeoutStep(
 
   const run = await startWorkflowOnCurrentDeployment(sessionTimeoutWorkflowReference, [input]);
   return { runId: run.runId };
+}
+
+/** Starts a timer inside a turn step without creating another durable step. */
+export async function startSessionTimeoutRun(
+  input: SessionTimeoutWorkflowInput,
+): Promise<{ readonly runId: string }> {
+  const world = await getWorld();
+  const timerWorld = new Proxy(world, {
+    get(target, property) {
+      if (property === "createRunId") return () => timeoutChildId(input);
+      // Custom Worlds can use private fields in getters and instance methods.
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const run = await startWorkflowOnCurrentDeployment(sessionTimeoutWorkflowReference, [input], {
+    world: timerWorld,
+  });
+  return { runId: run.runId };
+}
+
+function timeoutChildId(input: SessionTimeoutWorkflowInput): string {
+  // Keep the timestamp and routing bits; retries replace only the random suffix.
+  // A retry of the containing turn must target the same child run.
+  const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  const digest = createHash("sha256")
+    .update(`${input.ownerRunId}:timeout:${input.deadline.toISOString()}`)
+    .digest();
+  let bits = BigInt(`0x${digest.subarray(0, 9).toString("hex")}`) & ((1n << 65n) - 1n);
+  let suffix = "";
+  for (let index = 0; index < 13; index++) {
+    suffix = alphabet[Number(bits & 31n)] + suffix;
+    bits >>= 5n;
+  }
+  return input.ownerRunId.slice(5, 18) + suffix;
 }
 
 /** Resumes the owning session when its durable timer elapses. */
@@ -57,11 +94,15 @@ export async function signalSessionTimeoutStep(input: {
 }
 
 /** Cancels a timer whose session reached another terminal outcome first. */
-export async function cancelSessionTimeoutStep(input: { readonly runId: string }): Promise<void> {
+export async function cancelSessionTimeoutStep(
+  input: { readonly runId: string } | SessionTimeoutWorkflowInput,
+): Promise<void> {
   "use step";
 
+  // A failed turn may have created its child without returning its ID.
+  const runId = "runId" in input ? input.runId : `wrun_${timeoutChildId(input)}`;
   try {
-    await cancelRun(await getWorld(), input.runId, {
+    await cancelRun(await getWorld(), runId, {
       cancelReason: "Session ended before its timeout",
     });
   } catch (error) {

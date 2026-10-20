@@ -20,6 +20,45 @@ afterEach(() => {
 });
 
 describe("createSessionTimeoutControl", () => {
+  it("defers startup to one turn and cancels it even when that turn never returns its run ID", async () => {
+    const deadline = new Date("2026-02-01T00:00:00.000Z");
+    const control = createSessionTimeoutControl({
+      deadline,
+      deferToTurn: true,
+      sessionId: "wrun_1",
+    });
+    await control.start();
+    expect(startSessionTimeoutStep).not.toHaveBeenCalled();
+    expect(control.takeTurnInput()).toEqual({
+      deadline,
+      ownerRunId: "owner-1",
+      token: "eve:session:wrun_1:inbox",
+    });
+    expect(control.takeTurnInput()).toBeUndefined();
+    await control.dispose();
+    await control.dispose();
+    expect(cancelSessionTimeoutStep).toHaveBeenCalledExactlyOnceWith({
+      deadline,
+      ownerRunId: "owner-1",
+      token: "eve:session:wrun_1:inbox",
+    });
+  });
+
+  it("cancels the timer returned by the first turn without restarting it on follow-ups", async () => {
+    const control = createSessionTimeoutControl({
+      deadline: new Date("2026-02-01T00:00:00.000Z"),
+      deferToTurn: true,
+      sessionId: "wrun_1",
+    });
+    control.takeTurnInput();
+    control.adopt("timer-run");
+    await control.start();
+    expect(control.takeTurnInput()).toBeUndefined();
+    await control.dispose();
+    expect(startSessionTimeoutStep).not.toHaveBeenCalled();
+    expect(cancelSessionTimeoutStep).toHaveBeenCalledExactlyOnceWith({ runId: "timer-run" });
+  });
+
   it("starts one absolute deadline against the stable command inbox", async () => {
     const deadline = new Date("2026-02-01T00:00:00.000Z");
     vi.mocked(startSessionTimeoutStep).mockResolvedValue({ runId: "timer-run" });

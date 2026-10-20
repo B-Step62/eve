@@ -1,3 +1,4 @@
+import { startSessionTimeoutRun } from "#execution/session/timeout-steps.js";
 import { bindTurnCallerContext } from "#subagents/parent-notification.js";
 import type { HandleEventFn } from "#harness/types.js";
 import { bindDynamicConnections } from "#execution/dynamic-connections.js";
@@ -105,12 +106,27 @@ interface PendingStepAttributes {
 /** Runs a bounded batch of harness model steps inside one durable `"use step"` boundary. */
 export async function turnStep(input: TurnStepInput): Promise<TurnStepResult> {
   "use step";
-  return await withSessionStateDelta(input, (state) =>
+  const timer =
+    input.sessionTimeout === undefined
+      ? Promise.resolve(undefined)
+      : startSessionTimeoutRun(input.sessionTimeout);
+  const action = withSessionStateDelta(input, (state) =>
     runSessionStep({
       ...state,
       serializedContext: bindTurnCallerContext(state.caller, state.serializedContext),
     }),
   );
+  const [actionResult, timerResult] = await Promise.allSettled([action, timer]);
+  if (actionResult.status === "rejected") {
+    // Retries reuse this timer. The session controller cancels it on terminal failure.
+    throw actionResult.reason;
+  }
+  if (timerResult.status === "rejected") throw timerResult.reason;
+  if (timerResult.value === undefined) return actionResult.value;
+  return {
+    ...actionResult.value,
+    sessionTimeoutRunId: timerResult.value.runId,
+  };
 }
 
 async function runSessionStep(input: TurnStepInput): Promise<DurableStepResult> {

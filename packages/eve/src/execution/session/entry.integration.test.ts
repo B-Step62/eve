@@ -15,7 +15,10 @@ import {
   buildSessionAttributes,
   buildSubagentRootAttributes,
 } from "#execution/eve-workflow-attributes.js";
-import { createWorkflowRuntime } from "#execution/workflow-runtime.js";
+import {
+  createWorkflowRuntime,
+  sessionTimeoutWorkflowReference,
+} from "#execution/workflow-runtime.js";
 import { normalizeEveAttributes } from "#runtime/attributes/normalize.js";
 import { defineHook } from "#public/definitions/hook.js";
 import { defineDynamic } from "#dynamic/definition.js";
@@ -49,6 +52,72 @@ afterEach(() => {
 });
 
 describe("workflowEntry integration", () => {
+  it("starts the first agent turn before a delayed timeout creation finishes", async () => {
+    const agentStarted = vi.fn();
+    const timeoutStarted = Promise.withResolvers<void>();
+    const releaseTimeout = Promise.withResolvers<void>();
+    const runtime = await createTestRuntime({
+      agent: { name: "workflow-entry-timeout-overlap" },
+      modules: [
+        {
+          logicalPath: "hooks/observe-turn.ts",
+          loadNamespace: async () => ({
+            default: defineHook({
+              events: {
+                "turn.started"() {
+                  agentStarted();
+                },
+              },
+            }),
+          }),
+        },
+      ],
+    });
+    await runtime.run(async () => {
+      const world = await getWorld();
+      const createEvent = world.events.create.bind(world.events);
+      const creation = vi.spyOn(world.events, "create").mockImplementation(async (...args) => {
+        const event = args[1] as { eventType: string; eventData?: { workflowName?: string } };
+        if (
+          event.eventType === "run_created" &&
+          event.eventData?.workflowName === sessionTimeoutWorkflowReference.workflowId
+        ) {
+          timeoutStarted.resolve();
+          await releaseTimeout.promise;
+        }
+        return await createEvent(...args);
+      });
+      const run = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: "Say hello." },
+          serializedContext: buildSerializedContext({ channelKind: "http" }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+      let completed = false;
+      try {
+        await withTimeout(timeoutStarted.promise, "timeout creation to start");
+        await vi.waitFor(() => expect(agentStarted).toHaveBeenCalledOnce());
+        releaseTimeout.resolve();
+        const events = await stream.nextTurn();
+        expect(filterEventsByType(events, "turn.failed")).toHaveLength(0);
+        await resumeHook(sessionInboxHookToken(sessionCommandHookToken(run.runId)), {
+          kind: "reset",
+          reason: "Test cleanup",
+        });
+        await run.returnValue;
+        completed = true;
+      } finally {
+        releaseTimeout.resolve();
+        creation.mockRestore();
+        stream.dispose();
+        if (!completed) await run.cancel();
+      }
+    });
+  });
+
   it("preserves scheduled provenance in the first turn so unattended tools need no approval", async () => {
     const executions: unknown[] = [];
     const runtime = await createTestRuntime({

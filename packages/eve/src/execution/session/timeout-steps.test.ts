@@ -4,6 +4,7 @@ import {
   cancelSessionTimeoutStep,
   signalSessionTimeoutStep,
   startSessionTimeoutStep,
+  startSessionTimeoutRun,
 } from "#execution/session/timeout-steps.js";
 import { sessionTimeoutWorkflowReference } from "#execution/workflow-runtime.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
@@ -58,6 +59,40 @@ afterEach(() => {
 });
 
 describe("session timeout steps", () => {
+  it("reuses one child identity on retries and can cancel a child whose result was not committed", async () => {
+    const input = {
+      deadline: new Date("2026-02-01T00:00:00.000Z"),
+      ownerRunId: "wrun_41M58XS8C220Q95AZ8DA6B4DC8",
+      token: "eve:session:session-1:inbox",
+    };
+    const world = new (class {
+      #deploymentId = "dpl_current";
+      async getDeploymentId() {
+        return this.#deploymentId;
+      }
+    })();
+    getWorldMock.mockResolvedValue(world);
+    startMock.mockImplementation(async (_workflow, _args, options) => {
+      expect(await options.world.getDeploymentId()).toBe("dpl_current");
+      return { runId: `wrun_${options.world.createRunId(options)}` };
+    });
+    const first = await startSessionTimeoutRun(input);
+    const retry = await startSessionTimeoutRun({ ...input });
+    expect(retry.runId).toBe(first.runId);
+    expect(first.runId).toMatch(/^wrun_[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(first.runId.slice(5, 18)).toBe(input.ownerRunId.slice(5, 18));
+    expect("createRunId" in world).toBe(false);
+    const otherDeadline = await startSessionTimeoutRun({
+      ...input,
+      deadline: new Date("2026-02-02T00:00:00.000Z"),
+    });
+    expect(otherDeadline.runId).not.toBe(first.runId);
+    await cancelSessionTimeoutStep(input);
+    expect(cancelRunMock).toHaveBeenCalledWith(world, first.runId, {
+      cancelReason: "Session ended before its timeout",
+    });
+  });
+
   it("starts the durable timer workflow", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     startMock.mockResolvedValue({ runId: "timer-run" });

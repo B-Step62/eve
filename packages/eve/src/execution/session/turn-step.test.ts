@@ -225,6 +225,7 @@ const DEFAULT_WORKFLOW_STREAM_NAMESPACE = "__default__";
 const getRunMock = vi.fn();
 const resumeHookMock = vi.fn();
 const startMock = vi.fn();
+const cancelRunMock = vi.fn();
 const workflowWritesByNamespace = new Map<string, unknown[]>();
 
 function createTestWritable(
@@ -253,6 +254,7 @@ vi.mock("../../runtime/sessions/compiled-agent-cache.js", () => ({
 }));
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
+  cancelRun: (...args: unknown[]) => cancelRunMock(...args),
   getHookByToken: async (token: string) => {
     const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
     if (!token.startsWith("eve:inbox:v1:")) throw new HookNotFoundError(token);
@@ -380,6 +382,7 @@ afterEach(() => {
   getRunMock.mockReset();
   resumeHookMock.mockReset();
   startMock.mockReset();
+  cancelRunMock.mockReset();
   workflowWritesByNamespace.clear();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -1109,6 +1112,92 @@ describe("dispatchCoordinationStep", () => {
 });
 
 describe("turnStep", () => {
+  it("runs the first agent step while timeout creation is pending and joins both before returning", async () => {
+    vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_current");
+    const timeout = Promise.withResolvers<{ runId: string }>();
+    startMock.mockReturnValue(timeout.promise);
+    installSessionStoreMocks([createStubSession()]);
+    const execute = vi.fn(async (session: HarnessSession): Promise<StepResult> => ({
+      next: { done: true, output: "complete" },
+      session,
+    }));
+    vi.mocked(createExecutionNodeStep).mockReturnValue(execute);
+    let settled = false;
+    const result = turnStep({
+      input: { kind: "deliver", payloads: [{ message: "hello" }] },
+      sessionTimeout: {
+        deadline: new Date("2026-02-01T00:00:00.000Z"),
+        ownerRunId: "wrun_41M58XS8C220Q95AZ8DA6B4DC8",
+        token: "inbox",
+      },
+      sessionWritable: createTestWritable(),
+      serializedContext: createSerializedContext(),
+      sessionState: createStubSessionState(),
+    }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    expect(startMock).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    timeout.resolve({ runId: "timer-run" });
+    await expect(result).resolves.toMatchObject({
+      action: "done",
+      sessionTimeoutRunId: "timer-run",
+    });
+  });
+
+  it("propagates timeout startup failure after joining agent work", async () => {
+    vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_current");
+    const failure = new Error("timeout start failed");
+    startMock.mockRejectedValue(failure);
+    installSessionStoreMocks([createStubSession()]);
+    const execute = vi.fn(async (session: HarnessSession): Promise<StepResult> => ({
+      next: { done: true, output: "complete" },
+      session,
+    }));
+    vi.mocked(createExecutionNodeStep).mockReturnValue(execute);
+    await expect(
+      turnStep({
+        input: { kind: "deliver", payloads: [{ message: "hello" }] },
+        sessionTimeout: {
+          deadline: new Date("2026-02-01T00:00:00.000Z"),
+          ownerRunId: "wrun_41M58XS8C220Q95AZ8DA6B4DC8",
+          token: "inbox",
+        },
+        sessionWritable: createTestWritable(),
+        serializedContext: createSerializedContext(),
+        sessionState: createStubSessionState(),
+      }),
+    ).rejects.toBe(failure);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a created timeout alive across a failed turn attempt for retry and session cleanup", async () => {
+    vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_current");
+    startMock.mockResolvedValue({ runId: "timer-run" });
+    installSessionStoreMocks([createStubSession()]);
+    const failure = new Error("model failed");
+    vi.mocked(createExecutionNodeStep).mockReturnValue(async () => {
+      throw failure;
+    });
+    await expect(
+      turnStep({
+        input: { kind: "deliver", payloads: [{ message: "hello" }] },
+        sessionTimeout: {
+          deadline: new Date("2026-02-01T00:00:00.000Z"),
+          ownerRunId: "wrun_41M58XS8C220Q95AZ8DA6B4DC8",
+          token: "inbox",
+        },
+        sessionWritable: createTestWritable(),
+        serializedContext: createSerializedContext(),
+        sessionState: createStubSessionState(),
+      }),
+    ).rejects.toBe(failure);
+    expect(startMock).toHaveBeenCalledOnce();
+    expect(cancelRunMock).not.toHaveBeenCalled();
+  });
+
   it("starts model work before the title attribute write settles and joins it before returning", async () => {
     let finishTitle!: () => void;
     vi.mocked(setEveAttributes)

@@ -107,6 +107,7 @@ async function prepareInitialOwner(
   inbox: SessionInboxHandle,
   input: {
     readonly continuationToken: string;
+    readonly deferToTurn: boolean;
     readonly deadline: Date | undefined;
     readonly sessionId: string;
   },
@@ -127,7 +128,11 @@ async function prepareInitialOwner(
   const timeoutControl =
     input.deadline === undefined
       ? undefined
-      : createSessionTimeoutControl({ deadline: input.deadline, sessionId: input.sessionId });
+      : createSessionTimeoutControl({
+          deadline: input.deadline,
+          deferToTurn: input.deferToTurn,
+          sessionId: input.sessionId,
+        });
   const owner: OwnedInitialSession = {
     kind: "owned",
     timeoutControl,
@@ -178,23 +183,31 @@ export async function bootInitialOwner(
   };
   let owner: OwnedInitialSession | undefined;
   try {
-    const sessionCreationPromise = createSessionStep({
-      compiledArtifactsSource: serializedBundle.source,
-      continuationToken,
-      dynamicSubagentAgentConfig: serializedContext["eve.dynamicSubagentAgentConfig"] as
-        | DynamicSubagentAgentConfig
-        | undefined,
-      inheritedLimits: input.limits,
-      nodeId: serializedBundle.nodeId,
-      outputSchema: input.input.outputSchema,
-      rootSessionId: readRootSessionId(serializedContext),
-      sessionId,
-    });
     const ownerPreparationPromise = prepareInitialOwner(inbox, {
       continuationToken,
+      deferToTurn: input.input.message !== undefined,
       deadline,
       sessionId,
     });
+    const createSession = () =>
+      createSessionStep({
+        compiledArtifactsSource: serializedBundle.source,
+        continuationToken,
+        dynamicSubagentAgentConfig: serializedContext["eve.dynamicSubagentAgentConfig"] as
+          | DynamicSubagentAgentConfig
+          | undefined,
+        inheritedLimits: input.limits,
+        nodeId: serializedBundle.nodeId,
+        outputSchema: input.input.outputSchema,
+        rootSessionId: readRootSessionId(serializedContext),
+        sessionId,
+      });
+    // Pending ownership claims prevent Workflow from running this step inline.
+    // Prewarming keeps eager initialization because no message is waiting.
+    const sessionCreationPromise =
+      input.input.message === undefined
+        ? createSession()
+        : ownerPreparationPromise.then(createSession);
     const callerResolutionPromise = hasDelegatedSessionContext(serializedContext)
       ? resolveInitialTurnCallerStep({ serializedContext })
       : Promise.resolve(undefined);

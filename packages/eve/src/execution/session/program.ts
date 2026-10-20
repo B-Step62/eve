@@ -225,6 +225,7 @@ async function runSessionLoop(
     inbox,
     queue,
     sessionId: boot.sessionId,
+    sessionTimeoutControl: boot.sessionTimeoutControl,
   });
   const sessionTimeout = boot.sessionTimeoutControl;
 

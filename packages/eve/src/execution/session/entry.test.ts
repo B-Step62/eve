@@ -73,7 +73,7 @@ function deferred<T>(): Deferred<T> {
 
 function initialInput(overrides: Record<string, unknown> = {}) {
   return {
-    input: { message: "hello" },
+    input: {},
     kind: "initial" as const,
     ownerDeploymentId: "deployment-1",
     serializedContext: {
@@ -107,6 +107,32 @@ beforeEach(() => {
 });
 
 describe("bootInitialOwner timeout startup", () => {
+  it("claims ownership before creating a session with its first message", async () => {
+    const ownership = deferred<void>();
+    const inbox = createInbox();
+    inbox.claimSessionHook.mockReturnValue(ownership.promise);
+    vi.mocked(createSessionInbox).mockReturnValue(inbox as never);
+
+    const bootPromise = bootInitialOwner(
+      initialInput({ input: { message: "hello" } }),
+      "session-1",
+    );
+    await vi.waitFor(() => expect(inbox.claimSessionHook).toHaveBeenCalledOnce());
+    expect(createSessionStep).not.toHaveBeenCalled();
+    ownership.resolve();
+
+    const boot = await bootPromise;
+    expect(createSessionStep).toHaveBeenCalledOnce();
+    expect(boot?.session.start.kind).toBe("turn");
+    await boot?.session.sessionTimeoutControl?.start();
+    expect(startSessionTimeoutStep).not.toHaveBeenCalled();
+    expect(boot?.session.sessionTimeoutControl?.takeTurnInput()).toMatchObject({
+      ownerRunId: "session-1",
+      token: "eve:session:session-1:inbox",
+      deadline: boot?.session.sessionTimeoutDeadline,
+    });
+  });
+
   it("prepares controls and starts the timeout while session creation is pending", async () => {
     const sessionCreation = deferred<never>();
     const timeoutStartup = deferred<{ runId: string }>();
