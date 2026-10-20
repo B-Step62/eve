@@ -6538,6 +6538,29 @@ describe("slackChannel() code channels", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("cancels once for a stop in a code channel thread, even when Slack redelivers it", async () => {
+    useCodeChannels(["C_CODE_THREAD_STOP"]);
+    const channel = slackChannel({
+      codeChannels: true,
+      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
+    });
+    const body = buildEventBody(
+      {
+        channel: "C_CODE_THREAD_STOP",
+        thread_ts: "1700000000.000100",
+        type: "agent_session_stopped",
+        user: "U1",
+      },
+      { eventId: "Ev_STOP_THREAD" },
+    );
+
+    const first = await firePost(channel, buildSignedRequest({ body }));
+    const redelivered = await firePost(channel, buildSignedRequest({ body }));
+
+    expect(first.cancel).toHaveBeenCalledWith({ continuationToken: "C_CODE_THREAD_STOP:0" });
+    expect(redelivered.cancel).not.toHaveBeenCalled();
+  });
+
   it("suspends the session status while a turn waits on input", async () => {
     useCodeChannels([]);
     const adapter = withState(

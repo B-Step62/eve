@@ -1155,12 +1155,25 @@ async function handleEventPost(input: {
   const installationTeamId = slackEventInstallationTeamId(envelope);
 
   // Slack requires an agent to stop when a person stops a code channel session.
+  // The stop names the channel, or a thread in it; both are the channel's one session.
   const stopped = envelope.event;
   if (
     stopped.type === "agent_session_stopped" &&
     typeof stopped.channel === "string" &&
-    stopped.thread_ts === undefined
+    (stopped.thread_ts === undefined ||
+      (config.codeChannels === true &&
+        (await isSlackCodeChannel(
+          stopped.channel,
+          buildSlackWorkspaceHandle({
+            api: input.api,
+            botToken: config.credentials?.botToken,
+            installationTeamId,
+            teamId: typeof envelope.team_id === "string" ? envelope.team_id : undefined,
+          }).request,
+        ))))
   ) {
+    // A redelivered stop must not cancel a turn that started after the first one.
+    if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) return new Response("ok");
     const source = input.from(slackContinuationToken(stopped.channel, CODE_CHANNEL_THREAD_TS));
     input.waitUntil(
       source.cancel().catch((error: unknown) => {
@@ -1270,22 +1283,31 @@ async function handleEventPost(input: {
   dispatch ??= builtinDefault;
   if (dispatch === null) return new Response("ok");
 
-  const eventId = envelope.event_id;
-  if (eventId) {
-    if (input.handledEvents.has(eventId)) {
-      log.warn("received a duplicate event", {
-        event_id: eventId,
-        event_time: envelope.event_time,
-        retry_num: payload.retry?.num ?? "(null)",
-        retry_reason: payload.retry?.reason ?? "(null)",
-      });
-      return new Response("ok");
-    }
-    markEventHandled(eventId, input.handledEvents);
-  }
+  if (isDuplicateEvent(envelope, payload.retry, input.handledEvents)) return new Response("ok");
 
   input.waitUntil(dispatch());
   return new Response("ok");
+}
+
+/** Whether this process already handled the event; marks it handled otherwise. */
+function isDuplicateEvent(
+  envelope: SlackEventEnvelope,
+  retry: { readonly num?: unknown; readonly reason?: unknown } | undefined,
+  handledEvents: Set<string>,
+): boolean {
+  const eventId = envelope.event_id;
+  if (!eventId) return false;
+  if (handledEvents.has(eventId)) {
+    log.warn("received a duplicate event", {
+      event_id: eventId,
+      event_time: envelope.event_time,
+      retry_num: retry?.num ?? "(null)",
+      retry_reason: retry?.reason ?? "(null)",
+    });
+    return true;
+  }
+  markEventHandled(eventId, handledEvents);
+  return false;
 }
 
 function isSelfAuthoredSlackMessage(
