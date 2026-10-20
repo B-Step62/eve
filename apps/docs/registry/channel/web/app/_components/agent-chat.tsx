@@ -1,9 +1,7 @@
 "use client";
 
-import { interaction } from "eve/events";
-
 import { ClientError, type MessagePart } from "eve/client";
-import { activity, failure, type Activity } from "eve/events";
+import { activity, failure, interaction, type Activity } from "eve/events";
 import { useEveAgent } from "eve/react";
 import { AlertCircleIcon, BrainIcon, PlusIcon, SquareIcon } from "lucide-react";
 import { useRef, useState } from "react";
