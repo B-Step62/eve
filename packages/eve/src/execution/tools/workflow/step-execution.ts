@@ -77,12 +77,14 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
         if (isConnectionAuthorizationFailedError(error) && !error.retryable) {
           const signIn = failedSignIn(error);
           return {
-            kind: "authorization-failed",
+            kind: "result",
             authorized: authorized(signIn),
-            connectionName: error.connectionName,
-            message: error.message,
-            ...(error.reason !== undefined && { reason: error.reason }),
-            ...(signIn !== undefined && { signIn }),
+            failure: {
+              connectionName: error.connectionName,
+              message: error.message,
+              ...(error.reason !== undefined && { reason: error.reason }),
+              ...(signIn !== undefined && { signIn }),
+            },
           };
         }
         throw error;

@@ -160,8 +160,8 @@ describe("workflow step authorization", () => {
         ctx.requireAuth(provider);
       }, input),
     ).resolves.toMatchObject({
-      kind: "authorization-failed",
-      reason: "token_rejected_after_authorization",
+      kind: "result",
+      failure: { reason: "token_rejected_after_authorization" },
     });
     expect(complete).toHaveBeenCalledOnce();
   });
@@ -241,8 +241,10 @@ describe("workflow step authorization", () => {
         ],
       }),
     ).resolves.toMatchObject({
-      kind: "authorization-failed",
-      message: expect.stringContaining("rejected the token immediately after authorization"),
+      kind: "result",
+      failure: {
+        message: expect.stringContaining("rejected the token immediately after authorization"),
+      },
     });
     expect(evict).toHaveBeenCalledOnce();
   });

@@ -94,16 +94,17 @@ async function executeAuthorizedStep(
       );
 
       if (result.kind === "result") {
-        await reportPendingAsFailed(run, ctx.abortSignal, pending);
-        return result.output;
-      }
-      if (result.kind === "authorization-failed") {
-        const failure = new ConnectionAuthorizationFailedError(result.connectionName, {
-          message: result.message,
-          ...(result.reason !== undefined && { reason: result.reason }),
+        if (result.failure === undefined) {
+          await reportPendingAsFailed(run, ctx.abortSignal, pending);
+          return result.output;
+        }
+        const { connectionName, message, reason, signIn } = result.failure;
+        const failure = new ConnectionAuthorizationFailedError(connectionName, {
+          message,
+          ...(reason !== undefined && { reason }),
           retryable: false,
         });
-        if (result.signIn !== undefined) attributeSignInFailure(failure, result.signIn);
+        if (signIn !== undefined) attributeSignInFailure(failure, signIn);
         await reportPendingAsFailed(run, ctx.abortSignal, pending, failure);
         throw failure;
       }
