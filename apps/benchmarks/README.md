@@ -5,11 +5,21 @@ This private workspace measures how coding agents create and modify eve projects
 run automatically in CI or as part of `pnpm test`.
 
 To benchmark a same-repository pull request, add the `run-authoring-benchmark` label. The
-[Authoring Benchmark workflow](../../.github/workflows/authoring-benchmark.yml) waits for the PR's
-`pkg.eve.dev` package (or uses `main`'s when the PR does not affect the eve package), runs the
-PR's published cases once with the guided treatment, and attaches the results as an artifact. It
-uses `claude-sonnet-5` unless the `EVE_BENCHMARK_MODEL` repository variable names another model.
-Remove and re-add the label to benchmark a newer commit.
+[Authoring Benchmark workflow](../../.github/workflows/authoring-benchmark.yml) uses the branch's
+runner and cases, and the PR's `pkg.eve.dev` package (or `main`'s when the PR does not affect the
+eve package). By default it runs the published cases once with `claude-sonnet-5` (or the
+`EVE_BENCHMARK_MODEL` repository variable). To choose models and cases, add a line to the PR body:
+
+```text
+authoring-benchmark: models=kimi-k3,gpt-6-sol-high cases=author-008-restock-agent runs=3
+```
+
+`models=all` selects every supported model. Each model runs as its own job with its own summary
+and results artifact. Remove and re-add the label to run again. The workflow can also be
+dispatched from the Actions tab on a branch with the same options as inputs.
+
+Locally, pass several cases as separate or comma-separated arguments:
+`pnpm benchmark author-001-weather-tool,author-005-conditional-approval`.
 
 ## Run
 

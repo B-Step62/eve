@@ -1,37 +1,129 @@
 name: Authoring Benchmark
 
-# Runs the apps/benchmarks authoring cases against a pull request's eve package
-# when a maintainer adds the `run-authoring-benchmark` label. Remove and re-add
-# the label to benchmark a newer commit.
+# Runs the apps/benchmarks authoring cases against a branch's own code and eve
+# package. Both triggers use the workflow, runner, and cases from the branch.
+#
+# - Add the `run-authoring-benchmark` label to a same-repository PR. Choose
+#   models and cases with an optional line in the PR body:
+#     authoring-benchmark: models=kimi-k3,gpt-6-sol-high cases=author-008-restock-agent runs=3
+#   `models=all` selects every supported model. Remove and re-add the label to
+#   run again after a push or a body edit.
+# - Or dispatch this workflow from the Actions tab on any branch with the same
+#   options as inputs.
 on:
   pull_request:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Comma-separated model ids, or "all" (default claude-sonnet-5)
+        type: string
+      cases:
+        description: Comma-separated case names (default the published cases)
+        type: string
+      runs:
+        description: Runs per case, 1-5
+        type: string
+        default: "1"
 
 concurrency:
-  group: authoring-benchmark-${{ github.event.pull_request.number }}
+  group: authoring-benchmark-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   statuses: read
 
+env:
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
-  benchmark:
-    name: Authoring benchmark
+  request:
+    name: Resolve benchmark request
     if: >-
-      github.event.label.name == 'run-authoring-benchmark' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'run-authoring-benchmark' &&
+      github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      models: ${{ steps.selection.outputs.models }}
+      cases: ${{ steps.selection.outputs.cases }}
+      runs: ${{ steps.selection.outputs.runs }}
+      canary: ${{ steps.canary.outputs.ref }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Resolve models and cases
+        id: selection
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          INPUT_MODELS: ${{ inputs.models }}
+          INPUT_CASES: ${{ inputs.cases }}
+          INPUT_RUNS: ${{ inputs.runs }}
+          DEFAULT_MODEL: ${{ vars.EVE_BENCHMARK_MODEL }}
+        run: node .github/scripts/resolve-authoring-benchmark.mjs
+
+      # The benchmark runner only accepts published canaries. The Vercel eve-pkg
+      # preview deployment publishes PR heads by SHA, or skips when a change
+      # does not affect the eve package, in which case main's package applies.
+      - name: Resolve the eve package
+        id: canary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="https://pkg.eve.dev/${HEAD_SHA}/eve.tgz"
+          for _ in $(seq 1 60); do
+            if curl -fsIL -o /dev/null "$url"; then
+              echo "ref=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/statuses" \
+              --jq '[.[] | select(.context == "Vercel – eve-pkg")][0] | "\(.state) \(.description)"')
+            case "$status" in
+              "success Skipped"*)
+                echo "This change does not affect the eve package; benchmarking main's package."
+                echo "ref=main" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              failure* | error*)
+                echo "::error::The Vercel – eve-pkg deployment failed: ${status}"
+                exit 1
+                ;;
+            esac
+            sleep 30
+          done
+          echo "::error::$url was not published within 30 minutes. eve-pkg only publishes main and same-repository PR heads."
+          exit 1
+
+  benchmark:
+    name: Benchmark ${{ matrix.model }}
+    needs: request
     runs-on: ubuntu-latest
     # Each case can take up to EVE_BENCHMARK_TIMEOUT (15 minutes) plus sandbox
-    # setup; the eve-pkg preview build can take several minutes to publish.
-    timeout-minutes: 150
+    # setup, and cases run sequentially within a model.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{ fromJSON(needs.request.outputs.models) }}
     env:
       AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_TEAM_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      BENCHMARK_MODEL: ${{ vars.EVE_BENCHMARK_MODEL || 'claude-sonnet-5' }}
+      MODEL: ${{ matrix.model }}
+      CASES: ${{ needs.request.outputs.cases }}
+      RUNS: ${{ needs.request.outputs.runs }}
+      CANARY_REF: ${{ needs.request.outputs.canary }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,54 +142,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --filter @eve-internal/benchmarks...
 
-      # The benchmark runner only accepts published canaries. The Vercel eve-pkg
-      # preview deployment publishes the PR head by SHA, or skips when the PR
-      # does not affect the eve package, in which case main's package applies.
-      - name: Resolve the eve package
-        id: canary
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          url="https://pkg.eve.dev/${HEAD_SHA}/eve.tgz"
-          for _ in $(seq 1 60); do
-            if curl -fsIL -o /dev/null "$url"; then
-              echo "ref=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            status=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/statuses" \
-              --jq '[.[] | select(.context == "Vercel – eve-pkg")][0] | "\(.state) \(.description)"')
-            case "$status" in
-              "success Skipped"*)
-                echo "This PR does not affect the eve package; benchmarking main's package."
-                echo "ref=main" >> "$GITHUB_OUTPUT"
-                exit 0
-                ;;
-              failure* | error*)
-                echo "::error::The Vercel – eve-pkg deployment failed: ${status}"
-                exit 1
-                ;;
-            esac
-            sleep 30
-          done
-          echo "::error::$url was not published within 30 minutes. Check the Vercel – eve-pkg deployment."
-          exit 1
-
       - name: Run benchmark
         working-directory: apps/benchmarks
-        env:
-          CANARY_REF: ${{ steps.canary.outputs.ref }}
-        run: pnpm benchmark --canary "$CANARY_REF" --model "$BENCHMARK_MODEL"
+        # An empty CASES selects the published cases.
+        run: pnpm benchmark ${CASES:+"$CASES"} --canary "$CANARY_REF" --model "$MODEL" --runs "$RUNS"
 
       - name: Summarize results
         if: ${{ !cancelled() }}
         working-directory: apps/benchmarks
-        env:
-          CANARY_REF: ${{ steps.canary.outputs.ref }}
         run: |
           {
-            echo "### Authoring benchmark"
+            echo "### Authoring benchmark: ${MODEL}"
             echo
-            echo "eve canary \`${CANARY_REF:0:12}\` with \`${BENCHMARK_MODEL}\`"
+            echo "eve canary \`${CANARY_REF:0:12}\`, ${RUNS} run(s) per case"
             echo
             echo "| Case | Passed | Pass rate |"
             echo "| --- | --- | --- |"
@@ -113,7 +170,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: authoring-benchmark-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          name: authoring-benchmark-${{ matrix.model }}-${{ env.HEAD_SHA }}
           path: apps/benchmarks/results/
           if-no-files-found: ignore
           retention-days: 14
