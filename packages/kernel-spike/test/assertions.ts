@@ -66,9 +66,7 @@ export function check(name: ScenarioName, r: RunResult, traits: HostTraits): voi
       expect(turnEnd(r.events)).toBe("completed");
       expect(lastAssistant(h)).toBe("Done.");
       expect(file(r.ws, "out.txt")).toBe("alpha+beta\n");
-      // The write waits for both reads.
-      expect(at("tool_start", "w1")).toBeGreaterThan(at("tool_end", "r1"));
-      expect(at("tool_start", "w1")).toBeGreaterThan(at("tool_end", "r2"));
+      // eve's rule: all calls of a response run together, with no write fence.
       if (traits.parallelReads) {
         // Both reads start before either ends.
         expect(at("tool_start", "r2")).toBeLessThan(at("tool_end", "r1"));
@@ -81,13 +79,11 @@ export function check(name: ScenarioName, r: RunResult, traits: HostTraits): voi
     }
     case "crash_in_write": {
       expect(turnEnd(r.events)).toBe("completed");
-      // The write ran exactly once, and the model was told it may have run.
-      expect(file(r.ws, "report.txt")).toBe("report\n");
-      expect(t.filter((l) => l.kind === "side_effect")).toHaveLength(1);
+      // eve's rule: the interrupted write runs again, so its side effect happens twice.
+      expect(file(r.ws, "report.txt")).toBe("report\nreport\n");
+      expect(t.filter((l) => l.kind === "side_effect")).toHaveLength(2);
       const result = h.find((m) => m.role === "tool");
-      expect(result?.role === "tool" && result.content).toContain(
-        "may or may not have taken effect",
-      );
+      expect(result?.role === "tool" && result.content).toBe("ok");
       expect(lastAssistant(h)).toBe("The write may not have finished, so I did not retry it.");
       break;
     }

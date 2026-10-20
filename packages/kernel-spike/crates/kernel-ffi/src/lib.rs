@@ -30,7 +30,12 @@ pub unsafe extern "C" fn fxk_new(config: *const c_char, len: usize) -> *mut Kern
 /// # Safety
 /// `k` must come from `fxk_new`; `inputs` must point to `len` bytes.
 #[no_mangle]
-pub unsafe extern "C" fn fxk_advance(k: *mut Kernel, inputs: *const c_char, len: usize, out_len: *mut usize) -> *mut c_char {
+pub unsafe extern "C" fn fxk_advance(
+    k: *mut Kernel,
+    inputs: *const c_char,
+    len: usize,
+    out_len: *mut usize,
+) -> *mut c_char {
     let k = &mut *k;
     let out = match serde_json::from_slice::<Vec<kernel::Input>>(bytes(inputs, len)) {
         Ok(inputs) => {
@@ -48,7 +53,10 @@ pub unsafe extern "C" fn fxk_advance(k: *mut Kernel, inputs: *const c_char, len:
 /// `buf` and `len` must come from `fxk_advance`.
 #[no_mangle]
 pub unsafe extern "C" fn fxk_free(buf: *mut c_char, len: usize) {
-    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(buf.cast::<u8>(), len)));
+    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+        buf.cast::<u8>(),
+        len,
+    )));
 }
 
 /// # Safety

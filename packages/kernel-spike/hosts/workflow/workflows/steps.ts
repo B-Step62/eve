@@ -2,7 +2,6 @@
 // kernel and touch the workspace. Workflow code never imports these modules
 // directly; it calls the steps.
 
-import { getStepMetadata } from "workflow";
 import { resumeHook } from "workflow/api";
 
 import type {
@@ -51,11 +50,9 @@ export async function cancelStep(ws: string, key: string): Promise<void> {
 }
 
 /**
- * One kernel effect. Workflow reruns a step that did not finish, so a
- * `never` effect on a later attempt reports `interrupted { crashed }`
- * instead of running again (R2). A thrown error stands in for a crash: in
- * this in-process test the Workflow runtime retries the step the same way it
- * redelivers one after a process dies.
+ * One kernel effect. A step that did not finish runs again (eve's rule). A
+ * thrown error stands in for a crash: in this in-process test the Workflow
+ * runtime retries the step the same way it redelivers one after a process dies.
  */
 export async function runEffectStep(
   name: string,
@@ -66,10 +63,6 @@ export async function runEffectStep(
   const { existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { loadScenarios, ScenarioHost } = await import("../../../src/scenario.ts");
-  const { attempt } = getStepMetadata();
-  if (request.replay === "never" && attempt > 1) {
-    return { status: "interrupted", reason: "crashed", partial: null };
-  }
   const host = new ScenarioHost(ws, loadScenarios().scenarios[name]!);
   return host.run(request, {
     crash: async () => {

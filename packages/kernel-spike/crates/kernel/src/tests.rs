@@ -2,24 +2,32 @@ use serde_json::json;
 
 use super::*;
 
+fn tool(name: &str, approval: Approval) -> ToolDescriptor {
+    ToolDescriptor {
+        name: name.into(),
+        description: String::new(),
+        approval,
+    }
+}
+
 fn config() -> SessionConfig {
     SessionConfig {
         system: "test".into(),
         tools: vec![
-            ToolDescriptor {
-                name: "read_file".into(),
-                description: "".into(),
-                read_only: true,
-                replay: Replay::Safe,
-            },
-            ToolDescriptor {
-                name: "write_file".into(),
-                description: "".into(),
-                read_only: false,
-                replay: Replay::Never,
-            },
+            tool("read_file", Approval::Never),
+            tool("write_file", Approval::Never),
+            tool("deploy", Approval::Always),
+            tool("send_email", Approval::Once),
+            tool("delete", Approval::Auto),
         ],
         step_limit: 0,
+        host_policy: false,
+        caution: Caution::Ask,
+        review: ReviewConfig {
+            model: Some("review-model".into()),
+            instructions: None,
+        },
+        compaction: CompactionConfig::default(),
     }
 }
 
@@ -37,13 +45,34 @@ fn done(key: &str, output: Value) -> Input {
     }
 }
 
-fn calls(out: &Output) -> Vec<(&str, &str, Vec<String>)> {
+fn calls_one(name: &str) -> Value {
+    json!({ "tool_calls": [{ "id": "c", "name": name, "input": { "x": 1 } }] })
+}
+
+fn kinds(out: &Output) -> Vec<(String, &'static str)> {
     out.effects
         .iter()
-        .map(|e| match &e.effect {
-            Effect::ToolCall { name, .. } => (e.key.as_str(), name.as_str(), e.after.clone()),
-            Effect::ModelCall { .. } => (e.key.as_str(), "model", e.after.clone()),
-            Effect::Wait { .. } => (e.key.as_str(), "wait", e.after.clone()),
+        .map(|e| {
+            let k = match &e.effect {
+                Effect::ModelCall {
+                    purpose: ModelPurpose::Agent,
+                    ..
+                } => "model",
+                Effect::ModelCall {
+                    purpose: ModelPurpose::PermissionReview,
+                    ..
+                } => "review",
+                Effect::ModelCall {
+                    purpose: ModelPurpose::Compaction,
+                    ..
+                } => "compaction",
+                Effect::ToolCall { .. } => "tool",
+                Effect::PolicyDecide { .. } => "policy",
+                Effect::UserAsk { .. } => "ask",
+                Effect::BlobPut { .. } => "blob",
+                Effect::Wait { .. } => "wait",
+            };
+            (e.key.clone(), k)
         })
         .collect()
 }
@@ -55,11 +84,29 @@ fn ended(out: &Output) -> Option<TurnEnd> {
     })
 }
 
+fn last_tool(s: &State) -> (String, bool) {
+    s.history
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            Message::Tool {
+                content, is_error, ..
+            } => Some((content.clone(), *is_error)),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// Starts a turn whose first model reply calls `name`.
+fn calling(s: &mut State, name: &str) -> Output {
+    advance(s, vec![prompt("go")]);
+    advance(s, vec![done("t1.s0.a0.model", calls_one(name))])
+}
+
 #[test]
-fn reads_run_together_and_the_write_waits() {
+fn calls_of_one_response_run_together_and_results_keep_call_order() {
     let mut s = open(config());
-    let out = advance(&mut s, vec![prompt("go")]);
-    assert_eq!(calls(&out), vec![("t1.s0.a0.model", "model", vec![])]);
+    advance(&mut s, vec![prompt("go")]);
     let out = advance(
         &mut s,
         vec![done(
@@ -67,34 +114,27 @@ fn reads_run_together_and_the_write_waits() {
             json!({ "tool_calls": [
                 { "id": "a", "name": "read_file", "input": {} },
                 { "id": "b", "name": "read_file", "input": {} },
-                { "id": "c", "name": "write_file", "input": {} },
+                { "id": "w", "name": "write_file", "input": {} },
             ]}),
         )],
     );
-    assert_eq!(
-        calls(&out),
-        vec![
-            ("t1.tool.a", "read_file", vec![]),
-            ("t1.tool.b", "read_file", vec![]),
-            (
-                "t1.tool.c",
-                "write_file",
-                vec!["t1.tool.a".into(), "t1.tool.b".into()]
-            ),
-        ]
+    assert_eq!(out.effects.len(), 3);
+    assert!(
+        out.effects.iter().all(|e| e.after.is_empty()),
+        "no write fence"
     );
-    assert_eq!(out.effects[2].replay, Replay::Never);
-    // Results arrive out of order; the model sees them in call order.
     advance(
         &mut s,
-        vec![done("t1.tool.b", json!("B")), done("t1.tool.a", json!("A"))],
+        vec![
+            done("t1.tool.w", json!("ok")),
+            done("t1.tool.b", json!("B")),
+        ],
     );
-    let out = advance(&mut s, vec![done("t1.tool.c", json!("ok"))]);
-    assert_eq!(calls(&out), vec![("t1.s1.a0.model", "model", vec![])]);
+    let out = advance(&mut s, vec![done("t1.tool.a", json!("A"))]);
     let Effect::ModelCall { request, .. } = &out.effects[0].effect else {
         panic!()
     };
-    let tool_ids: Vec<_> = request
+    let ids: Vec<_> = request
         .messages
         .iter()
         .filter_map(|m| match m {
@@ -102,43 +142,352 @@ fn reads_run_together_and_the_write_waits() {
             _ => None,
         })
         .collect();
-    assert_eq!(tool_ids, vec!["a", "b", "c"]);
-    let out = advance(
-        &mut s,
-        vec![done("t1.s1.a0.model", json!({ "text": "done" }))],
-    );
-    assert_eq!(ended(&out), Some(TurnEnd::Completed));
-    assert!(s.is_idle());
+    assert_eq!(ids, vec!["a", "b", "w"]);
 }
 
 #[test]
-fn a_crashed_never_effect_tells_the_model_it_may_have_run() {
+fn always_asks_and_a_denial_reaches_the_model() {
+    let mut s = open(config());
+    let out = calling(&mut s, "deploy");
+    assert_eq!(kinds(&out), vec![("t1.tool.c.ask".into(), "ask")]);
+    let out = advance(
+        &mut s,
+        vec![done(
+            "t1.tool.c.ask",
+            json!({ "approved": false, "reason": "Not today." }),
+        )],
+    );
+    assert_eq!(kinds(&out), vec![("t1.s1.a0.model".into(), "model")]);
+    assert_eq!(
+        last_tool(&s),
+        ("The user denied this tool call. Not today.".into(), true)
+    );
+}
+
+#[test]
+fn once_asks_the_first_time_only() {
+    let mut s = open(config());
+    calling(&mut s, "send_email");
+    let out = advance(
+        &mut s,
+        vec![done("t1.tool.c.ask", json!({ "approved": true }))],
+    );
+    assert_eq!(kinds(&out), vec![("t1.tool.c".into(), "tool")]);
+    advance(&mut s, vec![done("t1.tool.c", json!("sent"))]);
+    advance(
+        &mut s,
+        vec![done("t1.s1.a0.model", json!({ "text": "Sent." }))],
+    );
+    assert!(s.approved_tools.contains("send_email"));
+    advance(&mut s, vec![prompt("again")]);
+    let out = advance(
+        &mut s,
+        vec![done("t2.s0.a0.model", calls_one("send_email"))],
+    );
+    assert_eq!(kinds(&out), vec![("t2.tool.c".into(), "tool")]);
+}
+
+#[test]
+fn auto_reviews_with_the_review_model_and_clear_runs() {
+    let mut s = open(config());
+    let out = calling(&mut s, "delete");
+    assert_eq!(kinds(&out), vec![("t1.tool.c.review".into(), "review")]);
+    let Effect::ModelCall { model, request, .. } = &out.effects[0].effect else {
+        panic!()
+    };
+    assert_eq!(model.as_deref(), Some("review-model"));
+    assert_eq!(request.tools[0].name, approval::DECISION_TOOL);
+    let clear = json!({ "tool_calls": [{ "id": "d", "name": "permission_decision", "input": { "decision": "clear" } }] });
+    let out = advance(&mut s, vec![done("t1.tool.c.review", clear)]);
+    assert_eq!(kinds(&out), vec![("t1.tool.c".into(), "tool")]);
+}
+
+#[test]
+fn caution_asks_a_person_in_eve_and_holds_in_fx() {
+    let caution = json!({ "tool_calls": [{ "id": "d", "name": "permission_decision", "input": { "decision": "caution" } }] });
+    let mut eve = open(config());
+    calling(&mut eve, "delete");
+    let out = advance(&mut eve, vec![done("t1.tool.c.review", caution.clone())]);
+    assert_eq!(kinds(&out), vec![("t1.tool.c.ask".into(), "ask")]);
+
+    let mut fx = open(SessionConfig {
+        caution: Caution::Hold,
+        ..config()
+    });
+    calling(&mut fx, "delete");
+    let out = advance(&mut fx, vec![done("t1.tool.c.review", caution)]);
+    assert_eq!(kinds(&out), vec![("t1.s1.a0.model".into(), "model")]);
+    assert!(out
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::ToolHeld { .. })));
+    assert_eq!(last_tool(&fx), (approval::HELD.into(), true));
+}
+
+#[test]
+fn a_failed_review_counts_as_caution() {
+    let mut s = open(config());
+    calling(&mut s, "delete");
+    let out = advance(
+        &mut s,
+        vec![Input::EffectResult {
+            key: "t1.tool.c.review".into(),
+            result: EffectResult::Failed {
+                error: "timeout".into(),
+                retryable: false,
+            },
+        }],
+    );
+    assert_eq!(kinds(&out), vec![("t1.tool.c.ask".into(), "ask")]);
+}
+
+#[test]
+fn an_action_too_large_to_review_counts_as_caution() {
     let mut s = open(config());
     advance(&mut s, vec![prompt("go")]);
-    advance(
+    let big = json!({ "tool_calls": [{ "id": "c", "name": "delete", "input": { "x": "y".repeat(70_000) } }] });
+    let out = advance(&mut s, vec![done("t1.s0.a0.model", big)]);
+    assert_eq!(kinds(&out), vec![("t1.tool.c.ask".into(), "ask")]);
+}
+
+#[test]
+fn the_host_policy_decides_first_and_default_falls_back_to_the_tool() {
+    let mut s = open(SessionConfig {
+        host_policy: true,
+        ..config()
+    });
+    advance(&mut s, vec![prompt("go")]);
+    let out = advance(
         &mut s,
         vec![done(
             "t1.s0.a0.model",
-            json!({ "tool_calls": [{ "id": "w", "name": "write_file", "input": {} }] }),
+            json!({ "tool_calls": [
+                { "id": "a", "name": "read_file", "input": {} },
+                { "id": "b", "name": "deploy", "input": {} },
+                { "id": "c", "name": "write_file", "input": {} },
+            ]}),
         )],
+    );
+    assert_eq!(
+        kinds(&out).iter().filter(|(_, k)| *k == "policy").count(),
+        3
+    );
+    let out = advance(
+        &mut s,
+        vec![
+            done("t1.tool.a.policy", json!({ "decision": "allow" })),
+            done("t1.tool.b.policy", json!({ "decision": "default" })),
+            done(
+                "t1.tool.c.policy",
+                json!({ "decision": "deny", "reason": "Outside the workspace." }),
+            ),
+        ],
+    );
+    assert_eq!(
+        kinds(&out),
+        vec![
+            ("t1.tool.a".into(), "tool"),
+            ("t1.tool.b.ask".into(), "ask")
+        ]
+    );
+    advance(
+        &mut s,
+        vec![
+            done("t1.tool.a", json!("A")),
+            done("t1.tool.b.ask", json!({ "approved": true })),
+        ],
+    );
+    advance(&mut s, vec![done("t1.tool.b", json!("deployed"))]);
+    let denied = s.history.iter().find_map(|m| match m {
+        Message::Tool {
+            call_id, content, ..
+        } if call_id == "c" => Some(content.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        denied.as_deref(),
+        Some("Denied by the session policy. Outside the workspace.")
+    );
+}
+
+#[test]
+fn with_no_person_to_ask_the_call_fails_with_a_reason() {
+    let mut s = open(config());
+    calling(&mut s, "deploy");
+    advance(
+        &mut s,
+        vec![Input::EffectResult {
+            key: "t1.tool.c.ask".into(),
+            result: EffectResult::Failed {
+                error: "unavailable".into(),
+                retryable: false,
+            },
+        }],
+    );
+    assert_eq!(last_tool(&s), (approval::NO_PERSON.into(), true));
+}
+
+#[test]
+fn cancel_during_an_approval_closes_the_call_and_the_turn() {
+    let mut s = open(config());
+    calling(&mut s, "deploy");
+    let out = advance(&mut s, vec![Input::Cancel { id: "x".into() }]);
+    assert_eq!(
+        out.commands,
+        vec![Command::Cancel {
+            key: "t1.tool.c.ask".into()
+        }]
     );
     let out = advance(
         &mut s,
         vec![Input::EffectResult {
-            key: "t1.tool.w".into(),
+            key: "t1.tool.c.ask".into(),
             result: EffectResult::Interrupted {
-                reason: InterruptReason::Crashed,
+                reason: InterruptReason::Cancelled,
                 partial: Value::Null,
             },
         }],
     );
+    assert_eq!(ended(&out), Some(TurnEnd::Cancelled));
+    assert_eq!(last_tool(&s), ("Cancelled by the user.".into(), true));
+}
+
+fn compacting() -> SessionConfig {
+    SessionConfig {
+        compaction: CompactionConfig {
+            context_window_tokens: 1000,
+            threshold_percent: 0.9,
+            recent_messages: 2,
+            records: true,
+        },
+        ..config()
+    }
+}
+
+fn long_history(s: &mut State) {
+    for i in 0..6 {
+        s.history.push(Message::User {
+            text: format!("{i} {}", "x".repeat(800)),
+        });
+        s.history.push(Message::Assistant {
+            text: format!("reply {i}"),
+            tool_calls: vec![],
+            partial: false,
+        });
+    }
+}
+
+#[test]
+fn compaction_summarizes_older_messages_before_the_model_call() {
+    let mut s = open(compacting());
+    long_history(&mut s);
+    let out = advance(&mut s, vec![prompt("next")]);
+    assert_eq!(
+        kinds(&out),
+        vec![
+            ("t1.s0.compaction".into(), "compaction"),
+            ("t1.s0.compaction.record".into(), "blob")
+        ]
+    );
     let Effect::ModelCall { request, .. } = &out.effects[0].effect else {
         panic!()
     };
-    let last = request.messages.last().unwrap();
-    assert!(
-        matches!(last, Message::Tool { content, is_error: true, .. } if content.contains("may or may not have taken effect"))
+    let Message::User { text } = &request.messages[0] else {
+        panic!()
+    };
+    assert!(text.contains("### user\n0 xxx") && text.contains("<previous-checkpoint>"));
+    advance(
+        &mut s,
+        vec![done(
+            "t1.s0.compaction",
+            json!({ "text": "The user sent six notes." }),
+        )],
     );
+    // The model call waits for the record too.
+    let out = advance(&mut s, vec![done("t1.s0.compaction.record", Value::Null)]);
+    assert_eq!(kinds(&out), vec![("t1.s0.a0.model".into(), "model")]);
+    assert!(out
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::CompactionCompleted { kept: 2, .. })));
+    let Effect::ModelCall { request, .. } = &out.effects[0].effect else {
+        panic!()
+    };
+    assert!(matches!(&request.messages[0], Message::User { text } if text == compaction::MARKER));
+    assert!(
+        matches!(&request.messages[1], Message::Assistant { text, .. } if text == "The user sent six notes.")
+    );
+    assert!(matches!(request.messages.last(), Some(Message::User { text }) if text == "next"));
+    assert_eq!(request.messages.len(), 4);
+}
+
+#[test]
+fn a_failed_compaction_still_makes_the_model_call() {
+    let mut s = open(SessionConfig {
+        compaction: CompactionConfig {
+            records: false,
+            ..compacting().compaction
+        },
+        ..config()
+    });
+    long_history(&mut s);
+    advance(&mut s, vec![prompt("next")]);
+    let out = advance(
+        &mut s,
+        vec![Input::EffectResult {
+            key: "t1.s0.compaction".into(),
+            result: EffectResult::Failed {
+                error: "no".into(),
+                retryable: false,
+            },
+        }],
+    );
+    assert_eq!(kinds(&out), vec![("t1.s0.a0.model".into(), "model")]);
+    assert_eq!(s.history.len(), 13);
+}
+
+#[test]
+fn a_failed_model_call_is_tried_three_times_with_backoff() {
+    let mut s = open(config());
+    advance(&mut s, vec![prompt("go")]);
+    let fail = |key: &str| Input::EffectResult {
+        key: key.into(),
+        result: EffectResult::Failed {
+            error: "503".into(),
+            retryable: true,
+        },
+    };
+    let out = advance(&mut s, vec![fail("t1.s0.a0.model")]);
+    assert!(matches!(
+        &out.effects[0].effect,
+        Effect::Wait { ms: 500, .. }
+    ));
+    advance(&mut s, vec![done("t1.s0.a0.wait", Value::Null)]);
+    let out = advance(&mut s, vec![fail("t1.s0.a1.model")]);
+    assert!(matches!(
+        &out.effects[0].effect,
+        Effect::Wait { ms: 1000, .. }
+    ));
+    advance(&mut s, vec![done("t1.s0.a1.wait", Value::Null)]);
+    let out = advance(&mut s, vec![fail("t1.s0.a2.model")]);
+    assert_eq!(ended(&out), Some(TurnEnd::Failed));
+}
+
+#[test]
+fn a_failure_that_is_not_retryable_ends_the_turn() {
+    let mut s = open(config());
+    advance(&mut s, vec![prompt("go")]);
+    let out = advance(
+        &mut s,
+        vec![Input::EffectResult {
+            key: "t1.s0.a0.model".into(),
+            result: EffectResult::Failed {
+                error: "401".into(),
+                retryable: false,
+            },
+        }],
+    );
+    assert_eq!(ended(&out), Some(TurnEnd::Failed));
 }
 
 #[test]
@@ -171,139 +520,16 @@ fn a_steer_during_generation_cancels_the_model_call_and_continues() {
     let Effect::ModelCall { request, .. } = &out.effects[0].effect else {
         panic!()
     };
-    let tail: Vec<_> = request.messages.iter().rev().take(2).collect();
-    assert!(matches!(tail[0], Message::Steering { text } if text == "look at b"));
     assert!(
-        matches!(tail[1], Message::Assistant { partial: true, text, .. } if text == "I will lo")
+        matches!(request.messages.last(), Some(Message::Steering { text }) if text == "look at b")
     );
-    // The same steer delivered again is a no-op.
-    let out = advance(
-        &mut s,
-        vec![Input::Steer {
-            id: "s1".into(),
-            text: "look at b".into(),
-        }],
-    );
-    assert!(out.commands.is_empty());
 }
 
 #[test]
-fn a_steer_during_a_tool_waits_for_the_boundary() {
-    let mut s = open(config());
-    advance(&mut s, vec![prompt("go")]);
-    advance(
-        &mut s,
-        vec![done(
-            "t1.s0.a0.model",
-            json!({ "tool_calls": [{ "id": "a", "name": "read_file", "input": {} }] }),
-        )],
-    );
-    let out = advance(
-        &mut s,
-        vec![Input::Steer {
-            id: "s1".into(),
-            text: "also c".into(),
-        }],
-    );
-    assert!(out.commands.is_empty());
-    let out = advance(&mut s, vec![done("t1.tool.a", json!("A"))]);
-    let Effect::ModelCall { request, .. } = &out.effects[0].effect else {
-        panic!()
-    };
-    assert!(matches!(
-        request.messages.last(),
-        Some(Message::Steering { .. })
-    ));
-}
-
-#[test]
-fn cancel_during_a_tool_pairs_every_call_and_ends_the_turn() {
-    let mut s = open(config());
-    advance(&mut s, vec![prompt("go")]);
-    advance(
-        &mut s,
-        vec![done(
-            "t1.s0.a0.model",
-            json!({ "tool_calls": [{ "id": "a", "name": "read_file", "input": {} }] }),
-        )],
-    );
-    let out = advance(&mut s, vec![Input::Cancel { id: "c1".into() }]);
-    assert_eq!(
-        out.commands,
-        vec![Command::Cancel {
-            key: "t1.tool.a".into()
-        }]
-    );
-    let out = advance(
-        &mut s,
-        vec![Input::EffectResult {
-            key: "t1.tool.a".into(),
-            result: EffectResult::Interrupted {
-                reason: InterruptReason::Cancelled,
-                partial: Value::Null,
-            },
-        }],
-    );
-    assert_eq!(ended(&out), Some(TurnEnd::Cancelled));
-    assert!(matches!(s.history.last(), Some(Message::Tool { call_id, .. }) if call_id == "a"));
-    // The next prompt starts a clean turn.
-    let out = advance(&mut s, vec![prompt("again")]);
-    assert_eq!(calls(&out), vec![("t2.s0.a0.model", "model", vec![])]);
-}
-
-#[test]
-fn a_failed_model_call_backs_off_through_a_wait_effect() {
-    let mut s = open(config());
-    advance(&mut s, vec![prompt("go")]);
-    let out = advance(
-        &mut s,
-        vec![Input::EffectResult {
-            key: "t1.s0.a0.model".into(),
-            result: EffectResult::Failed {
-                error: "503".into(),
-                evidence: Some(ModelFailureEvidence {
-                    cause: recovery::FailureCause::ProviderUnavailable,
-                    delivery: recovery::Delivery::PossiblySent,
-                    streamed_bytes: 0,
-                    progress: recovery::Progress::Unknown,
-                    retry_after_seconds: None,
-                    recovery_elapsed_ns: None,
-                }),
-            },
-        }],
-    );
-    assert_eq!(calls(&out), vec![("t1.s0.a0.wait", "wait", vec![])]);
-    assert!(matches!(
-        &out.effects[0].effect,
-        Effect::Wait { ms: 250, .. }
-    ));
-    let out = advance(&mut s, vec![done("t1.s0.a0.wait", Value::Null)]);
-    assert_eq!(calls(&out), vec![("t1.s0.a1.model", "model", vec![])]);
-}
-
-#[test]
-fn the_step_limit_ends_the_turn_with_a_notice() {
-    let mut s = open(SessionConfig {
-        step_limit: 1,
-        ..config()
-    });
-    advance(&mut s, vec![prompt("go")]);
-    advance(
-        &mut s,
-        vec![done(
-            "t1.s0.a0.model",
-            json!({ "tool_calls": [{ "id": "a", "name": "read_file", "input": {} }] }),
-        )],
-    );
-    let out = advance(&mut s, vec![done("t1.tool.a", json!("A"))]);
-    assert_eq!(ended(&out), Some(TurnEnd::StepLimit));
-}
-
-#[test]
-fn the_same_inputs_give_the_same_outputs() {
+fn the_same_inputs_give_the_same_outputs_and_state_round_trips() {
     let run = || {
         let mut s = open(config());
-        let mut all = vec![advance(&mut s, vec![prompt("go")])];
+        let mut all = vec![calling(&mut s, "delete")];
         all.push(advance(
             &mut s,
             vec![Input::Steer {
@@ -317,13 +543,8 @@ fn the_same_inputs_give_the_same_outputs() {
         )
     };
     assert_eq!(run(), run());
-}
-
-#[test]
-fn state_round_trips_through_json() {
     let mut s = open(config());
-    advance(&mut s, vec![prompt("go")]);
-    let bytes = serde_json::to_string(&s).unwrap();
-    let back = migrate(serde_json::from_str(&bytes).unwrap()).unwrap();
+    calling(&mut s, "send_email");
+    let back = migrate(serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap()).unwrap();
     assert_eq!(back, s);
 }

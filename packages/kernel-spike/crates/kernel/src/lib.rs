@@ -1,11 +1,16 @@
-//! A toy agent kernel with no I/O.
+//! An agent kernel with no I/O.
 //!
 //! The host calls [`advance`] with the saved state and new inputs. The kernel
 //! returns the effects to run, commands for open effects, and events. The
 //! kernel never reads the clock, the environment, the network, or the disk.
+//!
+//! Version 2 decides tool approval (`approval`) and compaction
+//! (`compaction`), after eve. Calls of one response run together, a crashed
+//! effect may run again, and a failed model call is tried 3 times, as in eve.
+//! A steer stops generation, as in fx.
 
-pub mod ordering;
-pub mod recovery;
+pub mod approval;
+pub mod compaction;
 pub mod types;
 
 use std::collections::BTreeSet;
@@ -13,14 +18,17 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use recovery::{AttemptState, Evidence, OutputEvidence, RetryPacingState, Strategy, ToolEvidence};
+use approval::Verdict;
+use compaction::UsageMark;
 pub use types::*;
 
-const INTERRUPTED_TOOL: &str = "This tool call was interrupted before its result was recorded. \
-It may or may not have taken effect. Check the current state before you try it again.";
 const CANCELLED_TOOL: &str = "Cancelled by the user.";
 const STEP_LIMIT_NOTICE: &str =
     "Agent step limit reached; continue with a follow-up prompt if needed.";
+/// eve's `MODEL_CALL_MAX_ATTEMPTS`.
+const MODEL_CALL_MAX_ATTEMPTS: u32 = 3;
+/// eve's first backoff; it doubles. eve adds jitter, which needs randomness the kernel does not have.
+const RETRY_BASE_MS: u64 = 500;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct State {
@@ -33,6 +41,10 @@ pub struct State {
     /// Input ids already applied, so a redelivered input is a no-op.
     pub seen: BTreeSet<String>,
     pub turns: u64,
+    /// Tools a person approved this session (eve `once()`).
+    pub approved_tools: BTreeSet<String>,
+    pub usage: Option<UsageMark>,
+    pub compactions: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,27 +58,63 @@ pub struct Turn {
     pub n: u64,
     pub step: u32,
     pub attempt: u32,
-    pub consumed_attempts: usize,
-    pub pacing: RetryPacingState,
     pub phase: Phase,
     pub steers: Vec<Queued>,
     pub cancelling: bool,
+    /// Compaction ran (or was skipped) for this step's model call.
+    pub compacted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum Phase {
-    Model { key: String, steered: bool },
-    Tools { calls: Vec<PendingCall> },
-    Waiting { key: String },
+    Model {
+        key: String,
+        steered: bool,
+    },
+    Compacting {
+        key: String,
+        record: Option<String>,
+        keep_from: usize,
+        summary: Option<String>,
+    },
+    Tools {
+        calls: Vec<PendingCall>,
+    },
+    Waiting {
+        key: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PendingCall {
     pub call_id: String,
     pub name: String,
-    pub key: Option<String>,
-    pub result: Option<(String, bool)>,
+    pub input: Value,
+    pub approval: Approval,
+    pub stage: Stage,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum Stage {
+    Policy { key: String },
+    Review { key: String },
+    Ask { key: String },
+    Run { key: String },
+    Done { content: String, is_error: bool },
+}
+
+impl Stage {
+    fn open_key(&self) -> Option<&str> {
+        match self {
+            Stage::Policy { key }
+            | Stage::Review { key }
+            | Stage::Ask { key }
+            | Stage::Run { key } => Some(key),
+            Stage::Done { .. } => None,
+        }
+    }
 }
 
 pub fn open(config: SessionConfig) -> State {
@@ -78,10 +126,13 @@ pub fn open(config: SessionConfig) -> State {
         queued: Vec::new(),
         seen: BTreeSet::new(),
         turns: 0,
+        approved_tools: BTreeSet::new(),
+        usage: None,
+        compactions: 0,
     }
 }
 
-/// Upgrades an older state. Version 1 is the only version.
+/// Reads a saved state of this version.
 pub fn migrate(state: Value) -> Result<State, String> {
     let v = state.get("v").and_then(Value::as_u64).unwrap_or(0);
     if v != u64::from(STATE_VERSION) {
@@ -102,9 +153,22 @@ pub fn advance(state: &mut State, inputs: Vec<Input>) -> Output {
     out
 }
 
+fn effect(key: String, effect: Effect) -> EffectRequest {
+    EffectRequest {
+        key,
+        replay: Replay::Safe,
+        after: Vec::new(),
+        effect,
+    }
+}
+
 impl State {
     pub fn is_idle(&self) -> bool {
         self.turn.is_none() && self.queued.is_empty()
+    }
+
+    fn turn_mut(&mut self) -> &mut Turn {
+        self.turn.as_mut().expect("a turn")
     }
 
     fn first_time(&mut self, id: &str, out: &mut Output) -> bool {
@@ -131,20 +195,20 @@ impl State {
                 }
             }
             Input::Steer { id, text } => {
-                if !self.first_time(&id, out) {
-                    return;
+                if self.first_time(&id, out) {
+                    self.steer(id, text, out);
                 }
-                self.steer(id, text, out);
             }
             Input::Cancel { id } => {
-                if !self.first_time(&id, out) {
-                    return;
+                if self.first_time(&id, out) {
+                    self.cancel(out);
                 }
-                self.cancel(out);
             }
             Input::EffectResult { key, result } => self.effect_result(key, result, out),
         }
     }
+
+    // ---- turn ----------------------------------------------------------
 
     fn start_turn(&mut self, text: String, out: &mut Output) {
         self.turns += 1;
@@ -153,11 +217,10 @@ impl State {
             n: self.turns,
             step: 0,
             attempt: 0,
-            consumed_attempts: 0,
-            pacing: RetryPacingState::Idle,
             phase: Phase::Waiting { key: String::new() },
             steers: Vec::new(),
             cancelling: false,
+            compacted: false,
         });
         out.events.push(Event::TurnStarted { turn: self.turns });
         self.request_model(out);
@@ -165,11 +228,26 @@ impl State {
 
     fn request_model(&mut self, out: &mut Output) {
         let limit = self.config.step_limit;
-        let turn = self.turn.as_mut().expect("a turn");
-        if limit > 0 && turn.step >= limit {
+        if limit > 0 && self.turn_mut().step >= limit {
             self.end_turn(TurnEnd::StepLimit, Some(STEP_LIMIT_NOTICE.to_string()), out);
             return;
         }
+        if !self.turn_mut().compacted
+            && compaction::due(
+                &self.config.compaction,
+                &self.config.system,
+                &self.history,
+                self.usage,
+            )
+        {
+            if let Some(keep_from) =
+                compaction::keep_from(&self.history, self.config.compaction.recent_messages)
+            {
+                self.start_compaction(keep_from, out);
+                return;
+            }
+        }
+        let turn = self.turn.as_mut().expect("a turn");
         let key = format!("t{}.s{}.a{}.model", turn.n, turn.step, turn.attempt);
         turn.phase = Phase::Model {
             key: key.clone(),
@@ -185,18 +263,18 @@ impl State {
                 .map(|t| ToolSpec {
                     name: t.name.clone(),
                     description: t.description.clone(),
+                    input_schema: None,
                 })
                 .collect(),
         };
-        out.effects.push(EffectRequest {
+        out.effects.push(effect(
             key,
-            replay: Replay::Safe,
-            after: Vec::new(),
-            effect: Effect::ModelCall {
+            Effect::ModelCall {
                 purpose: ModelPurpose::Agent,
+                model: None,
                 request,
             },
-        });
+        ));
     }
 
     fn steer(&mut self, id: String, text: String, out: &mut Output) {
@@ -242,14 +320,14 @@ impl State {
             out.events.push(Event::SteersReturned { ids });
         }
         match &turn.phase {
-            Phase::Model { key, .. } | Phase::Waiting { key } => {
+            Phase::Model { key, .. } | Phase::Waiting { key } | Phase::Compacting { key, .. } => {
                 out.commands.push(Command::Cancel { key: key.clone() })
             }
             Phase::Tools { calls } => {
-                for call in calls {
-                    if let (Some(key), None) = (&call.key, &call.result) {
-                        out.commands.push(Command::Cancel { key: key.clone() });
-                    }
+                for key in calls.iter().filter_map(|c| c.stage.open_key()) {
+                    out.commands.push(Command::Cancel {
+                        key: key.to_string(),
+                    });
                 }
             }
         }
@@ -267,9 +345,15 @@ impl State {
                 let steered = *steered;
                 self.model_result(steered, result, out)
             }
+            Phase::Compacting { key: open, .. } if *open == key => {
+                self.compaction_result(result, out)
+            }
+            Phase::Compacting {
+                record: Some(open), ..
+            } if *open == key => self.record_result(out),
             Phase::Waiting { key: open } if *open == key => self.wait_result(out),
-            Phase::Tools { calls } if calls.iter().any(|c| c.key.as_deref() == Some(&key)) => {
-                self.tool_result(key, result, out)
+            Phase::Tools { calls } if calls.iter().any(|c| c.stage.open_key() == Some(&key)) => {
+                self.call_result(key, result, out)
             }
             _ => out.events.push(Event::Ignored {
                 reason: format!("stale result for {key}"),
@@ -277,20 +361,26 @@ impl State {
         }
     }
 
+    // ---- model ---------------------------------------------------------
+
     fn model_result(&mut self, steered: bool, result: EffectResult, out: &mut Output) {
-        let cancelling = self.turn.as_ref().is_some_and(|t| t.cancelling);
+        let cancelling = self.turn_mut().cancelling;
         match result {
             EffectResult::Completed { output } => {
                 let parsed: ModelOutput = serde_json::from_value(output).unwrap_or_default();
+                if let Some(tokens) = parsed.usage.and_then(|u| u.input_tokens) {
+                    self.usage = Some(UsageMark {
+                        input_tokens: tokens,
+                        messages: self.history.len(),
+                    });
+                }
                 if cancelling {
                     self.push_assistant(parsed.text, Vec::new(), false);
                     self.end_turn(TurnEnd::Cancelled, None, out);
                     return;
                 }
-                let turn = self.turn.as_mut().expect("a turn");
-                turn.consumed_attempts = 0;
-                turn.pacing = RetryPacingState::Idle;
-                let n = turn.n;
+                let n = self.turn_mut().n;
+                self.turn_mut().attempt = 0;
                 if parsed.tool_calls.is_empty() {
                     self.push_assistant(parsed.text.clone(), Vec::new(), false);
                     if self.take_steers() {
@@ -321,201 +411,428 @@ impl State {
                 } else if steered && self.take_steers() {
                     self.next_step(out);
                 } else {
-                    // A model call is `safe`; an interruption without a cancel is retried.
-                    self.turn.as_mut().expect("a turn").attempt += 1;
+                    self.turn_mut().attempt += 1;
                     self.request_model(out);
                 }
             }
-            EffectResult::Failed { error, evidence } => {
+            EffectResult::Failed { error, retryable } => {
                 if cancelling {
                     self.end_turn(TurnEnd::Cancelled, None, out);
                     return;
                 }
-                self.recover(error, evidence, out);
+                let turn = self.turn_mut();
+                if !retryable || turn.attempt + 1 >= MODEL_CALL_MAX_ATTEMPTS {
+                    self.end_turn(TurnEnd::Failed, Some(error), out);
+                    return;
+                }
+                let delay_ms = RETRY_BASE_MS << turn.attempt;
+                let key = format!("t{}.s{}.a{}.wait", turn.n, turn.step, turn.attempt);
+                turn.phase = Phase::Waiting { key: key.clone() };
+                out.events.push(Event::Retrying {
+                    attempt: turn.attempt + 1,
+                    delay_ms,
+                });
+                out.effects.push(effect(
+                    key,
+                    Effect::Wait {
+                        ms: delay_ms,
+                        reason: error,
+                    },
+                ));
             }
         }
     }
 
-    fn recover(&mut self, error: String, evidence: Option<ModelFailureEvidence>, out: &mut Output) {
-        let turn = self.turn.as_mut().expect("a turn");
-        let ev = evidence.unwrap_or(ModelFailureEvidence {
-            cause: recovery::FailureCause::ProviderUnavailable,
-            delivery: recovery::Delivery::PossiblySent,
-            streamed_bytes: 0,
-            progress: recovery::Progress::Unknown,
-            retry_after_seconds: None,
-            recovery_elapsed_ns: None,
-        });
-        let decision = recovery::decide(Evidence {
-            cause: ev.cause,
-            delivery: ev.delivery,
-            attempts: AttemptState::consumed(turn.consumed_attempts),
-            output: if ev.streamed_bytes > 0 {
-                OutputEvidence::Partial
-            } else {
-                OutputEvidence::None
-            },
-            tool: ToolEvidence::None,
-            pacing: turn.pacing,
-            retry_after_seconds: ev.retry_after_seconds,
-            cancelled: turn.cancelling,
-            progress: ev.progress,
-            recovery_elapsed_ns: ev.recovery_elapsed_ns,
-        });
-        if decision.reserve_provider_attempt {
-            turn.consumed_attempts += 1;
-        }
-        turn.pacing = decision.next_pacing;
-        let delay_ms = decision.delay_ns / 1_000_000;
-        out.events.push(Event::Recovery {
-            strategy: format!("{:?}", decision.strategy),
-            delay_ms,
-            required_action: format!("{:?}", decision.required_action),
-        });
-        if matches!(decision.strategy, Strategy::Stop | Strategy::Pause) {
-            let notice = format!("{error} ({:?})", decision.required_action);
-            self.end_turn(TurnEnd::Failed, Some(notice), out);
+    fn wait_result(&mut self, out: &mut Output) {
+        if self.turn_mut().cancelling {
+            self.end_turn(TurnEnd::Cancelled, None, out);
             return;
         }
-        if delay_ms == 0 {
-            turn.attempt += 1;
-            self.request_model(out);
-            return;
-        }
-        let key = format!("t{}.s{}.a{}.wait", turn.n, turn.step, turn.attempt);
-        turn.phase = Phase::Waiting { key: key.clone() };
-        out.effects.push(EffectRequest {
-            key,
-            replay: Replay::Safe,
-            after: Vec::new(),
-            effect: Effect::Wait {
-                ms: delay_ms,
-                reason: format!("{:?}", decision.strategy),
-            },
-        });
+        self.turn_mut().attempt += 1;
+        self.request_model(out);
     }
 
-    fn wait_result(&mut self, out: &mut Output) {
+    // ---- compaction ----------------------------------------------------
+
+    fn start_compaction(&mut self, keep_from: usize, out: &mut Output) {
+        let request = compaction::request(&self.history[..keep_from]);
+        let records = self.config.compaction.records;
+        let n = self.compactions + 1;
         let turn = self.turn.as_mut().expect("a turn");
+        let key = format!("t{}.s{}.compaction", turn.n, turn.step);
+        let record = records.then(|| format!("{key}.record"));
+        turn.phase = Phase::Compacting {
+            key: key.clone(),
+            record: record.clone(),
+            keep_from,
+            summary: None,
+        };
+        out.events.push(Event::CompactionStarted {
+            messages: keep_from,
+        });
+        out.effects.push(effect(
+            key,
+            Effect::ModelCall {
+                purpose: ModelPurpose::Compaction,
+                model: None,
+                request,
+            },
+        ));
+        if let Some(record) = record {
+            let content = serde_json::to_string(&self.history[..keep_from]).unwrap_or_default();
+            out.effects.push(effect(
+                record,
+                Effect::BlobPut {
+                    name: format!("compaction-{n}.json"),
+                    content,
+                },
+            ));
+        }
+    }
+
+    fn compaction_result(&mut self, result: EffectResult, out: &mut Output) {
+        let summary = match result {
+            EffectResult::Completed { output } => serde_json::from_value::<ModelOutput>(output)
+                .map(|o| o.text)
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        let turn = self.turn_mut();
         if turn.cancelling {
             self.end_turn(TurnEnd::Cancelled, None, out);
             return;
         }
-        turn.attempt += 1;
+        if summary.trim().is_empty() {
+            // A failed compaction keeps the history and makes the model call anyway.
+            turn.compacted = true;
+            self.request_model(out);
+            return;
+        }
+        if let Phase::Compacting { summary: s, .. } = &mut turn.phase {
+            *s = Some(summary);
+        }
+        self.maybe_finish_compaction(out);
+    }
+
+    fn record_result(&mut self, out: &mut Output) {
+        if let Phase::Compacting { record, .. } = &mut self.turn_mut().phase {
+            *record = None;
+        }
+        self.maybe_finish_compaction(out);
+    }
+
+    fn maybe_finish_compaction(&mut self, out: &mut Output) {
+        let turn = self.turn_mut();
+        let Phase::Compacting {
+            record: None,
+            keep_from,
+            summary: Some(summary),
+            ..
+        } = &turn.phase
+        else {
+            return;
+        };
+        let (keep_from, summary) = (*keep_from, summary.clone());
+        turn.compacted = true;
+        let kept = self.history[keep_from..].to_vec();
+        self.history = compaction::compacted(summary, &kept);
+        self.usage = None;
+        self.compactions += 1;
+        out.events.push(Event::CompactionCompleted {
+            removed: keep_from,
+            kept: kept.len(),
+        });
         self.request_model(out);
     }
 
+    // ---- tools and approval -------------------------------------------
+
     fn start_tools(&mut self, n: u64, tool_calls: Vec<ToolCall>, out: &mut Output) {
-        let descriptors: Vec<Option<ToolDescriptor>> = tool_calls
-            .iter()
-            .map(|c| self.config.tools.iter().find(|t| t.name == c.name).cloned())
-            .collect();
-        let read_only: Vec<bool> = descriptors
-            .iter()
-            .map(|d| d.as_ref().is_some_and(|d| d.read_only))
-            .collect();
-        let order = ordering::order(&read_only);
         let mut calls = Vec::with_capacity(tool_calls.len());
-        for (i, call) in tool_calls.into_iter().enumerate() {
-            match &descriptors[i] {
-                Some(d) => {
-                    let key = format!("t{n}.tool.{}", call.id);
-                    calls.push(PendingCall {
-                        call_id: call.id.clone(),
-                        name: call.name.clone(),
-                        key: Some(key.clone()),
-                        result: None,
-                    });
-                    out.effects.push(EffectRequest {
-                        key,
-                        replay: d.replay,
-                        after: Vec::new(),
-                        effect: Effect::ToolCall {
-                            call_id: call.id,
-                            name: call.name,
-                            input: call.input,
-                        },
-                    });
-                }
-                None => calls.push(PendingCall {
-                    call_id: call.id,
-                    name: call.name.clone(),
-                    key: None,
-                    result: Some((format!("Unknown tool: {}", call.name), true)),
-                }),
-            }
-        }
-        // Fill `after` now that every call has its key.
-        let first = out.effects.len() - calls.iter().filter(|c| c.key.is_some()).count();
-        let mut e = first;
-        for (i, call) in calls.iter().enumerate() {
-            if call.key.is_none() {
-                continue;
-            }
-            out.effects[e].after = order[i]
+        for call in tool_calls {
+            let descriptor = self
+                .config
+                .tools
                 .iter()
-                .filter_map(|&j| calls[j].key.clone())
-                .collect();
-            e += 1;
+                .find(|t| t.name == call.name)
+                .cloned();
+            let mut pending = PendingCall {
+                call_id: call.id.clone(),
+                name: call.name.clone(),
+                input: call.input,
+                approval: descriptor.as_ref().map(|d| d.approval).unwrap_or_default(),
+                stage: Stage::Done {
+                    content: format!("Unknown tool: {}", call.name),
+                    is_error: true,
+                },
+            };
+            if descriptor.is_some() {
+                pending.stage = if self.config.host_policy {
+                    let key = format!("t{n}.tool.{}.policy", pending.call_id);
+                    out.effects.push(effect(
+                        key.clone(),
+                        Effect::PolicyDecide {
+                            call_id: pending.call_id.clone(),
+                            name: pending.name.clone(),
+                            input: pending.input.clone(),
+                        },
+                    ));
+                    Stage::Policy { key }
+                } else {
+                    self.by_tool_policy(n, &pending, out)
+                };
+            }
+            calls.push(pending);
         }
-        self.turn.as_mut().expect("a turn").phase = Phase::Tools { calls };
+        self.turn_mut().phase = Phase::Tools { calls };
         self.maybe_finish_tools(out);
     }
 
-    fn tool_result(&mut self, key: String, result: EffectResult, out: &mut Output) {
-        let turn = self.turn.as_mut().expect("a turn");
-        let Phase::Tools { calls } = &mut turn.phase else {
-            return;
-        };
-        let call = calls
-            .iter_mut()
-            .find(|c| c.key.as_deref() == Some(&key))
-            .expect("a call");
-        if call.result.is_some() {
-            out.events.push(Event::Ignored {
-                reason: format!("second result for {key}"),
-            });
-            return;
+    /// The stage a call goes to under its tool's own policy.
+    fn by_tool_policy(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
+        match call.approval {
+            Approval::Never => self.run(n, call, out),
+            Approval::Always => self.ask(n, call, "This tool asks for approval every time.", out),
+            Approval::Once if self.approved_tools.contains(&call.name) => self.run(n, call, out),
+            Approval::Once => self.ask(
+                n,
+                call,
+                "This tool asks for approval once each session.",
+                out,
+            ),
+            Approval::Auto => self.review(n, call, out),
         }
-        let (content, is_error) = match result {
-            EffectResult::Completed { output } => (value_text(output), false),
-            EffectResult::Failed { error, .. } => (format!("Error: {error}"), true),
-            EffectResult::Interrupted {
-                reason: InterruptReason::Crashed,
-                ..
-            } => (INTERRUPTED_TOOL.into(), true),
-            EffectResult::Interrupted {
-                reason: InterruptReason::Cancelled,
-                ..
-            } => (CANCELLED_TOOL.into(), true),
-        };
-        out.events.push(Event::ToolFinished {
+    }
+
+    fn run(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
+        let key = format!("t{n}.tool.{}", call.call_id);
+        out.effects.push(effect(
+            key.clone(),
+            Effect::ToolCall {
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                input: call.input.clone(),
+            },
+        ));
+        Stage::Run { key }
+    }
+
+    fn ask(&self, n: u64, call: &PendingCall, reason: &str, out: &mut Output) -> Stage {
+        let key = format!("t{n}.tool.{}.ask", call.call_id);
+        out.events.push(Event::ApprovalRequested {
             call_id: call.call_id.clone(),
             name: call.name.clone(),
-            is_error,
+            reason: reason.to_string(),
         });
-        call.result = Some((content, is_error));
-        self.maybe_finish_tools(out);
+        out.effects.push(effect(
+            key.clone(),
+            Effect::UserAsk {
+                request: AskRequest::Approval {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                    reason: reason.to_string(),
+                },
+            },
+        ));
+        Stage::Ask { key }
     }
 
-    fn maybe_finish_tools(&mut self, out: &mut Output) {
-        let turn = self.turn.as_mut().expect("a turn");
+    fn review(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
+        if approval::too_large_to_review(&call.input) {
+            return self.cautioned(n, call, out);
+        }
+        let key = format!("t{n}.tool.{}.review", call.call_id);
+        let request = approval::review_request(
+            &call.name,
+            &call.input,
+            self.config.review.instructions.as_deref(),
+        );
+        out.effects.push(effect(
+            key.clone(),
+            Effect::ModelCall {
+                purpose: ModelPurpose::PermissionReview,
+                model: self.config.review.model.clone(),
+                request,
+            },
+        ));
+        Stage::Review { key }
+    }
+
+    fn cautioned(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
+        match self.config.caution {
+            Caution::Ask => self.ask(n, call, "The safety review returned caution.", out),
+            Caution::Hold => {
+                out.events.push(Event::ToolHeld {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                });
+                Stage::Done {
+                    content: approval::HELD.into(),
+                    is_error: true,
+                }
+            }
+        }
+    }
+
+    fn call_result(&mut self, key: String, result: EffectResult, out: &mut Output) {
+        let turn = self.turn.as_ref().expect("a turn");
+        let n = turn.n;
+        let cancelling = turn.cancelling;
         let Phase::Tools { calls } = &turn.phase else {
             return;
         };
-        if calls.iter().any(|c| c.result.is_none()) {
+        let index = calls
+            .iter()
+            .position(|c| c.stage.open_key() == Some(&key))
+            .expect("a call");
+        let call = calls[index].clone();
+        let next = if cancelling && !matches!(call.stage, Stage::Run { .. }) {
+            Stage::Done {
+                content: CANCELLED_TOOL.into(),
+                is_error: true,
+            }
+        } else {
+            match (&call.stage, result) {
+                (Stage::Policy { .. }, result) => self.after_policy(n, &call, result, out),
+                (Stage::Review { .. }, EffectResult::Completed { output }) => {
+                    let parsed: ModelOutput = serde_json::from_value(output).unwrap_or_default();
+                    match approval::verdict(&parsed) {
+                        Verdict::Clear => self.run(n, &call, out),
+                        Verdict::Caution => self.cautioned(n, &call, out),
+                    }
+                }
+                (Stage::Review { .. }, _) => self.cautioned(n, &call, out),
+                (Stage::Ask { .. }, result) => self.after_ask(n, &call, result, out),
+                (Stage::Run { .. }, result) => {
+                    let (content, is_error) = match result {
+                        EffectResult::Completed { output } => (value_text(output), false),
+                        EffectResult::Failed { error, .. } => (format!("Error: {error}"), true),
+                        EffectResult::Interrupted { .. } => (CANCELLED_TOOL.into(), true),
+                    };
+                    out.events.push(Event::ToolFinished {
+                        call_id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        is_error,
+                    });
+                    Stage::Done { content, is_error }
+                }
+                (Stage::Done { .. }, _) => unreachable!("a done call has no open key"),
+            }
+        };
+        if let Phase::Tools { calls } = &mut self.turn_mut().phase {
+            calls[index].stage = next;
+        }
+        self.maybe_finish_tools(out);
+    }
+
+    fn after_policy(
+        &mut self,
+        n: u64,
+        call: &PendingCall,
+        result: EffectResult,
+        out: &mut Output,
+    ) -> Stage {
+        let EffectResult::Completed { output } = result else {
+            return Stage::Done {
+                content: "Error: the session policy could not decide.".into(),
+                is_error: true,
+            };
+        };
+        let reason = output
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        match output
+            .get("decision")
+            .and_then(Value::as_str)
+            .unwrap_or("default")
+        {
+            "allow" => self.run(n, call, out),
+            "deny" => Stage::Done {
+                content: format!("Denied by the session policy. {reason}")
+                    .trim()
+                    .into(),
+                is_error: true,
+            },
+            "ask" => self.ask(
+                n,
+                call,
+                if reason.is_empty() {
+                    "The session policy asks for approval."
+                } else {
+                    &reason
+                },
+                out,
+            ),
+            "review" => self.review(n, call, out),
+            _ => self.by_tool_policy(n, call, out),
+        }
+    }
+
+    fn after_ask(
+        &mut self,
+        n: u64,
+        call: &PendingCall,
+        result: EffectResult,
+        out: &mut Output,
+    ) -> Stage {
+        match result {
+            EffectResult::Completed { output }
+                if output.get("approved").and_then(Value::as_bool) == Some(true) =>
+            {
+                out.events.push(Event::ApprovalResolved {
+                    call_id: call.call_id.clone(),
+                    approved: true,
+                });
+                if call.approval == Approval::Once {
+                    self.approved_tools.insert(call.name.clone());
+                }
+                self.run(n, call, out)
+            }
+            EffectResult::Completed { output } => {
+                out.events.push(Event::ApprovalResolved {
+                    call_id: call.call_id.clone(),
+                    approved: false,
+                });
+                let reason = output.get("reason").and_then(Value::as_str).unwrap_or("");
+                Stage::Done {
+                    content: format!("{} {reason}", approval::DENIED).trim().into(),
+                    is_error: true,
+                }
+            }
+            EffectResult::Failed { .. } => Stage::Done {
+                content: approval::NO_PERSON.into(),
+                is_error: true,
+            },
+            EffectResult::Interrupted { .. } => Stage::Done {
+                content: CANCELLED_TOOL.into(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn maybe_finish_tools(&mut self, out: &mut Output) {
+        let turn = self.turn_mut();
+        let Phase::Tools { calls } = &turn.phase else {
+            return;
+        };
+        if calls.iter().any(|c| c.stage.open_key().is_some()) {
             return;
         }
         let cancelling = turn.cancelling;
         let messages: Vec<Message> = calls
             .iter()
             .map(|c| {
-                let (content, is_error) = c.result.clone().expect("a result");
+                let Stage::Done { content, is_error } = &c.stage else {
+                    unreachable!()
+                };
                 Message::Tool {
                     call_id: c.call_id.clone(),
                     name: c.name.clone(),
-                    content,
-                    is_error,
+                    content: content.clone(),
+                    is_error: *is_error,
                 }
             })
             .collect();
@@ -528,16 +845,19 @@ impl State {
         self.next_step(out);
     }
 
+    // ---- shared --------------------------------------------------------
+
     fn next_step(&mut self, out: &mut Output) {
-        let turn = self.turn.as_mut().expect("a turn");
+        let turn = self.turn_mut();
         turn.step += 1;
         turn.attempt = 0;
+        turn.compacted = false;
         self.request_model(out);
     }
 
     /// Moves pending steers into the history. Returns whether there were any.
     fn take_steers(&mut self) -> bool {
-        let turn = self.turn.as_mut().expect("a turn");
+        let turn = self.turn_mut();
         if turn.steers.is_empty() {
             return false;
         }

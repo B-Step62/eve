@@ -3,36 +3,108 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::recovery::{Delivery, FailureCause, Progress};
+pub const STATE_VERSION: u32 = 2;
 
-pub const STATE_VERSION: u32 = 1;
-
+/// Hosts may run any effect again after a crash (eve's rule). The field stays
+/// so hosts can read it; every effect is `safe`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Replay {
-    /// The host may run the effect again after a crash.
     Safe,
-    /// The host must not run the effect again after a crash. It reports
-    /// `interrupted { reason: crashed }` instead.
+}
+
+/// eve's tool approval policies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Approval {
+    /// No approval needed (eve `never()`, and tools without a policy).
+    #[default]
     Never,
+    /// Ask a person every time (eve `always()`).
+    Always,
+    /// Ask until a person approves this tool once in the session (eve `once()`).
+    Once,
+    /// A review model decides: clear runs, caution follows `caution` (eve `auto()`).
+    Auto,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolDescriptor {
     pub name: String,
     pub description: String,
-    pub read_only: bool,
-    pub replay: Replay,
+    #[serde(default)]
+    pub approval: Approval,
+}
+
+/// What a review's `caution` does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Caution {
+    /// Ask a person (eve).
+    #[default]
+    Ask,
+    /// Hold the action and tell the model (fx).
+    Hold,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewConfig {
+    /// The review model; the host's agent model when absent.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompactionConfig {
+    /// 0 turns compaction off.
+    #[serde(default)]
+    pub context_window_tokens: u64,
+    #[serde(default = "default_threshold")]
+    pub threshold_percent: f64,
+    #[serde(default = "default_recent")]
+    pub recent_messages: usize,
+    /// Store each compacted transcript with a `blob.put` effect.
+    #[serde(default)]
+    pub records: bool,
+}
+
+fn default_threshold() -> f64 {
+    0.9
+}
+fn default_recent() -> usize {
+    10
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            context_window_tokens: 0,
+            threshold_percent: 0.9,
+            recent_messages: 10,
+            records: false,
+        }
+    }
 }
 
 /// Prepared once by the distribution. The kernel never reads settings.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionConfig {
     pub system: String,
     pub tools: Vec<ToolDescriptor>,
     /// 0 means no limit.
     #[serde(default)]
     pub step_limit: u32,
+    /// Ask the host's session policy before each tool call (`policy.decide`).
+    #[serde(default)]
+    pub host_policy: bool,
+    #[serde(default)]
+    pub caution: Caution,
+    #[serde(default)]
+    pub review: ReviewConfig,
+    #[serde(default)]
+    pub compaction: CompactionConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -49,7 +121,7 @@ pub enum Input {
 pub enum InterruptReason {
     /// The host obeyed a `cancel` command.
     Cancelled,
-    /// A `never` effect was open when the process stopped.
+    /// The effect was open when the process stopped.
     Crashed,
 }
 
@@ -61,29 +133,15 @@ pub enum EffectResult {
     },
     Failed {
         error: String,
+        /// Whether trying again may help (eve's error classification).
         #[serde(default)]
-        evidence: Option<ModelFailureEvidence>,
+        retryable: bool,
     },
     Interrupted {
         reason: InterruptReason,
         #[serde(default)]
         partial: Value,
     },
-}
-
-/// What the host saw when a model call failed. The kernel decides what to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelFailureEvidence {
-    pub cause: FailureCause,
-    pub delivery: Delivery,
-    #[serde(default)]
-    pub streamed_bytes: u64,
-    #[serde(default)]
-    pub progress: Progress,
-    #[serde(default)]
-    pub retry_after_seconds: Option<u64>,
-    #[serde(default)]
-    pub recovery_elapsed_ns: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,6 +158,9 @@ pub struct EffectRequest {
 pub enum Effect {
     ModelCall {
         purpose: ModelPurpose,
+        /// A model other than the agent's, such as the review model.
+        #[serde(default)]
+        model: Option<String>,
         request: ModelRequest,
     },
     ToolCall {
@@ -107,14 +168,37 @@ pub enum Effect {
         name: String,
         input: Value,
     },
+    /// The host's session policy for one tool call. Output: `{"decision": "allow" | "deny" | "ask" | "review" | "default", "reason"?}`.
+    PolicyDecide {
+        call_id: String,
+        name: String,
+        input: Value,
+    },
+    /// Ask a person. Output: `{"approved": bool, "reason"?}`; `failed` means no person can answer.
+    UserAsk { request: AskRequest },
+    /// Store bytes the kernel no longer keeps in its state.
+    BlobPut { name: String, content: String },
     /// Backoff before a retry. The kernel has no clock.
     Wait { ms: u64, reason: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AskRequest {
+    Approval {
+        call_id: String,
+        name: String,
+        input: Value,
+        reason: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPurpose {
     Agent,
+    PermissionReview,
+    Compaction,
 }
 
 /// The normalized model request. Hosts map it to the AI SDK or to a provider codec.
@@ -125,10 +209,21 @@ pub struct ModelRequest {
     pub tools: Vec<ToolSpec>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
+    /// JSON Schema for the input; hosts use their own schema when absent.
+    #[serde(default)]
+    pub input_schema: Option<Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub input_tokens: Option<u64>,
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
 }
 
 /// The normalized model output, in `completed.output`.
@@ -138,6 +233,8 @@ pub struct ModelOutput {
     pub text: String,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -199,15 +296,34 @@ pub enum Event {
     SteersReturned {
         ids: Vec<String>,
     },
+    ApprovalRequested {
+        call_id: String,
+        name: String,
+        reason: String,
+    },
+    ApprovalResolved {
+        call_id: String,
+        approved: bool,
+    },
+    ToolHeld {
+        call_id: String,
+        name: String,
+    },
     ToolFinished {
         call_id: String,
         name: String,
         is_error: bool,
     },
-    Recovery {
-        strategy: String,
+    CompactionStarted {
+        messages: usize,
+    },
+    CompactionCompleted {
+        removed: usize,
+        kept: usize,
+    },
+    Retrying {
+        attempt: u32,
         delay_ms: u64,
-        required_action: String,
     },
     MessageCompleted {
         turn: u64,

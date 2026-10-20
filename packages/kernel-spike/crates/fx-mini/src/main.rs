@@ -13,7 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use kernel::{Effect, EffectRequest, EffectResult, Input, InterruptReason, Message, SessionConfig};
+use kernel::{
+    Effect, EffectRequest, EffectResult, Input, InterruptReason, Message, ModelPurpose,
+    SessionConfig,
+};
 use runner::{Handlers, HostCtx, JsonlStore, MemoryStore, Msg, NoStore, Runner, Store};
 use serde_json::{json, Value};
 
@@ -123,7 +126,7 @@ impl Mini {
                     Ok(s) => EffectResult::Completed { output: json!(s) },
                     Err(e) => EffectResult::Failed {
                         error: e.to_string(),
-                        evidence: None,
+                        retryable: false,
                     },
                 }
             }
@@ -138,7 +141,9 @@ impl Mini {
                 f.sync_data().unwrap();
                 self.trace(json!({ "kind": "side_effect", "id": call_id }));
                 let crash = &self.scenario["crash"];
-                if crash["at"] == "tool" && crash["name"] == name {
+                let first =
+                    self.trace_count(|v| v["kind"] == "side_effect" && v["id"] == call_id) == 1;
+                if crash["at"] == "tool" && crash["name"] == name && first {
                     std::process::abort();
                 }
                 EffectResult::Completed {
@@ -147,7 +152,7 @@ impl Mini {
             }
             other => EffectResult::Failed {
                 error: format!("no tool {other}"),
-                evidence: None,
+                retryable: false,
             },
         };
         self.trace(json!({ "kind": "tool_end", "id": call_id, "name": name }));
@@ -158,7 +163,48 @@ impl Mini {
 impl Handlers for Mini {
     fn run(&self, request: &EffectRequest, ctx: &HostCtx) -> EffectResult {
         match &request.effect {
-            Effect::ModelCall { request, .. } => self.model(&request.messages, ctx),
+            Effect::ModelCall {
+                purpose: ModelPurpose::Agent,
+                request,
+                ..
+            } => self.model(&request.messages, ctx),
+            // A scripted review clears unless the scenario says otherwise; a scripted summary is fixed text.
+            Effect::ModelCall {
+                purpose: ModelPurpose::PermissionReview,
+                ..
+            } => {
+                let decision = self.scenario["review"].as_str().unwrap_or("clear");
+                EffectResult::Completed {
+                    output: json!({ "tool_calls": [{ "id": "review", "name": "permission_decision", "input": { "decision": decision } }] }),
+                }
+            }
+            Effect::ModelCall {
+                purpose: ModelPurpose::Compaction,
+                ..
+            } => EffectResult::Completed {
+                output: json!({ "text": "Summary of earlier work." }),
+            },
+            // fx-mini has no session policy and no person to ask, unless the scenario scripts an answer.
+            Effect::PolicyDecide { .. } => EffectResult::Completed {
+                output: json!({ "decision": "default" }),
+            },
+            Effect::UserAsk { .. } => match self.scenario["approve"].as_bool() {
+                Some(approved) => EffectResult::Completed {
+                    output: json!({ "approved": approved }),
+                },
+                None => EffectResult::Failed {
+                    error: "no person is available".into(),
+                    retryable: false,
+                },
+            },
+            Effect::BlobPut { name, content } => {
+                let dir = self.ws.join(".blobs");
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(dir.join(name), content).unwrap();
+                EffectResult::Completed {
+                    output: Value::Null,
+                }
+            }
             Effect::ToolCall {
                 call_id,
                 name,

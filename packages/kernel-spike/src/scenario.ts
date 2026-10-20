@@ -26,6 +26,10 @@ export interface Scenario {
   crash?: { at: "tool"; name: string } | { at: "model"; index: number };
   steer?: { after_chunks: number; text: string };
   cancel?: { after_tool_start: string };
+  /** A scripted review decision for `auto` tools. */
+  review?: "clear" | "caution";
+  /** A scripted answer when the kernel asks a person. */
+  approve?: boolean;
 }
 
 export interface ScenarioFile {
@@ -88,11 +92,38 @@ export class ScenarioHost {
 
   async run(request: EffectRequest, hooks: HostHooks): Promise<EffectResult> {
     const e = request.effect;
-    if (e.kind === "model_call") return this.model(e.request.messages, hooks);
-    if (e.kind === "tool_call") return this.tool(e.call_id, e.name, e.input, hooks);
-    return (await sleepOrCancel(e.ms, hooks))
-      ? { status: "interrupted", reason: "cancelled" }
-      : { status: "completed", output: null };
+    switch (e.kind) {
+      case "model_call":
+        if (e.purpose === "permission_review") {
+          const decision = this.scenario.review ?? "clear";
+          return {
+            status: "completed",
+            output: {
+              tool_calls: [{ id: "review", name: "permission_decision", input: { decision } }],
+            },
+          };
+        }
+        if (e.purpose === "compaction")
+          return { status: "completed", output: { text: "Summary of earlier work." } };
+        return this.model(e.request.messages, hooks);
+      case "tool_call":
+        return this.tool(e.call_id, e.name, e.input, hooks);
+      // No session policy and no person to ask, unless the scenario scripts an answer.
+      case "policy_decide":
+        return { status: "completed", output: { decision: "default" } };
+      case "user_ask":
+        return this.scenario.approve === undefined
+          ? { status: "failed", error: "no person is available", retryable: false }
+          : { status: "completed", output: { approved: this.scenario.approve } };
+      case "blob_put":
+        mkdirSync(join(this.ws, ".blobs"), { recursive: true });
+        writeFileSync(join(this.ws, ".blobs", e.name), e.content);
+        return { status: "completed", output: null };
+      case "wait":
+        return (await sleepOrCancel(e.ms, hooks))
+          ? { status: "interrupted", reason: "cancelled" }
+          : { status: "completed", output: null };
+    }
   }
 
   async model(messages: Message[], hooks: HostHooks): Promise<EffectResult> {
@@ -150,10 +181,12 @@ export class ScenarioHost {
       appendFileSync(path, String(input.content ?? ""));
       this.trace({ kind: "side_effect", id: callId });
       const crash = this.scenario.crash;
-      if (crash?.at === "tool" && crash.name === name) await hooks.crash();
+      const first =
+        this.traceLines().filter((l) => l.kind === "side_effect" && l.id === callId).length === 1;
+      if (crash?.at === "tool" && crash.name === name && first) await hooks.crash();
       result = { status: "completed", output: "ok" };
     } else {
-      result = { status: "failed", error: `no tool ${name}` };
+      result = { status: "failed", error: `no tool ${name}`, retryable: false };
     }
     this.trace({ kind: "tool_end", id: callId, name });
     return result;

@@ -2,8 +2,7 @@
 //! libfx cases. It calls `kernel::advance`, runs effects on threads, obeys
 //! `cancel` commands, and writes to an optional session store.
 //!
-//! Crash rule (R2): on load, an effect with an intent and no outcome is run
-//! again if it is `safe`, and reported `interrupted { crashed }` if `never`.
+//! Crash rule (eve's): on load, an effect that was open runs again.
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -14,14 +13,14 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 use kernel::{
-    Command, EffectRequest, EffectResult, Event, Input, InterruptReason, Replay, SessionConfig,
-    State,
+    Command, EffectRequest, EffectResult, Event, Input, InterruptReason, SessionConfig, State,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Record {
     Input {
         input: Input,
@@ -258,26 +257,8 @@ impl<S: Store> Runner<S> {
         if !inputs.is_empty() {
             self.advance(inputs, false)?;
         }
-        for key in intents {
-            let Some(effect) = self.open.get(&key) else {
-                continue;
-            };
-            if effect.request.replay == Replay::Never {
-                let result = EffectResult::Interrupted {
-                    reason: InterruptReason::Crashed,
-                    partial: Value::Null,
-                };
-                self.open.remove(&key);
-                self.store.append(
-                    &Record::Outcome {
-                        key: key.clone(),
-                        result: result.clone(),
-                    },
-                    true,
-                )?;
-                self.advance(vec![Input::EffectResult { key, result }], false)?;
-            }
-        }
+        // Effects that were open when the last process stopped run again (eve's rule).
+        let _ = intents;
         Ok(())
     }
 
@@ -346,9 +327,8 @@ impl<S: Store> Runner<S> {
         for key in ready {
             let effect = self.open.get_mut(&key).expect("open");
             effect.started = true;
-            let sync = effect.request.replay == Replay::Never;
             self.store
-                .append(&Record::Intent { key: key.clone() }, sync)?;
+                .append(&Record::Intent { key: key.clone() }, false)?;
             let request = effect.request.clone();
             let ctx = HostCtx {
                 cancel: effect.cancel.clone(),

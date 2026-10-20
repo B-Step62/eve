@@ -1,18 +1,32 @@
 // TypeScript view of the kernel contract in crates/kernel/src/types.rs.
 
-export type Replay = "safe" | "never";
+/** Every effect may run again after a crash (eve's rule). */
+export type Replay = "safe";
+
+/** eve's tool approval policies. */
+export type Approval = "never" | "always" | "once" | "auto";
 
 export interface ToolDescriptor {
   name: string;
   description: string;
-  read_only: boolean;
-  replay: Replay;
+  approval?: Approval;
 }
 
 export interface SessionConfig {
   system: string;
   tools: ToolDescriptor[];
   step_limit: number;
+  /** Ask the host's session policy before each tool call (fx). */
+  host_policy?: boolean;
+  /** What a review's caution does: ask a person (eve) or hold the action (fx). */
+  caution?: "ask" | "hold";
+  review?: { model?: string; instructions?: string };
+  compaction?: {
+    context_window_tokens?: number;
+    threshold_percent?: number;
+    recent_messages?: number;
+    records?: boolean;
+  };
 }
 
 export type Input =
@@ -23,7 +37,7 @@ export type Input =
 
 export type EffectResult =
   | { status: "completed"; output: unknown }
-  | { status: "failed"; error: string; evidence?: unknown }
+  | { status: "failed"; error: string; retryable?: boolean }
   | { status: "interrupted"; reason: "cancelled" | "crashed"; partial?: unknown };
 
 export type Message =
@@ -41,12 +55,26 @@ export interface ToolCall {
 export interface ModelRequest {
   system: string;
   messages: Message[];
-  tools: { name: string; description: string }[];
+  tools: { name: string; description: string; input_schema?: unknown }[];
 }
 
+export type ModelPurpose = "agent" | "permission_review" | "compaction";
+
 export type Effect =
-  | { kind: "model_call"; purpose: "agent"; request: ModelRequest }
+  | { kind: "model_call"; purpose: ModelPurpose; model?: string | null; request: ModelRequest }
   | { kind: "tool_call"; call_id: string; name: string; input: Record<string, unknown> }
+  | { kind: "policy_decide"; call_id: string; name: string; input: Record<string, unknown> }
+  | {
+      kind: "user_ask";
+      request: {
+        kind: "approval";
+        call_id: string;
+        name: string;
+        input: Record<string, unknown>;
+        reason: string;
+      };
+    }
+  | { kind: "blob_put"; name: string; content: string }
   | { kind: "wait"; ms: number; reason: string };
 
 export interface EffectRequest {

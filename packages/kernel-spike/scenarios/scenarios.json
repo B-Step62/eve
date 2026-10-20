@@ -5,15 +5,11 @@
     "tools": [
       {
         "name": "read_file",
-        "description": "Read a file.",
-        "read_only": true,
-        "replay": "safe"
+        "description": "Read a file."
       },
       {
         "name": "write_file",
-        "description": "Append to a file.",
-        "read_only": false,
-        "replay": "never"
+        "description": "Append to a file."
       }
     ]
   },
