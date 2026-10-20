@@ -77,8 +77,11 @@ export interface StartedWorkflowBody {
   close(): Promise<void>;
   readonly control: WorkflowBodyControl;
   readonly outcome: Promise<WorkflowToolRunOutcome>;
-  /** Starts a new usage window in the body's `ctx.agent` sessions, after an approval. */
-  renew(renewalId: string): void;
+  /**
+   * Starts a new usage window in the body's `ctx.agent` sessions, after an
+   * approval. Rejects when a live session can't be renewed.
+   */
+  renew(renewalId: string): Promise<void>;
   /** What the body's `ctx.agent` sessions spent, which the run's outcome carries. */
   readonly usage: RunUsageTally;
 }

@@ -17,9 +17,7 @@ vi.mock("#compiled/@workflow/core/index.js", async (importOriginal) => ({
   createHook: () => ({
     token: "reply",
     dispose: async () => {},
-    async *[Symbol.asyncIterator]() {
-      await new Promise(() => {});
-    },
+    [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
   }),
 }));
 vi.mock("#execution/agent-sessions/steps.js", async (importOriginal) => ({
@@ -52,53 +50,91 @@ beforeEach(() => {
   });
 });
 
-it("renews a session a failed renewal missed before its next message", async () => {
+it("renews a session still opening when the renewal arrives", async () => {
+  const open = Promise.withResolvers<typeof address>();
+  mocks.openAgentSessionStep.mockReturnValue(open.promise);
+  mocks.renewAgentSessionsStep.mockResolvedValue(undefined);
   const sessions = createAgentSessions(run, createRunUsageTally(), "");
-  const worker = sessions.open("worker");
-  await worker.send("first page");
+  const sending = sessions.open("worker").send("first page");
 
-  // The renewal can't reach the worker, even after the step's retries.
-  mocks.renewAgentSessionsStep.mockRejectedValueOnce(new Error("inbox unavailable"));
-  sessions.renew("R");
-  await vi.waitFor(() => expect(mocks.renewAgentSessionsStep).toHaveBeenCalledOnce());
+  const renewed = sessions.renew("R");
   await new Promise((resolve) => setTimeout(resolve, 0));
-  // A repeat of the same renewal is ignored, so it can't repair the miss.
-  sessions.renew("R");
-  expect(mocks.renewAgentSessionsStep).toHaveBeenCalledOnce();
+  expect(mocks.renewAgentSessionsStep).not.toHaveBeenCalled();
+  open.resolve(address);
+  await renewed;
+  await sending;
 
-  mocks.renewAgentSessionsStep.mockImplementationOnce(async () => {
-    mocks.calls.push("renew");
-  });
-  await worker.send("next page");
-
-  expect(mocks.renewAgentSessionsStep).toHaveBeenLastCalledWith({
+  expect(mocks.renewAgentSessionsStep).toHaveBeenCalledExactlyOnceWith({
     renewalId: "R",
     sessions: [expect.objectContaining({ address })],
   });
+});
+
+it("rejects a renewal that can't reach a session, with no later message to carry it", async () => {
+  const sessions = createAgentSessions(run, createRunUsageTally(), "");
+  await sessions.open("worker").send("first page");
+  mocks.renewAgentSessionsStep.mockRejectedValue(new Error("inbox unavailable"));
+
+  await expect(sessions.renew("R")).rejects.toThrow("inbox unavailable");
+});
+
+it("holds a message until the pending renewal reaches the session", async () => {
+  const sessions = createAgentSessions(run, createRunUsageTally(), "");
+  const worker = sessions.open("worker");
+  await worker.send("first page");
+  mocks.calls.length = 0;
+  const renewal = Promise.withResolvers<void>();
+  mocks.renewAgentSessionsStep.mockImplementation(async () => {
+    await renewal.promise;
+    mocks.calls.push("renew");
+  });
+
+  const renewed = sessions.renew("R");
+  const sending = worker.send("next page");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(mocks.calls).toEqual([]);
+  renewal.resolve();
+  await Promise.all([renewed, sending]);
+
   expect(mocks.calls).toEqual(["renew", "send"]);
 });
 
-it("doesn't send the next message while the session still can't be renewed", async () => {
+it("doesn't send a message after its renewal failed", async () => {
   const sessions = createAgentSessions(run, createRunUsageTally(), "");
   const worker = sessions.open("worker");
   await worker.send("first page");
+  mocks.calls.length = 0;
   mocks.renewAgentSessionsStep.mockRejectedValue(new Error("inbox unavailable"));
-  sessions.renew("R");
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  const renewed = sessions.renew("R");
 
   await expect(worker.send("next page")).rejects.toThrow("inbox unavailable");
+  await expect(renewed).rejects.toThrow("inbox unavailable");
   expect(mocks.calls).toEqual([]);
 });
 
-it("sends nothing extra after a renewal that reached the session", async () => {
+it("doesn't renew a session opened after the renewal, which starts in it", async () => {
   const sessions = createAgentSessions(run, createRunUsageTally(), "");
-  const worker = sessions.open("worker");
-  await worker.send("first page");
-  mocks.renewAgentSessionsStep.mockResolvedValue(undefined);
-  sessions.renew("R");
+  await sessions.renew("R");
+  await sessions.open("worker").send("first page");
+  await sessions.renew("R");
+
+  expect(mocks.renewAgentSessionsStep).not.toHaveBeenCalled();
+});
+
+it("delivers a renewal only after the one before it, so the session ends in the latest", async () => {
+  const sessions = createAgentSessions(run, createRunUsageTally(), "");
+  await sessions.open("worker").send("first page");
+  const first = Promise.withResolvers<void>();
+  mocks.renewAgentSessionsStep.mockImplementation(async ({ renewalId }: { renewalId: string }) => {
+    if (renewalId === "R1") await first.promise;
+    mocks.calls.push(renewalId);
+  });
+
+  const renewals = [sessions.renew("R1"), sessions.renew("R2")];
   await new Promise((resolve) => setTimeout(resolve, 0));
-
-  await worker.send("next page");
-
   expect(mocks.renewAgentSessionsStep).toHaveBeenCalledOnce();
+  first.resolve();
+  await Promise.all(renewals);
+
+  expect(mocks.calls).toEqual(["R1", "R2"]);
 });

@@ -200,10 +200,38 @@ describe("renewAgentSessionsStep", () => {
     ).rejects.toThrow("inbox unavailable");
   });
 
+  it("waits for a live session that hasn't claimed its inbox yet", async () => {
+    mocks.resumeSessionInbox
+      .mockRejectedValueOnce(new HookNotFoundError("starting-token"))
+      .mockResolvedValueOnce({});
+    mocks.waitForSessionInbox.mockResolvedValueOnce(true);
+
+    await renewAgentSessionsStep({ renewalId: "R", sessions: [opened("starting")] });
+
+    expect(mocks.waitForSessionInbox).toHaveBeenCalledWith("starting");
+    expect(mocks.resumeSessionInbox).toHaveBeenCalledTimes(2);
+    expect(mocks.resumeSessionInbox).toHaveBeenLastCalledWith("starting-token", {
+      kind: "renew-window",
+      renewalId: "R",
+    });
+  });
+
+  it("fails the step when a session never claims its inbox", async () => {
+    mocks.resumeSessionInbox.mockRejectedValueOnce(new HookNotFoundError("starting-token"));
+    mocks.waitForSessionInbox.mockRejectedValueOnce(
+      new Error('Session "starting" did not start taking commands within 30 seconds.'),
+    );
+
+    await expect(
+      renewAgentSessionsStep({ renewalId: "R", sessions: [opened("starting")] }),
+    ).rejects.toThrow("did not start taking commands");
+  });
+
   it("skips a session that already ended", async () => {
     mocks.resumeSessionInbox
       .mockRejectedValueOnce(new HookNotFoundError("ended-token"))
       .mockResolvedValueOnce({});
+    mocks.waitForSessionInbox.mockResolvedValueOnce(false);
 
     await renewAgentSessionsStep({ renewalId: "R", sessions: [opened("ended"), opened("live")] });
 

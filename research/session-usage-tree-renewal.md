@@ -51,8 +51,12 @@ renewal when it reports started, since renewals skip runs that haven't.
 A missed renewal would leave later spend tagged with the old window, so
 delivery doesn't drop one. A blocking run that hasn't registered its control
 hook yet is waited for, as an interrupt is, and the renewing step fails and
-retries if it never does. A run whose renewal can't reach one of its sessions
-renews that session before sending it the next message.
+retries if it never does. A child session that hasn't claimed its inbox yet
+is waited for the same way. A run's renewal covers the sessions it opened and
+those still opening, and its messages wait for the renewal. A renewal that
+still can't reach a live session after the step's retries fails the run,
+which ends its sessions: the run may be waiting on that session's result and
+never send it another message.
 
 ## Gaps
 

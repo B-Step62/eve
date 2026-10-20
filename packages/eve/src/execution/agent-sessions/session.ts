@@ -47,7 +47,7 @@ export function createAgentSessions(
 ): {
   readonly close: () => Promise<void>;
   readonly open: (name: string) => AgentSession;
-  readonly renew: (renewalId: string) => void;
+  readonly renew: (renewalId: string) => Promise<void>;
 } {
   const sessions: OpenedAgentSession[] = [];
   const window = new RunUsageWindow(usageWindow);
@@ -65,22 +65,22 @@ export function createAgentSessions(
       if (sessions.length === 0) return;
       await endAgentSessionsStep({ sessions });
     },
-    renew: (renewalId) => {
-      if (window.renew(renewalId)) window.send([...sessions]);
-    },
+    renew: (renewalId) => window.renew(renewalId, sessions),
   };
 }
 
 /**
  * The usage window the run's sessions spend in, as the run last heard from
  * its calling session. A session that hasn't renewed since it opened spends in
- * the window the run was in when it opened.
+ * the window the run was in when it opened. A renewal reaches every session
+ * opened or opening when it arrived, and messages wait for it.
  */
 class RunUsageWindow {
   #current: string;
   readonly #seen: Set<string>;
-  /** Keys of sessions a renewal failed to reach; each gets the current one before its next message. */
-  readonly #stale = new Set<string>();
+  /** Opens in flight, each settling with the session or `undefined` if it failed. */
+  readonly #opening = new Set<Promise<OpenedAgentSession | undefined>>();
+  #delivered: Promise<void> = Promise.resolve();
 
   constructor(initial: string) {
     this.#current = initial;
@@ -91,33 +91,48 @@ class RunUsageWindow {
     return this.#current;
   }
 
-  /** Whether `renewalId` is new to the run. */
-  renew(renewalId: string): boolean {
-    if (this.#seen.has(renewalId)) return false;
-    this.#seen.add(renewalId);
-    this.#current = renewalId;
-    return true;
+  /** Settles once the latest renewal reached every session it covers; rejects if one couldn't take it. */
+  get delivered(): Promise<void> {
+    return this.#delivered;
   }
 
   /**
-   * Renews `sessions` into the current window. A send that fails after the
-   * step's retries leaves them stale rather than dropped: the run already
-   * remembers the renewal and ignores it if it comes again.
+   * Renews the sessions opened so far, and those still opening, into
+   * `renewalId`. A session opened after it starts in it already. A renewal the
+   * run has seen is ignored, and one follows the renewal before it, so a
+   * session ends up in the latest.
    */
-  send(sessions: readonly OpenedAgentSession[]): void {
-    if (sessions.length === 0) return;
-    const renewalId = this.#current;
-    renewAgentSessionsStep({ renewalId, sessions }).catch(() => {
-      if (this.#current !== renewalId) return;
-      for (const opened of sessions) this.#stale.add(opened.key);
-    });
+  renew(renewalId: string, sessions: readonly OpenedAgentSession[]): Promise<void> {
+    if (this.#seen.has(renewalId)) return this.#delivered;
+    this.#seen.add(renewalId);
+    this.#current = renewalId;
+    const opened = [...sessions];
+    const opening = [...this.#opening];
+    const previous = this.#delivered;
+    this.#delivered = (async () => {
+      // A failed renewal already failed the run.
+      await previous.catch(() => {});
+      for (const session of await Promise.all(opening)) {
+        if (session !== undefined) opened.push(session);
+      }
+      if (opened.length === 0) return;
+      await renewAgentSessionsStep({ renewalId, sessions: opened });
+    })();
+    return this.#delivered;
   }
 
-  /** Brings a stale session into the current window; throws while it still can't be reached. */
-  async catchUp(opened: OpenedAgentSession): Promise<void> {
-    if (!this.#stale.has(opened.key)) return;
-    await renewAgentSessionsStep({ renewalId: this.#current, sessions: [opened] });
-    this.#stale.delete(opened.key);
+  /** Tracks an open until it settles, so a renewal arriving meanwhile reaches it. */
+  async opening(open: Promise<OpenedAgentSession>): Promise<OpenedAgentSession> {
+    const settled = open.then(
+      (session) => session,
+      () => undefined,
+    );
+    this.#opening.add(settled);
+    try {
+      return await open;
+    } finally {
+      this.#opening.delete(settled);
+    }
   }
 }
 
@@ -297,7 +312,7 @@ class RunAgentSession implements AgentSession {
       return;
     }
     const opened = await this.#opened;
-    await this.#window.catchUp(opened);
+    await this.#window.delivered;
     await sendAgentSessionMessageStep({ ...message, ...opened });
   }
 
@@ -310,18 +325,14 @@ class RunAgentSession implements AgentSession {
     const { agentContext: context, from } = this.#run;
     const openedIn = this.#window.current;
     try {
-      const address = await openAgentSessionStep({
-        ...message,
-        context,
-        key: this.#key,
-        name: this.#name,
-      });
-      const opened = { address, context, key: this.#key };
+      const opened = await this.#window.opening(
+        openAgentSessionStep({ ...message, context, key: this.#key, name: this.#name }).then(
+          (address) => ({ address, context, key: this.#key }),
+        ),
+      );
       this.#openedIn = openedIn;
       this.#sessions.push(opened);
-      // A renewal that reached the run while the session opened missed it.
-      if (this.#window.current !== openedIn) this.#window.send([opened]);
-      await this.#run.owner.send({ from, kind: "agent-started", session: address });
+      await this.#run.owner.send({ from, kind: "agent-started", session: opened.address });
       return opened;
     } catch (error) {
       this.#opened = undefined;
