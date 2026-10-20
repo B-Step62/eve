@@ -645,6 +645,8 @@ The callback receives the `InputRequest` and current `SessionContext`, so it can
 
 When a tool approval resolves, eve retires the messages it posted for it. The card loses its buttons and shows the answer and who gave it, the separate tool-input post is deleted, and a direct-message request's `Waiting on approval` note in the thread changes to the outcome. This also happens when the approval ends without a click, for example when the person replies in the thread instead, in which case the card reads `No longer needed`.
 
+A click on any request whose session is no longer active, for example because its run was cancelled outside eve, can never be answered. eve removes the card's buttons, marks it `No longer active`, and tells the person who clicked, in an ephemeral message, to send a new message.
+
 A renderer's `input.requested` handler can extend delivery and then hand the requests on to eve with `next()`. For example, an application can add non-sensitive context to the Slack thread before eve renders the actionable controls. The configured `approvalChannel` still sends sensitive reviews to a DM and keeps ordinary requests in the thread:
 
 ```ts title="agent/channels/slack.ts"
@@ -747,6 +749,8 @@ Inbound files behind authenticated Slack URLs are staged with `fetchFile`. See [
 The agent receives the files attached to the message that reaches it. When a mention carries no files, eve also collects the files posted in the thread since the previous mention of the app, up to 10 messages back, so a person can share a file and then ask about it in a follow-up. This works for mentions up to 1,000 replies into a thread. The app's own messages are skipped. A DM, or a thread where the app answers without a mention, gets no lookback, because each earlier message brought its own files.
 
 Images, PDFs, audio, video, and other files all reach the agent. See [Inbound attachments](../sandbox#inbound-attachments) for which files the model reads directly and which it opens with tools. Files shared through an integration such as Google Drive or Dropbox are links to the other service, not Slack files, so eve skips them; their link stays in the message text. A download that fails or takes longer than 30 seconds reaches the model as a note.
+
+Slack voice clips reach the model as an audio file label, not as sound. To answer them, give the agent a transcription tool; see [Voice notes](../patterns/voice-notes).
 
 Private file downloads resolve credentials from the session's app installation workspace and require the Slack bot token's `files:read` scope. Add the scope and reinstall the Slack app before sending attachments.
 
