@@ -38,14 +38,14 @@ export default defineEval({
       throw new Error(`The first reply resolved ${JSON.stringify(resolved)}.`);
     }
 
-    const cancelled = await approved.session.send("cancel");
-    cancelled.noFailedActions();
-    const completed = cancelled.message?.includes(MARKER)
-      ? cancelled
+    const denied = await approved.session.send("deny");
+    denied.noFailedActions();
+    const completed = denied.message?.includes(MARKER)
+      ? denied
       : await waitForMessage(t, approved.session, MARKER);
     completed.messageIncludes('deploy_release={"deployed":true}');
     if (completed.message?.includes('"published":true') === true) {
-      throw new Error("The typed cancel ran publish_notes instead of denying it.");
+      throw new Error("The typed deny ran publish_notes instead of denying it.");
     }
 
     t.calledSubagent("release-pair", { status: "completed", count: 1 });
