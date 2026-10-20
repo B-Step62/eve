@@ -5877,6 +5877,55 @@ describe("slackChannel().receive", () => {
     expect(input.auth.principalId).toBe("p");
   });
 
+  it("opens a code channel and starts its session at the channel's one address", async () => {
+    fetchMock.mockImplementation(async (url: string | URL) =>
+      String(url).endsWith("/agents.conversations.create")
+        ? Response.json({ ok: true, channel: { id: "C_CODE_RECEIVE" } })
+        : Response.json({ ok: true, channel: { is_private: false }, ts: "1700000001.000001" }),
+    );
+    const send = vi.fn().mockResolvedValue({ id: "s" });
+
+    await buildReceive()(
+      {
+        message: "Start by reproducing it.",
+        target: {
+          channelId: "C_ORIGIN",
+          codeChannel: { name: "Fix it", originTs: "1700000000.000002" },
+        },
+        auth: null,
+      },
+      mockChannelContext(send),
+    );
+
+    const [continuationToken, input] = send.mock.calls[0]!;
+    expect(continuationToken).toBe("C_CODE_RECEIVE:0");
+    expect(input.state).toMatchObject({
+      audience: "public",
+      channelId: "C_CODE_RECEIVE",
+      codeChannel: true,
+      threadTs: "0",
+    });
+  });
+
+  it("rejects a code channel target combined with a thread", async () => {
+    const send = vi.fn();
+    await expect(
+      buildReceive()(
+        {
+          message: "hi",
+          target: {
+            channelId: "C_ORIGIN",
+            codeChannel: { name: "Fix it", originTs: "1" },
+            threadTs: "1",
+          },
+          auth: null,
+        },
+        mockChannelContext(send),
+      ),
+    ).rejects.toThrow("`codeChannel` can't be combined with `threadTs` or `initialMessage`");
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("persists an explicit public audience on the proactive send state", async () => {
     const send = vi.fn().mockResolvedValue({ id: "s" });
     await buildReceive()(

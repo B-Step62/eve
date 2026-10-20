@@ -26,6 +26,7 @@ import {
 import { startSessionOwner } from "#internal/testing/workflow-test-helpers.js";
 import type { ProgrammaticAgentModule } from "#compiler/source-graph.js";
 import { defineChannel, POST } from "#public/channels/index.js";
+import { executeOpenCodeChannel } from "#tools/provided/open-code-channel-workflow.js";
 import { slackChannel } from "#public/channels/slack/slackChannel.js";
 import { teamsChannel } from "#public/channels/teams/teamsChannel.js";
 import { sessions } from "#public/server/index.js";
@@ -189,6 +190,130 @@ describe("workflow tool channel handoffs", () => {
         expect(lastModelInput(modelInputs, first)).toContain("Alice prefers Friday.");
         expect(lastModelInput(modelInputs, second)).not.toContain("Alice prefers Friday.");
         expect(lastModelInput(modelInputs, source.runId)).not.toContain("Alice prefers Friday.");
+      } finally {
+        sourceTurns.dispose();
+        await source.cancel();
+      }
+    });
+  }, 90_000);
+
+  it("opens a Slack code channel from a thread and continues the work there", async () => {
+    const signingSecret = "code-channel-signing-secret";
+    const slackCalls: { readonly body: Record<string, string>; readonly method: string }[] = [];
+    let nextTs = 1;
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname !== "slack.com") return realFetch(input, init);
+      const method = url.pathname.split("/").at(-1)!;
+      const body = Object.fromEntries(new URLSearchParams(String(init?.body)));
+      slackCalls.push({ body, method });
+      if (method === "conversations.info") {
+        return Response.json({
+          ok: true,
+          channel:
+            body.channel === "C_CODE"
+              ? { id: "C_CODE", properties: { record_channel: { record_type: "agent_channel" } } }
+              : { id: body.channel, is_private: false },
+        });
+      }
+      // Slack returns the same channel for a repeated session_id.
+      if (method === "agents.conversations.create") {
+        return Response.json({ ok: true, channel: { id: "C_CODE" } });
+      }
+      const ts = `1700000100.${String(nextTs++).padStart(6, "0")}`;
+      return Response.json({ ok: true, channel: body.channel, message: { ts }, ts });
+    });
+    const slack = slackChannel({
+      codeChannels: true,
+      credentials: { botToken: "xoxb-test", signingSecret },
+    });
+    const { modelInputs, recordModelInputs } = modelInputRecorder();
+    const runtime = await createWorkflowToolRuntime({
+      agentName: "workflow-tool-slack-code-channel",
+      execute: executeOpenCodeChannel,
+      inputSchema: toInputSchema({
+        additionalProperties: false,
+        properties: { message: { type: "string" }, name: { type: "string" } },
+        required: ["message", "name"],
+        type: "object",
+      }),
+      modules: [
+        { logicalPath: "channels/slack.ts", loadNamespace: async () => ({ default: slack }) },
+        recordModelInputs,
+      ],
+      toolName: "open_code_channel",
+    });
+    const request =
+      'Run open_code_channel with name "Fix the login test" and message "Start by reproducing it."';
+
+    await runtime.run(async () => {
+      const source = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: request },
+          serializedContext: {
+            ...buildWorkflowToolSerializedContext({
+              continuationToken: "slack:C_ORIGIN:1700000000.000001",
+            }),
+            "eve.auth": {
+              attributes: {
+                channel_id: "C_ORIGIN",
+                message_ts: "1700000000.000002",
+                thread_ts: "1700000000.000001",
+                user_id: "U_ALICE",
+              },
+              authenticator: "slack-webhook",
+              issuer: "slack:T01",
+              principalId: "slack:T01:U_ALICE",
+              principalType: "user",
+            },
+          },
+        },
+      ]);
+      const sourceTurns = captureTurnEvents(source);
+      try {
+        const codeSession = forkedSessionId(await sourceTurns.nextTurn());
+        await waitForCompletedTurns(codeSession, 1);
+        // The code channel session starts from the thread and the tool's first message.
+        expect(lastModelInput(modelInputs, codeSession)).toContain("Run open_code_channel");
+        expect(lastModelInput(modelInputs, codeSession)).toContain("Start by reproducing it.");
+
+        const create = slackCalls.find(({ method }) => method === "agents.conversations.create");
+        expect(create?.body).toMatchObject({
+          is_private: "false",
+          name: "Fix the login test",
+          origin_link: JSON.stringify({ channel_id: "C_ORIGIN", ts: "1700000000.000002" }),
+        });
+        expect(create?.body.session_id).toMatch(/^[0-9a-f]{32}$/u);
+        expect(slackCalls).toContainEqual({
+          body: expect.objectContaining({
+            channel: "C_ORIGIN",
+            text: "Continuing in <#C_CODE>.",
+            thread_ts: "1700000000.000001",
+          }),
+          method: "chat.postMessage",
+        });
+        // The code channel's reply posts top-level.
+        const codeReplies = slackCalls.filter(
+          ({ body, method }) => method === "chat.postMessage" && body.channel === "C_CODE",
+        );
+        expect(codeReplies.length).toBeGreaterThan(0);
+        expect(codeReplies.every(({ body }) => body.thread_ts === undefined)).toBe(true);
+
+        // Alice writes in the code channel without a mention; only its session hears it.
+        await deliverSlackChannelMessage(slack, signingSecret, {
+          channel: "C_CODE",
+          text: "Alice prefers Friday.",
+        });
+        await waitForCompletedTurns(codeSession, 2);
+        expect(lastModelInput(modelInputs, codeSession)).toContain("Alice prefers Friday.");
+        expect(lastModelInput(modelInputs, source.runId)).not.toContain("Alice prefers Friday.");
+
+        // A repeat call for the same message reaches the same channel and session.
+        await sendToSession(source.runId, request);
+        expect(forkedSessionId(await sourceTurns.nextTurn())).toBe(codeSession);
       } finally {
         sourceTurns.dispose();
         await source.cancel();
@@ -364,6 +489,47 @@ async function deliverSlackDirectMessage(
       user: "U_ALICE",
     },
     event_id: "Ev_fork_reply",
+    team_id: "T01",
+    type: "event_callback",
+  });
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = `v0=${createHmac("sha256", signingSecret)
+    .update(`v0:${timestamp}:${body}`)
+    .digest("hex")}`;
+  await postToChannelRoute(
+    slack,
+    "slack",
+    new Request("https://agent.example.com/eve/v1/slack", {
+      body,
+      headers: {
+        "content-type": "application/json",
+        "x-slack-request-timestamp": String(timestamp),
+        "x-slack-signature": signature,
+      },
+      method: "POST",
+    }),
+  );
+}
+
+/** Sends Alice's signed, un-mentioned channel message through the Slack events route. */
+async function deliverSlackChannelMessage(
+  slack: ReturnType<typeof slackChannel>,
+  signingSecret: string,
+  message: { readonly channel: string; readonly text: string },
+): Promise<void> {
+  const ts = "1700000999.000200";
+  const body = JSON.stringify({
+    authorizations: [{ is_bot: true, team_id: "T01", user_id: "U_EVE" }],
+    event: {
+      channel: message.channel,
+      channel_type: "channel",
+      event_ts: ts,
+      text: message.text,
+      ts,
+      type: "message",
+      user: "U_ALICE",
+    },
+    event_id: "Ev_code_channel_message",
     team_id: "T01",
     type: "event_callback",
   });

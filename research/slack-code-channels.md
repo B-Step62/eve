@@ -12,8 +12,14 @@ last_updated: "2026-10-20"
 > replies, session status, stop, and `codeChannels: true` for un-mentioned messages and the manifest.
 > Every member can start turns; the `participants` policy (`"owner"`, `"confirm"`) is deferred,
 > since eve can't read a forked channel's owner before dispatch. Replies follow the thread the user
-> wrote in. Not yet: the membership check, and phases 2 and 3. Phase 2 ships with at-least-once
-> delivery, without `ctx.startInChannel()`.
+> wrote in. Not yet: the membership check, and phase 3.
+>
+> Phase 2 is in, with at-least-once delivery and no `ctx.startInChannel()`. It differs from the
+> plan: a workflow body can't capture factory options, and Slack credentials live on the channel,
+> so the Slack channel's `receive()` opens the code channel (`target.codeChannel`), and the tool is
+> `openCodeChannel()` from `eve/channels/slack/tools`, with no options, reaching the channel
+> named `slack`. No signed binding yet; `ctx.slack.openCodeChannel()` for inbound handlers is
+> not built. Slack method arguments follow the docs and are unverified against a workspace.
 
 ## Summary
 

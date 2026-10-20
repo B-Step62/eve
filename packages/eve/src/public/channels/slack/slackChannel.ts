@@ -48,8 +48,10 @@ import {
 import { defaultInputRequestedHandler } from "#public/channels/slack/approval-cards.js";
 import {
   CODE_CHANNEL_THREAD_TS,
+  createSlackCodeChannel,
   isSlackCodeChannel,
   isSlackCodeChannelOriginContext,
+  setSlackCodeChannelStatus,
 } from "#public/channels/slack/code-channel.js";
 import {
   defaultEvents,
@@ -364,6 +366,25 @@ export interface SlackReceiveTarget {
    * exclusive with {@link threadTs}.
    */
   readonly initialMessage?: SlackInitialMessage;
+  /**
+   * Opens a Slack code channel from a message in {@link channelId} and starts
+   * the session there, as the code channel's one session. Slack links the
+   * channel back to `originTs`, and eve points to the channel in the origin
+   * thread. One requester gets one code channel per origin message, so a
+   * retried send reaches the same channel. Mutually exclusive with
+   * {@link threadTs} and {@link initialMessage}.
+   */
+  readonly codeChannel?: SlackCodeChannelTarget;
+}
+
+/** The code channel `slackChannel().receive` opens for `target.codeChannel`. */
+export interface SlackCodeChannelTarget {
+  /** Channel name shown in Slack. */
+  readonly name: string;
+  /** ts of the message the code channel continues. */
+  readonly originTs: string;
+  /** Thread of the origin message, where eve points to the new channel. Defaults to `originTs`. */
+  readonly originThreadTs?: string;
 }
 
 /**
@@ -1056,6 +1077,18 @@ async function receiveOnSlack(
       "slackChannel().receive: `threadTs` and `initialMessage` are mutually exclusive.",
     );
   }
+  if (receiveTarget.codeChannel !== undefined) {
+    if (initialMessage || requestedThreadTs.length > 0) {
+      throw new Error(
+        "slackChannel().receive: `codeChannel` can't be combined with `threadTs` or `initialMessage`.",
+      );
+    }
+    return await receiveInNewCodeChannel(input, deps, {
+      codeChannel: receiveTarget.codeChannel,
+      installationTeamId,
+      originChannelId: channelId,
+    });
+  }
 
   let threadTs = requestedThreadTs;
   if (initialMessage) {
@@ -1104,6 +1137,54 @@ async function receiveOnSlack(
 
   return deps
     .from(slackContinuationToken(channelId, continuationThreadTs))
+    .send(input.message, { auth: input.auth, history: input.history, state, title: input.title });
+}
+
+/** Opens a code channel from the origin message and starts its one session. */
+async function receiveInNewCodeChannel(
+  input: Parameters<typeof receiveOnSlack>[0],
+  deps: Parameters<typeof receiveOnSlack>[1],
+  target: {
+    readonly codeChannel: SlackCodeChannelTarget;
+    readonly installationTeamId: string | undefined;
+    readonly originChannelId: string;
+  },
+): Promise<Session> {
+  const { codeChannel, installationTeamId, originChannelId } = target;
+  const { request } = buildSlackWorkspaceHandle({
+    api: deps.api,
+    botToken: deps.credentials?.botToken,
+    installationTeamId,
+    teamId: deps.teamId,
+  });
+  const created = await createSlackCodeChannel({
+    name: codeChannel.name,
+    originChannelId,
+    originTs: codeChannel.originTs,
+    requester: input.auth?.principalId ?? "anonymous",
+    request,
+  });
+  await setSlackCodeChannelStatus(request, created.channelId, "processing");
+  try {
+    await request("chat.postMessage", {
+      channel: originChannelId,
+      text: `Continuing in <#${created.channelId}>.`,
+      thread_ts: codeChannel.originThreadTs ?? codeChannel.originTs,
+    });
+  } catch (error) {
+    logError(log, "code channel pointer post failed", error, { channelId: originChannelId });
+  }
+  const state: SlackChannelState = {
+    audience: created.isPrivate ? "private" : "public",
+    channelId: created.channelId,
+    codeChannel: true,
+    installationTeamId: installationTeamId ?? null,
+    teamId: deps.teamId ?? null,
+    threadTs: CODE_CHANNEL_THREAD_TS,
+    triggeringUserId: deps.triggeringUserId ?? slackUserIdFromAuthContext(input.auth) ?? null,
+  };
+  return await deps
+    .from(slackContinuationToken(created.channelId, CODE_CHANNEL_THREAD_TS))
     .send(input.message, { auth: input.auth, history: input.history, state, title: input.title });
 }
 
@@ -1397,6 +1478,7 @@ async function dispatchSlackMessage(input: {
             fullName: author.fullName,
             installationTeamId: input.installationTeamId,
             isBot: author.isBot,
+            messageTs: input.message.ts,
             teamId: input.message.teamId,
             threadTs,
             userId: author.userId,

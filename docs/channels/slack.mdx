@@ -322,6 +322,22 @@ Every member of a code channel can start turns, with auth derived from each mess
 
 eve detects a code channel with Slack's `conversations.info` API, so the app needs `channels:read` (and `groups:read` for private code channels). If the lookup fails, eve logs an error, serves the channel per thread, and retries the lookup a minute later. With `codeChannels` set, the generated app manifest enables the code channels feature, adds the `code_channels:manage`, `channels:history`, `channels:read`, `groups:history`, and `groups:read` bot scopes, and subscribes to the `message.session` and `agent_session_stopped` events. For Vercel Connect, add the same scopes and events under **Advanced** when you create the connector. In message hooks, `ctx.isCodeChannel()` returns whether the message was posted in a code channel.
 
+#### Open a code channel from a thread
+
+Add the `open_code_channel` tool to let the agent move a request that needs more than one message into a new code channel:
+
+```ts title="agent/tools/open_code_channel.ts"
+import { openCodeChannel } from "eve/channels/slack/tools";
+
+export default openCodeChannel();
+```
+
+The model calls the tool with a channel name and a first message for the new channel. The tool opens the code channel from the message that triggered the turn, posts `Continuing in #channel` in the origin thread, and starts the code channel's session with the conversation so far as history. The origin thread keeps its own session for quick follow-ups. The tool reaches the Slack channel at `agent/channels/slack.ts`.
+
+The tool returns `unavailable` outside Slack, inside a code channel, for conversations shared outside the workspace through Slack Connect, and when Slack refuses to create the channel, for example when code channels are disabled or a scope is missing. The model then continues in the thread.
+
+One person gets one code channel per message, so a repeated call for the same message reaches the same channel and session. A failed step that retries after the session started delivers the history and first message again.
+
 ### Other Events API callbacks
 
 Use `onEvent` for subscribed events such as `reaction_added`, `team_join`, or `channel_created`. It receives the raw, open-ended Slack event and owns control flow. Call `ctx.send(message, { target, auth, title, history })` zero, one, or many times to start turns. `title` sets the run title without changing the message sent to the model, and `history` adds prior conversation before the message (see [Start from prior history](./eve#start-from-prior-history)). Each call returns the resulting session.

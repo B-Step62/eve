@@ -486,6 +486,11 @@
       "import": "./dist/src/public/channels/slack/index.js",
       "default": "./dist/src/public/channels/slack/index.js"
     },
+    "./channels/slack/tools": {
+      "types": "./dist/src/public/channels/slack/tools.d.ts",
+      "import": "./dist/src/public/channels/slack/tools.js",
+      "default": "./dist/src/public/channels/slack/tools.js"
+    },
     "./channels/chat-sdk": {
       "types": "./dist/src/public/channels/chat-sdk/index.d.ts",
       "import": "./dist/src/public/channels/chat-sdk/index.js",

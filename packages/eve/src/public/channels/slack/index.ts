@@ -15,6 +15,7 @@ export {
   type SlackChannelConfig,
   type SlackChannelCredentials,
   type SlackChannelState,
+  type SlackCodeChannelTarget,
   type SlackContext,
   type SlackEventContext,
   type SlackEventRespondFn,
