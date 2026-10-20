@@ -56,8 +56,8 @@ export default defineDynamic(async (ctx) => {
 });
 ```
 
-eve keeps the db rows, as they're JSON-serializable. After a restart, the function runs again, 
-`ctx.memo` returns the saved rows without querying the database, and `crmTool` builds the same 
+eve keeps the db rows, as they're JSON-serializable. After a restart, the function runs again,
+`ctx.memo` returns the saved rows without querying the database, and `crmTool` builds the same
 tools with ordinary code.
 
 ## The main changes
@@ -256,19 +256,20 @@ each definition twice with its memos fixed and reports any difference.
 <summary>Memo rules</summary>
 
 - **Keys and results are JSON.** Keys compare as canonical JSON, and `undefined` reads as `null`. A
-  key is at most 64 KB and a result at most 1 MB; the error names the file and the memo, and
+  key is at most 64 KB and a result at most 1 MB; the error names the file and the key's digest, and
   suggests keeping an ID and fetching the rest when it's used. A non-JSON result names the path and
   type, such as `memo returned Date at $.accounts[2].createdAt`.
 - **Memos belong to their definition.** A memo's identity is its session, its definition (from the
-  file path), its name, and its key. Two files that memoize the same key each run their own.
-- **Names are optional.** An unnamed memo uses a default name. A definition with more than one memo
-  names them: `ctx.memo(key, fn, { name: "tables" })`. The same name and key twice in one evaluation
-  fails with an error naming the file. When you add a second memo to a definition, name the new one
-  and leave the original as it is, so its records keep their identity.
-- **eve keeps the keys the latest evaluation used.** For each name, a key the latest evaluation
-  didn't use is dropped, so a key that comes back later runs `fn` again. A loop that memoizes one
-  key per account keeps every account's result. A name the evaluation didn't reach at all, such as
-  one behind an untaken branch, keeps what it had.
+  file path), and its key. Two files that memoize the same key each run their own.
+- **The key tells memos apart.** A definition with more than one memo gives each a distinct key,
+  usually a tuple: `ctx.memo(["tables", ctx.session.id], …)` and
+  `ctx.memo(["flags", ctx.turn?.id ?? null], …)`. The same key twice in one evaluation fails with
+  an error naming the file. When you add a second memo to a definition, give the new one a tuple
+  key and leave the original as it is, so its records keep their identity.
+- **eve keeps the keys the latest evaluation used.** A key the latest evaluation didn't use is
+  dropped, so a key that comes back later runs `fn` again. A loop that memoizes one key per account
+  keeps every account's result. A memo behind a branch that the latest evaluation didn't take is
+  dropped too, and runs again when the branch comes back.
 - **Memos are a cache.** eve may run `fn` again: it discards memos when the session moves to a new
   deployment, and a failed `fn` keeps nothing.
 - **Memos are private.** They live in the session's checkpointed state, never on the public stream.
@@ -739,9 +740,9 @@ opened. Event-handler occurrences that already ran don't run again either.
 - **Stored state rides along every step.** A step's input and result carry the session's state, so
   records are re-sent and saved again on each step. `main` has the same cost for its closure
   snapshots, which it stores per callback with no cap.
-- **Diagnostics go to logs, and later traces.** Each memo and once run reports the file, the name,
-  the key's digest, why it ran (a new key, a retry, or a deployment change), how long it took, and
-  whether the value changed. There's no public API for them at first.
+- **Diagnostics go to logs, and later traces.** Each memo and once run reports the file, the key's
+  digest (never the key, which can hold tenant or principal IDs), why it ran (a new key, a retry,
+  or a deployment change), how long it took, and whether the value changed. There's no public API for them at first.
 
 ## Examples from main's docs
 
@@ -1337,8 +1338,8 @@ The first change, on the v27 view:
   stay internal kinds.
 - The function form of a remote agent's `url` is replaced by a dynamic file.
 
-Moving #4616 to this API changes its definitions and hook kind: the runner keeps records per name
-and key rather than one record per definition, select-form hooks go, hook commands become methods
+Moving #4616 to this API changes its definitions and hook kind: the runner keeps records per key
+rather than one record per definition, select-form hooks go, hook commands become methods
 on the queue it already has, and remote credentials come from running the definition with the
 child's binding rather than calling `render`.
 
