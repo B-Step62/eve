@@ -5,6 +5,10 @@ import type { SessionEvent } from "#protocol/session-event.js";
 import type { DiscordInstrumentationMetadata } from "#public/channels/discord/index.js";
 import type { ChannelFrom } from "#channel/channel-operations.js";
 import type { ChannelContext } from "#shared/channel-context.js";
+import {
+  INACTIVE_REQUEST_NOTICE,
+  respondOrRetireInactivePrompt,
+} from "#channel/inactive-prompt.js";
 import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { ChannelContinuationOps } from "#public/definitions/channel.js";
 import { createLogger, logError } from "#internal/logging.js";
@@ -26,6 +30,7 @@ import {
   defaultDiscordAuth,
   defaultEvents,
   defaultOnCommand,
+  editDiscordResolvedPrompt,
 } from "#public/channels/discord/defaults.js";
 import {
   deriveComponentAnswers,
@@ -35,6 +40,7 @@ import {
 } from "#public/channels/discord/hitl.js";
 import {
   commandInteractionMessage,
+  DISCORD_EPHEMERAL_MESSAGE_FLAG,
   DISCORD_INTERACTION_RESPONSE_TYPE,
   DISCORD_INTERACTION_TYPE,
   formatDiscordContextBlock,
@@ -703,12 +709,13 @@ async function dispatchAnswers(input: {
     hasMessageAnchor: input.conversationId !== input.interaction.id,
     initialResponseSent: true,
   });
+  const discord = buildDiscordHandle({ config: input.config, state });
   let result: DiscordAnswerResult;
   try {
     result = await input.onAnswers(
       {
         defaultAuth: defaultDiscordAuth(input.interaction),
-        discord: buildDiscordHandle({ config: input.config, state }),
+        discord,
       },
       input.interaction,
     );
@@ -717,19 +724,41 @@ async function dispatchAnswers(input: {
     return;
   }
   if (result === null) return;
+  const { auth } = result;
+  const source = input.from(
+    discordContinuationToken({
+      channelId: input.interaction.channelId,
+      conversationId: input.conversationId,
+    }),
+  );
+  const response = await respondOrRetireInactivePrompt(
+    () => source.respond(input.answers, { auth }),
+    {
+      // The session's record of the prompt is gone, so its text comes from the
+      // pressed message. A modal submitted outside a message has neither, and
+      // editing without the prompt would erase it.
+      retirePrompt: async (label) => {
+        const messageId = input.interaction.messageId;
+        const content = readMessageContent(input.interaction.raw);
+        if (messageId === undefined || content === undefined) return;
+        await editDiscordResolvedPrompt(discord, { content, messageId }, label);
+      },
+    },
+    log,
+  );
+  if (response.outcome !== "inactive") return;
+  await Promise.all([response.retirement, sendInactiveNotice(discord)]);
+}
+
+/** Tells only the presser that the prompt they answered is no longer active. */
+async function sendInactiveNotice(discord: DiscordHandle): Promise<void> {
   try {
-    await input
-      .from(
-        discordContinuationToken({
-          channelId: input.interaction.channelId,
-          conversationId: input.conversationId,
-        }),
-      )
-      .respond(input.answers, {
-        auth: result.auth,
-      });
+    await discord.followup({
+      content: INACTIVE_REQUEST_NOTICE,
+      flags: DISCORD_EPHEMERAL_MESSAGE_FLAG,
+    });
   } catch (error) {
-    log.error("interaction response delivery failed", { error });
+    log.error("inactive prompt notice failed", { error });
   }
 }
 

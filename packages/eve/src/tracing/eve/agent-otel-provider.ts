@@ -8,7 +8,6 @@ import { createAgentChannelDeliveryInstrumentation } from "#tracing/eve/agent-ch
 import { createAgentToolInstrumentation } from "#tracing/eve/agent-tool-instrumentation.js";
 import { eveActivationMetadata } from "#tracing/eve/metadata.js";
 import { createAgentMemoryInstrumentation } from "#tracing/eve/agent-memory-instrumentation.js";
-import { readGatewayCostData } from "#tracing/eve/gateway.js";
 import { createEveSessionTracing } from "#tracing/eve/session.js";
 import type { TraceCapturePolicy } from "#tracing/eve/otel-declaration.js";
 import { isSampledTrace } from "#shared/trace-policy.js";
@@ -30,13 +29,17 @@ import type {
 import { resolveInstrumentationEnvironment } from "#internal/application/dev-environment.js";
 import type { ConversationEnvironment } from "#shared/conversation-context.js";
 import { createEveTracing } from "#tracing/eve/operation-input.js";
-import { gatewayCostAttributes } from "#tracing/eve/gateway.js";
+import {
+  gatewayCostAttributes,
+  gatewayRoutingAttributes,
+  readGatewayCostData,
+} from "#tracing/eve/gateway.js";
 import type {
   AgentSpanIdGenerator,
   AgentTelemetry,
   AttemptOperation,
   ModelOperation,
-} from "#compiled/@eve/tracing/index.js";
+} from "#compiled/@vercel/agent-runs/index.js";
 import { isUserMessageKind } from "#harness/messages.js";
 import { isObject } from "#shared/guards.js";
 
@@ -74,10 +77,16 @@ export function createAgentOtelInstrumentation(
   const recordInputs = input.recordInputs ?? false;
   const recordOutputs = input.recordOutputs ?? false;
   const tracing = createEveTracing(input);
+  const capturePolicy = createEveCapturePolicy({
+    stateStore: input.stateStore,
+    environment,
+    recordInputs,
+    recordOutputs,
+  });
   // Attempts run in one process; a lost serverless worker retries the whole step.
   const steps = new Map<string, AttemptOperation>();
   const modelSpans = new Map<string, Map<string, ModelOperation>>();
-  const sessionTracing = createEveSessionTracing({ ...input, environment, tracing });
+  const sessionTracing = createEveSessionTracing({ ...input, environment, tracing, capturePolicy });
   const { prepareSessionTrace, prepareTurnTrace } = sessionTracing;
 
   /** The attempt in its turn's tree, hydrating it when another process started it. */
@@ -108,13 +117,6 @@ export function createAgentOtelInstrumentation(
     actionStateFor: tools.stateFor,
   });
   const memory = createAgentMemoryInstrumentation({ ...input, environment, tracing });
-
-  const capturePolicy = createEveCapturePolicy({
-    stateStore: input.stateStore,
-    environment,
-    recordInputs,
-    recordOutputs,
-  });
 
   function turnState(scope: { sessionId: string; turnId: string }) {
     return input.stateStore.get("turn", JSON.stringify([scope.sessionId, scope.turnId]));
@@ -155,10 +157,7 @@ export function createAgentOtelInstrumentation(
   };
 
   const onStepTerminal = async (event: InstrumentationModelTerminalEvent): Promise<void> => {
-    const failure =
-      event.type === "model.retried" || event.outcome !== "completed"
-        ? { error: event.error }
-        : undefined;
+    const failure = attemptFailed(event) ? { error: event.error } : undefined;
     await drainOpenSpans(event);
     await tools.drain(attemptIdempotencyKey(event.scope), failure);
     const attempt =
@@ -206,10 +205,14 @@ export function createAgentOtelInstrumentation(
   const onModelCallTerminal = async (
     event: InstrumentationModelCallTerminalEvent,
   ): Promise<void> => {
-    if (event.outcome === "completed") {
+    const attempt = steps.get(attemptIdempotencyKey(event.scope));
+    if (event.outcome === "completed" && attempt !== undefined) {
+      // Vercel AI Gateway reports per-call cost and session affinity routing in providerMetadata.gateway;
+      // attributes exist only when it was actually the gateway serving the call.
       const cost = readGatewayCostData(event.providerMetadata);
-      if (cost !== undefined)
-        steps.get(attemptIdempotencyKey(event.scope))?.attributes(gatewayCostAttributes(cost));
+      if (cost !== undefined) attempt.attributes(gatewayCostAttributes(cost));
+      const routing = gatewayRoutingAttributes(event.providerMetadata);
+      if (routing !== undefined) attempt.attributes(routing);
     }
     const models = modelSpans.get(attemptIdempotencyKey(event.scope));
     const operation = models?.get(event.idempotencyKey);
@@ -281,8 +284,7 @@ export function createAgentOtelInstrumentation(
 
   async function drainOpenSpans(event: InstrumentationModelTerminalEvent): Promise<void> {
     for (const operation of modelSpans.get(attemptIdempotencyKey(event.scope))?.values() ?? []) {
-      if (event.type === "model.retried" || event.outcome !== "completed")
-        await operation.fail(event.error);
+      if (attemptFailed(event)) await operation.fail(event.error);
       else
         await operation.complete({
           outcome: "completed",
@@ -291,4 +293,12 @@ export function createAgentOtelInstrumentation(
     }
     modelSpans.delete(attemptIdempotencyKey(event.scope));
   }
+}
+
+/** A retry or an unfinished run fails its attempt; a cancelled turn stopped it on purpose. */
+function attemptFailed(event: InstrumentationModelTerminalEvent): boolean {
+  return (
+    event.type === "model.retried" ||
+    (event.outcome !== "completed" && event.outcome !== "cancelled")
+  );
 }

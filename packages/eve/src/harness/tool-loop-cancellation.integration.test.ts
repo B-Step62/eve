@@ -97,6 +97,39 @@ describe("tool loop cancellation (real AI SDK)", () => {
     }
   });
 
+  // #5025: a cancelled model call is not a failed attempt; instrumentation hears `model.retried`
+  // as one.
+  it("neither fails nor retries the model call a cancellation cuts short", async () => {
+    const abortController = new AbortController();
+    const model = new MockLanguageModelV3({
+      modelId: "integration-model",
+      provider: "eve-integration-mock",
+      doStream: async () => {
+        // A cancellation can reach the step without its reason, so the stream rejects with the
+        // platform's plain AbortError.
+        abortController.abort();
+        throw abortController.signal.reason;
+      },
+    });
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(
+      createConfig(model, emit, { abortSignal: abortController.signal }),
+    );
+
+    await expect(
+      runStep(createSession(), { message: "Summarize Alice's notes." }),
+    ).rejects.toBeInstanceOf(TurnCancelledError);
+
+    expect(events.filter((event) => event.type === "model.started")).toHaveLength(1);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "model.retried" ||
+          (event.type === "model.settled" && event.data.outcome === "failed"),
+      ),
+    ).toEqual([]);
+  });
+
   it("forwards a live signal to executing tools and discards the straggler result", async () => {
     const logs = captureLogRecords();
     const abortController = new AbortController();

@@ -1,3 +1,5 @@
+import { SessionStrandedError } from "#channel/session-stranded-error.js";
+
 const CODE = "EVE_SESSION_NOT_ACTIVE";
 
 /** A session could not accept a command. No delivery was accepted. */
@@ -24,4 +26,9 @@ export class SessionNotActiveError extends Error {
       typeof Reflect.get(error, "retryable") === "boolean"
     );
   }
+}
+
+/** Whether an answer targets a session that cannot run or no longer exists. */
+export function isUnanswerableResponseError(error: unknown): boolean {
+  return SessionNotActiveError.is(error) || SessionStrandedError.is(error);
 }

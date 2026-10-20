@@ -25,15 +25,15 @@ import type {
 export type { PrepareSend };
 
 /**
- * Lifecycle phase of a `useEveAgent` session: `"ready"` (idle), `"resuming"`
- * (checking an attached session), `"submitted"` (request sent, awaiting first
- * event), `"streaming"` (events arriving), or `"error"`.
+ * Local activity of a `useEveAgent` session: `"idle"` (nothing pending), `"resuming"`
+ * (catching up on an attached session), or `"busy"` (a send is in flight, or a turn, task, or
+ * sign-in is pending). Failures are reported separately in `error`.
  */
 export type UseEveAgentStatus = EveAgentStoreStatus;
 
 /**
- * Point-in-time projected state for an eve agent session (`data`, `error`,
- * `events`, `session`, `status`).
+ * Point-in-time projected state for an eve agent session: the conversation (`messages`,
+ * `interactions`, `agents`, `view`, `previews`), `error`, `events`, `session`, and `status`.
  *
  * `useEveAgent` passes this shape to callbacks such as `onFinish`, but exposes
  * the same fields as individual reactive refs on its return value.
@@ -76,9 +76,8 @@ export interface UseEveAgentReturn {
   /** Current session identity and stream cursor. */
   readonly session: ComputedRef<ClientSessionState | undefined>;
   /**
-   * Lifecycle phase: `"ready"` (idle), `"resuming"` (checking an attached
-   * session), `"submitted"` (request sent, awaiting first event), `"streaming"`
-   * (events arriving), or `"error"`.
+   * Local activity: `"idle"`, `"resuming"` (catching up on an attached session), or `"busy"`.
+   * Failures are reported separately in `error`.
    */
   readonly status: ComputedRef<UseEveAgentStatus>;
 }
@@ -125,13 +124,13 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
    * Project submitted user messages before eve confirms them with a
    * `delivery.consumed` fact.
    *
-   * Such a message shows in `data.messages` only; `events` remains the
+   * Such a message shows in `messages` only; `events` remains the
    * authoritative eve stream.
    *
    * @default true
    */
   readonly optimistic?: boolean;
-  /** Follow each subagent call's session into `data.agents` while mounted. @default false */
+  /** Follow each subagent call's session into `agents` while mounted. @default false */
   readonly followAgents?: boolean;
   /**
    * Keep the session stream open between turns to show events that arrive from schedules,
@@ -155,8 +154,8 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
  * Vue composable that drives one eve session and projects its event stream into
  * reactive UI state.
  *
- * `data` is the conversation, including its message parts; derive anything else from `events`.
- * Returns reactive refs (`data`, `error`, `events`, `session`, `status`) plus
+ * Returns reactive refs for the conversation (`messages`, `interactions`, `agents`, `view`,
+ * `previews`) and for `error`, `events`, `session`, and `status`, plus
  * `prewarm`, `send`, `respond`, `resume`, `cancel`, and `reset`. Configuration is read once on store creation;
  * remount to change it. On scope dispose, the in-flight request is detached and
  * the store unsubscribed.

@@ -6,6 +6,10 @@ import type { TelegramInstrumentationMetadata } from "#public/channels/telegram/
 import { defaultDeliverResult, type ChannelAdapterContext } from "#channel/adapter.js";
 import type { ChannelFrom, ChannelResolveSession } from "#channel/channel-operations.js";
 import type { ChannelContext } from "#shared/channel-context.js";
+import {
+  INACTIVE_REQUEST_NOTICE,
+  respondOrRetireInactivePrompt,
+} from "#channel/inactive-prompt.js";
 import type { DeliverPayload, SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { ChannelContinuationOps } from "#public/definitions/channel.js";
 import { isCompiledChannel } from "#channel/compiled-channel.js";
@@ -43,6 +47,7 @@ import {
   resolveTelegramAnswers,
   telegramCallbackAnswer,
   telegramReplyAnswers,
+  telegramResolvedPromptText,
   type TelegramHitlState,
 } from "#public/channels/telegram/hitl.js";
 import {
@@ -51,6 +56,7 @@ import {
   type TelegramCallbackQuery,
   type TelegramChatType,
   type TelegramMessage,
+  type TelegramMessageReference,
 } from "#public/channels/telegram/inbound.js";
 import {
   mergeUploadPolicy,
@@ -602,26 +608,35 @@ async function dispatchCallbackQuery(input: {
   }
 
   if (input.query.data?.startsWith(TELEGRAM_HITL_CALLBACK_PREFIX) === true) {
+    // Telegram takes one answer per callback, so it waits for delivery: a press
+    // no session can take is answered with the inactive notice instead.
+    // The prompt's edit starts before the answer and finishes after it.
+    const message = input.query.message;
+    const data = input.query.data;
+    const answer =
+      message && state.chatId
+        ? await respondOrRetireInactivePrompt(
+            // The presser acts as themselves, so a press that starts a turn lets
+            // their next message steer it.
+            () =>
+              input
+                .from(telegramContinuationTokenFromState(state))
+                .respond([telegramCallbackAnswer(data)], {
+                  auth: defaultTelegramAuth({ ...message, from: input.query.from }),
+                }),
+            { retirePrompt: (label) => retireInactivePrompt(telegram, message, label) },
+            log,
+          )
+        : undefined;
     try {
       await telegram.telegram.answerCallbackQuery({
         callbackQueryId: input.query.id,
-        text: "Answer received.",
+        text: answer?.outcome === "inactive" ? INACTIVE_REQUEST_NOTICE : "Answer received.",
       });
     } catch (error) {
       log.warn("Telegram callback-query acknowledgement failed", { error });
     }
-
-    if (!input.query.message || !state.chatId) return;
-    try {
-      const source = input.from(telegramContinuationTokenFromState(state));
-      // The presser acts as themselves, so a press that starts a turn lets
-      // their next message steer it.
-      await source.respond([telegramCallbackAnswer(input.query.data)], {
-        auth: defaultTelegramAuth({ ...input.query.message, from: input.query.from }),
-      });
-    } catch (error) {
-      log.error("callback query delivery failed", { error });
-    }
+    if (answer?.outcome === "inactive") await answer.retirement;
     return;
   }
 
@@ -642,6 +657,28 @@ async function dispatchCallbackQuery(input: {
   } catch (error) {
     log.warn("Telegram unsupported callback-query acknowledgement failed", { error });
   }
+}
+
+/**
+ * Edits a prompt no session holds the way `input.resolved` edits a resolved
+ * one. The session's record of the prompt is gone, so its text comes from the
+ * pressed message.
+ */
+async function retireInactivePrompt(
+  telegram: TelegramContext,
+  message: TelegramMessageReference,
+  label: string,
+): Promise<void> {
+  const replyMarkup = { inline_keyboard: [] };
+  if (message.text === undefined) {
+    await telegram.telegram.editMessageReplyMarkup({ messageId: message.messageId, replyMarkup });
+    return;
+  }
+  await telegram.telegram.editMessageText({
+    messageId: message.messageId,
+    replyMarkup,
+    text: telegramResolvedPromptText(message.text, label),
+  });
 }
 
 function attachTelegramDeliver(channel: TelegramChannel): void {

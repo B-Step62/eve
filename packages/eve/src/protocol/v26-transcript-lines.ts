@@ -1,7 +1,7 @@
 // eve before v27 stored one v26 event per line. A session a v27 deployment replaced may have
 // been recorded that way, and the replacement reads its conversation with `transcriptOf`.
 // This reads just enough of a v26 line for that: what the person sent, the assistant's text, a
-// clear, and the session's end, each as the v27 fact a transcript reads. Every other v26 event
+// clear, and the session's end, each as the v27 facts a transcript reads. Every other v26 event
 // stays unreadable, as before.
 
 import type { SessionEvent } from "./session-event.js";
@@ -17,65 +17,79 @@ export function readV26TranscriptLine(
 ): CommitLine<SessionEvent> | undefined {
   if (!isRecord(record) || typeof record.type !== "string") return undefined;
   const data = isRecord(record.data) ? record.data : {};
-  const fact = factOf(record.type, data, position);
-  if (fact === undefined) return undefined;
+  const facts = factsOf(record.type, data, position);
+  if (facts === undefined) return undefined;
   const meta = isRecord(record.meta) ? record.meta : {};
   const at = typeof meta.at === "string" ? meta.at : new Date(0).toISOString();
-  return { at, facts: [fact] };
+  return { at, facts };
 }
 
-function factOf(
+function factsOf(
   type: string,
   data: Readonly<Record<string, unknown>>,
   position: number,
-): SessionEvent | undefined {
+): SessionEvent[] | undefined {
   const id = `v26_${String(position)}`;
   const turnId = typeof data.turnId === "string" ? data.turnId : undefined;
   switch (type) {
     case "message.received": {
       if (turnId === undefined) return undefined;
-      return {
-        data: { deliveryId: id, parts: [{ kind: "text", text: receivedText(data) }], turnId },
-        scope: { turnId },
-        type: "delivery.consumed",
-      };
+      return [
+        {
+          data: { deliveryId: id, parts: [{ kind: "text", text: receivedText(data) }], turnId },
+          scope: { turnId },
+          type: "delivery.consumed",
+        },
+      ];
     }
     case "message.completed": {
       if (turnId === undefined || typeof data.message !== "string") return undefined;
-      return {
-        data: {
-          kind: "text",
-          partId: id,
-          // Text written before the step's tool calls narrated them.
-          phase: data.finishReason === "tool-calls" ? "narration" : "reply",
-          runId: id,
-          value: data.message,
+      return [
+        {
+          data: {
+            kind: "text",
+            partId: id,
+            // Text written before the step's tool calls narrated them.
+            phase: data.finishReason === "tool-calls" ? "narration" : "reply",
+            runId: id,
+            value: data.message,
+          },
+          scope: { turnId },
+          type: "content.completed",
         },
-        scope: { turnId },
-        type: "content.completed",
-      };
+      ];
     }
     case "context.cleared":
-      return {
-        data: { changeId: id, kind: "clear", outcome: "completed", selects: null },
-        type: "context.settled",
-      };
+      return [
+        {
+          data: { changeId: id, kind: "clear", outcome: "completed", selects: null },
+          type: "context.settled",
+        },
+      ];
     case "session.completed":
-      return { data: { outcome: "completed" }, type: "session.ended" };
+      return [{ data: { outcome: "completed" }, type: "session.ended" }];
     case "session.failed": {
       const code = typeof data.code === "string" ? data.code : "session_failed";
       const message = typeof data.message === "string" ? data.message : "The session failed.";
       const details = isRecord(data.details) ? data.details : {};
-      const ended: {
-        outcome: "failed";
-        error: { code: string; message: string };
-        cause?: { policy: string };
-      } = { error: { code, message }, outcome: "failed" };
-      // A v26 deployment ending a stranded session recorded what ended it.
-      if (code === "session_stranded" && typeof details.trigger === "string") {
-        ended.cause = { policy: `stranded-${details.trigger}` };
+      const error = { code, message };
+      // A v26 deployment ending a stranded session recorded what ended it. v27 records a reset
+      // as the control delivery it admitted, and names that delivery as the end's cause.
+      if (code !== "session_stranded" || typeof details.trigger !== "string") {
+        return [{ data: { error, outcome: "failed" }, type: "session.ended" }];
       }
-      return { data: ended, type: "session.ended" };
+      if (details.trigger === "reset") {
+        return [
+          { data: { deliveryId: id, source: { control: "reset" } }, type: "delivery.admitted" },
+          { data: { cause: { deliveryId: id }, error, outcome: "failed" }, type: "session.ended" },
+        ];
+      }
+      return [
+        {
+          data: { cause: { policy: `stranded-${details.trigger}` }, error, outcome: "failed" },
+          type: "session.ended",
+        },
+      ];
     }
     default:
       return undefined;

@@ -3,22 +3,25 @@ import { buildStepCatalog } from "#execution/catalog/step-catalog.js";
 import { SEARCH_TOOL_NAME } from "#protocol/catalog-tools.js";
 import { collectWorkflowCalls } from "#harness/coordination.js";
 import { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-authorization.js";
-import { completeSignIn, settle } from "#harness/session-machine/transitions.js";
-import type { SuspendedStep } from "#harness/session-machine/view.js";
+import { completeSignIn, runnableCalls, settle } from "#harness/session-machine/transitions.js";
+import type { ApprovedCall, SessionView, SuspendedStep } from "#harness/session-machine/view.js";
+import { signInAttemptKey } from "#harness/hitl/sign-ins.js";
+import { signInInteractionId } from "#harness/interaction-facts.js";
 import type { Step } from "#harness/step/context.js";
 import { park } from "#harness/step/park.js";
 import { SessionLimitDeclinedError, throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import { bumpSessionRuntimeUsageLimits } from "#harness/session-usage.js";
 import type { HarnessToolLookup, HarnessStepInput, StepResult } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
+import type { ClearedBy } from "#protocol/session-events/families/call.js";
 import {
   admitAnswers,
-  type ApprovedCall,
   dispatch,
   grantedApprovals,
   openLimit,
   queueInput,
   requireSignIn,
+  type RunnableCall,
   settleApprovals,
   settleLimit,
   stepForRequest,
@@ -100,9 +103,10 @@ export async function admitHumanInput(
   const typed = resolveTypedApproval(step.view(), delivered.input);
   const limit = openLimit(step.view());
   // A new message steers the held turn, unless it waits behind the budget prompt. A typed answer
-  // is not a new message.
+  // is not a new message. A message queued behind a policy's answer or a responder's sign-in
+  // still steers: without it, the turn re-runs a step that parks again, forever.
   const messaged =
-    (input?.message !== undefined && typed?.message !== undefined) ||
+    (delivered.input?.message !== undefined && typed?.message !== undefined) ||
     delivered.displayMessage !== undefined;
   const steer = messaged && limit === undefined;
   const steered = steer ? await withdrawSteeredSignIns(step, typed) : typed;
@@ -131,10 +135,13 @@ export async function admitHumanInput(
   };
 }
 
-/** What the person decided: the budget answer, and the calls they approved. */
+/**
+ * What the person decided: the budget answer, and the calls that run now: those they approved,
+ * and those a sign-in stopped whose sign-ins have called back.
+ */
 export interface HumanDecisions {
   readonly limit?: { readonly granted: boolean };
-  readonly approved: readonly ApprovedCall[];
+  readonly approved: readonly RunnableCall[];
   /** Approvals settled on their answers: the model reads their results before the turn input. */
   readonly settledApprovals: boolean;
 }
@@ -142,6 +149,7 @@ export interface HumanDecisions {
 /**
  * The person's standing answers decide what they answer: the budget prompt settles, and each
  * step's approvals settle together once each has an answer, or when a message steers past them.
+ * A call a sign-in stopped runs once its sign-ins have called back, as the call that asked.
  */
 export async function settleHumanInput(
   step: Step,
@@ -155,8 +163,12 @@ export async function settleHumanInput(
     steer: intake.steer,
   });
   await step.apply(settled);
+  const view = step.view();
+  const resumed = view.turn.suspended.flatMap((parked) =>
+    runnableCalls(view, parked).map((approval) => ({ approval, step: parked })),
+  );
   return {
-    approved: settled.approved,
+    approved: [...settled.approved, ...resumed],
     limit: limit.limit,
     settledApprovals: settled.answered,
   };
@@ -182,58 +194,65 @@ export async function applyHumanDecisions(
 }
 
 /**
- * Runs the calls a person approved, each with the tools of the step that asked and as the turn's
+ * Runs the calls cleared to run, each with the tools of the step that asked and as the turn's
  * requester: workflow and agent calls join the runs their steps wait on, and local calls run
- * here, in the step's first attempt. A call that needs a sign-in stops the turn for it.
+ * here, in the step's first attempt. A call that needs a sign-in stops the turn for it, and
+ * waits in its step until the sign-in calls back.
  */
 async function runApproved(
   step: Step,
-  approved: readonly ApprovedCall[],
+  approved: readonly RunnableCall[],
 ): Promise<StepResult | undefined> {
   if (approved.length === 0) return undefined;
-  const responders = new Map(approved.map((call) => [call.request.interactionId, call.responder]));
-  const byStep = new Map<SuspendedStep, ApprovedCall["request"][]>();
-  for (const { request, step: parked } of approved) {
-    byStep.set(parked, [...(byStep.get(parked) ?? []), request]);
+  const byStep = new Map<SuspendedStep, ApprovedCall[]>();
+  for (const { approval, step: parked } of approved) {
+    byStep.set(parked, [...(byStep.get(parked) ?? []), approval]);
   }
   const tasks: RuntimeWorkflowTaskRequest[] = [];
   const denied: ApprovedCallResult[] = [];
-  const local: { requests: ApprovedCall["request"][]; tools: HarnessToolLookup }[] = [];
-  for (const [parked, requests] of byStep) {
+  const local: { approvals: ApprovedCall[]; tools: HarnessToolLookup }[] = [];
+  const claimed = new Set<string>();
+  for (const [parked, approvals] of byStep) {
     const tools = toolsOf(step, parked);
-    const workflows: ApprovedCall["request"][] = [];
-    for (const request of requests) {
-      const tool = tools.get(request.call.toolName);
+    const workflows = new Map<string, { approval: ApprovedCall; clearedBy?: ClearedBy }>();
+    for (const approval of approvals) {
+      const tool = tools.get(approval.call.toolName);
       if (tool?.workflowId === undefined) continue;
       const recheck = await recheckApprovedCall(tool, {
         abortSignal: step.config.abortSignal,
         approvalGrants: grantedApprovals(step.view()),
-        callId: request.call.callId,
-        input: request.call.input,
+        callId: approval.call.callId,
+        input: approval.call.input,
       });
       if (recheck.denied) {
         denied.push(
           await rejectApprovedCall({
             position: step.position(),
             publish: step.publish,
-            approval: request,
+            approval,
             reason: recheck.reason,
           }),
         );
       } else {
-        workflows.push(request);
+        workflows.set(approval.call.callId, {
+          approval,
+          clearedBy:
+            approval.interactionId === undefined
+              ? recheck.clearedBy
+              : { interactionId: approval.interactionId },
+        });
       }
     }
     local.push({
-      requests: requests.filter(
-        (request) => tools.get(request.call.toolName)?.workflowId === undefined,
-      ),
+      approvals: approvals
+        .filter((approval) => tools.get(approval.call.toolName)?.workflowId === undefined)
+        .map((approval) => reportingOnce(step.view(), approval, claimed)),
       tools,
     });
-    if (workflows.length === 0) continue;
+    if (workflows.size === 0) continue;
     const dispatched = collectWorkflowCalls({
       session: step.session,
-      toolCalls: workflows.map(({ call }) => ({
+      toolCalls: [...workflows.values()].map(({ approval: { call } }) => ({
         input: call.input,
         toolCallId: call.callId,
         toolName: call.toolName,
@@ -245,30 +264,27 @@ async function runApproved(
     tasks.push(
       ...dispatched.workflowRequests.map((task) => ({
         ...task,
-        clearedBy: {
-          interactionId: workflows.find((request) => request.call.callId === task.callId)!
-            .interactionId,
-        },
+        clearedBy: workflows.get(task.callId)?.clearedBy,
       })),
     );
   }
   if (denied.length > 0) await step.apply(settle(step.view(), { results: denied }));
   if (tasks.length > 0) await step.apply(dispatch(step.view(), { tasks }));
 
-  const calls = local.flatMap(({ requests }) => requests);
+  const calls = local.flatMap(({ approvals }) => approvals);
   step.frameworkToolNames = new Set(
-    local.flatMap(({ requests, tools }) =>
-      requests
-        .map((request) => request.call.toolName)
+    local.flatMap(({ approvals, tools }) =>
+      approvals
+        .map((approval) => approval.call.toolName)
         .filter((name) => tools.get(name)?.frameworkTool === true),
     ),
   );
   if (calls.length === 0) return undefined;
   const executed = await Promise.all(
-    local.map(async ({ requests, tools }) => {
-      if (requests.length === 0) return { settled: [], signIns: [] };
+    local.map(async ({ approvals, tools }) => {
+      if (approvals.length === 0) return { settled: [], signIns: [] };
       const view = step.view().projection.view;
-      const call = view.calls[requests[0]!.call.callId];
+      const call = view.calls[approvals[0]!.call.callId];
       const runId = call === undefined ? undefined : callRun(view, call);
       const run = runId === undefined ? undefined : view.runs[runId];
       const attempt =
@@ -284,13 +300,14 @@ async function runApproved(
       return await runApprovedCalls({
         abortSignal: step.config.abortSignal,
         approvalGrants: grantedApprovals(step.view()),
-        approvals: requests,
+        approvals,
         messages: step.projectHistory(step.session.history),
         position: step.position(),
         publish: step.publish,
-        responderOf: (approval) => responders.get(approval.interactionId),
+        responderOf: (approval) => approval.responder,
         telemetry: attempt?.telemetry,
         tools,
+        view: () => step.view(),
       });
     }),
   );
@@ -298,18 +315,39 @@ async function runApproved(
   // A cancellation ends the turn once the calls it cut short have their results.
   throwIfTurnAborted(step.config.abortSignal);
   const signIn = resolveInlineAuthorizationInterrupt({
-    messages: [],
     signIns: executed.flatMap((run) => run.signIns),
   });
   if (signIn === undefined) return undefined;
+  // A stopped call keeps the approval it ran on, so it runs on it again after the sign-in.
+  const byCallId = new Map(calls.map((approval) => [approval.call.callId, approval]));
   await step.apply(
     requireSignIn(step.view(), {
-      callIdsByName: signIn.callIdsByName,
+      calls: signIn.calls.map((stopped) => {
+        const approval = byCallId.get(stopped.call.callId);
+        return approval === undefined ? stopped : { ...stopped, approval };
+      }),
       challenges: signIn.challenges,
     }),
     step.session.history,
   );
   return park(step);
+}
+
+/**
+ * Calls a sign-in stopped can share it, and it reports once: with the first call to run it, unless
+ * a call that ran earlier reported it (its interaction is no longer open). `claimed` holds the
+ * sign-ins the calls in this batch already took.
+ */
+function reportingOnce(view: SessionView, call: ApprovedCall, claimed: Set<string>): ApprovedCall {
+  const { interactions } = view.projection.view;
+  const signIns = (call.signIns ?? []).filter((challenge) => {
+    const key = signInAttemptKey(challenge);
+    const open = interactions[signInInteractionId(challenge)]?.status === "open";
+    if (claimed.has(key) || !open) return false;
+    claimed.add(key);
+    return true;
+  });
+  return { ...call, signIns };
 }
 
 // A step's catalog is built once per suspended step. Restoring a step's tools runs its

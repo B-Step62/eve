@@ -131,6 +131,7 @@ describe("step attempts from the stream", () => {
     ]);
   });
 
+  // A cancel stops the model call on purpose, so its attempt is cancelled, not failed (#5025).
   it("hears what a turn's end closes with it, as the writer commits it", async () => {
     const { commit, heard } = session();
     await commit(...opening);
@@ -158,8 +159,23 @@ describe("step attempts from the stream", () => {
     ).toEqual([
       ["call.requested", undefined],
       ["call.settled", "interrupted"],
-      ["model.settled", "interrupted"],
+      ["model.settled", "cancelled"],
     ]);
+  });
+
+  it("fails the attempt a failed turn's end closes", async () => {
+    const { commit, heard } = session();
+    await commit(...opening);
+    await commit(started("run_0", 0));
+    await commit({
+      data: { error: overloaded, outcome: "failed", turnId: "turn_0" },
+      scope: turn,
+      type: "turn.settled",
+    } as SessionEvent);
+
+    expect(
+      heard.flatMap((event) => (event.type === "model.settled" ? [event.outcome] : [])),
+    ).toEqual(["interrupted"]);
   });
 });
 
@@ -537,7 +553,7 @@ describe("interactions", () => {
       ["interaction.opened", undefined],
       ["interaction.settled", "interrupted"],
       ["call.settled", "interrupted"],
-      ["model.settled", "interrupted"],
+      ["model.settled", "cancelled"],
       ["turn.settled", "cancelled"],
     ]);
     expect(of(heard, "interaction.settled")[0]).toMatchObject({ answer: undefined });

@@ -1,7 +1,6 @@
 import type { MessageContent } from "#shared/message-content.js";
 import type { Delivery } from "#shared/delivery.js";
 import { commandDelivery } from "#channel/delivery.js";
-import { SessionNotActiveError } from "#channel/session-not-active-error.js";
 
 import type { ChannelAdapter } from "#channel/adapter.js";
 import {
@@ -11,6 +10,7 @@ import {
 import type { SendPayload } from "#channel/routes.js";
 import { normalizeSendInput, serializeFilePartsInMessage } from "#channel/send-input.js";
 import { createSession, sessionCallbackToTurnCaller, type Session } from "#channel/session.js";
+import { SessionNotActiveError } from "#channel/session-not-active-error.js";
 import type {
   RunInput,
   Runtime,
@@ -41,6 +41,7 @@ export type ChannelAddressDeliveryOptions<TState = undefined> = [TState] extends
  * Only {@link send} may create a session: when the address is unowned, or in
  * place of a stranded session that another eve version built. Sends to a session whose
  * owner is only unavailable throw `SessionStrandedError` and deliver nothing.
+ * Responses to an address no session holds throw `SessionNotActiveError`.
  */
 interface ChannelAddress<TState = undefined> {
   readonly continuationToken: string;

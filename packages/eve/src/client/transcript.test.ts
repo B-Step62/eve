@@ -51,13 +51,22 @@ function cleared(): SessionEvent {
   };
 }
 
-function strandedEnd(trigger: string): SessionEvent {
-  return {
-    data: {
-      cause: { policy: `stranded-${trigger}` },
-      error: { code: "session_stranded", message: "ended" },
-      outcome: "failed",
+const stranded = { code: "session_stranded", message: "ended" };
+
+/** What eve writes when a reset ends a stranded session: the admitted control, then the end. */
+function strandedReset(): SessionEvent[] {
+  return [
+    { data: { deliveryId: "reset_0", source: { control: "reset" } }, type: "delivery.admitted" },
+    {
+      data: { cause: { deliveryId: "reset_0" }, error: stranded, outcome: "failed" },
+      type: "session.ended",
     },
+  ];
+}
+
+function strandedByMessage(): SessionEvent {
+  return {
+    data: { cause: { policy: "stranded-message" }, error: stranded, outcome: "failed" },
     type: "session.ended",
   };
 }
@@ -99,11 +108,11 @@ describe("transcriptOf", () => {
       ]).messages,
     ).toEqual([{ role: "user", text: "Bob asks about the schedule." }]);
 
+    expect(reduce([received("Bob asks about the schedule."), ...strandedReset()]).messages).toEqual(
+      [],
+    );
     expect(
-      reduce([received("Bob asks about the schedule."), strandedEnd("reset")]).messages,
-    ).toEqual([]);
-    expect(
-      reduce([received("Bob asks about the schedule."), strandedEnd("message")]).messages,
+      reduce([received("Bob asks about the schedule."), strandedByMessage()]).messages,
     ).toHaveLength(1);
   });
 

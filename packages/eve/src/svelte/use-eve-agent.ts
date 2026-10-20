@@ -26,15 +26,16 @@ import type {
 export type { PrepareSend };
 
 /**
- * Session lifecycle phase: `"ready"` (idle), `"resuming"` (checking an
- * attached session), `"submitted"` (request sent, awaiting the first stream
- * event), `"streaming"` (events arriving), or `"error"`.
+ * Local activity of the session: `"idle"` (nothing pending), `"resuming"` (catching up on an
+ * attached session), or `"busy"` (a send is in flight, or a turn, task, or sign-in is pending).
+ * Failures are reported separately in `error`.
  */
 export type UseEveAgentStatus = EveAgentStoreStatus;
 
 /**
- * Immutable point-in-time view of an eve agent session: projected `data`, the
- * last `error`, the raw `events` stream, the `session` cursor, and `status`.
+ * Immutable point-in-time view of an eve agent session: the conversation (`messages`,
+ * `interactions`, `agents`, `view`, `previews`), the last `error`, the raw `events` stream, the
+ * `session` cursor, and `status`.
  * `useEveAgent` passes this snapshot to the `onFinish` callback.
  */
 export type UseEveAgentSnapshot = EveAgentStoreSnapshot;
@@ -79,9 +80,8 @@ export interface UseEveAgentReturn {
   /** Current session identity and stream cursor. */
   readonly session: ClientSessionState | undefined;
   /**
-   * Lifecycle phase: `"ready"` (idle), `"resuming"` (checking an attached
-   * session), `"submitted"` (request sent, awaiting first event), `"streaming"`
-   * (events arriving), or `"error"`.
+   * Local activity: `"idle"`, `"resuming"` (catching up on an attached session), or `"busy"`.
+   * Failures are reported separately in `error`.
    */
   readonly status: UseEveAgentStatus;
 }
@@ -126,13 +126,13 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
   readonly initialSession?: ClientSessionState;
   /**
    * Project submitted user messages before eve confirms them with a
-   * `delivery.consumed` fact. Such a message shows in `data.messages` only;
+   * `delivery.consumed` fact. Such a message shows in `messages` only;
    * `events` stays the authoritative eve stream.
    *
    * @default true
    */
   readonly optimistic?: boolean;
-  /** Follow each subagent call's session into `data.agents` while mounted. @default false */
+  /** Follow each subagent call's session into `agents` while mounted. @default false */
   readonly followAgents?: boolean;
   /**
    * Keep the session stream open between turns to show events that arrive from schedules,
@@ -245,7 +245,8 @@ class SvelteEveAgent implements UseEveAgentReturn {
  * Svelte 5 binding that drives an eve session and projects its events into
  * rune-friendly reactive data.
  *
- * `data` is the conversation, including its message parts; derive anything else from `events`.
+ * The conversation's `messages`, `interactions`, `agents`, `view`, and `previews` are exposed
+ * directly; derive anything else from `events`.
  * Configuration is read once; create a new binding to change host or session.
  */
 export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentReturn {

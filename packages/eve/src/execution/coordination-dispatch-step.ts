@@ -1,14 +1,16 @@
-/** Starts workflow-tool runs for pending coordination. */
+/** Starts workflow-tool runs for pending coordination, then publishes the calls it started. */
 
 import {
   prepareCoordinationDispatch,
   type CoordinationDispatchInput,
   type CoordinationDispatchResult,
+  type PendingDispatchFacts,
 } from "#execution/coordination-dispatch-shared.js";
 import { createDurableSessionState } from "#execution/durable-session-store.js";
-import { publishSessionEvents } from "#execution/publish-session-events.js";
+import { commitSessionStep, type SessionStepState } from "#execution/publish-session-events.js";
 import {
   withSessionStateDelta,
+  type SessionStateTransition,
   type WithSessionStateDelta,
 } from "#execution/session/state-delta.js";
 import {
@@ -32,16 +34,50 @@ import { startTask, type TaskCallStart } from "#harness/session-machine/transiti
 import { storedProjection } from "#harness/session-machine/view.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
 import type { HarnessSessionBase } from "#harness/types.js";
-import type { SessionEvent } from "#protocol/session-event.js";
+import type { FactOf } from "#protocol/session-events/facts.js";
 import { callSettledFrom, callStarted } from "#harness/call-facts.js";
 import { copyView, foldLine } from "#protocol/session-projection/fold.js";
 import type { SessionView } from "#protocol/session-projection/tables.js";
 
+/**
+ * Starts the runs of the pending calls and records them on the session. A
+ * retry starts its runs again, since a Workflow start has no idempotency key,
+ * so this step publishes nothing and commits as soon as the runs are
+ * recorded. See {@link publishDispatchedCallsStep}.
+ */
 export async function dispatchCoordinationStep(
   input: CoordinationDispatchInput,
 ): Promise<WithSessionStateDelta<CoordinationDispatchResult>> {
   "use step";
   return await withSessionStateDelta(input, dispatchCoordination);
+}
+
+/**
+ * Publishes, as one commit, what {@link dispatchCoordinationStep} recorded: the calls the turn
+ * waits on started, the tasks it started or reached, and the calls it refused. A retry only
+ * publishes again.
+ */
+export async function publishDispatchedCallsStep(
+  input: SessionStepState & { readonly pending: PendingDispatchFacts },
+): Promise<SessionStateTransition> {
+  "use step";
+  return await withSessionStateDelta(input, ({ pending, ...target }) =>
+    commitSessionStep(
+      target,
+      (view) => {
+        // One introduction per task in this commit, based on the public table, not the private
+        // runtime address the dispatch already recorded.
+        const introducedTasks = new Set(Object.keys(view.projection.view.tasks));
+        const events = [
+          ...pending.executing,
+          ...pending.started.flatMap((task) => startTask(view, task, introducedTasks).events),
+          ...pending.refused,
+        ];
+        return [{ events, turn: view.turn }];
+      },
+      { origin: "own" },
+    ),
+  );
 }
 
 async function dispatchCoordination(
@@ -56,6 +92,7 @@ async function dispatchCoordination(
       results: [],
       serializedContext: input.serializedContext,
       sessionState: input.sessionState,
+      pending: { executing: [], refused: [], started: [] },
     };
   }
 
@@ -63,8 +100,8 @@ async function dispatchCoordination(
   let nextSession = session;
   const results: RuntimeActionResult[] = [];
   const started: TaskCallStart[] = [];
-  const refused: SessionEvent[] = [];
-  const executing: SessionEvent[] = [];
+  const refused: FactOf<"call.settled">[] = [];
+  const executing: FactOf<"call.started">[] = [];
   const agentLimits = resolveStepAgentLimits(prepared);
   // Prospective facts for this admission batch use the same fold as committed facts. This
   // shadow is never saved: limits count work actually started earlier in the batch without
@@ -120,26 +157,15 @@ async function dispatchCoordination(
       );
   }
 
-  const view = sessionView(storedProjection(nextSession.state), nextSession.state);
-  // One introduction per task in this commit, based on the public table and this batch's
-  // pending facts, not the private runtime address (which can exist before publication).
-  const introducedTasks = new Set(Object.keys(view.projection.view.tasks));
-  const published = await publishSessionEvents(
-    {
-      serializedContext: input.serializedContext,
-      sessionState:
-        nextSession === session
-          ? prepared.sessionState
-          : createDurableSessionState({ session: nextSession }),
-      sessionWritable: input.sessionWritable,
-    },
-    [
-      ...executing,
-      ...started.flatMap((task) => startTask(view, task, introducedTasks).events),
-      ...refused,
-    ],
-  );
-  return { results, ...published };
+  return {
+    results,
+    serializedContext: input.serializedContext,
+    sessionState:
+      nextSession === session
+        ? prepared.sessionState
+        : createDurableSessionState({ session: nextSession }),
+    pending: { executing, refused, started },
+  };
 }
 
 /**

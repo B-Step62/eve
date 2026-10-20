@@ -19,6 +19,7 @@ import type {
   ResponseValue,
 } from "#protocol/session-events/families/response.js";
 import type { ApprovalAsk } from "#harness/session-machine/view.js";
+import type { ConnectionPrincipal } from "#shared/connection-types.js";
 
 /**
  * A question, approval, or budget prompt opens. An approval is about its call, a budget prompt
@@ -65,8 +66,11 @@ export function signInOpened(
     callbackUrl: challenge.hookUrl,
     displayName: details.displayName,
     expiresAt: details.expiresAt,
+    // Who and what it grants, so a later call can tell it asks for the same sign-in.
+    grant: challenge.grant,
     instructions: details.instructions,
     name: challenge.name,
+    principal: signInPrincipal(challenge.principal),
     url: details.url,
     userCode: details.userCode,
   });
@@ -84,6 +88,15 @@ export function signInOpened(
     request,
     subject: input.subject,
   });
+}
+
+/** The principal's identity: its attributes stay out of the stream, which every client reads. */
+function signInPrincipal(principal: ConnectionPrincipal | undefined): SignInChallenge["principal"] {
+  if (principal === undefined) return undefined;
+  if (principal.type === "app") return { type: "app" };
+  return principal.issuer === undefined
+    ? { id: principal.id, type: "user" }
+    : { id: principal.id, issuer: principal.issuer, type: "user" };
 }
 
 /** An interaction ends. `cause` names the response that decided it, or what else settled it. */

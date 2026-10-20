@@ -7,7 +7,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { describe, expect, it } from "vitest";
 
-import { AgentSpanIdGenerator, otelTelemetry } from "#compiled/@eve/tracing/index.js";
+import { AgentSpanIdGenerator, otelTelemetry } from "#compiled/@vercel/agent-runs/index.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { eventsOf } from "#harness/publication.js";
 import { cascade } from "#harness/session-machine/cascade.js";
@@ -263,13 +263,27 @@ describe("a session's spans, from its committed lines", () => {
     const exported = await spans();
     expect(tree(exported)).toEqual([
       "invoke_agent weather cancelled",
-      "  agent.step !",
+      // The cancel stopped the step on purpose, so it ends without an error (#5025).
+      "  agent.step",
       "    execute_tool weather failed !",
       "    execute_tool deploy cancelled !",
       "      agent.approval cancelled",
     ]);
     const failed = exported.find((span) => span.name === "execute_tool weather");
     expect(failed?.attributes["error.type"]).toBe("TOOL_FAILED");
+  });
+
+  it("fails the step a failed turn's end cuts short", async () => {
+    const { commit, spans } = session();
+    await commit(...opening);
+    await commit(
+      turnSettled({
+        error: { code: "MODEL_CALL_FAILED", message: "Overloaded" },
+        outcome: "failed",
+      }),
+    );
+
+    expect(tree(await spans())).toEqual(["invoke_agent weather failed !", "  agent.step !"]);
   });
 
   // Known gap: a failed session cancels its open turn first, so the turn's span ends cancelled

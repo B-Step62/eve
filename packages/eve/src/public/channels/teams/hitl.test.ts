@@ -46,6 +46,29 @@ describe("Teams HITL helpers", () => {
     });
   });
 
+  it("carries the prompt each button submits as the card shows it", () => {
+    const prompt = "x".repeat(20_000);
+    const body = renderInteractionMessage({
+      ...request(),
+      request: {
+        kind: "question",
+        options: ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, label: id })),
+        prompt,
+      },
+    });
+    const card = body.attachments?.[0]?.content as {
+      actions?: Array<{ data?: Record<string, Record<string, unknown>> }>;
+      body?: Array<{ text?: string }>;
+    };
+    const shown = card.body?.[0]?.text;
+
+    expect(shown?.length).toBeLessThan(prompt.length);
+    expect(card.actions).toHaveLength(6);
+    for (const action of card.actions ?? []) {
+      expect(action.data?.[TEAMS_HITL_DATA_KEY]?.[TEAMS_HITL_PROMPT_KEY]).toBe(shown);
+    }
+  });
+
   it("decodes message and invoke submission values", () => {
     const message = parseTeamsActivity(
       activityWithValue({

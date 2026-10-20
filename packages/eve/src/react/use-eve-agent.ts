@@ -25,19 +25,18 @@ import type {
 export type { PrepareSend };
 
 /**
- * Lifecycle status of an eve agent session.
+ * Local activity of an eve agent session. Failures are reported separately in `error`.
  *
- * - `"ready"`: idle, accepting a new turn.
- * - `"resuming"`: checking an attached session for events; submission is disabled.
- * - `"submitted"`: a turn was sent, no stream events received yet.
- * - `"streaming"`: stream events are arriving for the active turn.
- * - `"error"`: the last turn ended in a terminal failure (see `snapshot.error`).
+ * - `"idle"`: nothing is pending, so a new turn can start.
+ * - `"resuming"`: catching up on an attached session; submission is disabled.
+ * - `"busy"`: a send is in flight, or a turn, task, or sign-in is still pending.
  */
 export type UseEveAgentStatus = EveAgentStoreStatus;
 
 /**
- * Snapshot of an eve agent session: `data` (the conversation), `events` (the authoritative
- * server stream), `session` (resumable cursor), `status`, and `error`.
+ * Snapshot of an eve agent session: the conversation (`messages`, `interactions`, `agents`,
+ * `view`, `previews`), `events` (the authoritative server stream), `session` (resumable cursor),
+ * `status`, and `error`.
  */
 export type UseEveAgentSnapshot = EveAgentStoreSnapshot;
 
@@ -105,13 +104,13 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
    * Project submitted user messages before eve confirms them with a
    * `delivery.consumed` fact.
    *
-   * Such a message shows in `data.messages` only; `events` remains the
+   * Such a message shows in `messages` only; `events` remains the
    * authoritative eve stream.
    *
    * @default true
    */
   readonly optimistic?: boolean;
-  /** Follow each subagent call's session into `data.agents` while mounted. @default false */
+  /** Follow each subagent call's session into `agents` while mounted. @default false */
   readonly followAgents?: boolean;
   /**
    * Keep the session stream open between turns to show events that arrive from schedules,
@@ -143,10 +142,10 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
 /**
  * React hook that drives an eve session and projects its event stream into UI data.
  *
- * Returns the current snapshot (`data`, `events`, `session`, `status`, `error`)
- * plus the commands `prewarm`, `send`, `respond`, `resume`, `cancel`, and `reset`. `data` is the
- * conversation (`messages`, `interactions`, `agents`, `view`, `previews`). Read lifecycle from
- * `view` with selectors from `eve/events`.
+ * Returns the current snapshot (the conversation's `messages`, `interactions`, `agents`, `view`,
+ * and `previews`, plus `events`, `session`, `status`, and `error`) and the commands `prewarm`,
+ * `send`, `respond`, `resume`, `cancel`, and `reset`. Read lifecycle from `view` with selectors
+ * from `eve/events`.
  *
  * Session-shaping options (`host`, `session`, `initialEvents`,
  * `initialSession`, `auth`, `headers`, `optimistic`, `resume`) are read once

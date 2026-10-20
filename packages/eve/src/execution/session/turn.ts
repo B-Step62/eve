@@ -4,7 +4,10 @@ import { controlDeliveryOf } from "#execution/session/control-delivery.js";
 import { sleep } from "#compiled/@workflow/core/index.js";
 
 import type { SessionCapabilities, TurnCaller } from "#channel/types.js";
-import { dispatchCoordinationStep } from "#execution/coordination-dispatch-step.js";
+import {
+  dispatchCoordinationStep,
+  publishDispatchedCallsStep,
+} from "#execution/coordination-dispatch-step.js";
 import type { SessionInputQueue } from "#execution/session/input-queue.js";
 import { taskToolResult, type TaskToolCall } from "#execution/tasks/calls.js";
 import { TASK_WAIT_TOOL_NAME } from "#protocol/task-tools.js";
@@ -348,14 +351,23 @@ export class SessionExecution {
    * session answers them itself.
    */
   private async dispatchRuns(): Promise<readonly RuntimeActionResult[]> {
-    const dispatched = await this.input.cursor.advance((state) =>
+    const { cursor } = this.input;
+    const dispatched = await cursor.advance(({ serializedContext, sessionState }) =>
       dispatchCoordinationStep({
+        serializedContext,
+        sessionState,
         workflowToolRunOwner: {
           inbox: sessionInboxHookToken(sessionCommandHookToken(this.input.sessionId)),
         },
-        ...state,
       }),
     );
+    // Published in a step of its own, so a retry while it runs cannot start the runs again.
+    const { executing, refused, started } = dispatched.pending;
+    if (executing.length > 0 || started.length > 0 || refused.length > 0) {
+      await cursor.advance((state) =>
+        publishDispatchedCallsStep({ ...state, pending: dispatched.pending }),
+      );
+    }
     return dispatched.results;
   }
 

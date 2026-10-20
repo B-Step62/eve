@@ -356,9 +356,15 @@ export interface InstrumentationModelRetriedEvent {
   readonly error?: unknown;
 }
 
+/**
+ * How a model run ended, as its `model.settled` says, except that a run its turn's cancellation
+ * cut is `cancelled` rather than `interrupted`: it stopped on purpose, not as a failure.
+ */
+export type InstrumentationModelOutcome = ModelOutcome | "cancelled";
+
 export interface InstrumentationModelSettledEvent {
   readonly type: "model.settled";
-  readonly outcome: ModelOutcome;
+  readonly outcome: InstrumentationModelOutcome;
   readonly idempotencyKey: string;
   readonly scope: InstrumentationScope;
   readonly error?: unknown;
@@ -381,6 +387,12 @@ export interface InstrumentationModelCallStartedEvent {
 export interface InstrumentationModelCallCompletedEvent {
   readonly type: "model.call.settled";
   readonly outcome: "completed";
+  /**
+   * Provider metadata, as reported by the AI SDK. Carries Vercel AI Gateway cost and session
+   * affinity routing data when the request went through the gateway; absent for other providers.
+   * When the trace policy omits outputs, only the gateway's `cost`, `generationId`, and `routing`
+   * fields remain.
+   */
   readonly providerMetadata?: Readonly<Record<string, unknown>>;
   /** Content. Absent unless this provider's trace policy records this direction. */
   readonly content?: readonly InstrumentationContentPart[];

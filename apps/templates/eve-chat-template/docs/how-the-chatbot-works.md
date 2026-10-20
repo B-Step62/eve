@@ -297,7 +297,7 @@ The template wraps it with persistence and resume logic.
 
 `useEveAgent` owns the eve session and stream. The template passes the saved
 `initialSession` cursor and `initialEvents` when the chat mounts, then renders
-`agent.data.messages` directly. It does not maintain a second projection or
+`agent.messages` directly. It does not maintain a second projection or
 merge local events into the server log.
 
 `onSessionChange` saves the session ID and cursor. `onEvent` persists each newly
@@ -444,8 +444,8 @@ When a connection requires auth, eve emits:
 interaction.opened   (request.kind: "sign-in")
 ```
 
-The UI reads `agent.data.interactions` and selects open interactions whose
-request has `kind: "sign-in"`. It does not scan or interpret the event log.
+The UI reads `agent.view.interactions` through the `interaction` selector from
+`eve/events` and selects open interactions whose request has `kind: "sign-in"`. It does not scan or interpret the event log.
 
 For each pending authorization, the UI renders `ConnectionAuthorizationPrompt`.
 

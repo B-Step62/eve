@@ -666,7 +666,7 @@ async function findPackageJson(packageName, packageRoot, packageJsonName = packa
         return {
           packageJson,
           packageJsonPath,
-          packageRoot: dirname(packageJsonPath),
+          packageRoot: realpathSync(dirname(packageJsonPath)),
         };
       }
     }

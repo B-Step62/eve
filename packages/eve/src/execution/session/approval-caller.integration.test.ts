@@ -373,6 +373,38 @@ describe("approval caller", () => {
     ]);
   }, 60_000);
 
+  it("lets a message delivered with one answer steer past the step's other approval", async () => {
+    const { seen, stages } = await withChainRun(
+      "approval-caller-steer-with-answer",
+      async (run) => {
+        const publish = approvalsIn(run.stages).find(
+          (entry) => entry.toolName === "publish_change",
+        );
+        expect(approvalsIn(run.stages)).toHaveLength(2);
+        // publish_change waits for its response policy; deploy_change has none. The message
+        // queues behind the policy's answer and must still steer past deploy_change.
+        await run.deliver(ALICE, {
+          answers: [{ interactionId: publish!.interactionId, optionId: "approve" }],
+          message: "Never mind, skip the deploy.",
+        });
+      },
+      { firstApproval: always(), message: "Call in parallel: deploy_change, publish_change." },
+    );
+
+    const outcomes = Object.fromEntries(
+      filterEventsByType(stages.flat(), "interaction.settled").map((event) => [
+        event.data.interactionId,
+        event.data.outcome,
+      ]),
+    );
+    const byTool = Object.fromEntries(
+      approvalsIn(stages).map((entry) => [entry.toolName, outcomes[entry.interactionId]]),
+    );
+    expect(byTool).toEqual({ deploy_change: "withdrawn", publish_change: "accepted" });
+    expect(seen).toEqual([{ tool: "publish_change", caller: "alice" }]);
+    expect(stages.map(turnBoundaries).at(-1)).toEqual(["turn.settled turn_0"]);
+  }, 60_000);
+
   it("starts an approved workflow tool's run as its requester", async () => {
     const { stages } = await withChainRun(
       "approval-caller-workflow",
@@ -432,9 +464,11 @@ describe("approval caller", () => {
     const { secondRequesters, seen, stages } = await withChainRun(
       "approval-caller-null-auth",
       async (run) => {
-        // Without a response policy, the approval stands; the call runs as the turn's caller.
-        await run.approve(null, "deploy_change");
-        // A response policy needs an authenticated responder, so this one stays pending.
+        // The call has a requester, so an unauthenticated answer settles nothing, with or
+        // without a response policy; the requester's own answer still decides it.
+        const refusedDirect = await run.approve(null, "deploy_change", "response.settled");
+        expect(filterEventsByType(refusedDirect, "interaction.settled")).toEqual([]);
+        await run.approve(ALICE, "deploy_change");
         const refused = await run.approve(null, "publish_change", "response.settled");
         expect(filterEventsByType(refused, "interaction.settled")).toEqual([]);
         await run.approve(ALICE, "publish_change");
@@ -444,24 +478,26 @@ describe("approval caller", () => {
 
     expect(seen.map((entry) => entry.caller)).toEqual(["alice", "alice", "alice"]);
     expect(secondRequesters).toEqual(["alice"]);
-    // The publish approval settles on Alice's answer, the only one a responder sent.
+    // Each approval settles on Alice's answer, the only one a responder sent.
     const events = stages.flat();
-    const publish = approvalsIn(stages).find((entry) => entry.toolName === "publish_change");
-    const settled = filterEventsByType(events, "interaction.settled").find(
-      (event) => event.data.interactionId === publish?.interactionId,
-    );
-    expect(settled?.data.outcome).toBe("accepted");
-    const decider = settled?.data.cause;
-    const submitted = filterEventsByType(events, "response.submitted").find(
-      (event) =>
-        decider !== undefined &&
-        "responseId" in decider &&
-        event.data.responseId === decider.responseId,
-    );
-    const admitted = filterEventsByType(events, "delivery.admitted").find(
-      (event) => event.data.deliveryId === submitted?.data.deliveryId,
-    );
-    expect(admitted?.data.principal?.id).toBe("alice");
+    for (const toolName of ["deploy_change", "publish_change"]) {
+      const approval = approvalsIn(stages).find((entry) => entry.toolName === toolName);
+      const settled = filterEventsByType(events, "interaction.settled").find(
+        (event) => event.data.interactionId === approval?.interactionId,
+      );
+      expect(settled?.data.outcome).toBe("accepted");
+      const decider = settled?.data.cause;
+      const submitted = filterEventsByType(events, "response.submitted").find(
+        (event) =>
+          decider !== undefined &&
+          "responseId" in decider &&
+          event.data.responseId === decider.responseId,
+      );
+      const admitted = filterEventsByType(events, "delivery.admitted").find(
+        (event) => event.data.deliveryId === submitted?.data.deliveryId,
+      );
+      expect(admitted?.data.principal?.id).toBe("alice");
+    }
   }, 60_000);
 
   it("runs approved calls in parallel as their requester", async () => {

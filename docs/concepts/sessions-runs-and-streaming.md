@@ -128,7 +128,7 @@ The optional `data.trace` on `session.started` and `turn.started` contains eve-o
 
 `content.delta` and `call.input` carry only their new text. Accumulate them in stream order, per `partId` or `callId`, when you need the text so far. When the durable writer is busy, eve may merge adjacent deltas for the same part or call; the resulting text and ordering stay the same. `content.completed` carries the authoritative value of each finished part, so a reader that reconnects without its accumulated text can wait for it instead of replaying the deltas.
 
-When a streamed tool input becomes a validated call, its `call.input` records precede its `call.requested`. The client shows the potentially incomplete JSON as a `tool` part with `status: "streaming"` and its `inputText`, then as `status: "requested"` with the validated `input` on `call.requested`.
+When a streamed tool input becomes a validated call, its `call.input` records precede its `call.requested`. The client shows the potentially incomplete JSON as a `tool` part with `state: "streaming"` and its `inputText`, then as `state: "requested"` with the validated `input` on `call.requested`.
 
 `call.progress` carries one complete preliminary output snapshot from an authored async-generator tool. A later snapshot for the same `callId` replaces it, and `call.settled` carries the final output. Treat snapshots as last-write-wins. Provider-executed tool progress and MCP progress notifications are not projected as `call.progress`.
 
