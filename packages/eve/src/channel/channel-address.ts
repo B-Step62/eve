@@ -31,6 +31,8 @@ interface BaseChannelAddressCreateOptions {
   readonly auth: SessionAuthContext | null;
   readonly history?: SendPayload["history"];
   readonly initiatorAuth?: SessionAuthContext | null;
+  /** First message, which runs the first turn only when this call starts the session. */
+  readonly message?: string | UserContent;
   readonly title?: string;
 }
 
@@ -195,6 +197,15 @@ export function createChannelAddress<TState = undefined>(input: {
       }
       if (owner !== undefined) return { created: false, session: toSession(owner.sessionId) };
       const state = (options as { readonly state?: TState }).state;
+      const message = serializeFilePartsInMessage(options.message);
+      const delivery =
+        message !== undefined &&
+        metadata.channelKind !== undefined &&
+        metadata.channelName !== undefined
+          ? createChannelDeliveryMetadata(metadata as ChannelDeliverySource)
+          : undefined;
+      // A first message starts the session the way a send to a free address does, but a run
+      // that loses the address forwards nothing: `created: false` means nothing was delivered.
       const started = await input.runtime.createSession({
         adapter:
           state === undefined
@@ -207,8 +218,12 @@ export function createChannelAddress<TState = undefined>(input: {
         capabilities: { requestInput: true },
         channelName: input.channelName,
         continuationToken: namespacedToken,
+        delivery,
         initiatorAuth: options.initiatorAuth,
-        input: history === undefined ? {} : { history },
+        input: {
+          ...(history === undefined ? {} : { history }),
+          ...(message === undefined ? {} : { message }),
+        },
         requestId: metadata.requestId,
         title: options.title,
       });

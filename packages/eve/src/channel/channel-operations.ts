@@ -65,6 +65,12 @@ interface BaseChannelCreateOptions {
   /** Prior conversation the session starts with; it joins history with the first message. */
   readonly history?: readonly SessionHistoryMessage[];
   readonly initiatorAuth?: SessionAuthContext | null;
+  /**
+   * First message. When this call starts the session, it runs the first turn
+   * after `history`. When another session owns the address, it is not sent.
+   * Without it, the session waits for its first message.
+   */
+  readonly message?: string | UserContent;
   readonly title?: string;
 }
 
@@ -78,11 +84,12 @@ export interface ChannelSource<TState = undefined> {
   /** Starts or resumes a turn with a user message. May create a session. */
   send(message: string | UserContent, options: ChannelSendOptions<TState>): Promise<Session>;
   /**
-   * Creates a session that waits for its first message, without running a
-   * turn. When another session owns the address, or claims it concurrently,
-   * returns that session unchanged with `created: false`; its `history` was not
-   * added. Throws `SessionStrandedError` when the owner is stranded; reset the
-   * address, then create again.
+   * Creates a session only when the address is free. Without `message`, the
+   * session waits for its first message; with one, it runs the first turn.
+   * When another session owns the address, or claims it concurrently,
+   * returns that session unchanged with `created: false`; its `history` and
+   * `message` were not delivered. Throws `SessionStrandedError` when the owner
+   * is stranded; reset the address, then create again.
    */
   create(options: ChannelCreateOptions<TState>): Promise<ChannelCreateResult>;
   /** Answers pending input requests. Never creates a session. */
