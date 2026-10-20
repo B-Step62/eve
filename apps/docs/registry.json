@@ -981,7 +981,7 @@
       "name": "connection/context",
       "type": "registry:item",
       "title": "context.dev",
-      "description": "search, scrape, extract, and monitor live web data.",
+      "description": "Search, scrape, extract, and monitor live web data.",
       "meta": {
         "eve": {
           "setup": {

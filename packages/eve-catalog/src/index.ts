@@ -550,7 +550,7 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     slug: "context",
     name: "context.dev",
     kind: "connection",
-    tagline: "search, scrape, extract, and monitor live web data.",
+    tagline: "Search, scrape, extract, and monitor live web data.",
     surfaces: { scaffoldable: false, registry: true, gallery: true },
     connection: {
       description:
