@@ -101,6 +101,8 @@ export function openCodeChannel(): WorkflowExecuteToolDefinition<
 > {
   return frameworkTool(
     defineWorkflowTool({
+      // `ctx.to()` reaches channels only from the root agent.
+      availableInSubagents: false,
       description: OPEN_CODE_CHANNEL_DESCRIPTION,
       execute: executeOpenCodeChannel,
       inputSchema: OPEN_CODE_CHANNEL_INPUT_SCHEMA,

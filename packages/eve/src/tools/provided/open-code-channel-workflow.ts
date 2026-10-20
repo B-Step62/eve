@@ -1,5 +1,6 @@
 import { transcriptReducer } from "#client/index.js";
 import { sessions } from "#public/server/index.js";
+import type { SlackChannel } from "#public/channels/slack/index.js";
 import type { WorkflowToolContext } from "#public/tools/index.js";
 import type {
   OpenCodeChannelInput,
@@ -40,7 +41,7 @@ export async function executeOpenCodeChannel(
     : undefined;
   const history = await readSessionTranscript(ctx.session.id);
   // Slack refusals fail the call with Slack's error, which the model can relay.
-  const { sessionId } = await ctx.sendToChannel("slack", input.message, {
+  const { sessionId } = await ctx.sendToChannel<SlackChannel>("slack", input.message, {
     target: {
       channelId,
       codeChannel: { name: input.name, originTs },
@@ -52,9 +53,12 @@ export async function executeOpenCodeChannel(
   return { sessionId, status: "opened" };
 }
 
+/** Bounds the step result and the history the code channel session imports. */
+const MAX_HISTORY_MESSAGES = 40;
+
 async function readSessionTranscript(sessionId: string) {
   "use step";
-  const reducer = transcriptReducer();
+  const reducer = transcriptReducer({ maxMessages: MAX_HISTORY_MESSAGES });
   let transcript = reducer.initial();
   for await (const event of sessions.attach(sessionId).stream({ follow: false })) {
     transcript = reducer.reduce(transcript, event);
