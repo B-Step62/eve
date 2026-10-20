@@ -66,8 +66,7 @@ export function createAgentSessions(
       await endAgentSessionsStep({ sessions });
     },
     renew: (renewalId) => {
-      if (!window.renew(renewalId) || sessions.length === 0) return;
-      void renewAgentSessionsStep({ renewalId, sessions: [...sessions] });
+      if (window.renew(renewalId)) window.send([...sessions]);
     },
   };
 }
@@ -80,6 +79,8 @@ export function createAgentSessions(
 class RunUsageWindow {
   #current: string;
   readonly #seen: Set<string>;
+  /** Keys of sessions a renewal failed to reach; each gets the current one before its next message. */
+  readonly #stale = new Set<string>();
 
   constructor(initial: string) {
     this.#current = initial;
@@ -96,6 +97,27 @@ class RunUsageWindow {
     this.#seen.add(renewalId);
     this.#current = renewalId;
     return true;
+  }
+
+  /**
+   * Renews `sessions` into the current window. A send that fails after the
+   * step's retries leaves them stale rather than dropped: the run already
+   * remembers the renewal and ignores it if it comes again.
+   */
+  send(sessions: readonly OpenedAgentSession[]): void {
+    if (sessions.length === 0) return;
+    const renewalId = this.#current;
+    renewAgentSessionsStep({ renewalId, sessions }).catch(() => {
+      if (this.#current !== renewalId) return;
+      for (const opened of sessions) this.#stale.add(opened.key);
+    });
+  }
+
+  /** Brings a stale session into the current window; throws while it still can't be reached. */
+  async catchUp(opened: OpenedAgentSession): Promise<void> {
+    if (!this.#stale.has(opened.key)) return;
+    await renewAgentSessionsStep({ renewalId: this.#current, sessions: [opened] });
+    this.#stale.delete(opened.key);
   }
 }
 
@@ -275,6 +297,7 @@ class RunAgentSession implements AgentSession {
       return;
     }
     const opened = await this.#opened;
+    await this.#window.catchUp(opened);
     await sendAgentSessionMessageStep({ ...message, ...opened });
   }
 
@@ -297,9 +320,7 @@ class RunAgentSession implements AgentSession {
       this.#openedIn = openedIn;
       this.#sessions.push(opened);
       // A renewal that reached the run while the session opened missed it.
-      if (this.#window.current !== openedIn) {
-        void renewAgentSessionsStep({ renewalId: this.#window.current, sessions: [opened] });
-      }
+      if (this.#window.current !== openedIn) this.#window.send([opened]);
       await this.#run.owner.send({ from, kind: "agent-started", session: address });
       return opened;
     } catch (error) {

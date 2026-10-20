@@ -48,6 +48,12 @@ the session applies that renewal. Arrival order no longer matters.
 A task run that starts after a renewal the session already applied gets that
 renewal when it reports started, since renewals skip runs that haven't.
 
+A missed renewal would leave later spend tagged with the old window, so
+delivery doesn't drop one. A blocking run that hasn't registered its control
+hook yet is waited for, as an interrupt is, and the renewing step fails and
+retries if it never does. A run whose renewal can't reach one of its sessions
+renews that session before sending it the next message.
+
 ## Gaps
 
 - A model call already in flight when the renewal arrives counts in the new

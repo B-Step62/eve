@@ -10,6 +10,7 @@ import {
   type SubagentStartTarget,
 } from "#execution/agent-sessions/target.js";
 import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
+import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
 import {
   createWorkflowCallbackUrl,
   resolveWorkflowCallbackBaseUrl,
@@ -210,17 +211,14 @@ export async function renewAgentSessionsStep(input: {
       const { address } = opened;
       // Remote agents keep their own windows.
       if (address.kind === "remote") return;
-      try {
-        await resumeSessionInbox(address.continuationToken, {
+      // A session that ended spends nothing more; any other failure fails the
+      // step, so the runtime retries it.
+      await ignoreGoneTarget(
+        resumeSessionInbox(address.continuationToken, {
           kind: "renew-window",
           renewalId: input.renewalId,
-        });
-      } catch (error) {
-        logError(log, "failed to renew an agent session's usage window", error, {
-          name: address.name,
-          sessionId: address.sessionId,
-        });
-      }
+        }),
+      );
     }),
   );
 }

@@ -1,15 +1,15 @@
 import type { DurableSession } from "#execution/durable-session-store.js";
 import { readTaskTable, startedTaskRuns } from "#execution/tasks/table.js";
-import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
+import { sendToLiveWorkflowToolRun } from "#execution/tools/workflow/interrupt.js";
 import type { WorkflowToolRunControlMessage } from "#execution/tools/workflow/messages.js";
 import { getBlockingWorkflowToolRuns } from "#harness/workflow-tool-runs.js";
-import { resumeHook } from "#internal/workflow/runtime.js";
 
 /**
  * Tells every running descendant run that an approval started a new usage
  * window, so the sessions they opened start one before their next budget
- * check. A task run that hasn't started has opened no session yet, and one it
- * opens later starts with a fresh window.
+ * check. A blocking run may not have registered its control hook yet, so a
+ * live run is waited for rather than skipped. A task run that hasn't started
+ * gets the renewal when it reports started.
  */
 export async function renewDescendantWindows(
   session: DurableSession,
@@ -20,5 +20,5 @@ export async function renewDescendantWindows(
     ...startedTaskRuns(readTaskTable(session.state)),
     ...getBlockingWorkflowToolRuns(session.state).map((run) => run.address),
   ];
-  await Promise.all(runs.map((run) => ignoreGoneTarget(resumeHook(run.hookToken, message))));
+  await Promise.all(runs.map((run) => sendToLiveWorkflowToolRun(run, message)));
 }

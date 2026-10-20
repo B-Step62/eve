@@ -6,7 +6,9 @@ import {
   cancelAgentSessionTurnStep,
   endAgentSessionsStep,
   openAgentSessionStep,
+  renewAgentSessionsStep,
   sendAgentSessionMessageStep,
+  type OpenedAgentSession,
 } from "#execution/agent-sessions/steps.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   dispatch: vi.fn(),
   resolveSessionInbox: vi.fn(),
+  resumeSessionInbox: vi.fn(),
   waitForCommandHookOwner: vi.fn(),
   waitForSessionInbox: vi.fn(),
 }));
@@ -32,6 +35,7 @@ vi.mock("#execution/workflow-runtime.js", async (importOriginal) => ({
 vi.mock("#execution/session-inbox/resume.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("#execution/session-inbox/resume.js")>()),
   resolveSessionInbox: mocks.resolveSessionInbox,
+  resumeSessionInbox: mocks.resumeSessionInbox,
 }));
 vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
   getCompiledRuntimeAgentBundle: async () => ({ graph: {} }),
@@ -172,5 +176,40 @@ describe("commands to a session that opened without waiting", () => {
       'Agent "reviewer" can no longer receive messages; its session ended.',
     );
     expect(mocks.dispatch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("renewAgentSessionsStep", () => {
+  const opened = (sessionId: string): OpenedAgentSession => ({
+    address: {
+      continuationToken: `${sessionId}-token`,
+      kind: "local" as const,
+      name: "worker",
+      nodeId: "worker",
+      sessionId,
+    },
+    context: {} as AgentSessionContext,
+    key: sessionId,
+  });
+
+  it("fails the step when a live session's renewal isn't delivered, so the runtime retries it", async () => {
+    mocks.resumeSessionInbox.mockRejectedValueOnce(new Error("inbox unavailable"));
+
+    await expect(
+      renewAgentSessionsStep({ renewalId: "R", sessions: [opened("worker")] }),
+    ).rejects.toThrow("inbox unavailable");
+  });
+
+  it("skips a session that already ended", async () => {
+    mocks.resumeSessionInbox
+      .mockRejectedValueOnce(new HookNotFoundError("ended-token"))
+      .mockResolvedValueOnce({});
+
+    await renewAgentSessionsStep({ renewalId: "R", sessions: [opened("ended"), opened("live")] });
+
+    expect(mocks.resumeSessionInbox).toHaveBeenCalledWith("live-token", {
+      kind: "renew-window",
+      renewalId: "R",
+    });
   });
 });
