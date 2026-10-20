@@ -1,65 +1,39 @@
-import type { ModelMessage } from "ai";
-
-import { type AuthorizationSignal } from "#harness/authorization.js";
+import type { AuthorizationSignal } from "#harness/authorization.js";
+import type { ToolSignIn } from "#harness/call-executor.js";
 import { resolveActiveAuthorizationChallenges } from "#harness/hitl/sign-ins.js";
+import type { ApprovedCall } from "#harness/session-machine/view.js";
+import { createRuntimeToolCallActionFromToolCall } from "#harness/tool-call-action.js";
 
-/**
- * Resolves the sign-ins that stopped calls, and keeps only protocol-complete sibling calls from
- * the response that made them.
- */
+/** A call a sign-in stopped, the connections it needs, and the approval it ran on, if any. */
+export interface StoppedCall {
+  readonly call: ApprovedCall["call"];
+  readonly connections: readonly string[];
+  readonly approval?: Pick<ApprovedCall, "interactionId" | "responder">;
+}
+
+/** Resolves the sign-ins that stopped calls. */
 export function resolveInlineAuthorizationInterrupt(input: {
-  readonly messages: readonly ModelMessage[];
-  readonly signIns: readonly { readonly callId: string; readonly signal: AuthorizationSignal }[];
+  readonly signIns: readonly ToolSignIn[];
 }):
   | {
       readonly challenges: AuthorizationSignal["challenges"];
-      /** The calls each sign-in stopped, by the challenge's connection name. */
-      readonly callIdsByName: ReadonlyMap<string, readonly string[]>;
-      readonly history: ModelMessage[];
+      /** The calls sign-ins stopped, each with the connections it needs. */
+      readonly calls: readonly StoppedCall[];
     }
   | undefined {
   if (input.signIns.length === 0) return undefined;
-  const callIdsByName = new Map<string, string[]>();
-  for (const { callId, signal } of input.signIns) {
-    for (const challenge of signal.challenges) {
-      callIdsByName.set(challenge.name, [...(callIdsByName.get(challenge.name) ?? []), callId]);
-    }
-  }
   return {
-    callIdsByName,
+    calls: input.signIns.map(({ callId, input: args, signal, toolName }) => {
+      const action = createRuntimeToolCallActionFromToolCall({
+        toolCall: { input: args, toolCallId: callId, toolName },
+      });
+      return {
+        call: { callId: action.callId, input: action.input, toolName: action.toolName },
+        connections: signal.challenges.map((challenge) => challenge.name),
+      };
+    }),
     challenges: resolveActiveAuthorizationChallenges(
       input.signIns.flatMap(({ signal }) => signal.challenges),
     ),
-    history: withoutCalls(input.messages, new Set(input.signIns.map(({ callId }) => callId))),
   };
-}
-
-/** Drops the given calls and their results, keeping protocol-complete sibling calls. */
-export function withoutCalls(
-  messages: readonly ModelMessage[],
-  interruptedCallIds: ReadonlySet<string>,
-): ModelMessage[] {
-  const projected = messages.flatMap((message): ModelMessage[] => {
-    if (message.role === "assistant" && Array.isArray(message.content)) {
-      const interrupted = message.content.some(
-        (part) => part.type === "tool-call" && interruptedCallIds.has(part.toolCallId),
-      );
-      const content = message.content.filter(
-        (part) => part.type !== "tool-call" || !interruptedCallIds.has(part.toolCallId),
-      );
-      const hasSiblingCall = content.some((part) => part.type === "tool-call");
-      return content.length === 0 || (interrupted && !hasSiblingCall)
-        ? []
-        : [{ ...message, content }];
-    }
-    if (message.role === "tool") {
-      const content = message.content.filter(
-        (part) => part.type !== "tool-result" || !interruptedCallIds.has(part.toolCallId),
-      );
-      return content.length === 0 ? [] : [{ ...message, content }];
-    }
-    return [message];
-  });
-
-  return projected;
 }
