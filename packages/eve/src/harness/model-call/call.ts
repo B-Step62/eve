@@ -380,16 +380,12 @@ export class ModelCaller {
     const agent = new ToolLoopAgent(settings);
 
     try {
-      const result = await this.stream(
-        agent,
-        callMessages,
-        hooks.stepResult,
-        attempt?.telemetry,
-      );
+      const result = await this.stream(agent, callMessages, hooks.stepResult, attempt?.telemetry);
       await attempt?.complete();
       return result;
     } catch (error) {
-      if (generation.interrupted) await attempt?.complete();
+      // A steered or cancelled generation stopped on purpose; only other failures are errors.
+      if (generation.interrupted || generation.signal.aborted) await attempt?.complete();
       else await attempt?.fail(error);
       generation.check();
       // Only the output timeout above aborts the stream without aborting our signal.
