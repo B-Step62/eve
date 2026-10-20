@@ -710,7 +710,7 @@
       "name": "connection/agentcard",
       "type": "registry:item",
       "title": "Agentcard",
-      "description": "let agents buy online",
+      "description": "Shop real merchants and pay with single-use virtual cards.",
       "meta": {
         "eve": {
           "setup": {

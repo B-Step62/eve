@@ -461,7 +461,7 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     slug: "agentcard",
     name: "Agentcard",
     kind: "connection",
-    tagline: "let agents buy online",
+    tagline: "Shop real merchants and pay with single-use virtual cards.",
     surfaces: { scaffoldable: false, registry: true, gallery: true },
     connection: {
       description:
