@@ -125,15 +125,22 @@ function AgentMessagePart({ asks, part }: { readonly asks: Asks; readonly part: 
     case "tool":
       return (
         <div className="space-y-4">
-          {asks.questionsFor(part.callId).map(({ answer, ...request }) => (
-            <QuestionRequest
-              answer={answer}
-              canRespond={asks.canRespond(request.interactionId)}
-              interaction={request}
-              key={request.interactionId}
-              onAnswers={asks.onAnswers}
-            />
-          ))}
+          {asks.questionsFor(part.callId).map((question) => {
+            // The call's part shows an answer this client sent at once; the view, once eve has it.
+            const { answer, ...request } =
+              part.interaction?.interactionId === question.interactionId
+                ? part.interaction
+                : question;
+            return (
+              <QuestionRequest
+                answer={answer}
+                canRespond={asks.canRespond(request.interactionId)}
+                interaction={request}
+                key={request.interactionId}
+                onAnswers={asks.onAnswers}
+              />
+            );
+          })}
         </div>
       );
     default:

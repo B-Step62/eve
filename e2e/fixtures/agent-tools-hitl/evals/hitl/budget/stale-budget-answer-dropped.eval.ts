@@ -20,7 +20,7 @@ export default defineEval({
     const next = (await session.send(SAY.bobStatus, asAlice)).expectOk();
     next.event("content.completed", { data: { phase: "reply", value: REPLY.bobStatus } });
     session.notEvent("delivery.consumed", {
-      data: { parts: [{ kind: "text", text: "continue" }] },
+      data: { parts: [{ kind: "text", text: "approve" }] },
     });
     session.notEvent("content.completed", { data: { phase: "reply", value: REPLY.staleAnswer } });
     session.event("interaction.settled", {

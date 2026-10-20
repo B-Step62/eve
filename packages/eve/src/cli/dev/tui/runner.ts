@@ -1,3 +1,4 @@
+import { APPROVE_OPTION_ID, DENY_OPTION_ID } from "#protocol/interaction-options.js";
 import {
   delivery,
   turn as readTurn,
@@ -474,6 +475,8 @@ export class EveTUIRunner {
   #inputController?: AbortController;
   /** Questions the user skipped; they stay open for the server to resolve. */
   readonly #dismissedInputs = new Set<string>();
+  /** Questions answered here that stay open until the session settles them. */
+  readonly #answeredInputs = new Set<string>();
   /** Registry setups queued by tool results on root or child streams. */
   readonly #pendingRegistrySetups: string[] = [];
   #activeRegistrySetup?: string;
@@ -971,7 +974,9 @@ export class EveTUIRunner {
     // A sign-in completes by its callback, not an answer typed here.
     return openInteractions(this.#store.snapshot.view).filter(
       (input) =>
-        input.request.kind !== "sign-in" && !this.#dismissedInputs.has(input.interactionId),
+        input.request.kind !== "sign-in" &&
+        !this.#dismissedInputs.has(input.interactionId) &&
+        !this.#answeredInputs.has(input.interactionId),
     );
   }
 
@@ -992,7 +997,9 @@ export class EveTUIRunner {
         this.#dismissedInputs.add(input.interactionId);
         continue;
       }
+      this.#answeredInputs.add(input.interactionId);
       void this.#store.send({ answers: [response] }).catch((error: unknown) => {
+        this.#answeredInputs.delete(input.interactionId);
         if (this.#disposed || isAbortError(error)) return;
         this.#renderSendError("Error", error);
       });
@@ -1016,7 +1023,7 @@ export class EveTUIRunner {
       );
       return {
         interactionId: request.interactionId,
-        optionId: response.approved ? "approve" : "cancel",
+        optionId: response.approved ? APPROVE_OPTION_ID : DENY_OPTION_ID,
       };
     }
     if (!this.#renderer.readInputQuestion) {
@@ -1060,6 +1067,7 @@ export class EveTUIRunner {
 
   #clearRunnerState(): void {
     this.#dismissedInputs.clear();
+    this.#answeredInputs.clear();
     this.#handledHandoffs.clear();
     this.#recordedFailures = 0;
     this.#runtimeArtifacts?.clear();

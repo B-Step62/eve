@@ -39,6 +39,10 @@ describe("stepDisagreement", () => {
     } as never;
     expect(stepDisagreement(paused("person"), view)).toBe("person-but-session");
     expect(stepDisagreement(paused("calls", true), view)).toBe("dispatch-deferred");
+    const cancel = { callId: "c_1", kind: "eve__task_cancel", taskId: "t_1" } as const;
+    expect(
+      stepDisagreement({ ...paused("calls"), taskToolCalls: [cancel] } as DurableStepResult, view),
+    ).toBe("dispatch-deferred");
     expect(stepDisagreement({ action: "continue", ...fields }, view)).toBeUndefined();
   });
 });

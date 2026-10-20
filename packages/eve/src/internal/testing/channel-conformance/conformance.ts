@@ -300,7 +300,7 @@ const channelConformance = {
         "pressing an option of an answered question sends it to the agent as new input":
           "an answered question's drawer closes, so nothing is left to press",
         "a text reply of approve runs the gated tool": TUI_TYPED_APPROVAL,
-        "a text reply of cancel stops the gated tool without running it": TUI_TYPED_APPROVAL,
+        "a text reply of deny stops the gated tool without running it": TUI_TYPED_APPROVAL,
         "approving by text clears the approval's buttons": TUI_TYPED_APPROVAL,
         "approving by text names who approved on the approval": TUI_TYPED_APPROVAL,
         "a message while an approval is pending cancels it, so typing approve afterwards runs nothing and the next message gets a reply":

@@ -374,9 +374,13 @@ function splitAnswers(delivery: DeliverHookPayload): {
   const answers = delivery.payloads.flatMap((payload, index) =>
     payload.answers === undefined ? [] : [{ index, payload: { answers: payload.answers } }],
   );
+  // Only a message waits for the turn to end. What else a press carries, such as a channel's
+  // state, has nothing left to deliver; queued, it would come back as a delivery the session
+  // already settled.
   const rest = delivery.payloads.flatMap((payload, index) => {
+    if (payload.message === undefined) return [];
     const { answers: _answers, ...other } = payload;
-    return Object.keys(other).length === 0 ? [] : [{ index, payload: other }];
+    return [{ index, payload: other }];
   });
   return {
     answers: selectDeliveryPayloads(delivery, answers),

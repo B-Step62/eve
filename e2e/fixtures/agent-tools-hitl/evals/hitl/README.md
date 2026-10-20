@@ -46,7 +46,7 @@ and [`agent-workflow-tools/evals/hitl`](../../../agent-workflow-tools/evals/hitl
 | Budget question holds the turn                                                     | [budget-question-holds-the-turn](./budget/budget-question-holds-the-turn.eval.ts)                                       |
 | Continue resumes the same turn                                                     | [continue-runs-the-same-call](./budget/continue-runs-the-same-call.eval.ts)                                             |
 | Message waits behind the budget question                                           | [message-waits-behind-budget](./budget/message-waits-behind-budget.eval.ts)                                             |
-| Typed Continue answers the budget question                                         | [typed-continue-answers](./budget/typed-continue-answers.eval.ts)                                                       |
+| Typed Approve answers the budget question                                          | [typed-approve-answers](./budget/typed-approve-answers.eval.ts)                                                         |
 | Cancel withdraws the budget question                                               | [cancel-withdraws-budget-question](./budget/cancel-withdraws-budget-question.eval.ts)                                   |
 | Stop cancels the turn, resolving once                                              | [stop-cancels-once](./budget/stop-cancels-once.eval.ts)                                                                 |
 | No step starts behind the budget question                                          | [no-step-behind-budget](./budget/no-step-behind-budget.eval.ts)                                                         |

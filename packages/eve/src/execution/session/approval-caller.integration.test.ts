@@ -460,6 +460,28 @@ describe("approval caller", () => {
     expect(received.map((event) => event.data.turnId)).toEqual(["turn_0", "turn_1"]);
   }, 60_000);
 
+  it("answers the requester's next message after another person's press ends the turn", async () => {
+    const { stages } = await withChainRun(
+      "approval-caller-press-state",
+      async (run) => {
+        const request = approvalsIn(run.stages)[0]!;
+        // A channel's press carries its own state beside the answer, such as who pressed.
+        await run.deliver(BOB, {
+          answers: [{ interactionId: request.interactionId, optionId: "approve" }],
+          state: { triggeringUserId: "bob" },
+        });
+        await run.send(ALICE, "Thanks, that's all.");
+      },
+      { message: "Use deploy_change, then read_notes." },
+    );
+
+    expect(stages.map(turnBoundaries)).toEqual([
+      ["turn.started turn_0"],
+      ["turn.settled turn_0"],
+      ["turn.started turn_1", "turn.settled turn_1"],
+    ]);
+  }, 60_000);
+
   it("never credits an approval sent with null auth to the turn's caller", async () => {
     const { secondRequesters, seen, stages } = await withChainRun(
       "approval-caller-null-auth",

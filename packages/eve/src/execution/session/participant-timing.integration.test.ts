@@ -211,7 +211,7 @@ describe("participant timing", () => {
           payload: { message: "Look up the second thing." },
         });
         await until(log, "capture:turn", 2);
-        await resumeHook(inbox, { kind: "compact" });
+        await resumeHook(inbox, { deliveryId: "control-compact", kind: "compact" });
         await until(log, "recall:compaction", 1);
       } finally {
         await run.cancel().catch(() => {});
