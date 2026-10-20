@@ -32,8 +32,10 @@ phases:
 3. **Code channel surfaces.** Typed helpers for the context bar, views, rename, slash commands,
    and archive.
 
-This plan stacks on #4477 and proposes the additions to it that forking needs (see
-[Forking needs from session history](#forking-needs-from-session-history)).
+This plan stacks on #4477 and proposes the additions forking needs: channel operations available
+to tools, a first `message` on `create()` so a fork is idempotent and race-free, a history reader
+with turn boundaries, and a size check against Workflow limits (see
+[Forking needs from eve](#forking-needs-from-eve)).
 
 ## Why not a separate channel
 
@@ -78,7 +80,7 @@ export default slackChannel({
     },
 
     // Optional. Shapes what the code channel session starts from. Defaults to the source
-    // session's transcript, trimmed to the history caps.
+    // session's full transcript. Apps can trim or summarize it here.
     async history(ctx, source) {
       return source.history;
     },
@@ -91,7 +93,7 @@ person opened from Slack's UI is still served as a code channel (phase 1 needs n
 app has the feature enabled).
 
 Apps fork from their own code with a Slack helper that is available on inbound and event
-contexts:
+contexts. These contexts already receive `from()`, so this helper works with #4477 as it stands:
 
 ```ts
 const result = await ctx.slack.openCodeChannel({
@@ -186,13 +188,48 @@ Connect connectors need the same scopes and events.
    message `ts`, and a `session_id`. Slack treats `session_id` as an idempotency key (at most 64
    characters), so eve derives it from the source session id and the triggering message: webhook
    retries and step replays return the same channel.
-4. **Seed.** eve builds history from the source session and calls
-   `from(slackContinuationToken(channelId, "")).create({ auth, history, state })`. `create()`
-   returns `created: false` when a retry already seeded the channel, so seeding is idempotent too.
-5. **Start.** eve sends the first message to the new session: the tool's `message` argument, or
-   the triggering message for `shouldOpen`.
-6. **Point back.** The source session's tool call returns the new channel, and the model's reply
+4. **Seed and start.** eve builds history from the source session and calls
+   `from(slackContinuationToken(channelId, "")).create({ auth, history, state, message })`. The
+   `message` is the tool's `message` argument, or the triggering message for `shouldOpen`.
+   Seeding and the first turn happen in one call; see
+   [Retries and races](#retries-and-races).
+5. **Point back.** The source session's tool call returns the new channel, and the model's reply
    in the thread links to it. The source thread stays a normal session for quick questions.
+
+### Retries and races
+
+Two problems make a plain "`create()`, then `send()`" sequence unsafe.
+
+**Retries.** `create()` is safe to retry: a retry returns `created: false` and adds nothing. A
+separate `send()` after it is not. If the step retries after the send went through, the first
+turn runs twice. Skipping the send when `created` is `false` does not fix this, because a retry
+that failed between `create()` and `send()` would then never send at all.
+
+**A message can arrive before the seed.** The code channel's address is keyed by its channel id,
+which exists only after Slack creates the channel. If someone posts in the new channel before eve
+calls `create()`, the inbound handler starts an unseeded session there. `create()` then returns
+`created: false` and its history is dropped. The only recovery today is `send({ history })` on a
+later message, which puts the imported turns after the user's first message.
+
+This plan handles both with one rule: **whoever claims the code channel's address seeds it, in
+the same call that starts its first turn.**
+
+- `create()` accepts an optional first `message` (proposed below). With it, starting the session,
+  adding history, and running the first turn are one claim. A retry returns `created: false` and
+  delivers nothing, so the first turn runs once.
+- The inbound handler never starts an unseeded session in a code channel. On the first message in
+  a code channel with no session, it resolves the source session the same way discovery does
+  (see [Channels opened from Slack's UI](#channels-opened-from-slacks-ui)) and calls
+  `create({ history, message })` with the user's message. If the fork won the claim, the handler
+  gets `created: false` and sends the user's message as a normal follow-up.
+- If the inbound handler wins, the fork's `create()` returns `created: false` and the fork's
+  `message` is not delivered. The user's message drives the first turn instead. The seeded history
+  still holds the original request, so the session has the task. The tool result reports this
+  case so the source thread's reply stays accurate.
+
+Without `create({ message })`, the fallback is a caller-supplied delivery key on `send()` that eve
+drops when the session already accepted it. That is a larger change, because eve has no
+caller-supplied delivery identity today.
 
 ### Fork, not move
 
@@ -203,7 +240,7 @@ token to it. This plan forks instead:
   Moving the session leaves the thread with no session to answer follow-ups.
 - A fork lets the code channel use different defaults (for example a sandbox, a different
   turn policy, or code channel instructions) without affecting the thread.
-- `create({ history })` already gives forking a supported, idempotent path. Moving a live session
+- `create({ history })` already gives forking a supported path to build on. Moving a live session
   between addresses mid-turn has no precedent in eve.
 
 ### Who decides
@@ -220,6 +257,13 @@ eve ships default tool instructions adapted from Slack's guidance: open a code c
 multi-step work, code changes, builds, tests, PRs, or long output; reply in place for a single
 message answer.
 
+A tool cannot do this with eve today. `create()` is reachable only through `from()`, which eve
+passes to route handlers, channel receive hooks, and `onEvent`. Schedules get only `ctx.to(...)`.
+A tool's `execute` runs inside the source session's workflow step and gets none of these. The
+tool needs eve to make channel operations available to tools (see
+[Forking needs](#forking-needs-from-eve)). Subagents already start sessions from inside a step,
+so the runtime has a precedent.
+
 ### Failures
 
 These Slack errors are permanent for the installation or origin, and `openCodeChannel` returns
@@ -232,41 +276,66 @@ model continues in place.
 ### Channels opened from Slack's UI
 
 A person can open a code channel from Slack directly, then mention the agent in it. eve detects
-the channel, reads `agent_session.origin_link`, and resolves the origin's session from the
-recorded fork, or from `slackContinuationToken(origin.channel_id, origin.ts)`. When a source
-session exists, eve seeds history from it as in a fork. A channel with no origin, or an origin
-with no session, starts fresh.
+the channel and reads `agent_session.origin_link` (`channel_id`, `ts`). The origin message may be
+a reply, so eve looks up that message's `thread_ts` and resolves
+`slackContinuationToken(origin.channel_id, thread_ts)`. When a source session exists, eve seeds
+history from it with `create({ history, message })`, as in a fork. A channel with no origin, or an
+origin with no session, starts fresh.
 
-eve records each fork's origin (`origin channel + ts -> source session id`) before calling
-Slack, so a code channel created from a reply, where the origin `ts` is not the thread root, still
-resolves its source session.
+The same resolution serves the race in [Retries and races](#retries-and-races), so eve needs no
+separate store of forks. A fork and a discovery can resolve slightly different cut points in the
+source session (the fork stops at its own turn; discovery reads up to the current tail). Only the
+claim winner's history is used, so the session gets exactly one.
 
-## Forking needs from session history
+## Forking needs from eve
 
 [#4477](https://github.com/vercel/eve/pull/4477) adds `history` on `send()` and `create()`, and
-lists reading or forking sessions as a non-goal. Forking from a running turn needs the following
-additions. Each is small and useful outside Slack.
+lists reading or forking sessions as a non-goal. Phase 2 needs the following additions.
 
-1. **A history reader.** Every fork repeats the same loop: attach to the source session's
-   stream, fold `transcriptReducer()`, and stop at a turn boundary. Add
-   `sessionHistory(sessionId, { through?: turnId, before?: turnId })` to `eve/server`, returning
-   `SessionHistoryMessage[]` already trimmed to the caps.
-2. **Forking from inside a turn.** The tool call runs inside the source session's active turn. The
-   reader must include that turn's user message and any settled assistant text, and exclude the
-   in-flight tool call. `through: currentTurnId` with "settled text only" semantics covers it.
-3. **Cap-aware trimming.** Coding threads can exceed 500 messages or 512 KiB. When the transcript
-   is over the caps, keep the newest messages that fit, and prepend the latest compaction summary
-   when one exists so earlier context is not lost silently. Return what was dropped so the
-   caller can say so.
-4. **Tool results as text.** History is text only, so a forked session loses tool calls, which
+**Required for phase 2:**
+
+1. **Channel operations available to tools.** A tool's `execute` gets no `from()` or `to()`
+   today, so the `open_code_channel` tool cannot call `create()`. Tools need a way to start or
+   address a session on a channel, scoped to the agent's own channels. Subagent sessions already
+   start from inside a step, which is the model for the plumbing. `ctx.slack.openCodeChannel()`
+   from inbound and event contexts does not need this.
+2. **A first `message` on `create()`.** Makes seeding and the first turn one claim, so a fork is
+   idempotent under step retries and a racing inbound message cannot leave the channel unseeded.
+   See [Retries and races](#retries-and-races).
+3. **A history reader with turn boundaries.** Every fork repeats the same loop: attach to the
+   source session's stream, fold `transcriptReducer()`, and stop at a turn boundary. Add
+   `sessionHistory(sessionId, { through?: turnId, before?: turnId })` to `eve/server`. Forking
+   from inside a turn mostly works already: `transcriptReducer()` keeps `message.received` and
+   each `message.completed`, so the current turn's user message and finished assistant text are
+   included, and partial text and tool calls are left out. The reader mostly adds the boundaries.
+4. **A size check against Workflow limits.** #4477 no longer caps history. History travels in
+   three places: the run input, session state (until the first message), and the
+   `history.imported` event. The Workflow payload and event size limits for these are not
+   checked yet, so a very large fork would fail in the Workflow layer without a clear eve error.
+   eve should check the size up front and fail with a clear error. Apps that fork long sessions
+   can trim in the `history` hook.
+
+A large seeded history is compacted on the first turn, because compaction runs on the prompt
+before the model call. A history larger than the compaction model's own context window could
+still make that compaction fail; the size check should account for it.
+
+The reader does not need to carry compaction summaries. Compaction does not remove anything from
+the stream, so the reader already gets the full uncompacted text, and the new session compacts it
+itself.
+
+**Can follow:**
+
+5. **Tool results as text.** History is text only, so a forked session loses tool calls, which
    matters for coding work (files read, commands run, branch names). Until #4477's tool tier
    lands, the reader can optionally render settled tool calls as short assistant text
    (`Ran tool X: <one-line result>`). This is lossy and opt-in.
-5. **Lineage.** `create()` accepts `forkedFrom: { sessionId, turnId }`. eve stores it on the new
-   session and publishes it in session metadata, so clients, traces, and Agent Runs can link the
-   two sessions. The source session's stream gets a `session.forked` event naming the new session.
+6. **Lineage.** `create()` has no lineage or metadata field. A later `forkedFrom: { sessionId,
+   turnId }` would let clients, traces, and Agent Runs link the two sessions, with a
+   `session.forked` event on the source stream. Until then, the Slack channel stores `forkedFrom`
+   in the code channel session's state.
 
-Items 1 to 3 are required for phase 2. Items 4 and 5 can follow.
+`create()` throws `SessionStrandedError` when another eve version still holds the address. A
+fork always targets a new channel id, so this does not apply.
 
 ## Phase 3: code channel surfaces
 
@@ -307,9 +376,10 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 
 - Phase 1 is inside the Slack channel: inbound classification, session keying, binding options,
   default hooks, and renderer defaults. No harness or workflow change.
-- Phase 2 adds the Slack helper and tool, and the `sessionHistory` reader in `eve/server`. It
-  uses `create()` from #4477 for seeding. Lineage adds one optional `create()` field and one
-  stream event, which bumps the channel and client extension epochs additively.
+- Phase 2 adds the Slack helper and tool, the `sessionHistory` reader in `eve/server`, a first
+  `message` on `create()`, and channel operations for tools. The last one changes the tool
+  execution context, which bumps the tool extension epoch additively. Lineage, when it lands,
+  adds one optional `create()` field and one stream event.
 - Phase 3 is Slack API wrappers and state.
 
 ## Non-goals
@@ -326,9 +396,10 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 1. **Method name.** Slack documents `agents.conversations.create`. At least one existing
    integration calls `codeChannels.create`. Confirm which name is generally available before
    implementing.
-2. **Auth for the forked session.** The default reuses the triggering message's auth. Code
-   channels can gain members from the origin channel, so apps that scope auth per user may want
-   the channel's auth derived per message instead, as in ordinary threads.
+2. **Auth for the forked session.** `create()` fixes the session's auth when it creates the
+   session, and the default reuses the triggering message's auth. Code channels can gain members
+   from the origin channel, so apps that scope auth per user may want auth derived per message
+   instead, as in ordinary threads.
 3. **Chat SDK.** eve's Slack transport calls the Web API directly, so this does not depend on the
    Chat SDK Slack adapter. If the adapter adds code channel APIs, eve should match its naming.
 4. **Default `history`.** The whole source transcript can be noisy. A model-written handoff brief
@@ -343,8 +414,10 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
   messages; auto-anchor disabled in code channels; status transitions per lifecycle event;
   `session_id` derivation within 64 characters; permanent error classification.
 - Integration: a fork from a thread seeds the code channel session with the thread's history,
-  retries return the same channel and `created: false`, and the source thread keeps answering;
-  `agent_session_stopped` cancels the active turn and suppresses later posts.
+  and the source thread keeps answering; a retried fork step returns the same channel and runs
+  the first turn once; a message posted in the new channel before the fork's `create()` still
+  gets the seeded history before it; `agent_session_stopped` cancels the active turn and
+  suppresses later posts.
 - Conformance: the Slack conformance suite gains code channel cases (top-level replies, no
   mention required, threaded user replies).
 - E2E: a fixture agent forks a thread into a code channel against a mocked Slack API and answers
