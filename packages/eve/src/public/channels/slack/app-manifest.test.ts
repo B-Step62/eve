@@ -25,12 +25,29 @@ describe("Slack app manifests", () => {
     });
   });
 
-  it("uses a configured bot name and enforces Slack's app name limit", () => {
-    const definition = defineSlackAppManifest({ botName: "x".repeat(40) });
+  it("separates app and bot presentation and merges explicit requirements", () => {
+    const definition = defineSlackAppManifest({
+      app: { name: "x".repeat(40), description: "Support agent", backgroundColor: "#000000" },
+      bot: { displayName: "Support Bot!" },
+      scopes: ["im:history", "chat:write"],
+      optionalScopes: ["im:history", "reactions:write", "reactions:write", "app_mentions:read"],
+      eventSubscriptions: ["message.im", "app_mention", "message.im"],
+    });
 
     expect(definition.build("support")).toMatchObject({
-      display_information: { name: "x".repeat(35) },
-      features: { bot_user: { display_name: "x".repeat(35) } },
+      display_information: {
+        name: "x".repeat(35),
+        description: "Support agent",
+        background_color: "#000000",
+      },
+      features: { bot_user: { display_name: "support-bot-" } },
+      oauth_config: {
+        scopes: {
+          bot: ["app_mentions:read", "chat:write", "im:history", "reactions:write"],
+          bot_optional: ["reactions:write"],
+        },
+      },
+      settings: { event_subscriptions: { bot_events: ["app_mention", "message.im"] } },
     });
   });
 });
