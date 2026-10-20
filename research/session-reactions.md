@@ -130,11 +130,11 @@ doesn't need to repeat goes in a memo ([change 2](#2-ctxmemo-keeps-what-eve-lear
 <details>
 <summary>What the function can read</summary>
 
-| Context       | Fields                                                                                                                                                 |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Dynamic value | `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.model`, `ctx.messages()`, `ctx.memo`                                             |
-| Hook handler  | The event, plus `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.occurrence`, `ctx.memo`, `ctx.once`, `ctx.cancel`, `ctx.compact` |
-| Memo or once  | `fn(occurrence)` gets `occurrence.idempotencyKey` and `occurrence.abortSignal`, and can read the enclosing `ctx`                                       |
+| Context       | Fields                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Dynamic value | `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.model`, `ctx.messages()`, `ctx.memo`                  |
+| Hook handler  | The event, plus `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.occurrence`, `ctx.memo`, `ctx.cancel` |
+| Memo          | `fn(occurrence)` gets `occurrence.idempotencyKey` and `occurrence.abortSignal`, and can read the enclosing `ctx`            |
 
 - **`ctx.view` is the same view a client folds from the stream,** so selectors from `eve/events`,
   such as `idle(view)`, give the same answer on both sides.
@@ -334,33 +334,14 @@ new key runs it again, so this router reads the conversation and still decides o
 
 </details>
 
-### 4. Hooks can act, with `ctx.once` and commands
+### 4. Hooks read the view and can cancel
 
-**Today.** A hook is a map of event handlers that can watch but barely act. Doing something once,
-such as one alert per session, means keeping a flag in `defineState` and building an idempotency
-key by hand. Cancelling means calling `ctx.cancel()` before the handler's promise settles, and
-there's no way to ask for a compaction.
+**Today.** A hook is a map of event handlers. It can cancel the turn, but a thrown error is logged
+and the turn continues. A required check can therefore silently fail.
 
 **The change.** A hook stays a map of event handlers, one call per matching fact. A handler reads
-the same view a client sees, and changes something with `ctx.once(key, fn)`, which runs `fn` once
-per key for the life of the session:
-
-```ts
-// agent/hooks/budget-alert.ts
-export default defineHook({
-  events: {
-    async "model.settled"(_event, ctx) {
-      if (spentUsd(ctx.view) <= 50) return;
-      await ctx.once(ctx.session.id, ({ idempotencyKey }) =>
-        email.send({ template: "budget", idempotencyKey }),
-      );
-    },
-  },
-});
-```
-
-eve's own commands are effects too. `ctx.cancel(reason)` stops the running turn, and
-`ctx.compact(reason)` compacts before the next model call:
+the same view a client sees, can keep observations with `ctx.memo`, and can call
+`ctx.cancel(reason)` to stop the running turn. An unhandled error fails the turn:
 
 ```ts
 // agent/hooks/require-credentials.ts
@@ -377,78 +358,39 @@ export default defineHook({
 
 eve applies the cancel before the turn's dynamic values run or its model is called.
 
-A command acts once on its target, so asking again is safe: `cancel` acts once on the running
-turn, and `compact` once on the next model call. To act at most once per turn or per session, wrap
-the command in `ctx.once`, the same way as an email:
-
-```ts
-// agent/hooks/compact-over-budget.ts
-export default defineHook({
-  events: {
-    async "model.settled"(_event, ctx) {
-      if (contextTokens(ctx.view) <= 150_000) return;
-      await ctx.once(ctx.turn?.id ?? null, () => ctx.compact("Over the context budget."));
-    },
-  },
-});
-```
+Cancellation acts once on the running turn, so asking again is safe. Between turns it does
+nothing; it never cancels a later turn.
 
 A handler on `"*"` runs for every fact except streamed progress. It's the way to act on a
 condition over the view, such as `idle(ctx.view)`, when no one event causes it.
 
 **Why it's useful.**
 
-- One rule covers every effect a hook has: to do something at most once per X, wrap it in
-  `ctx.once(X, …)`. That holds for an email, a compaction, and a cancel.
-- A hook acts with a plain `if`, without tracking whether it already acted.
+- Required checks can stop a turn rather than silently disappearing.
+- Hooks and clients use the same selectors over the same committed view.
 - The split between the two kinds stays simple. A dynamic value is a function of the session,
   because a value has to exist at every model call. A hook reacts to facts, because it acts when
   something happens, and it only lists the events it cares about.
 
 **The cost.** Handlers run before the next model call, as on `main`, so a handler's I/O delays it.
-Reads that repeat go in `ctx.memo`. A command whose condition stays true asks again at each new
-target: without the `once` above, a hook that compacts over a token count compacts before every
-model call if compaction can't get below it. A condition that several events can cause either
-lists them all or uses `"*"`, which runs once per fact.
+Reads that repeat go in `ctx.memo`. External effects still need service-side idempotency and,
+for effects such as one alert per session, durable author-managed state. Memos are a cache, not an
+effect ledger. A condition that several events can cause either lists them all or uses `"*"`,
+which runs once per fact.
 
 <details>
 <summary>Retries and idempotency keys</summary>
 
-Every memo run, once run, and event handler call has an **occurrence**, whose
+Every memo run and event handler call has an **occurrence**, whose
 `idempotencyKey` is the same if eve retries it. Pass it to an external service; if an occurrence
 does several things, give each a stable suffix, such as `${idempotencyKey}:email`.
 
-A `once` record is committed with the step that ran it. An effect can succeed just before a process
-fails to save that step, and the retry runs `fn` again with the same idempotency key. So an
-external effect is **at least once until checkpointed**, and the service must honor the key to
-avoid repeating it. A command inside `once` is **exactly once**, because the record and the
-command commit together.
+An external effect can succeed just before a process fails to save the step. A retry can run the
+handler again, so the service must honor the key to avoid repeating that effect.
 
-An event handler's occurrence is the fact's position in the stream, so its effects and commands
-act once per fact. A command called after its hook's evaluation has settled, such as from work the
-hook didn't await, throws instead of being dropped.
-
-</details>
-
-<details>
-<summary>How once differs from memo</summary>
-
-- **`once` keeps every key.** A tenant that comes back gets nothing new, and a loop over pending
-  approvals pings each one once:
-
-  ```ts
-  for (const approval of pendingApprovals(ctx.view)) {
-    await ctx.once(approval.id, ({ idempotencyKey }) => slack.notify({ approval, idempotencyKey }));
-  }
-  ```
-
-- **`once` survives deployment changes.** A sent email stays sent under new code. A hook that should
-  act again under new code changes its key, for example by adding a version.
-- **`once` is only for hooks.** A dynamic value can be evaluated wherever eve needs the value, so an
-  effect there would happen on a read. Effects belong in hooks and in a tool's `execute`.
-- **Storage grows with distinct keys,** about one small record per turn for a per-turn key, on the
-  same order as the view's turn table. A cap per hook fails loudly rather than evicting, because
-  eviction would repeat effects.
+An event handler's occurrence identifies the fact's position in the stream. A cancellation called
+after its handler has settled, such as from work the hook didn't await, throws instead of being
+dropped.
 
 </details>
 
@@ -459,7 +401,7 @@ the turn continues. A throwing tool, skill, instruction, or subagent resolver is
 skipped, so the turn continues without what it would have added. A throwing connection handler
 fails the turn.
 
-**The change.** An unhandled error in a dynamic value, a memo, a once, or a hook fails the turn.
+**The change.** An unhandled error in a dynamic value, a memo, or a hook fails the turn.
 Behavior that's optional catches its own errors:
 
 ```ts
@@ -477,12 +419,12 @@ export default defineDynamic(async (ctx) => {
 ```
 
 Without the `try`, a CRM outage fails the turn. A required check, such as the credentials hook in
-[change 4](#4-hooks-can-act-with-ctxonce-and-commands), doesn't catch, so it can't be skipped.
+[change 4](#4-hooks-read-the-view-and-can-cancel), doesn't catch, so it can't be skipped.
 
 **Why it's useful.**
 
 - A required instruction or credential check can't silently disappear.
-- A failed memo or once keeps nothing, so the next evaluation tries again, even under the same key.
+- A failed memo keeps nothing, so the next evaluation tries again, even under the same key.
   A transient error can't break a once-per-session value for the rest of the session.
 
 **The cost.** Hooks that only observe, such as audit or metrics hooks, must catch their own errors
@@ -495,8 +437,7 @@ failure and returns `null` keeps that `null` until its key changes, while a `try
 
 - **A hook that fails between turns has no turn to fail.** eve logs the hook, the occurrence, and
   the error, and doesn't retroactively fail a finished turn. A handler isn't retried on a later
-  fact, but a failed `once` keeps nothing, so it runs the next time any handler reaches the same
-  key. A public fact for these failures can come later: readers ignore fact types they don't
+  fact. A public fact for these failures can come later: readers ignore fact types they don't
   recognize.
 - **A dynamic value's error fails the turn before the model call it was evaluated for; a hook's,**
   before the turn's next model call or as the turn would otherwise settle.
@@ -637,29 +578,19 @@ The changes above are one model, seen from different sides. A definition is a fu
 **frame**, the session at a commit, and its **records**, the results of outside interactions kept
 under a key. It returns what it wants to be true, and eve compares that with what's in place and
 acts on the difference. A dynamic value returns a capability, and eve installs it. A hook handler
-returns nothing; its effects and commands are records, and eve applies each once.
+returns nothing; it reacts to a fact with ordinary code and can queue a cancellation.
 
 ```text
 frame (session at a commit) ──┐
                               ├─► definition ─► desired value or effects ─► eve applies the difference
-records (memo, once) ─────────┘          ▲
+records (memos)      ─────────┘          ▲
                                          └── a new key runs fn and adds a record
 ```
 
-The two kinds of record differ in one property: whether eve may redo them.
-
-|                        | `ctx.memo`                          | `ctx.once`                             |
-| ---------------------- | ----------------------------------- | -------------------------------------- |
-| Records                | An observation                      | An effect                              |
-| eve may redo it        | Yes                                 | Never                                  |
-| Keeps                  | The keys the latest evaluation used | Every key, for the life of the session |
-| On a deployment change | Discarded                           | Kept                                   |
-| Available in           | Dynamic values and hooks            | Hooks                                  |
-
 Hooks fit the same model with a different trigger. A dynamic value is evaluated whenever a step
 needs the value; a hook handler is evaluated once per fact, and its occurrence is the fact's
-position, so it acts once per fact. Internally, one runner evaluates every definition, and one
-record store holds memos, once records, and queued commands. A kind only supplies how its value
+position, which supplies a stable idempotency key on retries. Internally, one runner evaluates
+every definition, and one record store holds memos and queued cancellations. A kind only supplies how its value
 joins the session.
 
 ## When things run
@@ -677,7 +608,7 @@ This is the contract authors can rely on, rather than an incidental order of int
   that subscribe to it by name, not `"*"`.
 - **Hooks run first.** Before a model call, hooks finish with the latest commit before dynamic
   values run, as on `main`, so a hook that cancels stops the turn before any dynamic value fetches
-  data. Hooks run in path order. If one commit produces both `cancel` and `compact`, `cancel` wins.
+  data. Hooks run in path order.
 - **Only ordinary model calls count:** the first of each turn, the one after a batch of tool calls,
   and the one after an approval resumes. Compaction's summarizing call, the evaluator `auto()` asks,
   and `evaluate` inside a tool don't evaluate dynamic values.
@@ -728,19 +659,18 @@ policy just because it's plain text. So a memo keyed by `ctx.session.id` that ca
 caller captures whoever is current after the change. `main` only re-resolves session tools and
 subagents here; its session instructions, skills, models, and connections keep their old results.
 
-`once` records, user-instruction digests, and remote-child bindings are kept. They record what
-already happened: an email that was sent, text that joined the conversation, a child that was
-opened. Event-handler occurrences that already ran don't run again either.
+User-instruction digests and remote-child bindings are kept. They record what already happened:
+text that joined the conversation and a child that was opened. Event-handler occurrences that already ran don't run again either.
 
 ### What eve stores
 
-- **Memos, once records, instruction digests, and remote-child bindings are private.** The first
-  three live in the session's checkpointed state, and bindings in a private side stream. None reach
+- **Memos, instruction digests, and remote-child bindings are private.** The first two live in the
+  session's checkpointed state, and bindings in a private side stream. None reach
   the public stream.
 - **Stored state rides along every step.** A step's input and result carry the session's state, so
   records are re-sent and saved again on each step. `main` has the same cost for its closure
   snapshots, which it stores per callback with no cap.
-- **Diagnostics go to logs, and later traces.** Each memo and once run reports the file, the key's
+- **Diagnostics go to logs, and later traces.** Each memo run reports the file, the key's
   digest (never the key, which can hold tenant or principal IDs), why it ran (a new key, a retry,
   or a deployment change), how long it took, and whether the value changed. There's no public API
   for them at first.
@@ -1197,9 +1127,7 @@ export default defineHook({
   new caller, compaction. Each new case adds to the event list, which is public API.
 - **Several listed events need a merge rule,** and that brings back precedence.
 - **Every value is two callbacks,** including the common one that only reads the session.
-- **Hooks still keep their own memory** for "once". The budget alert above differs from this
-  proposal's only in its `defineState` flag and hand-built idempotency key, where this proposal
-  uses `ctx.once`.
+  Hooks keep their own memory for effects such as one budget alert per session in either design.
 
 This proposal can express the event-keyed model, because an event's position is a key: "once per
 `turn.started`" is `ctx.memo(ctx.turn.id, …)`. The reverse doesn't hold: a key such as a tenant ID
@@ -1325,15 +1253,13 @@ The rest follows from having one model:
 - **Precedence and replay rules disappear.** Turn results shadowing session results, steering
   skipping `turn.started`, and re-running handlers to rebind callbacks are cases one function per
   value doesn't have, and neither do their tests.
-- **Hooks lose hand-built memory.** A `defineState` flag and a hand-built idempotency key become
-  `ctx.once`.
 
 ## Scope
 
 The first change, on the v27 view:
 
 - `defineDynamic(fn)` for every kind that takes a dynamic value today, with `ctx.memo`.
-- `ctx.once`, `ctx.memo`, and the `ctx.cancel` and `ctx.compact` commands in hook handlers.
+- `ctx.memo`, `ctx.occurrence.idempotencyKey`, and `ctx.cancel` in hook handlers.
 - The error rule, the user-instruction rule, and remote-child bindings with the folded view.
 - `auto()`, memory tools, and schedule tools rebuilt on the new runner. Memory recall and capture
   stay internal kinds.
@@ -1346,7 +1272,8 @@ rather than one record per definition, select-form hooks go, hook commands becom
 on the queue it already has, and remote credentials come from running the definition with the
 child's binding rather than calling `render`.
 
-Not included: field-level dynamic values, a command that schedules a later commit, testing helpers
+Not included: `ctx.once` and hook-side `ctx.compact` (both can be added later), field-level
+dynamic values, a command that schedules a later commit, testing helpers
 for hooks and dynamic values, an `onError` option, the conversation in hooks, a lint for `await`
 outside memos, dependency graphs between definitions, a command for adding messages, or a new
 task-authoring API.
