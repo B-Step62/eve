@@ -218,8 +218,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 65,
-    supported: [65],
+    current: 66,
+    supported: [66],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -285,6 +285,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       62: "v27 replaces v26 session event payloads; rebuild the extension against eve/events facts",
       63: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       64: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      65: "Typed channel delivery hooks and canonical identity changes the authoring contract; rebuild the extension.",
     },
   },
   schedule: {
