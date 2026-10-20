@@ -1,4 +1,5 @@
 import { LogoEveSvg } from "@vercel/geistdocs/assets/logos/logo-eve-svg";
+import { ChevronRightIcon, TerminalIcon, WrenchIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
   TemplateIntegration,
@@ -88,20 +89,34 @@ const WebChat = ({
     {messages.map((message) =>
       message.from === "user" ? (
         <p
-          className="max-w-[78%] self-end rounded-xl rounded-br-sm bg-gray-1000 px-2.5 py-1.5 text-background-100"
+          className="ml-auto w-fit max-w-[85%] rounded-xl bg-gray-1000 px-2.5 py-1.5 text-background-100"
           key={message.text}
         >
           {message.text}
         </p>
       ) : (
-        <div className="flex max-w-[90%] flex-col gap-1.5" key={message.text}>
-          <ToolCalls tools={message.tools} />
+        <div className="flex flex-col gap-1" key={message.text}>
+          {message.tools?.map((tool) => (
+            <WebToolCall key={tool} name={tool} />
+          ))}
           <p>{message.text}</p>
         </div>
       ),
     )}
   </Window>
 );
+
+/** Mirrors the eve Web Chat `ToolHeader` for a completed, collapsed tool call. */
+const WebToolCall = ({ name }: { name: string }) => {
+  const Icon = name === "bash" ? TerminalIcon : WrenchIcon;
+  return (
+    <span className="flex items-center gap-1.5 text-gray-900">
+      <Icon className="size-3 shrink-0" />
+      <span>{name}</span>
+      <ChevronRightIcon className="size-2.5 shrink-0" />
+    </span>
+  );
+};
 
 const SLACK_USER = "Alex";
 

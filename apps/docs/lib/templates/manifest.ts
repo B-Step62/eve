@@ -45,7 +45,13 @@ export interface TemplatePreview {
   surface: TemplatePreviewSurface;
   /** Display name for the agent. Defaults to the template title. */
   agent?: string;
-  /** Slack channel name shown in the window header. */
+  /**
+   * Square avatar image for the agent, relative to `public/`, such as
+   * `/templates/icons/acme.svg`. It is cropped to a circle or rounded square,
+   * so leave padding around the mark. Defaults to the eve logo.
+   */
+  icon?: string;
+  /** Slack channel name or web chat URL shown in the window header. */
   context?: string;
   messages: TemplatePreviewMessage[];
 }
@@ -111,6 +117,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     ],
     preview: {
       surface: "web",
+      context: "lisbon-planner.vercel.app",
       messages: [
         { from: "user", text: "Plan a weekend in Lisbon for me" },
         {
@@ -146,6 +153,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     ],
     preview: {
       surface: "web",
+      context: "tasks.vercel.app",
       messages: [
         { from: "user", text: 'Add "ship v2 docs" and summarize my open tasks' },
         {
@@ -479,6 +487,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "imessage",
       agent: "OpenInstinct",
+      icon: "/templates/icons/openinstinct.svg",
       messages: [
         { from: "user", text: "Can you grab 2 tickets for Dune tonight, around 7?" },
         {
