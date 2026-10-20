@@ -1,3 +1,4 @@
+import { APPROVE_OPTION_ID, DENY_OPTION_ID } from "#protocol/interaction-options.js";
 import { openInteractions } from "#protocol/session-projection/selectors.js";
 import { interaction, type Interaction } from "#protocol/session-reader.js";
 import { optionStyle } from "#channel/interaction-prompts.js";
@@ -1016,7 +1017,7 @@ export class EveTUIRunner {
       );
       return {
         interactionId: request.interactionId,
-        optionId: response.approved ? "approve" : "cancel",
+        optionId: response.approved ? APPROVE_OPTION_ID : DENY_OPTION_ID,
       };
     }
     if (!this.#renderer.readInputQuestion) {
