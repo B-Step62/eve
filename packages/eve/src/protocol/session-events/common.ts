@@ -46,9 +46,12 @@ type DeepReadonly<T> = T extends readonly (infer U)[]
 /**
  * A string whose values the stream names: it parses open, so a reader keeps what a newer writer
  * sends, and types as the values known today, so a reader's switch keeps a default branch.
+ * A plain string, not `z.custom`, so schemas published as JSON Schema (MCP tool output) can
+ * still describe it.
  */
-export function known<T extends string>(): z.ZodType<T> {
-  return z.custom<T>((value) => typeof value === "string");
+export function known<T extends string>(): z.ZodType<T>;
+export function known(): z.ZodType<string> {
+  return z.string();
 }
 
 export const id = z.string().min(1);
