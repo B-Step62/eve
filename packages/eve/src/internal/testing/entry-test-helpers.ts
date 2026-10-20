@@ -108,68 +108,13 @@ export interface CapturedEventStream {
   ): Promise<SessionStreamEvent[]>;
 }
 
+/** Reads a run's stream line by line, as {@link captureTurnEvents} does, failing a wait by name. */
 export function captureEvents(run: Parameters<typeof captureTurnEvents>[0]): CapturedEventStream {
-  const reader = run.readable.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let disposed = false;
-
+  const stream = captureTurnEvents(run);
   return {
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      reader.releaseLock();
-    },
-    nextUntil(label, predicate) {
-      if (disposed) {
-        return Promise.reject(new Error("CapturedEventStream: stream already disposed."));
-      }
-      return withTimeout(readUntil(reader, decoder, buffer, predicate), label).then((result) => {
-        buffer = result.buffer;
-        return result.events;
-      });
-    },
+    dispose: () => stream.dispose(),
+    nextUntil: (label, predicate) => withTimeout(stream.nextUntil(predicate), label),
   };
-}
-
-async function readUntil(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  decoder: InstanceType<typeof TextDecoder>,
-  initialBuffer: string,
-  predicate: (event: SessionStreamEvent) => boolean,
-): Promise<{ buffer: string; events: SessionStreamEvent[] }> {
-  const events: SessionStreamEvent[] = [];
-  let buffer = initialBuffer;
-
-  while (true) {
-    const { done, value } = await reader.read();
-
-    if (done) {
-      throw new Error("Workflow stream closed before reaching the expected event.");
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-
-    for (
-      let newlineIndex = buffer.indexOf("\n");
-      newlineIndex !== -1;
-      newlineIndex = buffer.indexOf("\n")
-    ) {
-      const line = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-
-      if (line.length === 0) {
-        continue;
-      }
-
-      const event = JSON.parse(line) as SessionStreamEvent;
-      events.push(event);
-
-      if (predicate(event)) {
-        return { buffer, events };
-      }
-    }
-  }
 }
 
 export async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {

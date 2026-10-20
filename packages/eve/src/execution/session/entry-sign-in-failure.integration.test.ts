@@ -1,5 +1,6 @@
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
+import { createChannelDeliveryMetadata } from "#channel/delivery-metadata.js";
 import {
   ConnectionAuthorizationFailedError,
   ConnectionAuthorizationRequiredError,
@@ -30,6 +31,13 @@ const script: readonly ({ readonly tool: string } | { readonly text: string })[]
   { tool: "create_issue" },
 ];
 let scriptIndex = 0;
+const alice = {
+  attributes: {},
+  authenticator: "test-idp",
+  issuer: "test-idp",
+  principalId: "user-1",
+  principalType: "user",
+};
 const scriptedModel = markMockModel(
   new MockLanguageModelV4({
     doStream: async () => {
@@ -110,13 +118,7 @@ describe("workflowEntry sign-in failure", () => {
           ownerDeploymentId: "dpl_inline",
           input: { message: "List my issues, then create one." },
           serializedContext: buildSerializedContext({
-            auth: {
-              attributes: {},
-              authenticator: "test-idp",
-              issuer: "test-idp",
-              principalId: "user-1",
-              principalType: "user",
-            },
+            auth: alice,
             channelKind: "http",
             continuationToken: "http:workflow-entry-sign-in-failure",
           }),
@@ -175,7 +177,9 @@ describe("workflowEntry sign-in failure", () => {
 
         // The refusal lasts the turn: the next one asks for the sign-in again.
         await resumeHook(sessionInboxHookToken(sessionCommandHookToken(run.runId)), {
+          auth: alice,
           kind: "send",
+          delivery: createChannelDeliveryMetadata({ channelKind: "http", channelName: "test" }),
           payload: { message: "Create one more." },
         });
         const nextTurn = await stream.nextUntil("next turn's sign-in", isSignInOpened);

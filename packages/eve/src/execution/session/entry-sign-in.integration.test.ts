@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { createChannelDeliveryMetadata } from "#channel/delivery-metadata.js";
 import { ROOT_COMPILED_AGENT_NODE_ID } from "#compiler/manifest.js";
 import {
   ConnectionAuthorizationFailedError,
@@ -157,6 +158,7 @@ describe("workflowEntry sign-ins", () => {
         await resumeHook(sessionInboxHookToken(continuationToken), {
           auth: userAuth("user-1"),
           kind: "send",
+          delivery: createChannelDeliveryMetadata({ channelKind: "http", channelName: "test" }),
           payload: { message: "Never mind that, just say hello." },
         });
         // A sign-in nobody completed does not stand between the user and an answer.
