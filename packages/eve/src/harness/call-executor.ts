@@ -19,7 +19,7 @@ import {
   modelFacingAuthorizationOutput,
 } from "#harness/authorization.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
-import { TOOL_EXECUTION_DENIED_MESSAGE } from "#harness/approval-outcome.js";
+import { failedCall, TOOL_EXECUTION_DENIED_MESSAGE } from "#harness/approval-outcome.js";
 import { createRuntimeToolCallActionFromToolCall } from "#harness/tool-call-action.js";
 import { toolCallModelOutput } from "#harness/tool-call-io.js";
 import { isInvalidToolCall } from "#harness/tool-call-input-errors.js";
@@ -203,13 +203,13 @@ export async function executeToolCall(
       messages: [...input.messages],
       toolCall: { input: args, toolCallId: callId, toolName, type: "tool-call" },
     });
+    input.beforeExecute?.();
     await telemetry.started();
     let executionMs = 0;
     try {
       await telemetry.execute(async () => {
         const startedAt = performance.now();
         try {
-          input.beforeExecute?.();
           started = true;
           // A call a person approved starts when it runs, after the recheck: the approval cleared
           // it, and the policy could still have refused it.
@@ -319,28 +319,11 @@ export async function executeToolCall(
       return { settled: [interruptedResult(callId, toolName)], toolResults };
     }
     const failure = toError(error);
-    const message = failure.message;
     logError(log, "tool call failed", error, { toolName, toolCallId: callId });
-    await input.beforeResult?.(toError(error));
-    await input.publish(
-      callSettledFrom(
-        createRuntimeToolResultFromValue({ callId, isError: true, output: failure, toolName }),
-        {},
-      ),
-    );
-    return {
-      settled: [
-        {
-          part: {
-            type: "tool-result" as const,
-            toolCallId: callId,
-            toolName,
-            output: { type: "error-text" as const, value: message },
-          },
-        },
-      ],
-      toolResults,
-    };
+    await input.beforeResult?.(failure);
+    const failed = failedCall({ callId, toolName, message: failure });
+    await input.publish(callSettledFrom(failed.result));
+    return { settled: [{ part: failed.part }], toolResults };
   }
 }
 
@@ -369,10 +352,20 @@ async function* untilAborted<T>(
   signal: AbortSignal | undefined,
 ): AsyncIterable<T> {
   const iterator = iterable[Symbol.asyncIterator]();
-  while (true) {
-    const next = await raceAbort(iterator.next(), signal);
-    if (next.done === true) return;
-    yield next.value;
+  let done = false;
+  try {
+    while (true) {
+      const next = await raceAbort(iterator.next(), signal);
+      if (next.done === true) {
+        done = true;
+        return;
+      }
+      yield next.value;
+    }
+  } finally {
+    // Request cleanup without letting an uncooperative iterator hold up cancellation.
+    if (!done && iterator.return !== undefined)
+      await raceAbort(Promise.resolve(iterator.return()), signal);
   }
 }
 
@@ -513,25 +506,38 @@ export async function executeInlineCalls(input: {
       !input.excludedCallIds.has(call.toolCallId) &&
       input.tools.get(call.toolName) !== undefined,
   );
-  const executed = await Promise.all(
-    calls.map(async (call): Promise<{ call: TypedToolCall<ToolSet>; executed: CallOutcome }> => {
-      const definition = input.tools.get(call.toolName)!;
-      const action = { callId: call.toolCallId, input: call.input, toolName: call.toolName };
-      if (isRunnableTool(definition)) {
-        return {
-          call,
-          executed: await executeToolCall(action, { ...input, definition }, "evaluate"),
-        };
-      }
-      return { call, executed: await decideDeferredCall(action, definition, input) };
-    }),
-  );
-  return {
-    approvals: executed.flatMap(({ call, executed }) =>
-      executed.awaitsApproval === true
-        ? [approvalRequest(call, input.tools.get(call.toolName))]
-        : [],
+  const finished = await Promise.allSettled(
+    calls.map(
+      async (
+        call,
+      ): Promise<{
+        call: TypedToolCall<ToolSet>;
+        executed: CallOutcome;
+        approval?: ApprovalAsk;
+      }> => {
+        const definition = input.tools.get(call.toolName)!;
+        const action = { callId: call.toolCallId, input: call.input, toolName: call.toolName };
+        try {
+          const executed = isRunnableTool(definition)
+            ? await executeToolCall(action, { ...input, definition }, "evaluate")
+            : await decideDeferredCall(action, definition, input);
+          const approval =
+            executed.awaitsApproval === true ? approvalRequest(call, definition) : undefined;
+          return { call, executed, approval };
+        } catch (error) {
+          throwIfTurnAborted(input.abortSignal);
+          const failed = failedCall({ ...action, message: toError(error) });
+          await input.publish(callSettledFrom(failed.result));
+          return { call, executed: { settled: [{ part: failed.part }], toolResults: [] } };
+        }
+      },
     ),
+  );
+  const rejected = finished.find((call) => call.status === "rejected");
+  if (rejected?.status === "rejected") throw rejected.reason;
+  const executed = finished.flatMap((call) => (call.status === "fulfilled" ? [call.value] : []));
+  return {
+    approvals: executed.flatMap(({ approval }) => (approval === undefined ? [] : [approval])),
     parts: executed.flatMap(({ executed }) => executed.settled.map((result) => result.part)),
     signIns: executed.flatMap(({ executed }) =>
       executed.signIn === undefined ? [] : [executed.signIn],

@@ -2,6 +2,7 @@
 // everything under it. Every walk over ownership — what a turn leaves open, what closes with a
 // task, which turn a fact belongs to, what retention must keep — reads this one rule.
 
+import { isObject } from "#shared/guards.js";
 import type {
   CallRow,
   ChangeRow,
@@ -88,7 +89,7 @@ export function rowOf<F extends Family>(
 
 /** A reference written as on the wire, `{ turnId }` or `{ callId }`, as a `Ref`. */
 export function refOf(keyed: Readonly<Record<string, string>> | undefined): Ref | undefined {
-  if (keyed === undefined) return undefined;
+  if (!isObject(keyed)) return undefined;
   if ("turnId" in keyed) return { family: "turn", id: keyed.turnId! };
   if ("runId" in keyed) return { family: "run", id: keyed.runId! };
   if ("changeId" in keyed) return { family: "change", id: keyed.changeId! };

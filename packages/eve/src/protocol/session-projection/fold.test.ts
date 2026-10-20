@@ -4,6 +4,7 @@ import type { StoredLine } from "#protocol/session-events/envelope.js";
 import {
   emptySessionView,
   emptyPreviews,
+  copyView,
   foldEvents,
   foldLines,
   type ReceivedEvent,
@@ -66,6 +67,73 @@ function folded(lines: readonly StoredLine[], retention?: "operational") {
 }
 
 describe("the shared fold", () => {
+  it("continues after malformed ownership without inventing a model run", () => {
+    const view = folded(turnLines(0, { opensSession: true }).slice(0, 1));
+    expect(() =>
+      foldLines(
+        view,
+        [
+          {
+            at,
+            facts: [
+              { type: "model.requested", data: { runId: "invalid", owner: null } },
+              { type: "usage.recorded", data: { kind: "model", owner: "invalid", usage: spent } },
+              { type: "model.requested", data: { runId: "valid", owner: { turnId: "turn_0" } } },
+            ],
+          },
+        ],
+        view.position,
+      ),
+    ).not.toThrow();
+    expect(view.runs.invalid).toBeUndefined();
+    expect(view.runs.valid?.status).toBe("requested");
+  });
+
+  it("treats dictionary-key identities as ordinary entities, including after a snapshot copy", () => {
+    const view = emptySessionView();
+    foldLines(
+      view,
+      [{ at, facts: [{ type: "delivery.admitted", data: { deliveryId: "constructor" } }] }],
+      0,
+    );
+    expect(view.deliveries.constructor).toMatchObject({
+      deliveryId: "constructor",
+      status: "admitted",
+    });
+    const next = copyView(view);
+    foldLines(
+      next,
+      [{ at, facts: [{ type: "delivery.admitted", data: { deliveryId: "toString" } }] }],
+      1,
+    );
+    expect(next.deliveries.toString).toMatchObject({ deliveryId: "toString", status: "admitted" });
+    expect(Object.keys(view.deliveries)).toEqual(["constructor"]);
+  });
+
+  it("keeps lifecycle coordinates authoritative over extra fact fields", () => {
+    const view = folded([
+      {
+        at,
+        facts: [
+          {
+            type: "delivery.admitted",
+            data: { deliveryId: "d", introducedAt: 900, startedAt: "incorrect" },
+          },
+          {
+            type: "delivery.settled",
+            data: {
+              deliveryId: "d",
+              outcome: "ignored",
+              introducedAt: 901,
+              startedAt: "incorrect",
+            },
+          },
+        ],
+      },
+    ]);
+    expect(view.deliveries.d).toMatchObject({ introducedAt: 0, startedAt: at, closedAt: 0 });
+  });
+
   it("folds a turn into its tables, and the selectors read them", () => {
     const lines = turnLines(0, { opensSession: true });
     const running = folded(lines.slice(0, 2));

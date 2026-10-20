@@ -67,13 +67,13 @@ export function unavailableToolMessage(toolName: string, searchable: boolean): s
  */
 export function failedCall(call: {
   readonly callId: string;
-  readonly message: string;
+  readonly message: string | Error;
   readonly toolName: string;
 }): Required<Pick<SettledCall, "part" | "result">> {
   const { callId, message, toolName } = call;
   return {
     part: {
-      output: { type: "error-text", value: message },
+      output: { type: "error-text", value: message instanceof Error ? message.message : message },
       toolCallId: callId,
       toolName,
       type: "tool-result",

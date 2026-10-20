@@ -1,5 +1,4 @@
 import type { SessionEvent } from "#protocol/session-event.js";
-import { answeredInteractionIds } from "#protocol/session-projection/selectors.js";
 import type { ModelMessage } from "ai";
 
 import type { AuthorizationChallenge } from "#harness/authorization.js";
@@ -124,8 +123,8 @@ export function saveTransition<T extends { readonly state?: SessionStateMap }>(
 
 /**
  * Drops the private records whose row the projection shows done, the one way they retire: a
- * relay's route once its request settled or was answered, so a later delivery can't route
- * through it, and a responder's once their answer settled.
+ * relay's route once its asker settles the interaction, and a responder's once their answer
+ * settled. Admitted answers can still be refused while the rest of their batch waits.
  */
 export function dropClosedRecords<T extends HarnessSessionBase>(
   session: T,
@@ -133,11 +132,9 @@ export function dropClosedRecords<T extends HarnessSessionBase>(
 ): T {
   const hitl = readHitlState(session.state);
   if (hitl.relays.size === 0 && Object.keys(hitl.responders).length === 0) return session;
-  const answered =
-    projection.view === undefined ? new Set<string>() : answeredInteractionIds(projection.view);
   const closed = [...hitl.relays.keys()].filter((requestId) => {
     const row = projection.view?.interactions[requestId];
-    return row === undefined || row.status === "settled" || answered.has(requestId);
+    return row === undefined || row.status === "settled";
   });
   // A responder's record lives while their answer stands: a policy weighs it, or it waits to
   // decide its approval, whose call reads who approved it.
