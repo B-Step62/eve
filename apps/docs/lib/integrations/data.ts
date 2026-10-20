@@ -2284,7 +2284,7 @@ export default defineMcpClientConnection({
 });
 \`\`\`
 
-Shop access is user-authorized, so actions follow the identity and permissions of the person using your agent. Shop lists its tools and answers catalog searches without sign-in; eve [asks the user to sign in](/docs/connections/mcp#when-eve-asks-for-sign-in) the first time a tool call, such as reading their account, comes back with HTTP \`401\`. [Read the Shop developer docs](https://shop.dev/docs).`,
+Your agent can search for products without the user signing in. When it needs the user's Shop account, for example to see their orders, eve [asks them to sign in](/docs/connections/mcp#when-eve-asks-for-sign-in) and then finishes the request. [Read the Shop developer docs](https://shop.dev/docs).`,
     configure: `Run these commands from the project that will use the connection:
 
 \`\`\`bash
