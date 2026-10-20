@@ -18,7 +18,7 @@ describe("rows", () => {
     expectTypeOf<Undeclared<"turn.started", "turns", "trace">>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<"turn.settled", "turns", "cause">>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<"delivery.admitted", "deliveries">>().toEqualTypeOf<never>();
-    expectTypeOf<Undeclared<"delivery.consumed", "deliveries">>().toEqualTypeOf<never>();
+    expectTypeOf<Undeclared<"delivery.consumed", "deliveries", "history">>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<"delivery.settled", "deliveries">>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<"model.requested", "runs">>().toEqualTypeOf<never>();
     expectTypeOf<Undeclared<"model.started", "runs">>().toEqualTypeOf<never>();

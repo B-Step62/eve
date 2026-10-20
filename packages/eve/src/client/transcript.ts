@@ -23,12 +23,13 @@ export interface TranscriptOptions {
 }
 
 /**
- * A session's text conversation, from its stream: user message text and completed assistant
- * text, oldest first.
+ * A session's text conversation, from its stream: imported history, user message text, and
+ * completed assistant text, oldest first.
  *
- * The user's text is what each consumed delivery carries; the assistant's is each completed
- * reply part. Reasoning, narration, tool calls and results, attachments, interactions, and
- * interrupted or unfinished output are left out. A completed clear (`context.settled` selecting
+ * The user's text is what each consumed delivery carries, after the history it imported; the
+ * assistant's is each completed reply part. When one line consumes several deliveries, their
+ * history comes before their messages, as the model reads them. Reasoning, narration, tool calls
+ * and results, attachments, interactions, and interrupted or unfinished output are left out. A completed clear (`context.settled` selecting
  * nothing), or a reset that ended a stranded session, starts the transcript over, so text the
  * session no longer holds is never returned.
  *
@@ -56,10 +57,14 @@ export function transcriptOf(
   }
   let messages: TranscriptMessage[] = [];
   let resetDeliveryId: string | undefined;
+  // Where the history of the deliveries the current line consumes goes: before their messages.
+  let consumed: { readonly line: number | undefined; at: number } | undefined;
   const append = (message: TranscriptMessage) => {
     if (message.text.trim().length > 0) messages.push(message);
   };
   for (const event of events) {
+    const line = event.meta?.position?.line;
+    if (event.type !== "delivery.consumed" || consumed?.line !== line) consumed = undefined;
     switch (event.type) {
       case "delivery.admitted":
         if (
@@ -69,9 +74,16 @@ export function transcriptOf(
         )
           resetDeliveryId = event.data.deliveryId;
         break;
-      case "delivery.consumed":
+      case "delivery.consumed": {
+        consumed ??= { at: messages.length, line };
+        const history = (event.data.history ?? [])
+          .filter(({ text }) => text.trim().length > 0)
+          .map(({ role, text }) => ({ role, text }));
+        messages.splice(consumed.at, 0, ...history);
+        consumed.at += history.length;
         append({ role: "user", text: textOf(event.data.parts) });
         break;
+      }
       case "content.completed":
         if (
           event.data.kind === "text" &&

@@ -77,8 +77,8 @@ export type ResolvedStepInput = HarnessStepInput & { readonly messageConsumed?: 
 /**
  * Plain text answers a budget prompt; `resolveTypedApproval` answers approvals. A channel
  * that wraps the typed text in an envelope for the model attaches the text itself to answer with.
- * The answer consumes the message and the context the channel sent about it: the model reads
- * neither.
+ * The answer consumes the message, with the context and history the channel sent with it: the
+ * model reads none of them.
  */
 export function resolveTextInput(
   view: SessionTables,
@@ -98,6 +98,8 @@ export function resolveTextInput(
     ...stepInput,
     context: undefined,
     answers: [...(stepInput.answers ?? []), ...answers],
+    deliveries: withoutHistory(stepInput.deliveries),
+    history: undefined,
     message: undefined,
     messageConsumed: true,
   });
@@ -130,9 +132,18 @@ export function resolveTypedApproval(
     ...stepInput,
     context: undefined,
     answers: [...(stepInput.answers ?? []), ...answers],
+    deliveries: withoutHistory(stepInput.deliveries),
+    history: undefined,
     message: undefined,
     messageConsumed: true,
   };
+}
+
+/** A message consumed as an answer imports nothing, so its deliveries record no history. */
+function withoutHistory(
+  deliveries: HarnessStepInput["deliveries"],
+): HarnessStepInput["deliveries"] {
+  return deliveries?.map(({ history: _history, ...delivery }) => delivery);
 }
 
 /**
@@ -168,9 +179,13 @@ export function withoutResponses(
 /** The turn's own input: the message a plain-text answer didn't consume, and its context. */
 export function turnInputOnly(input: ResolvedStepInput | undefined): HarnessStepInput | undefined {
   if (input === undefined) return undefined;
-  const result: { context?: HarnessStepInput["context"]; message?: HarnessStepInput["message"] } =
-    {};
+  const result: {
+    context?: HarnessStepInput["context"];
+    history?: HarnessStepInput["history"];
+    message?: HarnessStepInput["message"];
+  } = {};
   if ((input.context?.length ?? 0) > 0) result.context = input.context;
+  if ((input.history?.length ?? 0) > 0) result.history = input.history;
   if (input.message !== undefined && input.messageConsumed !== true) result.message = input.message;
   const turnInput = attachClientContext(result, readClientContext(input));
   return isEmptyInput(turnInput) ? undefined : turnInput;
@@ -193,6 +208,7 @@ export function compactInput(input: ResolvedStepInput | undefined): ResolvedStep
   if (input === undefined) return {};
   const result: {
     context?: HarnessStepInput["context"];
+    history?: HarnessStepInput["history"];
     answers?: HarnessStepInput["answers"];
     message?: HarnessStepInput["message"];
     messageConsumed?: boolean;
@@ -201,6 +217,7 @@ export function compactInput(input: ResolvedStepInput | undefined): ResolvedStep
   } = {};
   if ((input.deliveries?.length ?? 0) > 0) result.deliveries = input.deliveries;
   if ((input.context?.length ?? 0) > 0) result.context = input.context;
+  if ((input.history?.length ?? 0) > 0) result.history = input.history;
   if ((input.answers?.length ?? 0) > 0) result.answers = input.answers;
   if (input.message !== undefined) result.message = input.message;
   if (input.messageConsumed === true) result.messageConsumed = true;

@@ -3,7 +3,9 @@ import type { Delivery } from "#shared/delivery.js";
 
 import type { ChannelAdapter } from "#channel/adapter.js";
 import type { ChannelDeliverySource } from "#channel/delivery-metadata.js";
-import { createChannelAddressFn } from "#channel/channel-address.js";
+import { type ChannelCreateResult, createChannelAddressFn } from "#channel/channel-address.js";
+
+export type { ChannelCreateResult } from "#channel/channel-address.js";
 import type { Session } from "#channel/session.js";
 import type {
   Runtime,
@@ -13,9 +15,16 @@ import type {
 } from "#channel/types.js";
 import { type Answer, parseAnswers, type StrictAnswers } from "#shared/input.js";
 import type { JsonObject } from "#shared/json.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import { attachInputText, readInputText } from "#internal/input-text.js";
 
 interface BaseChannelSendOptions {
+  /**
+   * Prior conversation added as user and assistant turns before this
+   * message and its `context`. Seeds a session this send creates, or
+   * extends the history of the session that owns the address.
+   */
+  readonly history?: readonly SessionHistoryMessage[];
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   /** JSON Schema for a structured final answer, as on `Session.send()`. */
@@ -39,8 +48,25 @@ interface BaseChannelRespondOptions<TState = undefined> {
 /** Options for answering pending input requests at an existing continuation address. */
 export type ChannelRespondOptions<TState = undefined> = BaseChannelRespondOptions<TState>;
 
+/** Options for creating a session at a channel-local address without running a turn. */
+export type ChannelCreateOptions<TState = undefined> = {
+  readonly auth: SessionAuthContext | null;
+  /** Prior conversation the session starts with; it joins history with the first message. */
+  readonly history?: readonly SessionHistoryMessage[];
+  readonly initiatorAuth?: SessionAuthContext | null;
+  readonly title?: string;
+} & ([TState] extends [undefined] ? unknown : { readonly state: TState });
+
 /** Dynamic handle for whichever session currently owns one channel-local address. */
 export interface ChannelSource<TState = undefined> {
+  /**
+   * Creates a session that waits for its first message, without running a
+   * turn. When another session owns the address, or claims it concurrently,
+   * returns that session unchanged with `created: false`; its `history` was not
+   * added. Throws `SessionStrandedError` when the owner is stranded; reset the
+   * address, then create again.
+   */
+  create(options: ChannelCreateOptions<TState>): Promise<ChannelCreateResult>;
   /** Starts or resumes a turn with a user message. May create a session. */
   send(message: MessageContent, options: ChannelSendOptions<TState>): Promise<Delivery>;
   /** Answers pending input requests. Never creates a session. */
@@ -91,6 +117,7 @@ export function createChannelOperations<TState = undefined>(input: {
             attachInputText(
               {
                 context: options.context,
+                history: options.history,
                 message,
                 outputSchema: options.outputSchema,
                 state: (options as { readonly state?: TState }).state,
@@ -99,6 +126,9 @@ export function createChannelOperations<TState = undefined>(input: {
             ),
             options,
           );
+        },
+        async create(options) {
+          return await bound.create(options);
         },
         async respond(answers, options) {
           if (answers.length === 0) {

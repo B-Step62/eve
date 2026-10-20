@@ -31,7 +31,10 @@ import {
   responseSubmitted,
   signInInteractionId,
 } from "#harness/interaction-facts.js";
-import type { DeliverySource } from "#protocol/session-events/families/delivery.js";
+import type {
+  DeliverySource,
+  ImportedMessage,
+} from "#protocol/session-events/families/delivery.js";
 import type { ControlDelivery } from "#harness/types.js";
 import type { ResponseSubmittedData } from "#protocol/session-events/families/response.js";
 import type { SessionEvent } from "#protocol/session-event.js";
@@ -85,6 +88,8 @@ const unchanged = (view: SessionView, events: readonly SessionEvent[]) => ({
 export interface ConsumedDelivery {
   readonly deliveryId: string;
   readonly parts: readonly UserPart[];
+  /** Earlier conversation the delivery brought, which its consumption records. */
+  readonly history?: readonly ImportedMessage[];
 }
 
 /** The turn the next turn follows: the newest, unless a context change chose another or none. */
@@ -112,6 +117,7 @@ function waitingDeliveries(
 function consumed(delivery: ConsumedDelivery, turnId: string): SessionEvent {
   return fact("delivery.consumed", {
     deliveryId: delivery.deliveryId,
+    history: (delivery.history?.length ?? 0) > 0 ? delivery.history : undefined,
     parts: delivery.parts,
     turnId,
   });

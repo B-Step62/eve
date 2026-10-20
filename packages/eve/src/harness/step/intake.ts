@@ -2,6 +2,7 @@ import { stageAttachmentsToSandbox, stageToolResultMedia } from "#harness/attach
 import { forgetFinishedRuns, runtimeResultCalls } from "#harness/coordination.js";
 import {
   createFrameworkUserMessage,
+  createImportedHistoryMessages,
   createUserMessage,
   frameworkMessageKindForStepInput,
   type HarnessModelMessage,
@@ -89,8 +90,8 @@ export interface TurnInput {
   readonly clientContext: readonly string[] | undefined;
   readonly storedClientContext: ReturnType<typeof getTurnClientContextState>;
   readonly ephemeral: readonly UserModelMessage[];
-  /** The context entries and the message, in history order. */
-  readonly messages: readonly UserModelMessage[];
+  /** Imported history, the context entries, and the message, in history order. */
+  readonly messages: readonly HarnessModelMessage[];
   /** The input carries a user's message, which follows tool results across a boundary. */
   readonly hasUserMessage: boolean;
 }
@@ -111,9 +112,12 @@ export async function prepareTurnInput(
     (clientContext ?? storedClientContext?.messages)?.map((content) =>
       createFrameworkUserMessage("context.instruction", content),
     ) ?? [];
-  const messages: UserModelMessage[] = (input?.context ?? []).map((entry) =>
-    createFrameworkUserMessage("context.instruction", entry),
-  );
+  const messages: HarnessModelMessage[] = [
+    ...createImportedHistoryMessages(input?.history ?? []),
+    ...(input?.context ?? []).map((entry) =>
+      createFrameworkUserMessage("context.instruction", entry),
+    ),
+  ];
   const kind = frameworkMessageKindForStepInput(input);
   const content = normalizeMessage(input?.message);
   const staged =

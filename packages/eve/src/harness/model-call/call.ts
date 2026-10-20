@@ -22,7 +22,7 @@ import { historyCallNames, toEntryStep, toEntryStream } from "#harness/execute-c
 import { REPLY_TOOL_NAME } from "#protocol/reply-tool.js";
 import type { GenerationSteering } from "#harness/generation-steering.js";
 import { interruptStreamOnFailure } from "#harness/interruptible-stream.js";
-import type { HarnessModelMessage, UserModelMessage } from "#harness/messages.js";
+import type { HarnessModelMessage } from "#harness/messages.js";
 import {
   ContentFilteredModelResponseError,
   EmptyModelResponseError,
@@ -98,7 +98,7 @@ interface ModelCallerInput {
   readonly catalog: StepCatalog;
   readonly model: LanguageModel;
   readonly generation: GenerationSteering;
-  readonly turnMessages: readonly UserModelMessage[];
+  readonly turnMessages: readonly HarnessModelMessage[];
   readonly approvalGrants: readonly ApprovalGrant[];
   readonly pendingApprovalsNote: string | undefined;
   /** The prompt as the step started it, projected for the model. */

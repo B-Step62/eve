@@ -24,11 +24,27 @@ export interface DeliveryAdmittedData {
   readonly clientContext?: JsonValue;
 }
 
+/**
+ * A message from conversation eve did not run, such as a transcript an app stored. It is text
+ * only: it names no turn or call, and records nothing eve did.
+ */
+export interface ImportedMessage {
+  /** The app's own id for the message, when it gave one. eve never reads it. */
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+}
+
 export interface DeliveryConsumedData {
   readonly deliveryId: string;
   readonly turnId: string;
   /** What the person sent. Empty for a delivery that only adds context. */
   readonly parts: readonly UserPart[];
+  /**
+   * Earlier conversation the delivery brought, oldest first. The model reads the history of the
+   * deliveries a line consumes before what they sent.
+   */
+  readonly history?: readonly ImportedMessage[];
 }
 
 export type DeliveryOutcome =
@@ -64,6 +80,10 @@ const deliverySource = conforming<DeliverySource>()(
   ]),
 );
 
+const importedMessage = conforming<ImportedMessage>()(
+  z.object({ id: z.string().optional(), role: z.enum(["user", "assistant"]), text: z.string() }),
+);
+
 export const deliverySchemas = {
   "delivery.admitted": envelopeOf(
     "delivery.admitted",
@@ -79,7 +99,12 @@ export const deliverySchemas = {
   "delivery.consumed": envelopeOf(
     "delivery.consumed",
     conforming<DeliveryConsumedData>()(
-      z.object({ deliveryId: id, parts: z.array(userPart), turnId: id }),
+      z.object({
+        deliveryId: id,
+        history: z.array(importedMessage).optional(),
+        parts: z.array(userPart),
+        turnId: id,
+      }),
     ),
   ),
   "delivery.settled": envelopeOf(

@@ -3,7 +3,12 @@ import type {
   ConversationAgentSession,
   ConversationState,
 } from "#client/conversation-state.js";
-import { assistantMessages, type PlacedMessage, userMessage } from "#client/messages.js";
+import {
+  assistantMessages,
+  importedMessages,
+  type PlacedMessage,
+  userMessage,
+} from "#client/messages.js";
 import type { EveMessage } from "#client/message-types.js";
 import type { SessionStreamEvent } from "#protocol/session-event.js";
 import { isFactType } from "#protocol/session-events/catalog.js";
@@ -63,6 +68,8 @@ export class Conversation {
   readonly #agents = new Map<string, FollowedAgent>();
   #messages = new Map<string, readonly PlacedMessage[]>();
   readonly #users = new Map<string, EveMessage>();
+  /** The earlier conversation each consumed delivery imported, by delivery. */
+  readonly #imported = new Map<string, readonly EveMessage[]>();
   readonly #submissionIds = new Map<string, string>();
   #changed: Set<string> | "all" = "all";
   #state: ConversationState | undefined;
@@ -87,6 +94,11 @@ export class Conversation {
     this.#uncommitted = [];
     for (const fact of committed) {
       foldReceivedEvent(this.view, fact, this.previews);
+      if (fact.type === "delivery.consumed" && (fact.data.history?.length ?? 0) > 0)
+        this.#imported.set(
+          fact.data.deliveryId,
+          importedMessages(fact.data.deliveryId, fact.data.history!),
+        );
       if (isFactType(fact.type)) this.#viewCopy = undefined;
       for (const turnId of touchedTurns(this.view, this.previews, fact)) this.#touch(turnId);
     }
@@ -231,8 +243,16 @@ export class Conversation {
    */
   #orderedMessages(): readonly EveMessage[] {
     const sent = new Map<string, PlacedMessage[]>();
+    const imported = new Map<string, PlacedMessage[]>();
     for (const row of Object.values(this.view.deliveries)) {
       if (row.consumedAt === undefined || row.turnId === undefined) continue;
+      const at = row.consumedAt;
+      const history = (this.#imported.get(row.deliveryId) ?? []).map((message) => ({
+        at,
+        message,
+      }));
+      if (history.length > 0)
+        imported.set(row.turnId, [...(imported.get(row.turnId) ?? []), ...history]);
       const submissionId = this.#submissionIds.get(row.deliveryId);
       let message = this.#users.get(row.deliveryId);
       if (this.#holdUnconfirmedMessages && message === undefined && submissionId === undefined)
@@ -272,8 +292,10 @@ export class Conversation {
     }
     const messages: EveMessage[] = [];
     for (const turnId of Object.keys(this.view.turns)) {
-      // A person's message sorts before the agent's that starts on the same line.
+      // On one line, imported history sorts before what people sent, as the model reads them, and
+      // a person's message sorts before the agent's that starts there.
       const placed = [
+        ...(imported.get(turnId) ?? []).map((entry) => ({ ...entry, rank: -1 })),
         ...(sent.get(turnId) ?? []).map((entry) => ({ ...entry, rank: 0 })),
         ...(this.#messages.get(turnId) ?? []).map((entry) => ({ ...entry, rank: 1 })),
       ].sort((a, b) => a.at - b.at || a.rank - b.rank);

@@ -1,8 +1,14 @@
-// Epoch 39 of the subagent capability: the authoring contract of epoch 38 still compiles.
-import { defineAgent } from "#public/index.js";
+import { defineAgent, defineDynamic } from "#public/index.js";
 
-// Epoch 37 `action.result` errors had no `name`; epoch 38 adds it as optional.
-export default defineAgent({
-  description: "Summarize a customer's open support tickets.",
-  model: "anthropic/claude-sonnet-5",
+// Epoch 39 had no `history` option or `history.imported` event; epoch 40 adds both, which is additive.
+export default defineDynamic({
+  events: {
+    "turn.started": (_event, ctx) =>
+      ctx.session.auth.current === null
+        ? null
+        : defineAgent({
+            description: "Investigate the authenticated request.",
+            model: "openai/gpt-5.6-sol",
+          }),
+  },
 });

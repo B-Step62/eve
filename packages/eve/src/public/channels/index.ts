@@ -1,3 +1,4 @@
+export { InvalidSessionHistoryError, type SessionHistoryMessage } from "#shared/session-history.js";
 export {
   defineChannel,
   disableRoute,
@@ -20,6 +21,8 @@ export {
   type ChannelReceiveContext,
   type ChannelResolveSession,
   type ChannelRespondOptions,
+  type ChannelCreateOptions,
+  type ChannelCreateResult,
   type ChannelSendOptions,
   type ChannelSource,
   type ChannelCors,

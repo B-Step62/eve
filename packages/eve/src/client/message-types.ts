@@ -24,6 +24,9 @@ export interface EveMessage {
 }
 
 export interface EveMessageMetadata {
+  /** App-owned identifier on a message imported through session history. */
+  readonly historyId?: string;
+  readonly imported?: true;
   readonly optimistic?: true;
   readonly result?: unknown;
   readonly status?: "complete" | "failed" | "streaming" | "submitted";

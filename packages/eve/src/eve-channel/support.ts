@@ -5,6 +5,7 @@ import { SessionNotActiveError } from "#channel/session-not-active-error.js";
 import type { DeliveryReceipt } from "#protocol/delivery.js";
 import { EVE_SESSION_ID_HEADER } from "#protocol/session-http.js";
 import type { SessionAuthContext } from "#channel/types.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import { workflowEntryReference } from "#execution/workflow-runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
 import {
@@ -118,6 +119,7 @@ interface OnMessageOutcome {
   /** Model-ready turn context: `onMessage`'s replacement, or the request's labeled entries. */
   readonly clientContext?: readonly string[];
   readonly context?: readonly string[];
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
 }
 
@@ -164,6 +166,7 @@ export async function resolveOnMessage(input: {
     auth: result.auth,
     clientContext: resolveTurnClientContext(result.clientContext, input.clientContext),
     context: result.context,
+    history: result.history,
     title: result.title,
   };
 }

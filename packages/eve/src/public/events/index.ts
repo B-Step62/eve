@@ -99,6 +99,7 @@ export type {
   DeliverySource,
   DeliveryAdmittedData,
   DeliveryConsumedData,
+  ImportedMessage,
   DeliveryOutcome,
   DeliverySettledData,
   DeliveryAdmitted,

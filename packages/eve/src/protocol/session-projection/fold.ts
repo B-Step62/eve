@@ -314,7 +314,13 @@ const LIFECYCLE: Partial<
   "context.settled": { status: "settled", table: "changes" },
   "context.started": { status: "running", table: "changes" },
   "delivery.admitted": { status: "admitted", table: "deliveries" },
-  "delivery.consumed": { from: "admitted", status: "consumed", table: "deliveries" },
+  // Imported history can be long, and only readers of the fact show it.
+  "delivery.consumed": {
+    from: "admitted",
+    omit: ["history"],
+    status: "consumed",
+    table: "deliveries",
+  },
   "delivery.settled": { status: "settled", table: "deliveries" },
   "interaction.opened": { status: "open", table: "interactions" },
   "interaction.settled": { status: "settled", table: "interactions" },

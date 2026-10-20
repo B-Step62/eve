@@ -1,3 +1,4 @@
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import type {
   ChannelEventContext,
   ChannelEventOf,
@@ -159,6 +160,8 @@ export interface LinearChannelEvents {
 export type LinearInboundResult = {
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
+  /** Prior conversation added as user and assistant turns before this message. */
+  readonly history?: readonly SessionHistoryMessage[];
   /** Overrides the workflow run title without changing the message sent to the model. */
   readonly title?: string;
 } | null;
@@ -360,6 +363,7 @@ async function dispatchAgentSession(input: {
         ...event.previousComments,
         ...(result.context ?? []),
       ],
+      history: result.history,
       state: stateFromAgentSession(event.agentSession),
       title: result.title,
     });

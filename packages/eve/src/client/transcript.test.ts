@@ -71,6 +71,30 @@ function strandedByMessage(): SessionEvent {
   };
 }
 
+/** Events written together: one line, as a commit is. */
+function line(at: number, events: readonly SessionEvent[]) {
+  return events.map((event, index) => ({
+    ...event,
+    meta: {
+      at: new Date(Date.UTC(2026, 0, 1) + at).toISOString(),
+      endOfLine: index === events.length - 1,
+      position: { index, line: at },
+    },
+  }));
+}
+
+function importing(
+  history: readonly {
+    readonly id?: string;
+    readonly role: "user" | "assistant";
+    readonly text: string;
+  }[],
+  message: string,
+): SessionEvent {
+  const event = received(message);
+  return { ...event, data: { ...event.data, history } } as SessionEvent;
+}
+
 function reduce(events: readonly SessionEvent[], options?: { readonly maxMessages?: number }) {
   return transcriptOf(
     events.map((event, index) => stampTestEvent(event, index)),
@@ -128,5 +152,31 @@ describe("transcriptOf", () => {
     expect(() => transcriptOf([], { maxMessages })).toThrow(
       `"maxMessages" must be a positive integer; received ${maxMessages}.`,
     );
+  });
+  it("reads imported history before what its line's deliveries sent, as the model does", () => {
+    const events = [
+      ...line(0, [
+        importing(
+          [
+            { id: "app-1", role: "user", text: "Earlier question" },
+            { role: "assistant", text: "Earlier answer" },
+          ],
+          "Deploy it.",
+        ),
+        importing([{ role: "user", text: "Bob's note" }], "Use staging."),
+      ]),
+      ...line(1, [content("Done.")]),
+      ...line(2, [importing([{ role: "user", text: "Carol's note" }], "Ship it.")]),
+    ];
+    expect(transcriptOf(events).messages).toEqual([
+      { role: "user", text: "Earlier question" },
+      { role: "assistant", text: "Earlier answer" },
+      { role: "user", text: "Bob's note" },
+      { role: "user", text: "Deploy it." },
+      { role: "user", text: "Use staging." },
+      { role: "assistant", text: "Done." },
+      { role: "user", text: "Carol's note" },
+      { role: "user", text: "Ship it." },
+    ]);
   });
 });

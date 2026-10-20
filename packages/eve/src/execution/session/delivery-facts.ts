@@ -83,10 +83,11 @@ export function admitDeliveries(input: {
       facts.push(fact("delivery.settled", { deliveryId, outcome: "ignored" }));
       continue;
     }
-    const consumed: ConsumedDelivery = {
+    const consumed: ConsumedDelivery = defined({
       deliveryId,
+      history: (stepInput.history?.length ?? 0) > 0 ? stepInput.history : undefined,
       parts: stepInput.message === undefined ? [] : userPartsOf(stepInput.message),
-    };
+    });
     const { answers, ...rest } = stepInput;
     inputs.push(
       answers === undefined || answers.length === 0

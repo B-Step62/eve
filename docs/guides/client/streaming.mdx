@@ -137,7 +137,7 @@ The most common UI events are:
 
 | Event                 | Use                                                                                                                      |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `delivery.consumed`   | Confirm the user message landed; `data.parts` includes text and file metadata.                                           |
+| `delivery.consumed`   | Confirm the user message landed; `data.parts` includes text and file metadata, and `data.history` any imported history.  |
 | `content.delta`       | Render text and reasoning deltas as they stream.                                                                         |
 | `content.completed`   | A finished part. `phase` tells a `"reply"` from `"narration"`; `kind: "result"` is [structured output](./output-schema). |
 | `call.input`          | Accumulate raw tool-input deltas before validation completes.                                                            |

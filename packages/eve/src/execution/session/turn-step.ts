@@ -36,6 +36,7 @@ import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { bindSessionInstrumentation } from "#instrumentation/runtime.js";
 import { RuntimeActionSettlementTimesKey } from "#harness/runtime-action-settlement-state.js";
+import { readPendingHistory, withoutPendingHistory } from "#execution/session/pending-history.js";
 import * as agentTraceState from "#tracing/eve/agent-trace-context-store.js";
 import { matchAuthorizationCallbacks } from "#execution/authorization-callback-match.js";
 import { isTurnCancellation, throwIfTurnAborted } from "#harness/turn-cancellation.js";
@@ -299,12 +300,28 @@ async function runSessionStepBody(
     let admission: DeliveryAdmission | undefined;
     if (delivery !== undefined) {
       const delivered: { payload: DeliverPayload; input: StepInput | undefined }[] = [];
+      // History left by `create()` joins the first message's turn. It leaves state only once a
+      // deliver result carries it, so a dropped first message does not lose it.
+      const pendingHistory = delivery.payloads.some((payload) => payload.message !== undefined)
+        ? readPendingHistory(durableSession.state)
+        : [];
+      let accepted = 0;
       try {
         for (const payload of delivery.payloads) {
           const result = adapter.deliver
             ? await adapter.deliver(payload, adapterCtx)
             : defaultDeliverResult(payload);
-          delivered.push({ input: result ?? undefined, payload });
+          if (result === undefined || result === null) {
+            delivered.push({ input: undefined, payload });
+            continue;
+          }
+          // `history` is framework-owned, so a channel's deliver hook cannot drop or rewrite it.
+          const history = [...(accepted === 0 ? pendingHistory : []), ...(payload.history ?? [])];
+          accepted += 1;
+          delivered.push({
+            input: history.length === 0 ? result : { ...result, history },
+            payload,
+          });
         }
       } catch (error) {
         await instrumentation?.flush();
@@ -318,6 +335,9 @@ async function runSessionStepBody(
         admitted: (deliveryId) => currentProjection(ctx).view.deliveries[deliveryId] !== undefined,
         payloads: delivered,
       });
+      if (accepted > 0 && pendingHistory.length > 0) {
+        initialSession = { ...initialSession, state: withoutPendingHistory(initialSession.state) };
+      }
       resolved =
         admission.inputs.length === 0 ? undefined : admission.inputs.reduce(coalesceTurnInputs);
     }

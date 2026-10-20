@@ -1,7 +1,6 @@
-// Epoch 40 of the dynamicInstructions capability: the authoring contract of epoch 39 still compiles.
 import { defineDynamic, defineInstructions } from "#public/instructions/index.js";
 
-// Epoch 38 `action.result` errors had no `name`; epoch 39 adds it as optional.
+// Epoch 40 had no `history` option or `history.imported` event; epoch 41 adds both, which is additive.
 export default defineDynamic({
   events: {
     "turn.started": (_event, ctx) =>

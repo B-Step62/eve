@@ -1,3 +1,4 @@
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import type { TeamsChannelCredentials } from "#public/channels/teams/credentials.js";
 export type { TeamsChannelCredentials } from "#public/channels/teams/credentials.js";
 import type { ChannelEventContext, ChannelEventOf } from "#public/definitions/channel.js";
@@ -157,6 +158,8 @@ export interface TeamsReceiveTarget {
 export type TeamsInboundResult = {
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
+  /** Prior conversation added as user and assistant turns before this message. */
+  readonly history?: readonly SessionHistoryMessage[];
   /** Overrides the workflow run title without changing the message sent to the model. */
   readonly title?: string;
 } | null;
@@ -658,6 +661,7 @@ async function dispatchMessage(input: {
     await input.from(continuationToken).send(turnMessage, {
       auth: result.auth,
       context: [formatTeamsContextBlock(inboundContext), ...channelContext],
+      history: result.history,
       state,
       title: result.title,
     });

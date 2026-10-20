@@ -18,6 +18,7 @@ import type { ResponseOutcome } from "#protocol/session-events/families/response
 import type { ChannelAdapter } from "#channel/adapter.js";
 import type { AgentLimitsDefinition } from "#shared/agent-definition.js";
 import type { JsonObject } from "#shared/json.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 import type { InstrumentationDecision } from "#shared/instrumentation-decision.js";
 import type { ForwardedTraceAssertion } from "#shared/forwarded-trace-policy.js";
 import type { ConversationContext } from "#shared/conversation-context.js";
@@ -551,6 +552,8 @@ export interface RunInput {
     /** Omitted only when creating a conversation session before its first turn. */
     readonly message?: MessageContent;
     readonly context?: readonly string[];
+    /** Prior conversation; with no message, it waits for the first message's turn. */
+    readonly history?: readonly SessionHistoryMessage[];
     readonly outputSchema?: JsonObject;
     /** Channel payload state for the first delivery, as later deliveries carry it. */
     readonly state?: unknown;
@@ -646,9 +649,13 @@ export interface Runtime {
   /**
    * Resolves the session that currently owns a continuation token without
    * delivering input or starting a run. Returns `undefined` when no session
-   * owns the token.
+   * owns the token. With `runnable`, throws `SessionStrandedError` when the
+   * owner is stranded and can run nothing.
    */
-  resolveContinuation(continuationToken: string): Promise<{ sessionId: string } | undefined>;
+  resolveContinuation(
+    continuationToken: string,
+    options?: { readonly runnable?: boolean },
+  ): Promise<{ sessionId: string } | undefined>;
 
   /**
    * Returns a readable stream of lifecycle events for an existing session.
