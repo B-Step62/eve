@@ -302,9 +302,10 @@ and ACP clients leave those calls out; the terminal UI shows each task's start a
   and enforce per-person access inside the tool.
 - **Working tasks.** A session runs at most 32 working tasks at once. An idle resumable task doesn't
   count, and a call that makes it work again does.
-- **No time limits.** Tasks have no timeout of their own. The session lifetime,
-  `limits.sessionTimeoutMs` (30 days by default), bounds all work in a session. A body that needs a
-  deadline races `sleep` against its work.
+- **No time limits.** Tasks have no timeout of their own, and the session timeout does not bound
+  them. A turn held open while its tasks work keeps the session open, and
+  `limits.sessionTimeoutMs` (30 idle days by default) counts from when that turn settles. A body
+  that needs a deadline races `sleep` against its work.
 
 ## Upgrade from background tasks
 

@@ -171,12 +171,14 @@ export type ChannelSendOptions<TState = undefined> = BaseChannelSendOptions & {
   readonly state?: Partial<TState>;
 };
 interface BaseChannelRespondOptions<TState = undefined> {
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly outputSchema?: JsonObject;
   readonly context?: readonly string[];
   readonly state?: Partial<TState>;
 }
 interface BaseChannelSendOptions {
+  readonly idempotencyKey?: string;
   readonly history?: readonly SessionHistoryMessage[];
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
@@ -468,6 +470,7 @@ export type SessionSendOptions = SessionDeliveryOptions & {
   readonly turnPolicy?: TurnPolicy;
 };
 interface SessionDeliveryOptions {
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly outputSchema?: JsonObject;

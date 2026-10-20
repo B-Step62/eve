@@ -28,8 +28,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   tool: {
-    current: 95,
-    supported: [95],
+    current: 96,
+    supported: [96],
     dropped: {
       1: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
       2: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
@@ -125,6 +125,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       92: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
       93: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       94: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      95: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   dynamicTool: {
@@ -222,8 +223,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 64,
-    supported: [64],
+    current: 65,
+    supported: [65],
     dropped: {
       1: "Channel commands now return Delivery receipts and session handles read with stream(); rebuild the extension.",
       2: "Channel commands now return Delivery receipts and session handles read with stream(); rebuild the extension.",
@@ -288,11 +289,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       61: "Channel commands now return Delivery receipts and session handles read with stream(); rebuild the extension.",
       62: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       63: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      64: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   schedule: {
-    current: 36,
-    supported: [36],
+    current: 37,
+    supported: [37],
     dropped: {
       1: "Schedule dispatch now returns Delivery receipts rather than session handles; rebuild the extension.",
       2: "Schedule dispatch now returns Delivery receipts rather than session handles; rebuild the extension.",
@@ -329,6 +331,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       33: "Schedule dispatch now returns Delivery receipts rather than session handles; rebuild the extension.",
       34: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       35: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      36: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   subagent: {
@@ -378,8 +381,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 53,
-    supported: [53],
+    current: 54,
+    supported: [54],
     dropped: {
       1: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
       2: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
@@ -433,6 +436,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       50: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
       51: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
       52: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      53: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   hook: {

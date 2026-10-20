@@ -57,6 +57,7 @@ export type SessionSendOptions = SessionDeliveryOptions & {
   readonly turnPolicy?: TurnPolicy;
 };
 interface SessionDeliveryOptions {
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly outputSchema?: JsonObject;

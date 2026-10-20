@@ -2,6 +2,12 @@
 
 ## Export names
 
+- IMESSAGE_TAPBACKS: src/public/channels/imessage-tapbacks.d.ts#IMESSAGE_TAPBACKS
+- IMessageTapback: src/public/channels/imessage-tapbacks.d.ts#IMessageTapback
+- IMessageTapbackContext: src/public/channels/imessage-tapbacks.d.ts#IMessageTapbackContext
+- IMessageTapbackResult: src/public/channels/imessage-tapbacks.d.ts#IMessageTapbackResult
+- IMessageTapbackToolInput: src/public/channels/imessage-tapbacks.d.ts#IMessageTapbackToolInput
+- IMessageTapbackType: src/public/channels/imessage-tapbacks.d.ts#IMessageTapbackType
 - LinqChannel: src/public/channels/linq/linqChannel.d.ts#LinqChannel
 - LinqChannelConfig: src/public/channels/linq/linqChannel.d.ts#LinqChannelConfig
 - LinqChannelCredentials: src/public/channels/linq/linqChannel.d.ts#LinqChannelCredentials
@@ -21,6 +27,7 @@
 - chat/dist/types-B-vcrmGK.d.ts#Adapter
 - chat/dist/types-B-vcrmGK.d.ts#AdapterPostableMessage
 - chat/dist/types-B-vcrmGK.d.ts#Attachment
+- chat/dist/types-B-vcrmGK.d.ts#Author
 - chat/dist/types-B-vcrmGK.d.ts#ChatInstance
 - chat/dist/types-B-vcrmGK.d.ts#EmojiValue
 - chat/dist/types-B-vcrmGK.d.ts#FetchOptions
@@ -35,6 +42,106 @@
 - chat/dist/types-B-vcrmGK.d.ts#WebhookOptions
 
 ## Declaration closure
+
+### src/approval/definition.d.ts
+
+```ts
+export interface ApprovalConfiguration<TInput = Record<string, unknown>> {
+  readonly prompt?: ApprovalPrompt<TInput>;
+  readonly request: ApprovalPolicy<TInput>;
+  readonly response?: ApprovalResponsePolicy<TInput>;
+}
+export interface ApprovalContext<TInput = Record<string, unknown>> extends SessionContext {
+  readonly abortSignal: AbortSignal;
+  readonly callId: string;
+  readonly toolAnnotations?: ConnectionToolAnnotations;
+  readonly toolInput?: ApprovalToolInput<TInput>;
+  readonly toolName: string;
+}
+export interface ApprovalPromptContext<TInput = Record<string, unknown>> {
+  readonly callId: string;
+  readonly input: TInput;
+  readonly toolName: string;
+}
+export interface ApprovalRequest<TInput = Record<string, unknown>> {
+  readonly callId: string;
+  readonly interactionId: string;
+  readonly principal: SessionAuthContext | null;
+  readonly toolInput?: ApprovalToolInput<TInput>;
+  readonly toolName: string;
+}
+export interface ApprovalResponse {
+  readonly decision: "approve" | "deny";
+  readonly principal: SessionAuthContext;
+}
+export interface ApprovalResponseAuth {
+  getToken(provider: ToolAuthProvider, options?: ToolAuthOptions): Promise<TokenResult>;
+  requireAuth(provider: ToolAuthProvider, options?: ToolAuthOptions): never;
+}
+export interface ApprovalResponseContext<TInput = Record<string, unknown>> {
+  readonly auth: ApprovalResponseAuth;
+  readonly request: ApprovalRequest<TInput>;
+  readonly response: ApprovalResponse;
+  readonly session: ApprovalResponseSession;
+}
+export interface ApprovalResponseSession {
+  readonly id: string;
+  readonly initiator: SessionAuthContext | null;
+  readonly parent?: SessionParent;
+  readonly turn: SessionTurn;
+}
+export interface ConnectionToolAnnotations {
+  readonly title?: string;
+  readonly readOnlyHint?: boolean;
+  readonly destructiveHint?: boolean;
+  readonly idempotentHint?: boolean;
+  readonly openWorldHint?: boolean;
+  readonly [key: string]: unknown;
+}
+export type Approval<TInput = Record<string, unknown>> =
+  ApprovalPolicy<TInput> | ApprovalConfiguration<TInput>;
+export type ApprovalPolicy<TInput = Record<string, unknown>> = (
+  ctx: ApprovalContext<TInput>,
+) => ApprovalStatus | Promise<ApprovalStatus>;
+export type ApprovalPrompt<TInput = Record<string, unknown>> = (
+  context: ApprovalPromptContext<TInput>,
+) => string;
+export type ApprovalResponseDecision =
+  | {
+      readonly status: "allowed";
+    }
+  | {
+      readonly reason: string;
+      readonly status: "rejected";
+    };
+export type ApprovalResponsePolicy<TInput = Record<string, unknown>> = (
+  ctx: ApprovalResponseContext<TInput>,
+) => ApprovalResponseDecision | Promise<ApprovalResponseDecision>;
+export type ApprovalStatus =
+  | undefined
+  | boolean
+  | "not-applicable"
+  | "approved"
+  | "denied"
+  | "user-approval"
+  | {
+      readonly type: "not-applicable";
+      readonly reason?: never;
+    }
+  | {
+      readonly type: "approved";
+      readonly reason?: string;
+    }
+  | {
+      readonly type: "denied";
+      readonly reason?: string;
+    }
+  | {
+      readonly type: "user-approval";
+      readonly reason?: never;
+    };
+type ApprovalToolInput<TInput> = TInput extends object ? Readonly<TInput> : TInput;
+```
 
 ### src/channel/adapter.d.ts
 
@@ -124,12 +231,14 @@ export type ChannelSendOptions<TState = undefined> = BaseChannelSendOptions & {
   readonly state?: Partial<TState>;
 };
 interface BaseChannelRespondOptions<TState = undefined> {
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly outputSchema?: JsonObject;
   readonly context?: readonly string[];
   readonly state?: Partial<TState>;
 }
 interface BaseChannelSendOptions {
+  readonly idempotencyKey?: string;
   readonly history?: readonly SessionHistoryMessage[];
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
@@ -383,6 +492,7 @@ export type SessionSendOptions = SessionDeliveryOptions & {
   readonly turnPolicy?: TurnPolicy;
 };
 interface SessionDeliveryOptions {
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly outputSchema?: JsonObject;
@@ -540,6 +650,95 @@ export type LinqRawMessage =
   LinqAPIV3.UnwrapWebhookEvent["data"] | LinqMessageSendResponse | LinqRetrievedMessage;
 type LinqMessageSendResponse = Awaited<ReturnType<LinqAPIV3["chats"]["messages"]["send"]>>;
 type LinqRetrievedMessage = LinqAPIV3.Message;
+```
+
+### src/compiled/@standard-schema/spec/index.d.ts
+
+```ts
+declare namespace StandardJSONSchemaV1 {
+  interface Props<Input = unknown, Output = Input> extends StandardTypedV1.Props<Input, Output> {
+    readonly jsonSchema: StandardJSONSchemaV1.Converter;
+  }
+  interface Converter {
+    readonly input: (options: StandardJSONSchemaV1.Options) => Record<string, unknown>;
+    readonly output: (options: StandardJSONSchemaV1.Options) => Record<string, unknown>;
+  }
+  type Target = "draft-2020-12" | "draft-07" | "openapi-3.0" | ({} & string);
+  interface Options {
+    readonly target: Target;
+    readonly libraryOptions?: Record<string, unknown> | undefined;
+  }
+  interface Types<Input = unknown, Output = Input> extends StandardTypedV1.Types<Input, Output> {}
+  type InferInput<Schema extends StandardTypedV1> = StandardTypedV1.InferInput<Schema>;
+  type InferOutput<Schema extends StandardTypedV1> = StandardTypedV1.InferOutput<Schema>;
+}
+declare namespace StandardSchemaV1 {
+  interface Props<Input = unknown, Output = Input> extends StandardTypedV1.Props<Input, Output> {
+    readonly validate: (
+      value: unknown,
+      options?: StandardSchemaV1.Options | undefined,
+    ) => Result<Output> | Promise<Result<Output>>;
+  }
+  type Result<Output> = SuccessResult<Output> | FailureResult;
+  interface SuccessResult<Output> {
+    readonly value: Output;
+    readonly issues?: undefined;
+  }
+  interface Options {
+    readonly libraryOptions?: Record<string, unknown> | undefined;
+  }
+  interface FailureResult {
+    readonly issues: ReadonlyArray<Issue>;
+  }
+  interface Issue {
+    readonly message: string;
+    readonly path?: ReadonlyArray<PropertyKey | PathSegment> | undefined;
+  }
+  interface PathSegment {
+    readonly key: PropertyKey;
+  }
+  interface Types<Input = unknown, Output = Input> extends StandardTypedV1.Types<Input, Output> {}
+  type InferInput<Schema extends StandardTypedV1> = StandardTypedV1.InferInput<Schema>;
+  type InferOutput<Schema extends StandardTypedV1> = StandardTypedV1.InferOutput<Schema>;
+}
+declare namespace StandardTypedV1 {
+  interface Props<Input = unknown, Output = Input> {
+    readonly version: 1;
+    readonly vendor: string;
+    readonly types?: Types<Input, Output> | undefined;
+  }
+  interface Types<Input = unknown, Output = Input> {
+    readonly input: Input;
+    readonly output: Output;
+  }
+  type InferInput<Schema extends StandardTypedV1> = NonNullable<
+    Schema["~standard"]["types"]
+  >["input"];
+  type InferOutput<Schema extends StandardTypedV1> = NonNullable<
+    Schema["~standard"]["types"]
+  >["output"];
+}
+interface StandardJSONSchemaV1<Input = unknown, Output = Input> {
+  readonly "~standard": StandardJSONSchemaV1.Props<Input, Output>;
+}
+interface StandardSchemaV1<Input = unknown, Output = Input> {
+  readonly "~standard": StandardSchemaV1.Props<Input, Output>;
+}
+interface StandardTypedV1<Input = unknown, Output = Input> {
+  readonly "~standard": StandardTypedV1.Props<Input, Output>;
+}
+```
+
+### src/connections/errors.d.ts
+
+```ts
+export interface ConnectionAuthorizationChallenge {
+  readonly url?: string;
+  readonly userCode?: string;
+  readonly expiresAt?: string;
+  readonly instructions?: string;
+  readonly displayName?: string;
+}
 ```
 
 ### src/context/keys.d.ts
@@ -1288,6 +1487,7 @@ export interface ChatSdkChannelState extends Record<string, unknown>, PromptQueu
   usersByPrincipal?: Record<string, string | null>;
   pendingInputCards?: Record<string, ChatSdkPendingInputCard>;
   streamPartId?: string | null;
+  latestMessageId?: string;
 }
 export interface ChatSdkInstrumentationMetadata extends Record<string, unknown> {
   readonly adapterName: string | null;
@@ -1309,16 +1509,53 @@ export type ChatSdkChannelEvents<TAdapters extends ChatSdkAdapters = ChatSdkAdap
 type ChatSdkAdapters = Record<string, Adapter>;
 ```
 
+### src/public/channels/imessage-tapbacks.d.ts
+
+```ts
+export declare const IMESSAGE_TAPBACKS: readonly [
+  "love",
+  "like",
+  "dislike",
+  "laugh",
+  "emphasize",
+  "question",
+];
+export interface IMessageTapback {
+  readonly added: boolean;
+  readonly author: Author;
+  readonly message?: Message;
+  readonly messageId: string;
+  readonly raw: unknown;
+  readonly tapback: IMessageTapbackType | (string & {});
+}
+export interface IMessageTapbackContext {
+  readonly thread: Thread<unknown>;
+}
+export interface IMessageTapbackToolInput {
+  readonly tapback: IMessageTapbackType | (string & {});
+}
+export type IMessageTapbackResult = {
+  readonly answer?: string;
+  readonly auth: SessionAuthContext | null;
+  readonly context?: readonly string[];
+  readonly message?: string;
+  readonly title?: string;
+} | null;
+export type IMessageTapbackType = (typeof IMESSAGE_TAPBACKS)[number];
+```
+
 ### src/public/channels/linq/linqChannel.d.ts
 
 ```ts
-export declare function defaultLinqAuth(message: Message): SessionAuthContext;
+export declare function defaultLinqAuth(message: Pick<Message, "author">): SessionAuthContext;
 export declare function linqChannel(config: LinqChannelConfig): LinqChannel;
 export interface LinqChannel extends Channel<
   ChatSdkChannelState,
   ChatSdkReceiveTarget,
   ChatSdkInstrumentationMetadata
-> {}
+> {
+  tapbackTool(): ToolDefinition<IMessageTapbackToolInput, string>;
+}
 export interface LinqChannelConfig {
   readonly baseURL?: string;
   readonly credentials?: LinqChannelCredentials;
@@ -1329,6 +1566,10 @@ export interface LinqChannelConfig {
     ctx: LinqInboundMessageContext,
     message: Message,
   ) => LinqInboundResult | Promise<LinqInboundResult>;
+  readonly onTapback?: (
+    ctx: IMessageTapbackContext,
+    tapback: IMessageTapback,
+  ) => IMessageTapbackResult | Promise<IMessageTapbackResult>;
   readonly route?: string;
   readonly turnPolicy?: TurnPolicy;
   readonly userName?: string;
@@ -1397,6 +1638,18 @@ export type ReceiveInput<TReceiveTarget = Record<string, unknown>> =
   GenericReceiveInput<TReceiveTarget>;
 ```
 
+### src/public/definitions/connections/events.d.ts
+
+```ts
+export interface ConnectionEvent {
+  readonly eventId: string;
+  readonly name: string;
+  readonly timestamp: string;
+  readonly data: Readonly<Record<string, unknown>>;
+  readonly cursor: string | null;
+}
+```
+
 ### src/shared/channel-context.d.ts
 
 ```ts
@@ -1415,6 +1668,172 @@ export interface GenericReceiveInput<TReceiveTarget = Record<string, unknown>> {
   readonly message: MessageContent;
   readonly target: Readonly<TReceiveTarget>;
   readonly auth: SessionAuthContext | null;
+}
+```
+
+### src/shared/connection-events.d.ts
+
+```ts
+export interface ConnectionEventsAdapter {
+  subscribe(input: ManagedEventSubscribeInput): Promise<ManagedEventSubscription>;
+  getSubscription(input: {
+    id: string;
+    options?: {
+      timeout?: number;
+    };
+  }): Promise<ManagedEventSubscription>;
+  unsubscribe(input: {
+    id: string;
+    options?: {
+      timeout?: number;
+    };
+  }): Promise<ManagedEventSubscription>;
+}
+export interface ConnectionEventsBackend {
+  createAdapter(input: {
+    principal: ConnectionPrincipal;
+    connection: {
+      url: string;
+    };
+    destination: {
+      path: string;
+    };
+  }): Promise<ConnectionEventsAdapter>;
+  verify(
+    request: Request,
+    options: {
+      path: string;
+    },
+  ): Promise<ConnectionEventDelivery>;
+}
+export interface ManagedEventSubscription {
+  id: string;
+  name: string;
+  arguments: EventJsonObject;
+  status: "pending" | "active" | "needs_auth" | "stopped" | "expired" | "failed";
+  expiresAt: string | null;
+  cleanupStatus?: "pending" | "complete" | "exhausted";
+}
+export type ConnectionEventDelivery = {
+  version: 1;
+  deliveryId: string;
+  subscriptionId: string;
+  source: {
+    type: "mcp";
+    connectorId: string;
+  };
+  context: Record<string, unknown>;
+} & (
+  | {
+      event: ConnectionEvent;
+    }
+  | {
+      control: {
+        type: "gap";
+        cursor: string | null;
+        truncated?: true;
+      };
+    }
+  | {
+      control: {
+        type: "terminated";
+        error: {
+          code: number;
+          message: string;
+          data?: unknown;
+        };
+      };
+    }
+);
+export type EventJson = string | number | boolean | null | readonly EventJson[] | EventJsonObject;
+export type EventJsonObject = {
+  [key: string]: EventJson | undefined;
+};
+export type ManagedEventSubscribeInput = {
+  name: string;
+  arguments: EventJsonObject;
+  context?: EventJsonObject;
+  idempotencyKey: string;
+  ttlMs: number | null;
+  options?: {
+    signal?: AbortSignal;
+    timeout?: number;
+    maxTotalTimeout?: number;
+  };
+};
+```
+
+### src/shared/connection-types.d.ts
+
+```ts
+export interface AuthorizationCallback {
+  readonly params: Readonly<Record<string, string>>;
+  readonly method: string;
+  readonly body?: string;
+}
+export interface ConnectionAuthorizationContext {
+  readonly url: string;
+}
+export interface InteractiveAuthorizationDefinition<
+  Resume = JsonValue,
+> extends AuthorizationDefinitionBase {
+  readonly principalType: "user";
+  getToken(opts: {
+    readonly principal: ConnectionPrincipal;
+    readonly connection: ConnectionAuthorizationContext;
+  }): Promise<TokenResult>;
+  startAuthorization(opts: {
+    readonly principal: ConnectionPrincipal;
+    readonly connection: ConnectionAuthorizationContext;
+    readonly callbackUrl: string;
+  }): Promise<{
+    readonly challenge: ConnectionAuthorizationChallenge;
+    readonly resume?: Resume;
+  }>;
+  completeAuthorization(opts: {
+    readonly principal: ConnectionPrincipal;
+    readonly connection: ConnectionAuthorizationContext;
+    readonly callbackUrl: string;
+    readonly resume?: Resume;
+    readonly callback: AuthorizationCallback;
+  }): Promise<TokenResult>;
+}
+export interface NonInteractiveAuthorizationDefinition extends AuthorizationDefinitionBase {
+  getToken(opts: {
+    readonly principal: ConnectionPrincipal;
+    readonly connection: ConnectionAuthorizationContext;
+  }): Promise<TokenResult>;
+  readonly startAuthorization?: undefined;
+  readonly completeAuthorization?: undefined;
+}
+export interface TokenResult {
+  readonly token: string;
+  readonly expiresAt?: number;
+  readonly providerSubject?: string;
+}
+export type AuthorizationDefinition<Resume extends JsonValue = JsonValue> =
+  NonInteractiveAuthorizationDefinition | InteractiveAuthorizationDefinition<Resume>;
+export type ConnectionPrincipal =
+  | {
+      readonly type: "app";
+    }
+  | {
+      readonly type: "user";
+      readonly id: string;
+      readonly issuer?: string;
+      readonly attributes?: Readonly<Record<string, string | readonly string[]>>;
+    };
+interface AuthorizationDefinitionBase {
+  readonly principalType?: "app" | "user";
+  readonly vercelConnect?: {
+    readonly experimental_events?: ConnectionEventsBackend;
+    readonly connector: string;
+  };
+  readonly displayName?: string;
+  evict?(opts: {
+    readonly principal: ConnectionPrincipal;
+    readonly connection: ConnectionAuthorizationContext;
+  }): void | Promise<void>;
 }
 ```
 
@@ -1448,6 +1867,242 @@ export type DeliveryResult<TOutput = unknown> = {
       readonly error: ErrorInfo;
     }
 );
+```
+
+### src/shared/history-message.d.ts
+
+```ts
+export type HistoryMessage =
+  SystemModelMessage | UserModelMessage | AssistantModelMessage | ToolModelMessage;
+interface CustomPart {
+  type: "custom";
+  kind: `${string}.${string}`;
+  providerOptions?: ProviderOptions;
+}
+interface FilePart {
+  type: "file";
+  data: FileData | DataContent | URL | ProviderReference;
+  filename?: string;
+  mediaType: string;
+  providerOptions?: ProviderOptions;
+}
+interface ImagePart {
+  type: "image";
+  image: DataContent | URL | ProviderReference;
+  mediaType?: string;
+  providerOptions?: ProviderOptions;
+}
+interface ReasoningFilePart {
+  type: "reasoning-file";
+  data: FileDataData | FileDataUrl | DataContent | URL;
+  mediaType: string;
+  providerOptions?: ProviderOptions;
+}
+interface ReasoningPart {
+  type: "reasoning";
+  text: string;
+  providerOptions?: ProviderOptions;
+}
+interface TextPart {
+  type: "text";
+  text: string;
+  providerOptions?: ProviderOptions;
+}
+interface ToolCallPart {
+  type: "tool-call";
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  providerOptions?: ProviderOptions;
+  providerExecuted?: boolean;
+}
+interface ToolResultPart {
+  type: "tool-result";
+  toolCallId: string;
+  toolName: string;
+  output: ToolResultOutput;
+  providerOptions?: ProviderOptions;
+}
+type AssistantContent =
+  | string
+  | Array<
+      | TextPart
+      | CustomPart
+      | FilePart
+      | ReasoningPart
+      | ReasoningFilePart
+      | ToolCallPart
+      | ToolResultPart
+      | ToolApprovalRequest
+    >;
+type AssistantModelMessage = {
+  role: "assistant";
+  content: AssistantContent;
+  providerOptions?: ProviderOptions;
+};
+type DataContent = string | Uint8Array | ArrayBuffer;
+type FileData =
+  | FileDataData
+  | FileDataUrl
+  | {
+      type: "reference";
+      reference: ProviderReference;
+    }
+  | {
+      type: "text";
+      text: string;
+    };
+type FileDataData = {
+  type: "data";
+  data: DataContent;
+};
+type FileDataUrl = {
+  type: "url";
+  url: URL;
+  originalUrl?: string;
+};
+type JSONValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JSONValue[]
+  | {
+      readonly [key: string]: JSONValue | undefined;
+    };
+type ProviderOptions = Record<
+  string,
+  {
+    [key: string]: JSONValue | undefined;
+  }
+>;
+type ProviderReference = Record<string, string> & {
+  type?: never;
+};
+type SystemModelMessage = {
+  role: "system";
+  content: string;
+  providerOptions?: ProviderOptions;
+};
+type ToolApprovalRequest = {
+  type: "tool-approval-request";
+  approvalId: string;
+  toolCallId: string;
+  reason?: string;
+  isAutomatic?: boolean;
+  signature?: string;
+  inputSchemaInput?: unknown;
+};
+type ToolApprovalResponse = {
+  type: "tool-approval-response";
+  approvalId: string;
+  approved: boolean;
+  reason?: string;
+  providerExecuted?: boolean;
+};
+type ToolContent = Array<ToolResultPart | ToolApprovalResponse>;
+type ToolModelMessage = {
+  role: "tool";
+  content: ToolContent;
+  providerOptions?: ProviderOptions;
+};
+type ToolResultOutput =
+  | {
+      type: "text";
+      value: string;
+      providerOptions?: ProviderOptions;
+    }
+  | {
+      type: "json";
+      value: JSONValue;
+      providerOptions?: ProviderOptions;
+    }
+  | {
+      type: "execution-denied";
+      reason?: string;
+      providerOptions?: ProviderOptions;
+    }
+  | {
+      type: "error-text";
+      value: string;
+      providerOptions?: ProviderOptions;
+    }
+  | {
+      type: "error-json";
+      value: JSONValue;
+      providerOptions?: ProviderOptions;
+    }
+  | {
+      type: "content";
+      value: Array<
+        | {
+            type: "text";
+            text: string;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "file";
+            data: FileData;
+            mediaType: string;
+            filename?: string;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "file-data";
+            data: string;
+            mediaType: string;
+            filename?: string;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "file-url";
+            url: string;
+            mediaType?: string;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "file-id";
+            fileId: string | Record<string, string>;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "file-reference";
+            providerReference: ProviderReference;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "image-data";
+            data: string;
+            mediaType: string;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "image-url";
+            url: string;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "image-file-id";
+            fileId: string | Record<string, string>;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "image-file-reference";
+            providerReference: ProviderReference;
+            providerOptions?: ProviderOptions;
+          }
+        | {
+            type: "custom";
+            providerOptions?: ProviderOptions;
+          }
+      >;
+    };
+type UserContent = string | Array<TextPart | ImagePart | FilePart>;
+type UserModelMessage = {
+  role: "user";
+  content: UserContent;
+  providerOptions?: ProviderOptions;
+};
 ```
 
 ### src/shared/input.d.ts
@@ -1747,6 +2402,70 @@ export interface SessionStreamOptions {
   readonly signal?: AbortSignal;
   readonly streamReconnectPolicy?: StreamReconnectPolicy;
 }
+```
+
+### src/tools/auth.d.ts
+
+```ts
+export interface ToolAuthOptions {
+  readonly connection?: ConnectionAuthorizationContext;
+  readonly displayName?: string;
+  readonly authKey?: string;
+}
+export type ToolAuthDefinition = AuthorizationDefinition;
+export type ToolAuthProvider = ToolAuthDefinition;
+```
+
+### src/tools/definition.d.ts
+
+```ts
+export interface ApprovalResponder extends SessionAuthContext {
+  getToken(provider: ToolAuthProvider, options?: ToolAuthOptions): Promise<TokenResult>;
+}
+export interface ApprovedCall {
+  readonly responder: ApprovalResponder;
+}
+export interface PublicToolDefinition<
+  TInput = unknown,
+  TOutput = unknown,
+> extends ToolDefinitionBase {
+  label?: ToolLabelDefinition<TInput, TOutput>;
+  inputSchema: PublicToolInputSchema<TInput>;
+  outputSchema?: PublicToolOutputSchema<TOutput>;
+}
+export interface ToolDefinition<TInput = unknown, TOutput = unknown> extends PublicToolDefinition<
+  TInput,
+  TOutput
+> {
+  execute(input: TInput, ctx: ToolContext): Promise<TOutput> | TOutput | AsyncIterable<TOutput>;
+  endsTurn?: boolean | ((output: TOutput) => boolean | Promise<boolean>);
+  approval?: Approval<ApprovalContextInput<TInput>>;
+  toModelOutput?: (output: TOutput) => ToolModelOutput | Promise<ToolModelOutput>;
+}
+export interface ToolLabelDefinition<TInput = unknown, TOutput = unknown> {
+  start(input: Readonly<TInput>): string;
+  delta?(input: Readonly<TInput>, partial: Readonly<TOutput>): string;
+  complete?(input: Readonly<TInput>, output: Readonly<TOutput>): string;
+}
+export type PublicToolInputSchema<TInput = unknown> =
+  StandardSchemaV1<unknown, TInput> | StandardJSONSchemaV1<unknown, TInput> | JsonObject;
+export type PublicToolOutputSchema<TOutput = unknown> =
+  StandardJSONSchemaV1<unknown, TOutput> | JsonObject;
+export type ToolContext = SessionContext & {
+  readonly abortSignal: AbortSignal;
+  readonly callId: string;
+  readonly toolName: string;
+  readonly messages: readonly ModelMessage[];
+  getToken(provider: ToolAuthProvider, options?: ToolAuthOptions): Promise<TokenResult>;
+  requireAuth(provider: ToolAuthProvider, options?: ToolAuthOptions): never;
+  readonly approval?: ApprovedCall;
+};
+interface ToolDefinitionBase {
+  readonly availableInSubagents?: boolean;
+  readonly deferred?: boolean;
+  readonly description: string;
+}
+type ApprovalContextInput<TInput> = unknown extends TInput ? Record<string, unknown> : TInput;
 ```
 
 ### src/tools/model-output.d.ts

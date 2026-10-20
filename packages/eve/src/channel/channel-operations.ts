@@ -19,6 +19,8 @@ import type { SessionHistoryMessage } from "#shared/session-history.js";
 import { attachInputText, readInputText } from "#internal/input-text.js";
 
 interface BaseChannelSendOptions {
+  /** Stable delivery identity, deduplicated within this session's recent-key window. */
+  readonly idempotencyKey?: string;
   /**
    * Prior conversation added as user and assistant turns before this
    * message and its `context`. Seeds a session this send creates, or
@@ -39,6 +41,8 @@ export type ChannelSendOptions<TState = undefined> = BaseChannelSendOptions & {
 };
 
 interface BaseChannelRespondOptions<TState = undefined> {
+  /** Stable delivery identity, with the same scope and retention as `send()`. */
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly outputSchema?: JsonObject;
   readonly context?: readonly string[];

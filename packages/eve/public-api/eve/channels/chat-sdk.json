@@ -6,6 +6,7 @@
   "ChatSdkChannelEvents",
   "ChatSdkChannelState",
   "ChatSdkEventContext",
+  "ChatSdkInputAnswer",
   "ChatSdkInstrumentationMetadata",
   "ChatSdkReceiveTarget",
   "ChatSdkRespondOptions",

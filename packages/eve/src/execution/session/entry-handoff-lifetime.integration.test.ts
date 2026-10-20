@@ -17,7 +17,7 @@ import { createBundledRuntimeCompiledArtifactsSource } from "#runtime/compiled-a
 
 afterEach(() => vi.restoreAllMocks());
 
-it("keeps the replay-stable deadline across a compaction handoff", async () => {
+it("restarts the idle window across a compaction handoff", async () => {
   const output = captureConsoleOutput();
   const runtime = await createTestRuntime({ agent: { name: "workflow-entry-compaction" } });
   await runtime.run(async () => {
@@ -63,7 +63,9 @@ it("keeps the replay-stable deadline across a compaction handoff", async () => {
         successor = await waitForCommandHookOwner(inboxToken);
         expect(successor.runId).not.toBe(anchor.runId);
       });
-      expect((await readSessionTimer(successor!.runId)).deadline).toEqual(originalTimer.deadline);
+      expect((await readSessionTimer(successor!.runId)).deadline.getTime()).toBeGreaterThan(
+        originalTimer.deadline.getTime(),
+      );
       await vi.waitFor(async () =>
         expect((await world.runs.get(originalTimer.runId)).status).toBe("cancelled"),
       );

@@ -5,6 +5,7 @@ import { SESSION_CHECKPOINT_VERSION } from "#execution/session/handoff.js";
 
 function checkpoint(version: number) {
   return {
+    admittedDeliveryKeys: [],
     history: [],
     serializedContext: {},
     sessionState: { sessionId: "session-1", version: 2 },
@@ -27,6 +28,24 @@ describe("migrateSessionCheckpoint", () => {
         detail: `checkpoint version ${version} predates v27 session events; the session continues on the deployment that owns it`,
         kind: "incompatible",
       });
+    },
+  );
+
+  it.each([
+    undefined,
+    ["alice", 1],
+    [""],
+    ["x".repeat(257)],
+    Array.from({ length: 1025 }, (_, index) => `delivery-${index}`),
+  ])(
+    "refuses a current checkpoint with an invalid delivery-key window (%#)",
+    (admittedDeliveryKeys) => {
+      expect(
+        migrateSessionCheckpoint({
+          ...checkpoint(SESSION_CHECKPOINT_VERSION),
+          admittedDeliveryKeys,
+        }),
+      ).toMatchObject({ kind: "incompatible" });
     },
   );
 

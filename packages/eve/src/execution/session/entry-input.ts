@@ -16,6 +16,7 @@ export const SESSION_HANDOFF_VERSION = 3;
  * and deserialized at each `"use step"` boundary.
  */
 export interface InitialWorkflowEntryInput {
+  readonly idempotencyKey?: string;
   readonly continuationConflictCommand?: Extract<SessionCommand, { readonly kind: "send" }>;
   readonly input: RunInput["input"];
   readonly kind: "initial";
@@ -46,8 +47,6 @@ export type SessionHandoffStart =
        * successor parks until the next input arrives.
        */
       readonly delivery?: DeliverHookPayload;
-      /** Compaction does not extend the session's lifetime. */
-      readonly sessionTimeoutDeadline?: Date;
     };
 
 /** A successor owner started by a previous owner during a handoff. */

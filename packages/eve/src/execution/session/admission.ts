@@ -1,4 +1,6 @@
 import { getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
+import type { SessionStateCursor } from "#execution/session/state-cursor.js";
+import { settleDuplicateDeliveryStep } from "#execution/session/settle-duplicate-delivery-step.js";
 
 import type { RuntimeActionResultHookPayload, SessionControlIdentity } from "#channel/types.js";
 import type {
@@ -31,6 +33,7 @@ export async function admitSessionInboxPayload(
   value: SessionInboxPayload,
   input: {
     readonly queue: SessionInputQueue;
+    readonly cursor: SessionStateCursor;
   },
 ): Promise<SessionAdmission> {
   if (value.kind === "session-failure") throw new Error(value.error);
@@ -56,8 +59,16 @@ export async function admitSessionInboxPayload(
   }
 
   switch (command.kind) {
-    case "deliver":
-      return { admission: input.queue.enqueueDelivery(command), kind: "delivery" };
+    case "deliver": {
+      const admission = input.queue.enqueueDelivery(command);
+      if (admission === undefined) {
+        await input.cursor.advance((state) =>
+          settleDuplicateDeliveryStep({ ...state, delivery: command }),
+        );
+        return { kind: "consumed" };
+      }
+      return { admission, kind: "delivery" };
+    }
     case "clear":
     case "compact":
       input.queue.enqueueControl(command.kind, controlOrigin(command));

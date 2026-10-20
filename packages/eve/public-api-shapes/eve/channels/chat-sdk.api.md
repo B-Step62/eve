@@ -9,6 +9,7 @@
 - ChatSdkChannelEvents: src/public/channels/chat-sdk/chatSdkChannel.d.ts#ChatSdkChannelEvents
 - ChatSdkChannelState: src/public/channels/chat-sdk/chatSdkChannel.d.ts#ChatSdkChannelState
 - ChatSdkEventContext: src/public/channels/chat-sdk/chatSdkChannel.d.ts#ChatSdkEventContext
+- ChatSdkInputAnswer: src/public/channels/chat-sdk/chatSdkChannel.d.ts#ChatSdkInputAnswer
 - ChatSdkInstrumentationMetadata: src/public/channels/chat-sdk/chatSdkChannel.d.ts#ChatSdkInstrumentationMetadata
 - ChatSdkReceiveTarget: src/public/channels/chat-sdk/chatSdkChannel.d.ts#ChatSdkReceiveTarget
 - ChatSdkRespondOptions: src/public/channels/chat-sdk/chatSdkChannel.d.ts#ChatSdkRespondOptions
@@ -118,12 +119,14 @@ export type ChannelSendOptions<TState = undefined> = BaseChannelSendOptions & {
   readonly state?: Partial<TState>;
 };
 interface BaseChannelRespondOptions<TState = undefined> {
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly outputSchema?: JsonObject;
   readonly context?: readonly string[];
   readonly state?: Partial<TState>;
 }
 interface BaseChannelSendOptions {
+  readonly idempotencyKey?: string;
   readonly history?: readonly SessionHistoryMessage[];
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
@@ -377,6 +380,7 @@ export type SessionSendOptions = SessionDeliveryOptions & {
   readonly turnPolicy?: TurnPolicy;
 };
 interface SessionDeliveryOptions {
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly outputSchema?: JsonObject;
@@ -1208,9 +1212,14 @@ export interface ChatSdkChannelState extends Record<string, unknown>, PromptQueu
   usersByPrincipal?: Record<string, string | null>;
   pendingInputCards?: Record<string, ChatSdkPendingInputCard>;
   streamPartId?: string | null;
+  latestMessageId?: string;
 }
 export interface ChatSdkEventContext<TAdapters extends ChatSdkAdapters = ChatSdkAdapters>
   extends ChatSdkChannelContext<TAdapters>, ChannelContinuationOps {}
+export interface ChatSdkInputAnswer {
+  readonly messageId: string;
+  readonly optionId: string;
+}
 export interface ChatSdkInstrumentationMetadata extends Record<string, unknown> {
   readonly adapterName: string | null;
   readonly channelId: string | null;
@@ -1229,6 +1238,7 @@ export interface ChatSdkReceiveTarget {
 export interface ChatSdkRespondOptions
   extends ChatSdkThreadOptions, Omit<ChannelRespondOptions, "auth" | "state"> {}
 export interface ChatSdkSendOptions extends ChatSdkThreadOptions, Omit<ChannelSendOptions, "auth"> {
+  readonly inputAnswer?: ChatSdkInputAnswer;
   readonly turnPolicy?: TurnPolicy;
 }
 export type ChatSdkChannelEvents<TAdapters extends ChatSdkAdapters = ChatSdkAdapters> =

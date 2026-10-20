@@ -26,11 +26,7 @@ import { settleCancelledTurnStep } from "#execution/settle-cancelled-turn-step.j
 import { finalizeSession, type SessionTerminalOutcome } from "#execution/session/finalization.js";
 import { type SessionInboxHandle } from "#execution/session-inbox/inbox.js";
 import type { SessionTimeoutControl } from "#execution/session/timeout-control.js";
-import {
-  type CompactionHandoff,
-  SessionHandoff,
-  sessionAnchorToken,
-} from "#execution/session/handoff.js";
+import { SessionHandoff, sessionAnchorToken } from "#execution/session/handoff.js";
 import { signalSessionAnchorStep } from "#execution/session/handoff-steps.js";
 import type { WorkflowEntryResult } from "#execution/session/entry-input.js";
 
@@ -64,6 +60,7 @@ export type SessionStart =
   | { readonly kind: "parked" };
 
 export interface SessionBoot {
+  readonly admittedDeliveryKeys: readonly string[];
   readonly anchor: SessionAnchor;
   readonly caller: TurnCaller | undefined;
   readonly capabilities?: SessionCapabilities;
@@ -76,7 +73,6 @@ export interface SessionBoot {
   readonly sessionId: string;
   readonly sessionState: DurableSessionState;
   readonly sessionTimeoutControl?: SessionTimeoutControl;
-  readonly sessionTimeoutDeadline?: Date;
   readonly sessionTimeoutMs: number | false;
   readonly sessionWritable: WritableStream<Uint8Array>;
 }
@@ -223,7 +219,7 @@ async function runSessionLoop(
   },
 ): Promise<SessionLoopOutcome> {
   const { cursor, handoff, inbox, progress } = deps;
-  const queue = new SessionInputQueue();
+  const queue = new SessionInputQueue(boot.admittedDeliveryKeys);
   const execution = new SessionExecution({
     capabilities: boot.capabilities,
     cursor,
@@ -261,6 +257,11 @@ async function runSessionLoop(
         }
         continue;
       }
+      if (next.kind === "expired" && sessionTimeout !== undefined) {
+        // Input accepted behind the timer's signal would be lost if the session ended now.
+        if (queue.pendingCount > 0 || inbox.hasPending()) sessionTimeout.recordActivity();
+        if ((await sessionTimeout.handleTimerElapsed()) === "extended") continue;
+      }
       return next;
     }
   };
@@ -282,21 +283,21 @@ async function runSessionLoop(
         : undefined;
     const outcome = await execution.runTurn(payload, { caller, control });
     progress.turnId = undefined;
+    sessionTimeout?.recordActivity();
     if (outcome.caller !== undefined) progress.caller = outcome.caller;
     if (outcome.compacted === true) compactionHandoffDue = true;
     return outcome;
   };
   const transferState = () => ({
+    admittedDeliveryKeys: queue.admittedDeliveryKeys,
     history: cursor.history,
     serializedContext: cursor.serializedContext,
     sessionState: cursor.sessionState,
   });
-  const dueCompactionHandoff = (): CompactionHandoff | undefined =>
+  const compactionHandoffReady = (): boolean =>
     compactionHandoffDue &&
     progress.caller === undefined &&
-    workingTasks(sessionTaskTable(cursor)).length === 0
-      ? { sessionTimeoutDeadline: boot.sessionTimeoutDeadline }
-      : undefined;
+    workingTasks(sessionTaskTable(cursor)).length === 0;
   /**
    * Hands a session that compacted to a fresh run on this deployment while
    * nothing is waiting. Input that is already waiting runs here first, and
@@ -304,9 +305,8 @@ async function runSessionLoop(
    * move has started runs on the successor.
    */
   const tryCompactionHandoff = async (): Promise<SessionLoopOutcome | undefined> => {
-    const compaction = dueCompactionHandoff();
-    if (compaction === undefined || queue.pendingCount > 0 || inbox.hasPending()) return undefined;
-    const transfer = await handoff.tryCompactionTransfer(transferState(), compaction);
+    if (!compactionHandoffReady() || queue.pendingCount > 0 || inbox.hasPending()) return undefined;
+    const transfer = await handoff.tryCompactionTransfer(transferState());
     return transfer.kind === "transferred" ? transfer : undefined;
   };
   const runDeliveredTurn = async (
@@ -425,6 +425,7 @@ async function runSessionLoop(
             false,
             next.origin === undefined ? undefined : controlDeliveryOf(next.origin),
           );
+          sessionTimeout?.recordActivity();
           // Cancellation consumes any outstanding caller; do not report the prior turn.
           action = { ...action, settled: undefined };
           continue;

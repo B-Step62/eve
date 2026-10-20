@@ -4,6 +4,7 @@ import type { Delivery } from "#shared/delivery.js";
 import { commandDelivery } from "#channel/delivery.js";
 import type { SessionStreamEvent } from "#protocol/session-event.js";
 import type { ContextAccessor } from "#context/key.js";
+import { validateDeliveryIdempotencyKey } from "#channel/delivery-idempotency.js";
 import {
   createChannelDeliveryMetadata,
   type ChannelDeliverySource,
@@ -66,6 +67,8 @@ export function internalSession(session: Session): InternalSession {
 }
 
 interface SessionDeliveryOptions {
+  /** Stable delivery identity, deduplicated within this session's recent-key window. */
+  readonly idempotencyKey?: string;
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly outputSchema?: JsonObject;
@@ -95,6 +98,7 @@ export function createSession(
   return {
     id,
     async send(message, options) {
+      validateDeliveryIdempotencyKey(options.idempotencyKey);
       const delivery = createDelivery(metadata);
       const caller = sessionCallbackToTurnCaller(
         (options as InternalSessionDeliveryOptions).callback,
@@ -110,6 +114,7 @@ export function createSession(
       if (history !== undefined) payload.history = history;
       if (options.outputSchema !== undefined) payload.outputSchema = options.outputSchema;
       const commandWithoutCaller = {
+        idempotencyKey: options.idempotencyKey,
         auth: options.auth,
         delivery,
         kind: "send" as const,
@@ -125,6 +130,7 @@ export function createSession(
       return commandDelivery(runtime, result, delivery.deliveryId);
     },
     async respond(answers, options) {
+      validateDeliveryIdempotencyKey(options.idempotencyKey);
       if (answers.length === 0) {
         throw new Error("respond() requires at least one answer.");
       }
@@ -141,6 +147,7 @@ export function createSession(
       if (options.context !== undefined) payload.context = options.context;
       if (options.outputSchema !== undefined) payload.outputSchema = options.outputSchema;
       const commandWithoutCaller = {
+        idempotencyKey: options.idempotencyKey,
         auth: options.auth,
         delivery,
         kind: "send" as const,
