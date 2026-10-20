@@ -326,6 +326,20 @@ describe("session usage limit", () => {
       expect(getSessionUsageWindow(counted)).toEqual(input(1_000_000));
       expect(getSessionUsage(counted)).toEqual(input(45_000_005));
     });
+
+    it("passes a child's pre-window spend up whole after the session reported new-window spend", () => {
+      // A middle session renews, reports 3 tokens of its new window, then counts a child turn of
+      // 46 tokens, 45 of them spent before the child's window.
+      const renewed = resetSessionUsageWindow(spend(makeSession(), 10));
+      const reported = takeSessionUsageDelta(spend(renewed, 3));
+      expect(reported.beforeWindow).toEqual(input(10));
+      const counted = addUsageBeforeWindow(spend(reported.session, 46), { inputTokens: 45 });
+
+      const report = takeSessionUsageDelta(counted);
+
+      expect(report.delta).toEqual(input(46));
+      expect(report.beforeWindow).toEqual(input(45));
+    });
   });
 
   it("reads zero session usage before token state exists", () => {

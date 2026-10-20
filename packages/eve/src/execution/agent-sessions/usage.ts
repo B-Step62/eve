@@ -19,40 +19,79 @@ import type { TokenUsage } from "#shared/token-usage.js";
 // usage already includes what its own children spent, so a chain of agents
 // adds up at every level. A turn's usage can carry the part spent before the
 // child's current usage window; the run tallies it apart, and the calling
-// session keeps it out of its own window.
+// session keeps it out of its own window. When a renewal reaches the run,
+// whatever it hasn't carried to the calling session yet was spent before the
+// new window too.
 
 /** What a run's `ctx.agent` sessions have spent, turn by turn. */
 export interface RunUsageTally {
   /** Adds one ended turn's usage, and the part of it spent before the child's window. */
   record(turnUsage: TokenUsage, beforeWindow?: TokenUsage): void;
-  /** The running total, or `undefined` before any turn ended. */
-  total(): TokenUsage | undefined;
-  /** The running total spent before the children's windows, or `undefined` while there is none. */
-  beforeWindow(): TokenUsage | undefined;
+  /** A renewal started a new window: everything not carried yet was spent before it. */
+  renew(): void;
+  /** Whether a turn ended since the last {@link carry}. */
+  hasUncarried(): boolean;
+  /** The running totals for a message to the calling session, now carried; `undefined` before any turn ended. */
+  carry(): RunUsage | undefined;
 }
 
 /** `onRecord` runs after each recorded turn, so the run can send a total no reply will carry. */
 export function createRunUsageTally(onRecord?: () => void): RunUsageTally {
-  let spent: TurnUsageState | undefined;
-  let spentBeforeWindow: TurnUsageState | undefined;
+  // Carried totals, and what was spent since: all of it, and the part before the window.
+  let carried: TurnUsageState | undefined;
+  let carriedBeforeWindow: TurnUsageState | undefined;
+  let uncarried: TurnUsageState | undefined;
+  let uncarriedBeforeWindow: TurnUsageState | undefined;
   return {
     record(turnUsage, beforeWindow) {
-      spent = accumulateSessionUsage({ previous: spent, usage: turnUsage });
-      if (beforeWindow !== undefined) {
-        spentBeforeWindow = accumulateSessionUsage({
-          previous: spentBeforeWindow,
+      if (!isZeroUsage(turnUsage)) {
+        uncarried = accumulateSessionUsage({ previous: uncarried, usage: turnUsage });
+      }
+      if (beforeWindow !== undefined && !isZeroUsage(beforeWindow)) {
+        uncarriedBeforeWindow = accumulateSessionUsage({
+          previous: uncarriedBeforeWindow,
           usage: beforeWindow,
         });
       }
       onRecord?.();
     },
-    total() {
-      return spent === undefined ? undefined : toUsage(spent.session);
+    renew() {
+      uncarriedBeforeWindow = uncarried;
     },
-    beforeWindow() {
-      return spentBeforeWindow === undefined ? undefined : toUsage(spentBeforeWindow.session);
+    hasUncarried() {
+      return uncarried !== undefined;
+    },
+    carry() {
+      if (uncarried !== undefined) {
+        carried = accumulateSessionUsage({ previous: carried, usage: toUsage(uncarried.session) });
+      }
+      if (uncarriedBeforeWindow !== undefined) {
+        carriedBeforeWindow = accumulateSessionUsage({
+          previous: carriedBeforeWindow,
+          usage: toUsage(uncarriedBeforeWindow.session),
+        });
+      }
+      uncarried = undefined;
+      uncarriedBeforeWindow = undefined;
+      if (carried === undefined) return undefined;
+      return {
+        usage: toUsage(carried.session),
+        ...(carriedBeforeWindow !== undefined && {
+          beforeWindow: toUsage(carriedBeforeWindow.session),
+        }),
+      };
     },
   };
+}
+
+function isZeroUsage(usage: TokenUsage): boolean {
+  return (
+    usage.inputTokens === 0 &&
+    usage.outputTokens === 0 &&
+    usage.cacheReadTokens === 0 &&
+    usage.cacheWriteTokens === 0 &&
+    !usage.costUsd
+  );
 }
 
 /** A run's running totals: all it spent, and the part spent before its children's windows. */

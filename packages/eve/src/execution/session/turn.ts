@@ -1,4 +1,6 @@
-import { renewSessionUsageWindowStep } from "#execution/renew-window-step.js";
+import { renewDescendantWindowsStep } from "#execution/renew-window-step.js";
+import { readDurableSession } from "#execution/durable-session-read.js";
+import { latestSessionUsageRenewal } from "#harness/turn-tag-state.js";
 import { sleep } from "#compiled/@workflow/core/index.js";
 
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
@@ -185,12 +187,9 @@ export class SessionExecution {
 
     while (true) {
       const { cursor } = this.input;
-      // A renewal admitted at the boundary or during a wait applies before the step's budget check.
-      for (const renewalId of turn.takeRenewals()) {
-        await cursor.advance((state) => renewSessionUsageWindowStep({ ...state, renewalId }));
-      }
       const caller = bindCaller;
       bindCaller = undefined;
+      const renewedBefore = latestSessionUsageRenewal(readDurableSession(cursor.sessionState));
       const result = await cursor.advanceWithHistory((state) =>
         turnStep({
           ...state,
@@ -201,6 +200,14 @@ export class SessionExecution {
         }),
       );
       if (result.compacted === true) turn.compacted = true;
+      // Approving this session's own prompt renewed its window in the step; its runs renew too.
+      const renewedInStep = latestSessionUsageRenewal(readDurableSession(cursor.sessionState));
+      if (renewedInStep !== undefined && renewedInStep !== renewedBefore) {
+        await renewDescendantWindowsStep({
+          renewalId: renewedInStep,
+          sessionState: cursor.sessionState,
+        });
+      }
       const pendingCallIds =
         result.action === "park" ? result.pendingCoordinationCallIds : undefined;
       const turnCompleted = result.action === "park" && result.settled !== undefined;

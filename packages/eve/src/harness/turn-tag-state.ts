@@ -28,6 +28,8 @@ const REPORTED_SESSION_USAGE_STATE_KEY = "eve.harness.reportedSessionUsage";
 const SESSION_USAGE_WINDOW_START_KEY = "eve.harness.sessionUsageWindowStart";
 const SESSION_USAGE_WINDOW_INDEX_KEY = "eve.harness.sessionUsageWindowIndex";
 const SESSION_USAGE_RENEWALS_KEY = "eve.harness.sessionUsageRenewals";
+/** Usage not yet reported to the caller that was spent before the current window. */
+const UNREPORTED_BEFORE_WINDOW_KEY = "eve.harness.unreportedUsageBeforeWindow";
 /** Renewal ids remembered for dedupe; one approval reaches a session by at most a few paths. */
 const MAX_REMEMBERED_RENEWALS = 16;
 
@@ -96,14 +98,19 @@ export function getSessionUsageWindow(session: Pick<HarnessSession, "state">): T
   return toUsage(subtractTokenUsage(getSessionTokenUsage(session), getWindowStart(session)));
 }
 
-/** Starts a new usage window at the session's current totals, after an approved continuation. */
+/**
+ * Starts a new usage window at the session's current totals, after an approved
+ * continuation. Whatever the caller hasn't been told yet was spent before it.
+ */
 export function resetSessionUsageWindow<T extends Pick<HarnessSession, "state">>(session: T): T {
+  const totals = getSessionTokenUsage(session);
   return {
     ...session,
     state: {
       ...session.state,
       [SESSION_USAGE_WINDOW_INDEX_KEY]: getSessionUsageWindowIndex(session) + 1,
-      [SESSION_USAGE_WINDOW_START_KEY]: getSessionTokenUsage(session),
+      [SESSION_USAGE_WINDOW_START_KEY]: totals,
+      [UNREPORTED_BEFORE_WINDOW_KEY]: subtractTokenUsage(totals, getReported(session)),
     },
   };
 }
@@ -117,25 +124,35 @@ export function getSessionUsageWindowIndex(session: Pick<HarnessSession, "state"
  * Starts a new usage window for an approval the session hasn't applied yet.
  * One approval renews every session in the tree and can reach a session more
  * than once, so the approved request id names the renewal and a repeat is a
- * no-op.
+ * no-op. `covers` names the session-limit prompts the renewal makes obsolete:
+ * they count as applied, so answering one later renews nothing.
  */
 export function renewSessionUsageWindow<T extends Pick<HarnessSession, "state">>(
   session: T,
   renewalId: string,
+  covers: readonly string[] = [],
 ): { readonly renewed: boolean; readonly session: T } {
   const seen = getSessionUsageRenewals(session);
   if (seen.includes(renewalId)) return { renewed: false, session };
   const reset = resetSessionUsageWindow(session);
+  const applied = [...seen, ...covers.filter((id) => id !== renewalId), renewalId];
   return {
     renewed: true,
     session: {
       ...reset,
       state: {
         ...reset.state,
-        [SESSION_USAGE_RENEWALS_KEY]: [...seen, renewalId].slice(-MAX_REMEMBERED_RENEWALS),
+        [SESSION_USAGE_RENEWALS_KEY]: applied.slice(-MAX_REMEMBERED_RENEWALS),
       },
     },
   };
+}
+
+/** The renewal the session applied last. */
+export function latestSessionUsageRenewal(
+  session: Pick<HarnessSession, "state">,
+): string | undefined {
+  return getSessionUsageRenewals(session).at(-1);
 }
 
 function getSessionUsageRenewals(session: Pick<HarnessSession, "state">): readonly string[] {
@@ -150,23 +167,37 @@ function getWindowStart(session: Pick<HarnessSession, "state">): TokenUsageTotal
   );
 }
 
+function getReported(session: Pick<HarnessSession, "state">): TokenUsageTotals {
+  return (
+    (session.state?.[REPORTED_SESSION_USAGE_STATE_KEY] as TokenUsageTotals | undefined) ??
+    ZERO_TOKEN_USAGE
+  );
+}
+
+function getUnreportedBeforeWindow(session: Pick<HarnessSession, "state">): TokenUsageTotals {
+  return (
+    (session.state?.[UNREPORTED_BEFORE_WINDOW_KEY] as TokenUsageTotals | undefined) ??
+    ZERO_TOKEN_USAGE
+  );
+}
+
 /**
  * Moves the window start forward by delegated usage that a child spent before
  * its own window started. Every session in a tree starts a new window on the
- * same approval, so that spend belongs before this session's window too.
+ * same approval, so that spend belongs before this session's window too, and
+ * before its caller's.
  */
 export function addUsageBeforeWindow<T extends Pick<HarnessSession, "state">>(
   session: T,
   usage: TokenUsageDelta,
 ): T {
+  const added = toTokenUsageDelta(usage);
   return {
     ...session,
     state: {
       ...session.state,
-      [SESSION_USAGE_WINDOW_START_KEY]: addTokenUsage(
-        getWindowStart(session),
-        toTokenUsageDelta(usage),
-      ),
+      [SESSION_USAGE_WINDOW_START_KEY]: addTokenUsage(getWindowStart(session), added),
+      [UNREPORTED_BEFORE_WINDOW_KEY]: addTokenUsage(getUnreportedBeforeWindow(session), added),
     },
   };
 }
@@ -194,39 +225,26 @@ export function takeSessionUsageDelta<T extends Pick<HarnessSession, "state">>(
   readonly session: T;
 } {
   const totals = getSessionTokenUsage(session);
-  const reported =
-    (session.state?.[REPORTED_SESSION_USAGE_STATE_KEY] as TokenUsageTotals | undefined) ??
-    ZERO_TOKEN_USAGE;
-  const beforeWindow = positivePart(subtractTokenUsage(getWindowStart(session), reported));
+  const beforeWindow = getUnreportedBeforeWindow(session);
+  const { [UNREPORTED_BEFORE_WINDOW_KEY]: _taken, ...state } = session.state ?? {};
   return {
-    ...(beforeWindow !== undefined && { beforeWindow: toUsage(beforeWindow) }),
-    delta: toUsage(subtractTokenUsage(totals, reported)),
+    ...(!isZeroTokenUsage(beforeWindow) && { beforeWindow: toUsage(beforeWindow) }),
+    delta: toUsage(subtractTokenUsage(totals, getReported(session))),
     session: {
       ...session,
-      state: {
-        ...session.state,
-        [REPORTED_SESSION_USAGE_STATE_KEY]: totals,
-      },
+      state: { ...state, [REPORTED_SESSION_USAGE_STATE_KEY]: totals },
     },
   };
 }
 
-function positivePart(usage: TokenUsageTotals): TokenUsageTotals | undefined {
-  const part: TokenUsageTotals = {
-    cacheReadTokens: Math.max(0, usage.cacheReadTokens),
-    cacheWriteTokens: Math.max(0, usage.cacheWriteTokens),
-    costUsd: Math.max(0, usage.costUsd),
-    inputTokens: Math.max(0, usage.inputTokens),
-    outputTokens: Math.max(0, usage.outputTokens),
-    sawCost: usage.sawCost,
-  };
-  const empty =
-    part.cacheReadTokens === 0 &&
-    part.cacheWriteTokens === 0 &&
-    part.costUsd === 0 &&
-    part.inputTokens === 0 &&
-    part.outputTokens === 0;
-  return empty ? undefined : part;
+function isZeroTokenUsage(usage: TokenUsageTotals): boolean {
+  return (
+    usage.cacheReadTokens === 0 &&
+    usage.cacheWriteTokens === 0 &&
+    usage.costUsd === 0 &&
+    usage.inputTokens === 0 &&
+    usage.outputTokens === 0
+  );
 }
 
 /** Writes per-turn token state onto a new copy of the session. */

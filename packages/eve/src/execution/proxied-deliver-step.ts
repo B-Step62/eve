@@ -3,16 +3,11 @@ import type { SessionInboxAddress } from "#execution/session-inbox/address.js";
 import { hasDelegatedSessionContext } from "#execution/delegated-session-context.js";
 import { buildAdapterContext } from "#channel/adapter-context.js";
 import type { DeliverHookPayload, DeliverPayload } from "#channel/types.js";
-import { AuthKey, TurnDeliveryIdsKey } from "#context/keys.js";
+import { AuthKey, ContinuationTokenKey, TurnDeliveryIdsKey } from "#context/keys.js";
 import { setChannelContext } from "#execution/channel-context.js";
 import { coalesceDeliverPayloads } from "#execution/deliver-payloads.js";
-import {
-  type DurableSessionState,
-  readDurableSession,
-  replaceDurableSessionSnapshot,
-} from "#execution/durable-session-store.js";
-import { renewSessionUsageWindow } from "#harness/turn-tag-state.js";
-import { renewDescendantWindows } from "#execution/renew-descendant-windows.js";
+import { type DurableSessionState, readDurableSession } from "#execution/durable-session-store.js";
+import { sessionCommandHookToken } from "#execution/session-inbox/address.js";
 import {
   publishSessionEvents,
   type PublishedSessionEvents,
@@ -241,20 +236,14 @@ async function routeProxiedDeliver(
     parentAction === undefined &&
     [...requests.keys()].some((id) => !retired.has(id) && !forwarded.has(id));
 
-  // An approval anywhere in the tree starts a new window in every session: here, and in the
-  // sessions this session's running descendants opened.
+  // An approval anywhere in the tree starts a new window in every session. This session takes
+  // it as any renewal: through its inbox, so a turn waiting on its own prompt wakes to it.
   if (renewalId !== undefined && !published.cancelled) {
-    const renewed = renewSessionUsageWindow(readDurableSession(published.sessionState), renewalId);
-    if (renewed.renewed) {
-      published = {
-        ...published,
-        sessionState: replaceDurableSessionSnapshot({
-          session: renewed.session,
-          state: published.sessionState,
-        }),
-      };
-      await renewDescendantWindows(renewed.session, renewalId);
-    }
+    const ctx = await deserializeContext(published.serializedContext);
+    await resumeSessionInbox(
+      ctx.get(ContinuationTokenKey) ?? sessionCommandHookToken(durableSession.sessionId),
+      { kind: "renew-window", renewalId },
+    );
   }
   const context = await commitSessionStep(
     { ...published, sessionWritable: input.sessionWritable },

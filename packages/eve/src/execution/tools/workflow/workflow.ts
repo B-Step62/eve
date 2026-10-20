@@ -140,14 +140,11 @@ export async function workflowToolRunWorkflow(input: WorkflowToolRunInput): Prom
     };
   }
   if (outcome !== undefined) {
-    const usage = started.usage.total();
-    const beforeWindow = started.usage.beforeWindow();
     await owner.handleMessage({
       from: createWorkflowBodyRef(input),
       kind: "outcome",
       result: outcome,
-      ...(usage !== undefined && { usage }),
-      ...(beforeWindow !== undefined && { beforeWindow }),
+      ...started.usage.carry(),
     });
   }
 }
@@ -176,6 +173,7 @@ function applyControlMessage(started: StartedWorkflowBody, message: unknown): vo
     return;
   }
   if (message.kind === "renew-window") {
+    started.usage.renew();
     started.renew(message.renewalId);
     return;
   }

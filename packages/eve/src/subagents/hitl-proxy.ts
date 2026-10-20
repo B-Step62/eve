@@ -12,7 +12,7 @@ import type { InputResolution } from "#protocol/message.js";
 import type { InputResponse } from "#shared/input.js";
 import { resolveTextToResponse } from "#channel/resolve-text.js";
 import { inputTextKey, readAnswerText } from "#internal/input-text.js";
-import { SESSION_LIMIT_STOP_OPTION_ID } from "#harness/hitl/budget-request.js";
+import { sessionLimitDecision } from "#harness/hitl/budget-request.js";
 
 // ---------------------------------------------------------------------------
 // Downward deliver routing
@@ -148,9 +148,9 @@ export function routeDeliverPayload(input: {
     routedRequestIds.add(response.requestId);
 
     if (route.kind === "session-limit") {
-      if (response.optionId === SESSION_LIMIT_STOP_OPTION_ID)
-        parentAction = { kind: "cancel-turn" };
-      else renewalId ??= response.requestId;
+      const granted = sessionLimitDecision(response);
+      if (granted === false) parentAction = { kind: "cancel-turn" };
+      else if (granted === true) renewalId ??= response.requestId;
     }
 
     const bucket = bucketFor(route);

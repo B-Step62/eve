@@ -23,6 +23,7 @@ import {
 } from "#execution/session-workflow-tool-run.js";
 import type { AppliedRunMessage } from "#execution/tools/workflow/apply-run-messages-step.js";
 import { readDurableSession } from "#execution/durable-session-read.js";
+import { applySessionUsageRenewal } from "#execution/session/session-usage-renewal.js";
 import { activeTurnId, storedProjection, turnPosition } from "#harness/session-machine/view.js";
 import { coalesceDeliveries } from "#harness/messages.js";
 import { TurnCancelledError } from "#harness/turn-cancellation.js";
@@ -35,7 +36,7 @@ export type RuntimeEvent =
   | { readonly kind: "steering" }
   /** An `eve__task_wait` call's timeout passed. */
   | { readonly kind: "timeout"; readonly callId: string }
-  /** A delivery or sign-in callback was admitted; a held request may be answered. */
+  /** A delivery, sign-in callback, or renewal was admitted; a held request may be answered. */
   | { readonly kind: "input" }
   | "cancelled";
 
@@ -54,7 +55,6 @@ export class ActiveTurn {
   private readonly routedToChildren = new Set<number>();
   private readonly mappedForHeldRequest = new Set<number>();
   private readonly runtimeResults: RuntimeEvent[] = [];
-  private readonly renewals: string[] = [];
   private readonly controller: AbortController;
   private readonly expectedTurnId: string;
   private readonly input: SessionExecutionInput;
@@ -268,7 +268,11 @@ export class ActiveTurn {
     return payload.turnId === undefined || payload.turnId === this.expectedTurnId;
   }
 
-  /** Admits one payload; returns whether it was a delivery or sign-in callback. */
+  /**
+   * Admits one payload; returns whether it was a delivery, sign-in callback, or
+   * renewal. A renewal applies now, between steps or during a wait, so the
+   * session's own runs hear of it while this turn still waits on them.
+   */
   private async admit(value: SessionInboxPayload): Promise<boolean> {
     const admitted = await admitSessionInboxPayload(value, this.input);
     switch (admitted.kind) {
@@ -287,9 +291,12 @@ export class ActiveTurn {
       case "cancel":
         if (this.cancelsThisTurn(value)) this.abort();
         return false;
-      case "renew-window":
-        this.renewals.push(admitted.renewalId);
-        return false;
+      case "renew-window": {
+        const approval = await applySessionUsageRenewal(this.input, admitted.renewalId);
+        if (approval === undefined) return false;
+        this.admitted.add(approval.sequence);
+        return true;
+      }
       case "consumed":
         return value.kind === "authorization-callback";
     }
@@ -327,11 +334,6 @@ export class ActiveTurn {
       if (isSteeringMessage(routed.remainder, this.identity)) steered = true;
     }
     return steered;
-  }
-
-  /** Renewals admitted since the last take; the turn applies them before its next model step. */
-  takeRenewals(): string[] {
-    return this.renewals.splice(0, this.renewals.length);
   }
 
   /** Stops the turn, as `session.cancel()` does; a hook's `ctx.cancel()` uses it too. */

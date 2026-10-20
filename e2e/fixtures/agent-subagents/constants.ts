@@ -35,3 +35,5 @@ export const LEASE_DIRECTIVE = "LEASE-FANOUT";
 export const LEASE_STEP_INPUT_TOKENS = 15_000_000;
 /** How long worker b's second page takes: longer than worker a's prompt takes to reach the eval and be approved. */
 export const LEASE_SLOW_PAGE_MS = 10_000;
+/** The same fan-out with no slow page, so both workers ask and wait on their prompts. */
+export const LEASE_PARKED_DIRECTIVE = "LEASE-PARKED";

@@ -51,7 +51,15 @@ vi.mock("#execution/tools/workflow/body.js", () => ({
       },
     },
     outcome: mocks.runBody(input),
-    usage: { beforeWindow: () => undefined, record: () => {}, total: mocks.usageTotal },
+    usage: {
+      carry: () => {
+        const usage = mocks.usageTotal();
+        return usage === undefined ? undefined : { usage };
+      },
+      hasUncarried: () => true,
+      record: () => {},
+      renew: () => {},
+    },
   }),
 }));
 vi.mock("#execution/tools/workflow/owner.js", () => ({

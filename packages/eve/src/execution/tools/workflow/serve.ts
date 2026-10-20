@@ -32,7 +32,6 @@ import type {
 } from "#execution/tools/workflow/messages.js";
 import type { WorkflowToolRunInbox } from "#execution/tools/workflow/owner.js";
 import type { JsonValue } from "#shared/json.js";
-import type { TokenUsage } from "#shared/token-usage.js";
 import type { ToolContext } from "#tools/definition.js";
 import type {
   AgentSession,
@@ -101,8 +100,6 @@ class WorkflowServeCalls implements WorkflowBodyControl {
    * stopped, sends it on its own, since no reply would carry it.
    */
   readonly usage: RunUsageTally = createRunUsageTally(() => this.sendUncarriedUsage());
-  /** The latest total a message carried, so a turn that spent nothing sends none. */
-  private carriedUsage: TokenUsage | undefined;
   private readonly toolName: string;
   private readonly seenCallIds: Set<string>;
   private firstReceived = false;
@@ -231,16 +228,10 @@ class WorkflowServeCalls implements WorkflowBodyControl {
     if (this.waiting.length > 0 || this.endedBy !== undefined) return;
     const { from } = this.latest;
     this.replies = this.replies.then(async () => {
-      const usage = this.usage.total();
-      if (usage === undefined || isSameUsage(usage, this.carriedUsage)) return;
-      this.carriedUsage = usage;
-      const beforeWindow = this.usage.beforeWindow();
-      await this.owner.send({
-        from,
-        kind: "usage",
-        usage,
-        ...(beforeWindow !== undefined && { beforeWindow }),
-      });
+      if (!this.usage.hasUncarried()) return;
+      const carried = this.usage.carry();
+      if (carried === undefined) return;
+      await this.owner.send({ from, kind: "usage", ...carried });
     });
   }
 
@@ -327,29 +318,14 @@ class WorkflowServeCalls implements WorkflowBodyControl {
     const latest = calls.at(-1);
     if (latest === undefined) return;
     const callIds = calls.map((served) => served.from.callId);
-    const usage = this.usage.total();
-    const beforeWindow = this.usage.beforeWindow();
-    this.carriedUsage = usage;
     await this.owner.send({
       callIds,
       from: latest.from,
       kind: "reply",
       output,
-      ...(usage !== undefined && { usage }),
-      ...(beforeWindow !== undefined && { beforeWindow }),
+      ...this.usage.carry(),
     });
   }
-}
-
-function isSameUsage(total: TokenUsage, carried: TokenUsage | undefined): boolean {
-  return (
-    carried !== undefined &&
-    total.inputTokens === carried.inputTokens &&
-    total.outputTokens === carried.outputTokens &&
-    total.cacheReadTokens === carried.cacheReadTokens &&
-    total.cacheWriteTokens === carried.cacheWriteTokens &&
-    total.costUsd === carried.costUsd
-  );
 }
 
 /** Starts a `serve` body, which runs once for its task and serves every call to it. */
