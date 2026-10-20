@@ -41,7 +41,7 @@ import {
 } from "#instrumentation/prepare-trace-context.js";
 import type { TraceContext } from "#protocol/message.js";
 import type { OtelHarnessSettings, RuntimeContextResolver } from "#tracing/eve/otel-declaration.js";
-import { AgentSpanIdGenerator } from "#compiled/@eve/tracing/index.js";
+import { AgentSpanIdGenerator } from "#compiled/@vercel/agent-runs/index.js";
 import { contextStorage, type ContextContainer } from "#context/container.js";
 import {
   createMemoryInstrumentation,
@@ -49,7 +49,7 @@ import {
 } from "#instrumentation/memory.js";
 import { ConversationIdKey, ParentSessionKey } from "#context/keys.js";
 import type { ConversationContext } from "#shared/conversation-context.js";
-import { withCapture } from "#compiled/@eve/tracing/otel.js";
+import { withCapture } from "#compiled/@vercel/agent-runs/otel.js";
 import type { SamplingOperation as AgentSamplingOperation } from "#tracing/eve/otel-registration.js";
 import {
   isSampledTrace,

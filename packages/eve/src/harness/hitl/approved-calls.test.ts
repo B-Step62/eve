@@ -8,6 +8,9 @@ import {
 import { TurnCancelledError } from "#harness/turn-cancellation.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import type { ApprovalAsk } from "#harness/session-machine/view.js";
+import { initialSessionProjection } from "#protocol/session-projection.js";
+
+const view = () => ({ projection: initialSessionProjection() });
 
 function approval(callId: string, toolName: string): ApprovalAsk {
   return {
@@ -42,6 +45,7 @@ it("settles calls a cancellation cut short, and keeps their siblings' results", 
     messages: [],
     position: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
     publish: async () => {},
+    view,
     approvals: [approval("call-finished", "finished"), approval("call-cut", "cut")],
     tools: new Map([
       ["finished", finished],
@@ -68,6 +72,7 @@ it("leaves a call the cancellation stopped before it started without a result", 
     messages: [],
     position: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
     publish: async () => {},
+    view,
     approvals: [approval("call-unstarted", "unstarted")],
     tools: new Map([["unstarted", unstarted]]),
   });

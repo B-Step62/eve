@@ -127,13 +127,12 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
     .filter((toolCall) => isWorkflowTool(input.catalog.get(toolCall.toolName)));
 
   const authorizationInterrupt = resolveInlineAuthorizationInterrupt({
-    messages: [...promptMessages, ...responseMessages],
     signIns: result.signIns ?? [],
   });
 
   // --- Park on approvals or runtime calls ----------------------------------
 
-  if (workflowToolCalls.length > 0 || approvalRequests.length > 0) {
+  if (workflowToolCalls.length > 0 || approvalRequests.length > 0 || authorizationInterrupt) {
     const { sequence, stepIndex, turnId } = step.position();
     const dispatched = collectWorkflowCalls({
       session: step.session,
@@ -161,27 +160,13 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
             : undefined,
       });
       // Approval only precedes sign-in for the same call, not an executing sibling.
-      if (authorizationInterrupt) {
-        return stopForToolSignIn(step, {
-          ...authorizationInterrupt,
-          history: step.session.history,
-        });
-      }
+      if (authorizationInterrupt) return stopForToolSignIn(step, authorizationInterrupt);
       return parkedResult;
     }
     await step.apply(suspendStep(step.view(), parked));
-    if (authorizationInterrupt) {
-      return stopForToolSignIn(step, {
-        ...authorizationInterrupt,
-        history: step.session.history,
-      });
-    }
+    if (authorizationInterrupt) return stopForToolSignIn(step, authorizationInterrupt);
     return { next: null, session: step.session };
   }
-
-  // --- Park on authorization request ------------------------------------------
-
-  if (authorizationInterrupt) return stopForToolSignIn(step, authorizationInterrupt);
 
   // --- Continue or terminate ------------------------------------------------
 
