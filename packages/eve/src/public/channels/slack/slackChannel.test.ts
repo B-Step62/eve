@@ -5880,7 +5880,7 @@ describe("slackChannel().receive", () => {
   it("opens a code channel and starts its session at the channel's one address", async () => {
     fetchMock.mockImplementation(async (url: string | URL) =>
       String(url).endsWith("/agents.conversations.create")
-        ? Response.json({ ok: true, channel: { id: "C_CODE_RECEIVE" } })
+        ? Response.json({ ok: true, channel_id: "C_CODE_RECEIVE" })
         : Response.json({ ok: true, channel: { is_private: false }, ts: "1700000001.000001" }),
     );
     const send = vi.fn().mockResolvedValue({ id: "s" });
@@ -5900,7 +5900,6 @@ describe("slackChannel().receive", () => {
     const [continuationToken, input] = send.mock.calls[0]!;
     expect(continuationToken).toBe("C_CODE_RECEIVE:0");
     expect(input.state).toMatchObject({
-      audience: "public",
       channelId: "C_CODE_RECEIVE",
       codeChannel: true,
       threadTs: "0",

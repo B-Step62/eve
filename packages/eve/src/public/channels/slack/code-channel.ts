@@ -71,31 +71,31 @@ function cacheLookup(channelId: string, value: boolean | { readonly failedAtMs: 
   codeChannelCache.set(channelId, value);
 }
 
-// Errors that won't change on retry; anything else is retried by the calling step.
+// Errors from Slack's docs that won't change on retry; anything else is retried by the calling step.
 const PERMANENT_CREATE_ERRORS: ReadonlySet<string> = new Set([
+  "access_denied",
+  "channel_not_viewable",
   "feature_disabled",
   "invalid_agent",
+  "invalid_arguments",
   "invalid_origin_link",
   "missing_scope",
+  "no_permission",
+  "no_shared_workspace",
   "not_allowed_token_type",
   "origin_channel_externally_shared",
   "origin_channel_is_file_channel",
   "restricted_action",
-  "unknown_method",
+  "team_access_not_granted",
   "user_not_enabled",
 ]);
 
-/** A code channel {@link createSlackCodeChannel} opened. */
-export interface SlackCreatedCodeChannel {
-  readonly channelId: string;
-  readonly isPrivate: boolean;
-}
-
 /**
- * Opens a code channel from an origin message. Slack treats `session_id` as an
- * idempotency key, so a retry with the same origin and requester returns the
- * same channel. Throws an error marked `fatal` when the origin can't fork or
- * Slack refuses permanently, so the calling step doesn't retry.
+ * Opens a code channel from an origin message. Slack invites the origin
+ * message's author, matches the origin's privacy, and refuses Slack Connect
+ * origins. `session_id` makes the call idempotent, so a retry with the same
+ * origin and requester returns the same channel. Throws an error marked
+ * `fatal` when Slack refuses permanently, so the calling step doesn't retry.
  */
 export async function createSlackCodeChannel(input: {
   readonly name: string;
@@ -104,62 +104,24 @@ export async function createSlackCodeChannel(input: {
   /** Principal the channel is opened for; one channel per requester and origin message. */
   readonly requester: string;
   readonly request: SlackRequest;
-}): Promise<SlackCreatedCodeChannel> {
-  const info = await input.request("conversations.info", { channel: input.originChannelId });
-  if (info.ok !== true) throw slackFailure("conversations.info", info.error);
-  const origin = (info.channel ?? {}) as Record<string, unknown>;
-  if (!isEligibleOrigin(origin)) {
-    throw fatalError(
-      "This conversation is shared outside the workspace, so it can't open a code channel.",
-    );
-  }
-  const isPrivate = origin.is_private === true || origin.is_im === true || origin.is_mpim === true;
+}): Promise<string> {
   const sessionId = createHash("sha256")
     .update(`${input.originChannelId}:${input.originTs}:${input.requester}`)
     .digest("hex")
     .slice(0, 32);
-  const response = await callCodeChannelsMethod(input.request, "create", {
-    is_private: isPrivate,
+  const response = await input.request("agents.conversations.create", {
     name: input.name,
-    origin_link: JSON.stringify({ channel_id: input.originChannelId, ts: input.originTs }),
+    origin_channel_id: input.originChannelId,
+    origin_message_ts: input.originTs,
     session_id: sessionId,
   });
   if (response.ok !== true) throw slackFailure("agents.conversations.create", response.error);
-  const channelId = createdChannelId(response);
-  if (channelId === undefined) {
+  const channelId = response.channel_id;
+  if (typeof channelId !== "string" || channelId.length === 0) {
     throw new Error("Slack did not return a channel id for the new code channel.");
   }
   cacheLookup(channelId, true);
-  return { channelId, isPrivate };
-}
-
-/**
- * Slack Connect origins may include people outside the workspace. Enterprise
- * Grid marks every DM as org-shared, so sharing flags don't block a DM.
- */
-function isEligibleOrigin(origin: Record<string, unknown>): boolean {
-  if (origin.is_ext_shared === true || origin.is_pending_ext_shared === true) return false;
-  if (Array.isArray(origin.pending_shared) && origin.pending_shared.length > 0) return false;
-  const isDirect = origin.is_im === true || origin.is_mpim === true;
-  return isDirect || (origin.is_shared !== true && origin.is_org_shared !== true);
-}
-
-/** Some workspaces still answer only the older `codeChannels.*` method names. */
-async function callCodeChannelsMethod(
-  request: SlackRequest,
-  method: string,
-  body: Record<string, unknown>,
-): Promise<SlackApiResponse> {
-  const response = await request(`agents.conversations.${method}`, body);
-  if (response.ok === true || response.error !== "unknown_method") return response;
-  return await request(`codeChannels.${method}`, body);
-}
-
-function createdChannelId(response: SlackApiResponse): string | undefined {
-  const channel = response.channel;
-  if (typeof channel === "string") return channel;
-  const id = (channel as { readonly id?: unknown } | undefined)?.id ?? response.channel_id;
-  return typeof id === "string" && id.length > 0 ? id : undefined;
+  return channelId;
 }
 
 function slackFailure(method: string, error: unknown): Error {

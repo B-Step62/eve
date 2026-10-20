@@ -19,7 +19,7 @@ last_updated: "2026-10-20"
 > so the Slack channel's `receive()` opens the code channel (`target.codeChannel`), and the tool is
 > `openCodeChannel()` from `eve/channels/slack/tools`, with no options, reaching the channel
 > named `slack`. No signed binding yet; `ctx.slack.openCodeChannel()` for inbound handlers is
-> not built. Slack method arguments follow the docs and are unverified against a workspace.
+> not built. Creation sends `origin_channel_id` and `origin_message_ts` and leaves origin eligibility and privacy to Slack, per Slack's method docs; there is no `codeChannels.*` fallback.
 
 ## Summary
 

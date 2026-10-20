@@ -1158,31 +1158,30 @@ async function receiveInNewCodeChannel(
     installationTeamId,
     teamId: deps.teamId,
   });
-  const created = await createSlackCodeChannel({
+  const codeChannelId = await createSlackCodeChannel({
     name: codeChannel.name,
     originChannelId,
     originTs: codeChannel.originTs,
     requester: input.auth?.principalId ?? "anonymous",
     request,
   });
-  const address = slackContinuationToken(created.channelId, CODE_CHANNEL_THREAD_TS);
+  const address = slackContinuationToken(codeChannelId, CODE_CHANNEL_THREAD_TS);
   // The same requester and origin message reach the same channel; a repeated
   // call joins its session instead of linking and seeding it again.
   const existing = await deps.resolveSession(address);
   if (existing !== undefined) return existing;
-  await setSlackCodeChannelStatus(request, created.channelId, "processing");
+  await setSlackCodeChannelStatus(request, codeChannelId, "processing");
   try {
     await request("chat.postMessage", {
       channel: originChannelId,
-      text: `Continuing in <#${created.channelId}>.`,
+      text: `Continuing in <#${codeChannelId}>.`,
       thread_ts: codeChannel.originThreadTs ?? codeChannel.originTs,
     });
   } catch (error) {
     logError(log, "code channel pointer post failed", error, { channelId: originChannelId });
   }
   const state: SlackChannelState = {
-    audience: created.isPrivate ? "private" : "public",
-    channelId: created.channelId,
+    channelId: codeChannelId,
     codeChannel: true,
     installationTeamId: installationTeamId ?? null,
     teamId: deps.teamId ?? null,

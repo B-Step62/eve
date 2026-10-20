@@ -219,7 +219,7 @@ describe("workflow tool channel handoffs", () => {
       }
       // Slack returns the same channel for a repeated session_id.
       if (method === "agents.conversations.create") {
-        return Response.json({ ok: true, channel: { id: "C_CODE" } });
+        return Response.json({ ok: true, channel_id: "C_CODE" });
       }
       const ts = `1700000100.${String(nextTs++).padStart(6, "0")}`;
       return Response.json({ ok: true, channel: body.channel, message: { ts }, ts });
@@ -282,9 +282,9 @@ describe("workflow tool channel handoffs", () => {
 
         const create = slackCalls.find(({ method }) => method === "agents.conversations.create");
         expect(create?.body).toMatchObject({
-          is_private: "false",
           name: "Fix the login test",
-          origin_link: JSON.stringify({ channel_id: "C_ORIGIN", ts: "1700000000.000002" }),
+          origin_channel_id: "C_ORIGIN",
+          origin_message_ts: "1700000000.000002",
         });
         expect(create?.body.session_id).toMatch(/^[0-9a-f]{32}$/u);
         expect(slackCalls).toContainEqual({
