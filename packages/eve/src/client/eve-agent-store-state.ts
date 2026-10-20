@@ -34,8 +34,11 @@ export interface EveAgentStoreSnapshot extends ConversationState {
  * do not alter execution; `prepareSend` may replace the outbound turn payload.
  */
 export interface EveAgentStoreCallbacks {
+  /** Reports live failures; restoring history updates `error` without replaying this callback. */
   readonly onError?: (error: Error) => void;
+  /** Observes newly read events, including catch-up events. */
   readonly onEvent?: (event: SessionStreamEvent) => void;
+  /** Fires once a live turn settles, after its complete commit; history does not replay it. */
   readonly onFinish?: (snapshot: EveAgentStoreSnapshot) => void;
   readonly onSessionChange?: (session: ClientSessionState | undefined) => void;
   readonly prepareSend?: PrepareSend;

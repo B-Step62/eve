@@ -359,7 +359,7 @@ const agent = useEveAgent({
 The hook accepts these lifecycle callbacks:
 
 - `onEvent(event)`: fires for each eve stream event as it arrives.
-- `onError(error)`: fires when session creation, streaming, resume, or a turn fails. A failed prewarm reports here when no send is waiting to retry creation.
+- `onError(error)`: fires when session creation, streaming, resume, or a live turn fails. Restoring a historical failure updates `error` without replaying this callback. A failed prewarm reports here when no send is waiting to retry creation.
 - `onFinish(snapshot)`: fires when a live turn settles, after its whole committed line is visible. An explicit `resume()` does not replay historical finish callbacks.
 - `onSessionChange(session)`: fires when a session is created, its cursor advances, or `newSession()` clears it. Persist the session state to resume across reloads.
 

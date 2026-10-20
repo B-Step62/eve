@@ -80,6 +80,20 @@ describe("parseCreateBody", () => {
     },
   );
 
+  it.each([64, 65])("bounds message-part work before admission (%i parts)", async (count) => {
+    const body = parseCreateBody({
+      message: Array.from({ length: count }, () => ({ type: "text", text: "A report section." })),
+    });
+    if (count === 64) expect(body).not.toBeInstanceOf(Response);
+    else {
+      expect(body).toBeInstanceOf(Response);
+      expect((body as Response).status).toBe(400);
+      await expect((body as Response).json()).resolves.toMatchObject({
+        error: expect.stringContaining("64"),
+      });
+    }
+  });
+
   it("rejects an explicitly empty message", async () => {
     const response = parseCreateBody({ message: "" });
     expect(response).toBeInstanceOf(Response);

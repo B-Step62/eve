@@ -10,6 +10,7 @@ import { createTurnControl } from "#execution/session/turn-control.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { cancelTasksStep } from "#execution/tasks/steps.js";
 import { turnStep } from "#execution/session/turn-step.js";
+import { publishSessionEvents } from "#execution/publish-session-events.js";
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
 import { dispatchCoordinationStep } from "#execution/coordination-dispatch-step.js";
 import { routeDeliverToChildren } from "#execution/route-child-delivery.js";
@@ -901,6 +902,7 @@ describe("SessionExecution checkpoints", () => {
       },
     };
     const completedState = state("http:completed");
+    vi.mocked(publishSessionEvents).mockClear();
     const execution = createExecution({ inbox, queue, sessionState: state("") });
     vi.mocked(cancelTasksStep).mockClear();
     vi.mocked(turnStep)
@@ -922,6 +924,13 @@ describe("SessionExecution checkpoints", () => {
       settled,
     });
     expect(execution.cursor.sessionState).toEqual(completedState);
+    expect(publishSessionEvents).toHaveBeenCalledWith(expect.anything(), [
+      {
+        type: "delivery.admitted",
+        data: { deliveryId: "cancel-delivery", source: { control: "cancel" } },
+      },
+      { type: "delivery.settled", data: { deliveryId: "cancel-delivery", outcome: "ignored" } },
+    ]);
     expect(cancelTasksStep).not.toHaveBeenCalled();
     expect(queue.pendingCount).toBe(1);
   });

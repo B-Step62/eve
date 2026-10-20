@@ -1054,7 +1054,7 @@ export class EveTUIRunner {
   }
 
   #resetConversation(): void {
-    this.#store.reset();
+    this.#store.newSession();
     this.#clearRunnerState();
   }
 

@@ -29,6 +29,7 @@ import type {
 
 /** The turn that is running or paused, if any. */
 export function activeTurn(view: SessionView): TurnRow | undefined {
+  if (view.session.status === "ended") return undefined;
   const latest = view.session.latestTurnId;
   const row = latest === undefined ? undefined : view.turns[latest];
   return row !== undefined && row.status !== "settled" ? row : undefined;
@@ -116,7 +117,7 @@ export function callOutputSource(view: SessionView, callId: string): CallRow | u
 
 /** True while any call the task serves is unsettled. Idle tasks don't hold the session open. */
 export function isWorking(view: SessionView, taskId: string): boolean {
-  if (view.tasks[taskId]?.status !== "running") return false;
+  if (view.session.status === "ended" || view.tasks[taskId]?.status !== "running") return false;
   return Object.values(view.calls).some(
     (row) => row.status !== "settled" && callTask(view, row) === taskId,
   );
@@ -146,6 +147,7 @@ export function openInteractions(
   view: SessionView,
   filter: { readonly kind?: string; readonly subject?: InteractionSubject } = {},
 ): readonly InteractionRow[] {
+  if (view.session.status === "ended") return [];
   return Object.values(view.interactions)
     .filter(
       (row) =>
@@ -170,6 +172,7 @@ export function answeredInteractionIds(view: SessionView): ReadonlySet<string> {
 
 /** Deliveries admitted but not yet consumed or settled, in arrival order. */
 export function queue(view: SessionView): readonly DeliveryRow[] {
+  if (view.session.status === "ended") return [];
   return Object.values(view.deliveries)
     .filter((row) => row.status === "admitted")
     .sort((a, b) => a.introducedAt - b.introducedAt);
@@ -220,6 +223,7 @@ export function waiting(
   view: SessionView,
   of: string | { readonly taskId: string } | { readonly callId: string },
 ): Waiting | undefined {
+  if (view.session.status === "ended") return undefined;
   if (typeof of !== "string") return heldBy(view, of);
   const turnId = of;
   const row = view.turns[turnId];
@@ -554,6 +558,17 @@ export function openWork(
     | { readonly taskId: string }
     | { readonly session: true },
 ): OpenWork {
+  // A retired owner may publish only its session end; historical rows do not remain actionable.
+  if (view.session.status === "ended")
+    return {
+      calls: [],
+      changes: [],
+      deliveries: [],
+      interactions: [],
+      responses: [],
+      runs: [],
+      tasks: [],
+    };
   const ref = "session" in owner ? "session" : refOf(owner)!;
   const open = openUnder(view, ref);
   // A run, change, or task leaves itself open too; a turn's own fact closes it.

@@ -63,6 +63,11 @@ export class EveAgentStore {
   #inLine = false;
   #posting = 0;
   #finishes = 0;
+  readonly #finishedTurns = new Set<string>();
+  #endings: {
+    event: Extract<SessionStreamEvent, { type: "turn.settled" | "session.ended" }>;
+    historical: boolean;
+  }[] = [];
 
   constructor(init: EveAgentStoreInit) {
     this.#autoPrewarm = init.prewarm ?? false;
@@ -165,12 +170,13 @@ export class EveAgentStore {
         throw new Error("The server did not identify the accepted delivery.");
       retract?.accept(deliveryId);
       retract = undefined;
-      this.#accepted.add(deliveryId);
-      if (submissionId !== undefined) {
-        this.#conversationClient.confirmSubmission(submissionId, deliveryId);
-        this.#messageSubmissions.correlate(submissionId, deliveryId);
+      if (lifetime === this.#controller) {
+        if (submissionId !== undefined) {
+          this.#conversationClient.confirmSubmission(submissionId, deliveryId);
+          this.#messageSubmissions.correlate(submissionId, deliveryId);
+        }
+        this.#acceptReceipt(deliveryId);
       }
-      this.#reconcile();
       accepted.resolve(deliveryId);
       return new StreamDelivery<TOutput>({
         sessionId: response.sessionId,
@@ -216,7 +222,6 @@ export class EveAgentStore {
       .finally(() => {
         if (lifetime !== this.#controller) return;
         this.#resumePromise = undefined;
-        this.#finishes = 0;
         this.#publish();
         this.#closeStreamWhenIdle();
       });
@@ -287,8 +292,7 @@ export class EveAgentStore {
     try {
       const receipt = await dispatch(session);
       throwIfAborted(lifetime.signal);
-      this.#accepted.add(receipt.deliveryId);
-      this.#reconcile();
+      this.#acceptReceipt(receipt.deliveryId);
       return receipt;
     } finally {
       if (lifetime === this.#controller) {
@@ -314,6 +318,7 @@ export class EveAgentStore {
     this.#stop();
     if (!this.#externalSession) this.#session = undefined;
     this.#accepted.clear();
+    this.#finishedTurns.clear();
     this.#events = [];
     this.#conversationClient.reset();
     this.#messageSubmissions.reset();
@@ -333,6 +338,7 @@ export class EveAgentStore {
     this.#pending.clear();
     this.#posting = 0;
     this.#finishes = 0;
+    this.#endings = [];
     this.#inLine = false;
   }
 
@@ -401,8 +407,8 @@ export class EveAgentStore {
     const lifetime = this.#controller;
     return this.#conversationClient.stream(this.#session, {
       ...options,
-      onEvent: (event) => {
-        if (lifetime === this.#controller) this.#acceptServerEvent(event);
+      onEvent: (event, historical) => {
+        if (lifetime === this.#controller) this.#acceptServerEvent(event, historical);
       },
       onError: (error) => {
         if (lifetime === this.#controller) this.#fail(error);
@@ -415,37 +421,66 @@ export class EveAgentStore {
       this.#conversationClient.follow(this.#session, this.#events);
   }
 
-  #acceptServerEvent(event: SessionStreamEvent): void {
+  #acceptServerEvent(event: SessionStreamEvent, historical: boolean): void {
+    const lifetime = this.#controller;
     this.#inLine = event.meta.endOfLine === false;
     if (!this.#conversationClient.observe(event, { notify: false })) return;
     this.#events = [...this.#events, event];
     this.#callbacks.onEvent?.(event);
-    if (event.type === "turn.started") this.#error = undefined;
-    if (event.type === "turn.settled") this.#finishes += 1;
-    if (
-      (event.type === "session.ended" && event.data.outcome === "failed") ||
-      (event.type === "turn.settled" && event.data.outcome === "failed")
-    ) {
-      const error = new Error(event.data.error?.message ?? "The session failed.");
-      error.name = event.data.error?.code ?? "SESSION_FAILED";
-      this.#messageSubmissions.failAll(error);
-      this.#fail(error);
-    }
+    if (lifetime !== this.#controller) return;
+    if (event.type === "turn.started" && !historical) this.#error = undefined;
+    if (event.type === "turn.settled" || event.type === "session.ended")
+      this.#endings.push({ event, historical });
     if (this.#inLine) return;
+    const view = this.#conversationClient.view;
+    const submitted = this.#accepted.size > 0;
+    const submittedTurns = new Set(
+      [...this.#accepted].flatMap((id) => {
+        const turnId = view.deliveries[id]?.turnId;
+        return turnId === undefined ? [] : [turnId];
+      }),
+    );
     this.#reconcile();
-    // Stop observes committed facts even while POST receipts gate public snapshots.
+    for (const ending of this.#endings.splice(0)) {
+      if (ending.event.type === "turn.settled") {
+        if (!ending.historical || submittedTurns.has(ending.event.data.turnId))
+          this.#finishTurn(ending.event.data.turnId);
+      } else if ((!ending.historical || submitted) && ending.event.data.outcome === "failed") {
+        this.#fail(
+          Object.assign(new Error(ending.event.data.error?.message ?? "The session failed."), {
+            name: ending.event.data.error?.code ?? "SESSION_FAILED",
+          }),
+        );
+      }
+      if (lifetime !== this.#controller) return;
+    }
     for (const check of this.#turnWaiters) check();
     this.#callbacks.onSessionChange?.(this.#sessionState);
+    if (lifetime !== this.#controller) return;
     this.#publish();
     this.#closeStreamWhenIdle();
   }
 
+  #acceptReceipt(deliveryId: string): void {
+    const lifetime = this.#controller;
+    this.#accepted.add(deliveryId);
+    this.#reconcile();
+    const view = this.#conversationClient.view;
+    const error = view.session.status === "ended" ? failure(view) : undefined;
+    if (error !== undefined)
+      this.#fail(Object.assign(new Error(error.message), { name: error.code }));
+    if (lifetime !== this.#controller) return;
+    const turnId = view.deliveries[deliveryId]?.turnId;
+    if (turnId !== undefined && view.turns[turnId]?.status === "settled") this.#finishTurn(turnId);
+  }
+
   #reconcile(): void {
     const view = this.#conversationClient.view;
+    if (view.session.status === "ended") this.#accepted.clear();
     this.#messageSubmissions.reconcile(view);
     for (const id of this.#accepted) {
       const delivery = view.deliveries[id];
-      if (delivery !== undefined && delivery.status !== "admitted") this.#accepted.delete(id);
+      if (delivery?.status === "settled") this.#accepted.delete(id);
     }
   }
 
@@ -462,6 +497,17 @@ export class EveAgentStore {
     )
       return;
     this.#conversationClient.closeStream();
+  }
+
+  #finishTurn(turnId: string): void {
+    if (this.#finishedTurns.has(turnId)) return;
+    const row = this.#conversationClient.view.turns[turnId];
+    if (row?.status !== "settled") return;
+    this.#finishedTurns.add(turnId);
+    this.#finishes += 1;
+    const error = failure(this.#conversationClient.view, turnId);
+    if (error !== undefined)
+      this.#fail(Object.assign(new Error(error.message), { name: error.code }));
   }
 
   #recordedFailure(): Error | undefined {
@@ -495,6 +541,9 @@ export class EveAgentStore {
   }
 
   #createSnapshot(): EveAgentStoreSnapshot {
+    this.#conversationClient.holdUnconfirmedMessages(
+      this.#posting > 0 && this.#messageSubmissions.awaitingReceipt,
+    );
     const data = this.#conversationClient.conversation;
     const { view } = data;
     return {
@@ -516,7 +565,7 @@ export class EveAgentStore {
   }
 
   #publish(force = false): void {
-    if (this.#posting > 0 || (this.#resumePromise !== undefined && !force)) return;
+    if (this.#resumePromise !== undefined && !force) return;
     if (this.#inLine) {
       if (this.#error === undefined) return;
       // Transport or observer failure must be visible without publishing an unfinished line.
@@ -526,9 +575,11 @@ export class EveAgentStore {
     }
     this.#snapshot = this.#createSnapshot();
     const finishes = this.#finishes;
+    const lifetime = this.#controller;
     this.#finishes = 0;
     for (const subscriber of this.#subscribers) subscriber();
-    for (let index = 0; index < finishes; index += 1) this.#callbacks.onFinish?.(this.#snapshot);
+    for (let index = 0; index < finishes && lifetime === this.#controller; index += 1)
+      this.#callbacks.onFinish?.(this.#snapshot);
   }
 }
 

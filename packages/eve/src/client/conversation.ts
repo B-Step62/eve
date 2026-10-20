@@ -59,6 +59,7 @@ export class Conversation {
   #uncommitted: SessionStreamEvent[] = [];
   readonly #pendingAnswers = new Map<string, { readonly answer: Answer; deliveryId?: string }>();
   #submissions: readonly LocalSubmission[] = [];
+  #holdUnconfirmedMessages = false;
   readonly #agents = new Map<string, FollowedAgent>();
   #messages = new Map<string, readonly PlacedMessage[]>();
   readonly #users = new Map<string, EveMessage>();
@@ -124,6 +125,13 @@ export class Conversation {
   /** Keeps the local echo's identity when its durable delivery replaces it. */
   confirmSubmission(id: string, deliveryId: string): void {
     this.#submissionIds.set(deliveryId, id);
+    this.#state = undefined;
+  }
+
+  /** A pending receipt has not yet identified which durable user row replaces its echo. */
+  holdUnconfirmedMessages(hold: boolean): void {
+    if (this.#holdUnconfirmedMessages === hold) return;
+    this.#holdUnconfirmedMessages = hold;
     this.#state = undefined;
   }
 
@@ -225,13 +233,15 @@ export class Conversation {
     const sent = new Map<string, PlacedMessage[]>();
     for (const row of Object.values(this.view.deliveries)) {
       if (row.consumedAt === undefined || row.turnId === undefined) continue;
+      const submissionId = this.#submissionIds.get(row.deliveryId);
       let message = this.#users.get(row.deliveryId);
+      if (this.#holdUnconfirmedMessages && message === undefined && submissionId === undefined)
+        continue;
       if (message === undefined) {
         message = userMessage(row);
         if (message === undefined) continue;
         this.#users.set(row.deliveryId, message);
       }
-      const submissionId = this.#submissionIds.get(row.deliveryId);
       const shown =
         submissionId === undefined
           ? message

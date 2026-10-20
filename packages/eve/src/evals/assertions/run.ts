@@ -477,7 +477,7 @@ function requestedTools(events: readonly SessionStreamEvent[]): readonly ToolReq
   };
 
   for (const event of events) {
-    if (event.type === "call.requested" && event.data.capability.kind === "tool") {
+    if (event.type === "call.requested" && event.data.capability.kind !== "skill") {
       append(event.data.callId, event.data.capability.name);
     }
   }

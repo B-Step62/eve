@@ -93,11 +93,15 @@ export function admitDeliveries(input: {
         ? { ...rest, deliveries: [consumed] }
         : {
             ...rest,
-            answers: answers.map((answer, index) => ({
-              ...answer,
-              deliveryId,
-              responseId: `response_${deliveryId}_${String(index)}`,
-            })),
+            answers: answers.map((answer, index) =>
+              defined({
+                interactionId: answer.interactionId,
+                optionId: answer.optionId,
+                text: answer.text,
+                deliveryId,
+                responseId: `response_${deliveryId}_${String(index)}`,
+              }),
+            ),
             deliveries: [consumed],
           },
     );

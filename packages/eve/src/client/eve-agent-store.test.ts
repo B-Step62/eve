@@ -1,4 +1,9 @@
-import { delivery, turn } from "#protocol/session-projection/public-view.js";
+import {
+  activeTurn,
+  delivery,
+  openInteractions,
+  turn,
+} from "#protocol/session-projection/public-view.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -112,31 +117,38 @@ function texts(current: EveAgentStore) {
 const initialSession = { sessionId: "session_1", streamIndex: 0 };
 
 describe("EveAgentStore acceptance and observation", () => {
-  it("resolves a send at acceptance, then observes its turn on the one session stream", async () => {
-    const server = agent();
-    const current = store();
-    const finished = vi.fn();
-    current.setCallbacks({ onFinish: finished });
-    const sent = current.send({ message: "sunny." });
-    const echoId = current.snapshot.messages[0]!.id;
-    expect(texts(current)).toEqual(["user: sunny."]);
-    await expect(sent).resolves.toEqual({ deliveryId: "d_0", sessionId: "session_1" });
-    expect(finished).not.toHaveBeenCalled();
-    expect(current.snapshot.status).toBe("busy");
-    server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
-    await vi.waitFor(() => expect(current.snapshot.status).toBe("idle"));
-    expect(texts(current)).toEqual(["user: sunny.", "assistant: Sunny."]);
-    expect(current.snapshot.messages[0]!.id).toBe(echoId);
-    expect(finished).toHaveBeenCalledOnce();
-    expect(server.reads).toHaveLength(1);
-    current.newSession();
-    await expect((await sent).result()).resolves.toMatchObject({
-      status: "completed",
-      reply: "Sunny.",
-      sessionEnded: false,
-    });
-    expect(server.reads).toHaveLength(2);
-  });
+  it.each([false, true])(
+    "observes its accepted turn once, including a reply already at the tail (early: %s)",
+    async (early) => {
+      const server = agent(() => {
+        if (early) server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
+      });
+      const current = store();
+      const finished = vi.fn();
+      current.setCallbacks({ onFinish: finished });
+      const sent = current.send({ message: "sunny." });
+      const echoId = current.snapshot.messages[0]!.id;
+      expect(texts(current)).toEqual(["user: sunny."]);
+      await expect(sent).resolves.toEqual({ deliveryId: "d_0", sessionId: "session_1" });
+      if (!early) {
+        expect(finished).not.toHaveBeenCalled();
+        expect(current.snapshot.status).toBe("busy");
+        server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
+      }
+      await vi.waitFor(() => expect(current.snapshot.status).toBe("idle"));
+      expect(texts(current)).toEqual(["user: sunny.", "assistant: Sunny."]);
+      expect(current.snapshot.messages[0]!.id).toBe(echoId);
+      expect(finished).toHaveBeenCalledOnce();
+      expect(server.reads).toHaveLength(1);
+      current.newSession();
+      await expect((await sent).result()).resolves.toMatchObject({
+        status: "completed",
+        reply: "Sunny.",
+        sessionEnded: false,
+      });
+      expect(server.reads).toHaveLength(2);
+    },
+  );
 
   it("does not publish another reader's cursor ahead of its own committed events", async () => {
     const server = agent();
@@ -205,6 +217,82 @@ describe("EveAgentStore acceptance and observation", () => {
     expect(await two).toEqual({ deliveryId: "d_1", sessionId: "session_1" });
     expect(server.posts).toEqual(["/eve/v1/session", "/eve/v1/session/session_1"]);
     expect(server.reads).toHaveLength(1);
+  });
+
+  it("does not replay historical errors into a new pending send", async () => {
+    const receipt = Promise.withResolvers<void>();
+    const server = agent(() => receipt.promise);
+    server.append(
+      testTurnFacts(0, "Earlier.", ["old"]).map((event): SessionEvent =>
+        event.type === "turn.settled"
+          ? {
+              ...event,
+              data: {
+                ...event.data,
+                outcome: "failed",
+                error: { code: "EARLIER", message: "Earlier failure" },
+              },
+            }
+          : event,
+      ),
+    );
+    const current = store({ initialSession });
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const onFinish = vi.fn();
+    current.setCallbacks({ onError, onEvent, onFinish });
+    const sending = current.send({ message: "New task." });
+    try {
+      await vi.waitFor(() => expect(onEvent).toHaveBeenCalledTimes(8));
+      expect(onError).not.toHaveBeenCalled();
+      expect(onFinish).not.toHaveBeenCalled();
+    } finally {
+      receipt.resolve();
+      await sending;
+    }
+    expect(current.snapshot.error).toBeUndefined();
+    expect(
+      current.snapshot.messages.find((message) => message.id.startsWith("optimistic:"))?.metadata
+        ?.status,
+    ).toBe("submitted");
+  });
+
+  it("publishes committed work while an unrelated message waits for its receipt", async () => {
+    const receipt = Promise.withResolvers<void>();
+    const server = agent((id) => (id === "d_1" ? receipt.promise : undefined));
+    const current = store({ initialSession });
+    await current.send({ message: "First task." });
+    const echo = current.snapshot.messages[0]!.id;
+    const sending = current.send({ message: "Queued task.", turnPolicy: "queue" });
+    try {
+      server.append(testTurnFacts(0, "First done.", ["d_0"]));
+      await vi.waitFor(() => expect(turn(current.snapshot.view, "turn_0")?.status).toBe("settled"));
+      const users = current.snapshot.messages.filter((message) => message.role === "user");
+      expect(users).toHaveLength(2);
+      expect(users[0]?.id).toBe(echo);
+      expect(texts(current)).toContain("assistant: First done.");
+    } finally {
+      receipt.resolve();
+      await sending;
+    }
+  });
+
+  it("keeps a live finish when its event observer starts catch-up", async () => {
+    const server = agent();
+    const current = store({ initialSession });
+    await current.send({ message: "First task." });
+    let resumed: Promise<void> | undefined;
+    const onFinish = vi.fn();
+    current.setCallbacks({
+      onFinish,
+      onEvent: (event) => {
+        if (event.type === "turn.settled") resumed = current.resume();
+      },
+    });
+    server.append(testTurnFacts(0, "Done.", ["d_0"]));
+    await vi.waitFor(() => expect(resumed).toBeDefined());
+    await resumed;
+    expect(onFinish).toHaveBeenCalledOnce();
   });
 
   it("resumes through catch-up without waiting for an in-flight turn to end", async () => {
@@ -446,6 +534,72 @@ describe("EveAgentStore Stop during submission", () => {
 });
 
 describe("EveAgentStore committed snapshots", () => {
+  it("does not apply an old ending after its observer starts a fresh session", async () => {
+    const server = agent();
+    const current = store();
+    await current.send({ message: "Review the report." });
+    await vi.waitFor(() => expect(server.reads).toHaveLength(1));
+    const reset = vi.fn();
+    current.setCallbacks({
+      onEvent: (event) => {
+        if (event.type === "session.ended") {
+          current.newSession();
+          reset();
+        }
+      },
+    });
+    server.append(
+      [
+        ...testTurnFacts(0, "Later.", ["d_0"]).slice(0, 4),
+        {
+          type: "session.ended",
+          data: {
+            outcome: "failed",
+            error: { code: "session_stranded", message: "Earlier session unavailable." },
+          },
+        },
+      ],
+      true,
+    );
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledOnce());
+    expect(current.snapshot.session).toBeUndefined();
+    expect(current.snapshot.error).toBeUndefined();
+    expect(current.snapshot.events).toEqual([]);
+  });
+
+  it("stops showing a retired session as busy when its last rows could not be settled", async () => {
+    const server = agent();
+    const current = store();
+    await current.send({ message: "Review the report." });
+    server.append(testTurnFacts(0, "Later.", ["d_0"]).slice(0, 4));
+    await vi.waitFor(() => expect(activeTurn(current.snapshot.view)?.turnId).toBe("turn_0"));
+    server.append(
+      [
+        { type: "model.settled", data: { runId: "run_0", outcome: "completed" } },
+        {
+          type: "interaction.opened",
+          data: {
+            interactionId: "question",
+            subject: { turnId: "turn_0" },
+            request: { kind: "question", prompt: "Which report?" },
+          },
+        },
+        {
+          type: "session.ended",
+          data: {
+            outcome: "failed",
+            error: { code: "session_stranded", message: "Session unavailable." },
+          },
+        },
+      ],
+      true,
+    );
+    await vi.waitFor(() => expect(current.snapshot.error?.message).toBe("Session unavailable."));
+    expect(current.snapshot.status).toBe("idle");
+    expect(activeTurn(current.snapshot.view)).toBeUndefined();
+    expect(openInteractions(current.snapshot.view)).toEqual([]);
+  });
+
   it("reports a mid-line stream failure without exposing the unfinished line", async () => {
     const server = agent();
     const current = store();
