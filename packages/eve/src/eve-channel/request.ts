@@ -97,6 +97,10 @@ export async function deriveOperationContinuationToken(input: {
 }
 
 export function parseCreateBody(input: Record<string, unknown>): ParsedCreateBody | Response {
+  // A newer protocol may introduce fields; preserve upgrade guidance before checking this one's envelope.
+  const protocolVersion =
+    input.callback === undefined ? undefined : parseProtocolVersionField(input.protocolVersion);
+  if (protocolVersion instanceof Response) return protocolVersion;
   const fields = [
     "message",
     "clientContext",
@@ -121,10 +125,6 @@ export function parseCreateBody(input: Record<string, unknown>): ParsedCreateBod
 
   const callback = parseCallbackField(payload.callback);
   if (callback instanceof Response) return callback;
-  const protocolVersion =
-    callback === undefined ? undefined : parseProtocolVersionField(payload.protocolVersion);
-  if (protocolVersion instanceof Response) return protocolVersion;
-
   const capabilities = parseCapabilitiesField(payload.capabilities);
   if (capabilities instanceof Response) return capabilities;
 

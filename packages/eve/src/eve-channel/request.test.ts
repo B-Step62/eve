@@ -62,19 +62,23 @@ describe("parseCreateBody", () => {
     expect(body).toEqual(expect.objectContaining({ callback: CALLBACK, protocolVersion: 1 }));
   });
 
-  it("refuses a caller on a newer protocol with this deployment's version", async () => {
-    const body = parseCreateBody({
-      callback: CALLBACK,
-      message: "research this",
-      protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION + 1,
-    });
-    if (!(body instanceof Response)) throw new Error("expected a refusal");
-    expect(body.status).toBe(409);
-    await expect(body.json()).resolves.toMatchObject({
-      code: "REMOTE_AGENT_PROTOCOL_MISMATCH",
-      protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION,
-    });
-  });
+  it.each([{}, { nextProtocolOption: true }])(
+    "preserves protocol upgrade guidance with additional fields %j",
+    async (additional) => {
+      const body = parseCreateBody({
+        ...additional,
+        callback: CALLBACK,
+        message: "research this",
+        protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION + 1,
+      });
+      if (!(body instanceof Response)) throw new Error("expected a refusal");
+      expect(body.status).toBe(409);
+      await expect(body.json()).resolves.toMatchObject({
+        code: "REMOTE_AGENT_PROTOCOL_MISMATCH",
+        protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION,
+      });
+    },
+  );
 
   it("rejects an explicitly empty message", async () => {
     const response = parseCreateBody({ message: "" });

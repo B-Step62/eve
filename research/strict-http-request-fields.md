@@ -1,7 +1,7 @@
 ---
 issue: "None (maintainer proposal; related PR #4930)"
 status: in-progress
-last_updated: "2026-10-19"
+last_updated: "2026-10-20"
 ---
 
 # Reject unknown HTTP request fields
@@ -35,14 +35,13 @@ Content-Type: application/json
 ```json
 {
   "ok": false,
-  "error": "Unknown field 'outputschema'. Accepted fields: message, inputResponses, clientContext, outputSchema, turnPolicy, callback, forwardedPrincipal."
+  "error": "Unknown field 'outputschema'. Accepted fields: message, answers, clientContext, outputSchema, turnPolicy, callback, forwardedPrincipal."
 }
 ```
 
 The accepted-field list must describe the actual route and supported protocol,
-including any recognized protocol-specific fields. This implementation uses
-`inputResponses`; [the pre-1.0 API cleanup](https://github.com/vercel/eve/pull/4930)
-separately proposes the `answers` vocabulary.
+including any recognized protocol-specific fields. The combined pre-1.0 cleanup
+uses `answers` for follow-up responses.
 
 For multiple unknown fields, identify them in a deterministic order and include
 the accepted-field list. Report field names, not request values. Diagnostics show
@@ -66,7 +65,8 @@ Apply this rule to eve-owned JSON request envelopes, starting with session
 creation, follow-up messages and answers, and session control routes. These routes
 now keep accepted fields beside their parsers and reuse the same list for
 validation and diagnostics. Other HTTP protocol surfaces keep their existing
-validation in this PR.
+validation in this PR, including callback/webhook protocols and the legacy
+`/eve/v1/task-input/:token` capability route where that protocol is served.
 
 This proposal does not recursively close arbitrary JSON values. Declared open
 objects such as `clientContext` and application data retain their contracts.
@@ -79,8 +79,10 @@ with a `callback`. Known remote protocol fields, forwarded principals, and tool
 stubs retain their existing validation and permission checks. None of these
 contracts permits arbitrary unknown fields.
 
-A newer client that sends a new field to an older strict server receives a 400
-instead of silently losing the requested behavior. This is the intended lasting
+A delegated create request on an unsupported remote protocol retains the structured
+409 protocol-mismatch response before request-field diagnostics. After successful
+protocol negotiation, a newer client that sends a new field to an older strict
+server receives a 400 instead of silently losing the requested behavior. This is the intended lasting
 compatibility rule. A future `operationId` on follow-up messages must not be
 silently discarded: doing so could change retry or deduplication semantics.
 Clients must not automatically remove behavior-changing fields and retry.
