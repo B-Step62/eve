@@ -48,6 +48,7 @@ const Conversation = ({ agent, preview }: { agent: string; preview: TemplatePrev
         channel={preview.context}
         icon={preview.icon}
         messages={preview.messages}
+        user={pickPreviewUser(agent)}
       />
     );
   }
@@ -112,7 +113,35 @@ const WebToolCall = ({ name }: { name: string }) => {
   );
 };
 
-const SLACK_USER = "Alex";
+interface PreviewUser {
+  name: string;
+  /** GitHub user ID, for a rename-proof avatar URL. */
+  githubId: number;
+}
+
+/** eve contributors who play the person talking to the agent. */
+const PREVIEW_USERS: PreviewUser[] = [
+  { name: "barba", githubId: 1316152 }, // AndrewBarba
+  { name: "Casey Gowrie", githubId: 6045519 }, // ctgowrie
+  { name: "pankow", githubId: 10215173 }, // benpankow
+  { name: "owen", githubId: 22457492 }, // OwenKephart
+  { name: "prha", githubId: 1040172 }, // prha
+  { name: "chad", githubId: 183799 }, // chadhietala
+  { name: "rui", githubId: 1834568 }, // ruiconti
+  { name: "colton", githubId: 5807118 }, // cmpadden
+  { name: "shar", githubId: 2982650 }, // darafsheh
+];
+
+/** Stable per template, so server and client render the same person. */
+const pickPreviewUser = (seed: string): PreviewUser => {
+  let hash = 0;
+  for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return PREVIEW_USERS[hash % PREVIEW_USERS.length]!;
+};
+
+const githubAvatar = (user: PreviewUser) =>
+  `https://avatars.githubusercontent.com/u/${user.githubId}?s=72&v=4`;
+
 const SLACK_TIMESTAMP = "10:42 AM";
 
 /** The template's own icon when it has one, otherwise the eve logo on `fallbackClassName`. */
@@ -147,11 +176,13 @@ const Slack = ({
   channel,
   icon,
   messages,
+  user,
 }: {
   agent: string;
   channel?: string;
   icon?: string;
   messages: TemplatePreviewMessage[];
+  user: PreviewUser;
 }) => (
   <div className="absolute top-3 -right-3 -bottom-5 left-6 overflow-hidden rounded-lg border border-gray-alpha-400 bg-white shadow-sm dark:bg-[#1a1d21]">
     <div
@@ -174,14 +205,17 @@ const Slack = ({
                   logoHeight={11}
                 />
               ) : (
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[#4a154b] font-bold text-[16px] text-white">
-                  {SLACK_USER[0]}
-                </div>
+                // oxlint-disable-next-line nextjs/no-img-element -- tiny decorative avatar
+                <img
+                  alt=""
+                  className="size-9 shrink-0 rounded-lg bg-[rgba(29,28,29,0.13)] object-cover"
+                  src={githubAvatar(user)}
+                />
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-1">
                   <span className="font-black dark:text-[#f8f8f8]">
-                    {isAgent ? agent : SLACK_USER}
+                    {isAgent ? agent : user.name}
                   </span>
                   {isAgent ? (
                     <span className="ml-1 self-center rounded-[2px] bg-[rgba(29,28,29,0.13)] px-[3px] py-px font-bold text-[10px] text-[rgba(29,28,29,0.7)] leading-[14px] dark:bg-[rgba(232,232,232,0.13)] dark:text-[#ababad]">
