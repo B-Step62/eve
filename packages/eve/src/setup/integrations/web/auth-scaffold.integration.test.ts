@@ -127,3 +127,17 @@ describe("Web Chat auth scaffold", () => {
     ).toBeUndefined();
   });
 });
+
+it("resumes an unmodified legacy auth scaffold without rotating or requiring new client credentials", async () => {
+  const input = await fixture();
+  const oldAuth =
+    'import { betterAuth } from "better-auth";\n\nconst SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;\nconst DEVELOPMENT_ALLOWED_HOSTS = ["localhost:*", "127.0.0.1:*"];\n\nfunction getAllowedHosts(): string[] {\n  if (process.env.NODE_ENV === "development") {\n    return DEVELOPMENT_ALLOWED_HOSTS;\n  }\n  const deploymentHosts = [\n    process.env.VERCEL_URL,\n    process.env.VERCEL_BRANCH_URL,\n    process.env.VERCEL_PROJECT_PRODUCTION_URL,\n  ].filter((host): host is string => Boolean(host));\n  if (deploymentHosts.length === 0) {\n    throw new Error("No trusted deployment hosts are configured");\n  }\n  return Array.from(new Set(deploymentHosts));\n}\n\nfunction requireEnvironmentVariable(name: string): string {\n  const value = process.env[name];\n  if (value) return value;\n  if (process.env.NODE_ENV === "development") return `development-${name}`;\n  throw new Error(`Missing required environment variable: ${name}`);\n}\n\nexport const auth = betterAuth({\n  baseURL: {\n    allowedHosts: getAllowedHosts(),\n    protocol: process.env.NODE_ENV === "development" ? "auto" : "https",\n  },\n  secret: requireEnvironmentVariable("BETTER_AUTH_SECRET"),\n  session: {\n    expiresIn: SESSION_MAX_AGE_SECONDS,\n    disableSessionRefresh: true,\n    cookieCache: {\n      enabled: true,\n      maxAge: SESSION_MAX_AGE_SECONDS,\n      refreshCache: false,\n      strategy: "jwe",\n    },\n  },\n  socialProviders: {\n    vercel: {\n      clientId: requireEnvironmentVariable("VERCEL_APP_CLIENT_ID"),\n      clientSecret: requireEnvironmentVariable("VERCEL_APP_CLIENT_SECRET"),\n      scope: ["openid", "email", "profile"],\n    },\n  },\n});\n';
+  const authPath = join(input.environmentRoot, "apps/web/lib/auth.ts");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(authPath, oldAuth);
+  const write = await prepareWebAuthScaffold(input);
+  await write();
+  const updated = await readFile(authPath, "utf8");
+  expect(updated).toContain('process.env.VERCEL_APP_AUTH_METHOD ?? "client_secret_post"');
+  expect(updated).toContain('requireEnvironmentVariable("VERCEL_APP_CLIENT_SECRET")');
+});

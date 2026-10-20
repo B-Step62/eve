@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 
@@ -9,6 +10,12 @@ import {
   WEB_CHANNEL_TEMPLATES,
 } from "#setup/scaffold/create/web-template.js";
 import { resolveWebPackageVersions } from "#setup/scaffold/update/web-options.js";
+
+// Recognize only exact previously generated auth files; authored edits still require --overwrite.
+const LEGACY_AUTH_HASHES = new Set([
+  "ea76e368aded3bec47896e763182a91e02e991b5cdb1b2e96e4da6dbd4375aeb",
+  "01da29006c659aac63ac25b164d0fae32f23b57da291126ac5a4b2c6ce95619a",
+]);
 
 async function readOptional(path: string): Promise<string | undefined> {
   try {
@@ -53,7 +60,11 @@ export async function prepareWebAuthScaffold(input: {
       !input.force &&
       current !== undefined &&
       current !== file.source &&
-      current !== file.previous
+      current !== file.previous &&
+      !(
+        file.path === join(webRoot, "lib", "auth.ts") &&
+        LEGACY_AUTH_HASHES.has(createHash("sha256").update(current).digest("hex"))
+      )
     ) {
       throw new Error(
         `Could not add Sign in with Vercel because ${file.path} contains authored code. Preserve your changes and integrate auth manually, or retry setup with --overwrite.`,
@@ -67,6 +78,7 @@ export async function prepareWebAuthScaffold(input: {
     };
     document.dependencies = {
       ...document.dependencies,
+      "@vercel/oidc": document.dependencies?.["@vercel/oidc"] ?? "3.8.0",
       "better-auth":
         document.dependencies?.["better-auth"] ??
         resolveWebPackageVersions(undefined, "sign-in-with-vercel").betterAuthPackageVersion,
@@ -75,7 +87,7 @@ export async function prepareWebAuthScaffold(input: {
     await writeTextFile(packagePath, `${JSON.stringify(document, null, 2)}\n`, { force: true });
     await appendEnv(join(input.environmentRoot, ".env.example"), {
       VERCEL_APP_CLIENT_ID: "",
-      VERCEL_APP_CLIENT_SECRET: "",
+      VERCEL_APP_AUTH_METHOD: "oidc_token",
       BETTER_AUTH_SECRET: "",
     });
   };

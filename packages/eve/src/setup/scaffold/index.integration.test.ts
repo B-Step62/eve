@@ -377,7 +377,9 @@ describe("ensureChannel", () => {
     const authSource = await readFile(join(projectRoot, "lib/auth.ts"), "utf8");
     expect(authSource).toContain('requireEnvironmentVariable("BETTER_AUTH_SECRET")');
     expect(authSource).toContain("process.env.VERCEL_PROJECT_PRODUCTION_URL");
-    expect(authSource).toContain('clientId: requireEnvironmentVariable("VERCEL_APP_CLIENT_ID")');
+    expect(authSource).toContain(
+      'const clientId = requireEnvironmentVariable("VERCEL_APP_CLIENT_ID")',
+    );
     expect(authSource).toContain('throw new Error("No trusted deployment hosts are configured")');
     expect(authSource).not.toContain("*.vercel.app");
 
