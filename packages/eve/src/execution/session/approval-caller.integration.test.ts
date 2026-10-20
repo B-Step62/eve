@@ -373,6 +373,38 @@ describe("approval caller", () => {
     ]);
   }, 60_000);
 
+  it("lets a message delivered with one answer steer past the step's other approval", async () => {
+    const { seen, stages } = await withChainRun(
+      "approval-caller-steer-with-answer",
+      async (run) => {
+        const publish = approvalsIn(run.stages).find(
+          (entry) => entry.toolName === "publish_change",
+        );
+        expect(approvalsIn(run.stages)).toHaveLength(2);
+        // publish_change waits for its response policy; deploy_change has none. The message
+        // queues behind the policy's answer and must still steer past deploy_change.
+        await run.deliver(ALICE, {
+          answers: [{ interactionId: publish!.interactionId, optionId: "approve" }],
+          message: "Never mind, skip the deploy.",
+        });
+      },
+      { firstApproval: always(), message: "Call in parallel: deploy_change, publish_change." },
+    );
+
+    const outcomes = Object.fromEntries(
+      filterEventsByType(stages.flat(), "interaction.settled").map((event) => [
+        event.data.interactionId,
+        event.data.outcome,
+      ]),
+    );
+    const byTool = Object.fromEntries(
+      approvalsIn(stages).map((entry) => [entry.toolName, outcomes[entry.interactionId]]),
+    );
+    expect(byTool).toEqual({ deploy_change: "withdrawn", publish_change: "accepted" });
+    expect(seen).toEqual([{ tool: "publish_change", caller: "alice" }]);
+    expect(stages.map(turnBoundaries).at(-1)).toEqual(["turn.settled turn_0"]);
+  }, 60_000);
+
   it("starts an approved workflow tool's run as its requester", async () => {
     const { stages } = await withChainRun(
       "approval-caller-workflow",

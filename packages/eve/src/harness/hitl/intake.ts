@@ -100,9 +100,10 @@ export async function admitHumanInput(
   const typed = resolveTypedApproval(step.view(), delivered.input);
   const limit = openLimit(step.view());
   // A new message steers the held turn, unless it waits behind the budget prompt. A typed answer
-  // is not a new message.
+  // is not a new message. A message queued behind a policy's answer or a responder's sign-in
+  // still steers: without it, the turn re-runs a step that parks again, forever.
   const messaged =
-    (input?.message !== undefined && typed?.message !== undefined) ||
+    (delivered.input?.message !== undefined && typed?.message !== undefined) ||
     delivered.displayMessage !== undefined;
   const steer = messaged && limit === undefined;
   const steered = steer ? await withdrawSteeredSignIns(step, typed) : typed;
