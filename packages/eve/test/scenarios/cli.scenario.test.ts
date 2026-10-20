@@ -410,47 +410,26 @@ describe("runCli", () => {
     }
   }, 120_000);
 
-  it.each([
-    {
-      channel: "disables the eve channel",
-      source: 'import { disableRoute } from "eve/channels";\nexport default disableRoute();\n',
-      status: 404,
-    },
-    {
-      channel: "redirects its health route",
-      source: [
-        'import { defineChannel, GET, HEAD } from "eve/channels";',
-        'const redirect = async () => new Response(null, { status: 302, headers: { location: "/alive" } });',
-        "export default defineChannel({",
-        '  routes: [GET("/eve/v1/health", redirect), HEAD("/eve/v1/health", redirect)],',
-        "});",
-        "",
-      ].join("\n"),
-      status: 302,
-    },
-  ])(
-    "reports ready when the app $channel",
-    async ({ source, status }) => {
-      const { buildApplication } = await import("../../src/internal/nitro/host.js");
-      const appRoot = await createMinimalAppRoot("eve-cli-start-custom-eve-channel-");
-      await mkdir(join(appRoot, "agent", "channels"));
-      await writeFile(join(appRoot, "agent", "channels", "eve.mjs"), source);
-      await mkdir(join(appRoot, "node_modules"));
-      await symlink(resolvePackageRoot(), join(appRoot, "node_modules", "eve"), "junction");
-      await buildApplication(appRoot, { skipSandboxPrewarm: true });
+  it("reports ready when the app disables the eve channel", async () => {
+    const { buildApplication } = await import("../../src/internal/nitro/host.js");
+    const appRoot = await createMinimalAppRoot("eve-cli-start-no-eve-channel-");
+    await mkdir(join(appRoot, "agent", "channels"));
+    await writeFile(
+      join(appRoot, "agent", "channels", "eve.mjs"),
+      'import { disableRoute } from "eve/channels";\nexport default disableRoute();\n',
+    );
+    await mkdir(join(appRoot, "node_modules"));
+    await symlink(resolvePackageRoot(), join(appRoot, "node_modules", "eve"), "junction");
+    await buildApplication(appRoot, { skipSandboxPrewarm: true });
 
-      const server = await startPackagedEveStart(appRoot);
-      try {
-        const response = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url), {
-          redirect: "manual",
-        });
-        expect(response.status).toBe(status);
-      } finally {
-        await server.stop();
-      }
-    },
-    120_000,
-  );
+    const server = await startPackagedEveStart(appRoot);
+    try {
+      const response = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url));
+      expect(response.status).toBe(404);
+    } finally {
+      await server.stop();
+    }
+  }, 120_000);
 
   it("starts an existing built app with local Workflow data under .eve", async () => {
     const { buildApplication } = await import("../../src/internal/nitro/host.js");

@@ -94,25 +94,30 @@ describe("production server output", () => {
     }
   });
 
-  it("fails when another process takes the port after the pre-bind check", async () => {
+  it("fails when another process takes the port before the server binds", async () => {
     const port = await findFreePort();
     const { appRoot } = await createApp("eve-production-port-race-", {
       files: {
-        // The first listener plays the process that wins the port between the
-        // pre-bind check and the server's own bind; the second is the
-        // srvx-like bind that then fails and leaves the process alive.
+        // A separate process wins the port first, like a second `eve start`
+        // on the same port. Then the srvx-like bind fails and leaves this
+        // process alive. The winner exits when this process does.
         ".output/server/index.mjs": [
+          'import { spawn } from "node:child_process";',
           'import { createServer } from "node:http";',
-          "const port = Number(process.env.PORT);",
-          'createServer((_request, response) => response.end("not eve"))',
-          "  .listen(port, process.env.HOST, () => {",
-          "    createServer()",
-          "      .listen(port, process.env.HOST)",
-          '      .once("error", (error) => {',
-          '        console.error("[srvx] Failed to start server:", error);',
-          "        process.exitCode = 1;",
-          "      });",
-          "  });",
+          "const winner = spawn(process.execPath, [",
+          '  "-e",',
+          '  `require("node:http").createServer((_q, s) => s.end("not eve"))',
+          '    .listen(${process.env.PORT}, ${JSON.stringify(process.env.HOST)}, () => console.log("up"));',
+          '   process.stdin.on("end", () => process.exit()).resume();`,',
+          '], { stdio: ["pipe", "pipe", "inherit"] });',
+          'winner.stdout.once("data", () => {',
+          "  createServer()",
+          "    .listen(Number(process.env.PORT), process.env.HOST)",
+          '    .once("error", (error) => {',
+          '      console.error("[srvx] Failed to start server:", error);',
+          "      process.exitCode = 1;",
+          "    });",
+          "});",
         ].join("\n"),
       },
     });

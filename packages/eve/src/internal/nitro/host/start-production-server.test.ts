@@ -50,8 +50,11 @@ function createChildProcess(): ChildProcess {
   return child;
 }
 
+function reportListening(child: ChildProcess, address: string, port: number): void {
+  setImmediate(() => child.emit("message", { type: "listening", address, port }));
+}
+
 describe("startProductionServer", () => {
-  const originalFetch = globalThis.fetch;
   const originalPort = process.env.PORT;
   let stdoutWrites: string[] = [];
 
@@ -63,14 +66,10 @@ describe("startProductionServer", () => {
       return true;
     });
     delete process.env.PORT;
-    globalThis.fetch = vi.fn(async () => {
-      throw new TypeError("fetch failed");
-    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    globalThis.fetch = originalFetch;
     if (originalPort === undefined) {
       delete process.env.PORT;
     } else {
@@ -93,6 +92,7 @@ describe("startProductionServer", () => {
     const { startProductionServer } = await import("./start-production-server.js");
     const child = createChildProcess();
     (child.stdout as PassThrough).write("Listening on http://127.0.0.1:4321/\n");
+    reportListening(child, "127.0.0.1", 4321);
     mocks.spawn.mockReturnValueOnce(child);
 
     const server = await startProductionServer("/tmp/app", {
@@ -105,7 +105,11 @@ describe("startProductionServer", () => {
     expect(mocks.loadDevelopmentEnvironmentFiles).toHaveBeenCalledWith("/tmp/app");
     expect(mocks.spawn).toHaveBeenCalledWith(
       process.execPath,
-      ["/tmp/app/.output/server/index.mjs"],
+      [
+        "--import",
+        expect.stringMatching(/listen-report-preload\.[jt]s$/),
+        "/tmp/app/.output/server/index.mjs",
+      ],
       {
         cwd: "/tmp/app",
         env: expect.objectContaining({
@@ -114,7 +118,7 @@ describe("startProductionServer", () => {
           NITRO_PORT: "4321",
           PORT: "4321",
         }),
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
     );
     await server.close();
@@ -126,7 +130,7 @@ describe("startProductionServer", () => {
     const { startProductionServer } = await import("./start-production-server.js");
     const child = createChildProcess();
     process.env.PORT = "4567";
-    (child.stdout as PassThrough).write("Listening on http://0.0.0.0:4567/\n");
+    reportListening(child, "0.0.0.0", 4567);
     mocks.spawn.mockReturnValueOnce(child);
 
     const server = await startProductionServer("/tmp/app");
@@ -151,7 +155,7 @@ describe("startProductionServer", () => {
     const child = createChildProcess();
     mocks.spawn.mockImplementationOnce((_command, _args, options) => {
       const port = (options as { env?: NodeJS.ProcessEnv }).env?.PORT;
-      (child.stdout as PassThrough).write(`Listening on http://127.0.0.1:${port}/\n`);
+      reportListening(child, "127.0.0.1", Number(port));
       return child;
     });
 
@@ -170,5 +174,19 @@ describe("startProductionServer", () => {
     expect(server.url).toBe(`http://127.0.0.1:${port}/`);
 
     await server.close();
+  });
+  it("ignores listens on other ports and rejects when the requested port is taken", async () => {
+    const { startProductionServer } = await import("./start-production-server.js");
+    const child = createChildProcess();
+    setImmediate(() => {
+      child.emit("message", { type: "listening", address: "127.0.0.1", port: 9999 });
+      child.emit("message", { type: "listen-error", code: "EADDRINUSE", port: 4321 });
+    });
+    mocks.spawn.mockReturnValueOnce(child);
+
+    await expect(
+      startProductionServer("/tmp/app", { host: "127.0.0.1", port: 4321 }),
+    ).rejects.toThrow("Port 4321 on 127.0.0.1 is already in use.");
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 });
