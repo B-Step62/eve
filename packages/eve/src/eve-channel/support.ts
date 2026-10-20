@@ -6,6 +6,7 @@ import { workflowEntryReference } from "#execution/workflow-runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
 import type { ChannelCors } from "#public/definitions/channel.js";
 import {
+  type ClientContextValue,
   defaultEveAuth,
   type EveChannelCors,
   type EveChannelCorsOptions,
@@ -16,6 +17,8 @@ import {
 } from "#eve-channel/types.js";
 
 const log = createLogger("eve.channel");
+
+const CLIENT_CONTEXT_PREFIX = "Client context:\n";
 
 export function healthResponse(): Response {
   return Response.json({
@@ -147,12 +150,15 @@ function normalizeEveCorsOrigin(
 
 interface OnMessageOutcome {
   readonly auth: SessionAuthContext | null;
+  /** Model-ready turn context: `onMessage`'s replacement, or the request's labeled entries. */
+  readonly clientContext?: readonly string[];
   readonly context?: readonly string[];
   readonly title?: string;
 }
 
 export async function resolveOnMessage(input: {
   readonly auth: SessionAuthContext | null;
+  readonly clientContext?: ClientContextValue;
   readonly config: EveChannelInput;
   readonly invocation?: EveHandle["invocation"];
   readonly message: MessageContent;
@@ -163,7 +169,11 @@ export async function resolveOnMessage(input: {
 
   let result: EveMessageResult;
   try {
-    const base = { caller: input.auth, request: input.request };
+    const base: EveHandle = {
+      caller: input.auth,
+      clientContext: input.clientContext,
+      request: input.request,
+    };
     const eve: EveHandle =
       input.sessionId === undefined
         ? input.invocation === undefined
@@ -185,7 +195,35 @@ export async function resolveOnMessage(input: {
     );
   }
 
-  return { auth: result.auth, context: result.context, title: result.title };
+  return {
+    auth: result.auth,
+    clientContext: resolveTurnClientContext(result.clientContext, input.clientContext),
+    context: result.context,
+    title: result.title,
+  };
+}
+
+/**
+ * The turn's model context messages: `onMessage`'s replacement as written, otherwise
+ * the request's entries labeled as client-supplied. Empty means none.
+ */
+export function resolveTurnClientContext(
+  replacement: ClientContextValue | undefined,
+  requested: ClientContextValue | undefined,
+): readonly string[] | undefined {
+  const messages =
+    replacement === undefined
+      ? toContextEntries(requested).map((entry) => `${CLIENT_CONTEXT_PREFIX}${entry}`)
+      : toContextEntries(replacement);
+  return messages.length === 0 ? undefined : messages;
+}
+
+/** One model message per string; an object is JSON-serialized into one. */
+function toContextEntries(value: ClientContextValue | undefined): readonly string[] {
+  if (value === undefined || value === "") return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value;
+  return [JSON.stringify(value)];
 }
 
 function defaultOnMessage(ctx: EveMessageContext): EveMessageResult {

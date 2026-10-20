@@ -1,3 +1,4 @@
+// Epoch 39 of the dynamicInstructions capability: the authoring contract of epoch 38 still compiles.
 import { defineDynamic, defineInstructions } from "#public/instructions/index.js";
 
 // Epoch 38 `action.result` errors had no `name`; epoch 39 adds it as optional.

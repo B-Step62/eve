@@ -27,6 +27,7 @@ import type { Answer } from "#shared/input.js";
 // policy's allowance until the answer settles, so the approved call can read who approved it.
 
 const UNAUTHENTICATED_FEEDBACK = "Authentication is required to respond to this approval.";
+const INVALID_FEEDBACK = "Respond to this approval with Approve or Cancel.";
 const REQUESTER_ONLY_FEEDBACK =
   "Only the person who requested this action can respond to this approval.";
 const UNAVAILABLE_REASON =
@@ -59,9 +60,10 @@ export interface ResponderCheck {
 }
 
 /**
- * Checks who gave each of a delivery's answers. An approval without a response policy takes only
- * its requester's answer, or anyone's when its requester is anonymous; one with a policy records
- * an authenticated responder for the policy to weigh. Other answers stand as they arrive.
+ * Checks who gave each of a delivery's answers. An approval takes only Approve or Cancel. Without
+ * a response policy, it takes only its requester's answer, or anyone's when its requester is
+ * anonymous; with one, it records an authenticated responder for the policy to weigh. Other
+ * answers stand as they arrive, and an answer the session already holds was checked when it did.
  */
 export function checkResponders(
   view: SessionView,
@@ -76,6 +78,9 @@ export function checkResponders(
     const { responder: auth, responseId } = response;
     if (seen.has(responseId)) continue;
     seen.add(responseId);
+    // A repeated delivery brings back an answer the session holds: it changes nothing, whoever
+    // carried it, and a response policy already weighs it or has.
+    if (view.projection.view.responses[responseId] !== undefined) continue;
     const step = stepAsking(view, response.interactionId);
     const request = step?.requests.find((asked) => asked.interactionId === response.interactionId);
     if (step === undefined || request === undefined) {
@@ -83,17 +88,20 @@ export function checkResponders(
       continue;
     }
     const decision = decisionOf(response);
+    if (decision === undefined) {
+      refused.push({ reason: INVALID_FEEDBACK, responseId });
+      continue;
+    }
     const gated = step.responseAuthRequiredRequestIds?.includes(request.interactionId) === true;
     if (!gated) {
       // An answer attributed to nobody stays nobody's; only an unattributed one is the caller's.
       const responder = auth !== undefined ? auth : currentResponder();
       const requester = step.requester ?? null;
-      if (
-        responder !== null &&
-        decision !== undefined &&
-        requester !== null &&
-        !sameResponder(requester, responder)
-      ) {
+      if (requester !== null && responder === null) {
+        refused.push({ reason: UNAUTHENTICATED_FEEDBACK, responseId });
+        continue;
+      }
+      if (requester !== null && responder !== null && !sameResponder(requester, responder)) {
         refused.push({ reason: REQUESTER_ONLY_FEEDBACK, responseId });
         continue;
       }
@@ -102,7 +110,7 @@ export function checkResponders(
     }
     // A response policy decides Cancel as well as Approve, so a responder it rejects can
     // neither approve nor cancel someone else's request.
-    if (decision === undefined || responseId === undefined) continue;
+    if (responseId === undefined) continue;
     const responder = auth !== undefined ? auth : buildCallbackContext().session.auth.current;
     if (responder === null) {
       refused.push({ reason: UNAUTHENTICATED_FEEDBACK, responseId });

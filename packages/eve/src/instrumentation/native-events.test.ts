@@ -125,6 +125,7 @@ describe("step attempts from the stream", () => {
     ]);
   });
 
+  // A cancel stops the model call on purpose, so its attempt ends without failing (#5025).
   it("hears what a turn's end closes with it, as the writer commits it", async () => {
     const { commit, heard } = session();
     await commit(...opening);
@@ -152,8 +153,23 @@ describe("step attempts from the stream", () => {
     ).toEqual([
       ["call.requested", undefined],
       ["call.settled", "interrupted"],
-      ["model.settled", "interrupted"],
+      ["model.settled", "completed"],
     ]);
+  });
+
+  it("fails the attempt a failed turn's end closes", async () => {
+    const { commit, heard } = session();
+    await commit(...opening);
+    await commit(started("run_0", 0));
+    await commit({
+      data: { error: overloaded, outcome: "failed", turnId: "turn_0" },
+      scope: turn,
+      type: "turn.settled",
+    } as SessionEvent);
+
+    expect(
+      heard.flatMap((event) => (event.type === "model.settled" ? [event.outcome] : [])),
+    ).toEqual(["interrupted"]);
   });
 });
 

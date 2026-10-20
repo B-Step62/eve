@@ -1,3 +1,4 @@
+// Epoch 92 of the tool capability: the authoring contract of epoch 91 still compiles.
 import { defineTool } from "#public/tools/index.js";
 
 // Existing Connect auth providers still work without event support.

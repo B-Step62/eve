@@ -7,7 +7,13 @@ import { attachRouteSessionCreator } from "#internal/nitro/routes/channel-route-
 import { mockChannelContext } from "#internal/testing/mocks/mock-channel-operations.js";
 import { writeForwardedParentSessionBaggage } from "#protocol/baggage.js";
 import { none } from "#public/channels/auth.js";
-import { eveChannel, type TrustedForwarders } from "#public/channels/eve.js";
+import {
+  defaultEveAuth,
+  eveChannel,
+  type EveMessageContext,
+  type TrustedForwarders,
+} from "#public/channels/eve.js";
+import { readClientContext } from "#internal/client-context.js";
 import { captureLogRecords } from "#internal/testing/log-records.js";
 import { mockAgentRouteArgs } from "#internal/testing/mocks/mock-route-args.js";
 import { SessionStrandedError } from "#channel/session-stranded-error.js";
@@ -576,5 +582,105 @@ describe("eve ID-addressed session routes", () => {
 
     expect(response.status).toBe(400);
     expect(session[operation]).not.toHaveBeenCalled();
+  });
+});
+
+describe("eve channel onMessage client context", () => {
+  function jsonRequest(path: string, body: unknown): Request {
+    return new Request(`https://eve.test${path}`, {
+      body: JSON.stringify(body),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+  }
+
+  async function create(
+    onMessage: NonNullable<Parameters<typeof eveChannel>[0]["onMessage"]>,
+    body: unknown,
+  ) {
+    const createSession = vi.fn().mockResolvedValue({
+      events: new ReadableStream(),
+      sessionId: "wrun_A",
+    });
+    const response = await route("POST", "/eve/v1/session", { auth: none(), onMessage })(
+      jsonRequest("/eve/v1/session", body),
+      attachRouteSessionCreator(createArgs(), createSession),
+    );
+    const input = createSession.mock.calls[0]?.[0]?.input as Record<string, unknown> | undefined;
+    return { input, response };
+  }
+
+  async function continueSession(
+    onMessage: NonNullable<Parameters<typeof eveChannel>[0]["onMessage"]>,
+    body: unknown,
+  ) {
+    const session = createFixedSession();
+    const response = await route("POST", "/eve/v1/session/:sessionId", { auth: none(), onMessage })(
+      jsonRequest("/eve/v1/session/wrun_A", body),
+      createArgs(session),
+    );
+    const options = vi.mocked(session.send).mock.calls[0]?.[1] as object | undefined;
+    return { options, response };
+  }
+
+  it("shows onMessage the client's context and lets it replace that context for the turn", async () => {
+    const onMessage = vi.fn((ctx: EveMessageContext) => {
+      expect(ctx.eve.clientContext).toEqual({ plan: "pro" });
+      return { auth: defaultEveAuth(ctx), clientContext: ["Verified plan: hobby"] };
+    });
+
+    const { input, response } = await create(onMessage, {
+      clientContext: { plan: "pro" },
+      message: "What plan am I on?",
+    });
+
+    expect(response.status).toBe(202);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(input).toMatchObject({ message: "What plan am I on?" });
+    expect(input?.context).toBeUndefined();
+    expect(readClientContext(input)).toEqual(["Verified plan: hobby"]);
+  });
+
+  it("serializes an object returned from onMessage the same way as client objects", async () => {
+    const { input, response } = await create(
+      (ctx) => ({ auth: defaultEveAuth(ctx), clientContext: { plan: "hobby" } }),
+      { clientContext: "plan: pro", message: "What plan am I on?" },
+    );
+
+    expect(response.status).toBe(202);
+    expect(readClientContext(input)).toEqual(['{"plan":"hobby"}']);
+  });
+
+  it("shows onMessage no client context when the request sent none", async () => {
+    const onMessage = vi.fn((ctx: EveMessageContext) => {
+      expect(ctx.eve.clientContext).toBeUndefined();
+      return { auth: defaultEveAuth(ctx) };
+    });
+
+    const { input, response } = await create(onMessage, { message: "hi" });
+
+    expect(response.status).toBe(202);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(readClientContext(input)).toBeUndefined();
+  });
+
+  it("replaces the client's context on continue requests", async () => {
+    const { options, response } = await continueSession(
+      (ctx) => ({ auth: defaultEveAuth(ctx), clientContext: ["Verified team: acme"] }),
+      { clientContext: "team: other", message: "Hello" },
+    );
+
+    expect(response.status).toBe(202);
+    expect(readClientContext(options)).toEqual(["Verified team: acme"]);
+  });
+
+  it("drops the client's context when onMessage returns an empty clientContext", async () => {
+    const { options, response } = await continueSession(
+      (ctx) => ({ auth: defaultEveAuth(ctx), clientContext: [] }),
+      { clientContext: "team: other", message: "Hello" },
+    );
+
+    expect(response.status).toBe(202);
+    expect(readClientContext(options)).toBeUndefined();
   });
 });

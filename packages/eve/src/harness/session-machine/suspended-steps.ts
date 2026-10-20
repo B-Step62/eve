@@ -57,6 +57,20 @@ export function withResult(
   return next;
 }
 
+/** The messages without the results of the calls in `callIds`, which stay as unanswered calls. */
+export function withoutResults(
+  messages: readonly ModelMessage[],
+  callIds: ReadonlySet<string>,
+): ModelMessage[] {
+  return messages.flatMap((message): ModelMessage[] => {
+    if (message.role !== "tool") return [message];
+    const content = message.content.filter(
+      (part) => part.type !== "tool-result" || !callIds.has(part.toolCallId),
+    );
+    return content.length === 0 ? [] : [{ ...message, content }];
+  });
+}
+
 /** The call with this id, and the index of the message that made it. */
 function findCall(
   messages: readonly ModelMessage[],

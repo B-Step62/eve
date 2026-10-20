@@ -22,12 +22,12 @@ import type {
 import { withChannelAudience } from "#tracing/eve/channel-audience-context.js";
 import { eveTurnIdentity } from "#tracing/eve/operation-input.js";
 import type {
-  AgentTracing,
+  AgentRun,
   AttemptOperation,
   CaptureDecision,
   ToolInput,
   ToolOperation,
-} from "#compiled/@eve/tracing/index.js";
+} from "#compiled/@vercel/agent-runs/index.js";
 
 export interface AgentToolContext {
   readonly context: Context;
@@ -54,7 +54,7 @@ const OPEN_EXECUTIONS = 10000;
 
 /** Finds an open tool call in its turn's trace tree, in this or a later process. */
 export async function resumeTool(
-  tracing: AgentTracing,
+  tracing: AgentRun,
   state: AgentActionTraceState,
 ): Promise<ToolOperation | undefined> {
   const turn = await tracing.resume({
@@ -71,7 +71,7 @@ export async function resumeTool(
  * without a dispatch closes under its step when the step ends.
  */
 export function createAgentToolInstrumentation(input: {
-  readonly tracing: AgentTracing;
+  readonly tracing: AgentRun;
   readonly attemptFor: (scope: InstrumentationScope) => Promise<AttemptOperation | undefined>;
   readonly stepFor: (scope: InstrumentationScope) => AttemptOperation | undefined;
   readonly recordInputs: boolean;
