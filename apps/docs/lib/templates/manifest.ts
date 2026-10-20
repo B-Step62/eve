@@ -121,6 +121,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     ],
     preview: {
       surface: "web",
+      icon: "/templates/icons/web-chat.svg",
       context: "trips.example.com",
       messages: [
         { from: "user", text: "Plan a weekend in Lisbon for me" },
@@ -236,6 +237,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "assistant",
+      icon: "/templates/icons/slack-assistant.svg",
       context: "general",
       messages: [
         { from: "user", text: "@assistant what's the weather in Tokyo?" },
@@ -277,6 +279,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "brain",
+      icon: "/templates/icons/company-brain.svg",
       context: "ask-data",
       messages: [
         { from: "user", text: "@brain how many orders did we have, and what did they total?" },
@@ -319,6 +322,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "coder",
+      icon: "/templates/icons/coding-agent.svg",
       context: "eng",
       messages: [
         { from: "user", text: "@coder checkout 500s on an empty cart, can you fix it?" },
@@ -354,6 +358,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "analyst",
+      icon: "/templates/icons/data-analyst.svg",
       context: "data",
       messages: [
         { from: "user", text: "@analyst what was our MRR last month?" },
@@ -391,6 +396,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "contentful",
+      icon: "/templates/icons/contentful.svg",
       context: "content",
       messages: [
         { from: "user", text: "@contentful turn this outline into a blog post draft" },
@@ -425,6 +431,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "knowledge",
+      icon: "/templates/icons/vercel-drives.svg",
       context: "team",
       messages: [
         { from: "user", text: "@knowledge how much PTO do new hires get?" },
@@ -459,6 +466,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "memory",
+      icon: "/templates/icons/memory-agent.svg",
       context: "general",
       messages: [
         { from: "user", text: "@memory keep my summaries to three bullets from now on" },
@@ -560,7 +568,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "marketing",
-      icon: "/templates/icons/marketing-team.png",
+      icon: "/templates/icons/marketing-team.svg",
       context: "launch",
       messages: [
         { from: "user", text: "@marketing can you draft Thursday's launch posts?" },
@@ -664,6 +672,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "social",
+      icon: "/templates/icons/typefully.svg",
       context: "social",
       messages: [
         { from: "user", text: "@social turn the v2 launch brief in Notion into an X thread" },
@@ -782,7 +791,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "design",
-      icon: "/templates/icons/design.png",
+      icon: "/templates/icons/design.svg",
       context: "design",
       messages: [
         { from: "user", text: "@design what's our minimum tap target on mobile?" },
