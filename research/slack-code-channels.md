@@ -69,13 +69,17 @@ import { slackChannel } from "eve/channels/slack";
 
 export default slackChannel({
   credentials: connectSlackCredentials("slack/my-agent"),
-  codeChannels: true,
+  codeChannels: {
+    // Who can start turns in a code channel. Defaults to "confirm".
+    participants: "confirm",
+  },
 });
 ```
 
 Without `codeChannels`, a mention inside a code channel that a person opened from Slack's UI is
 still served as a code channel once the Slack app has the feature enabled. The option controls
-the manifest additions and the default for un-mentioned messages.
+the manifest additions, the default for un-mentioned messages, and who can drive the session (see
+[Participants](#participants)).
 
 Phase 2 is a workflow tool. A channel cannot contribute tools to the agent, so the app adds the
 tool as a file. eve ships a factory for it:
@@ -85,7 +89,8 @@ import { openCodeChannelTool } from "eve/channels/slack/tools";
 
 export default openCodeChannelTool({
   // Optional. Shapes what the code channel session starts from. Defaults to the calling
-  // session's transcript. Apps can trim or summarize it here.
+  // session's transcript. Apps can trim or summarize it here, or return false to start without
+  // history (see "Without history" below).
   history: (transcript) => transcript,
 });
 ```
@@ -126,19 +131,27 @@ itself are marked at creation and skip the lookup.
 
 ### Session keying
 
-A code channel is one session. eve keys it by `slackContinuationToken(channelId, "")`
-(`C123:`), not by thread. Every message in the channel, top-level or threaded, resolves to that
+A code channel is one session. eve keys it by `slackContinuationToken(channelId, "0")`
+(`C123:0`), not by thread. Every message in the channel, top-level or threaded, resolves to that
 session. Slack does not allow separate agent sessions in a code channel's threads, so this matches
 Slack's model.
+
+`"0"` is a placeholder thread, not an empty one. In eve's Slack state, an empty `threadTs` already
+means "not anchored yet: the first post starts a thread". A non-empty placeholder keeps that
+meaning intact and needs no special case in session state. Slack accepts `thread_ts: "0"` on
+`chat.startStream` as "top-level". For other calls, eve's Slack binding omits `thread_ts` when
+the thread is `"0"`, and reads channel history with `conversations.history` instead of
+`conversations.replies`.
 
 ### Reply placement
 
 eve replies top-level in a code channel. A threaded user message gets its reply in that thread.
 
 Today, a binding that starts without a `threadTs` adopts the first posted message as the thread
-root (`onThreadTsChanged`), so every later reply would land in that thread. Code channel state
-disables that auto-anchor. Streaming uses `chat.startStream` without `thread_ts`, which Slack
-supports for top-level messages in code channels.
+root (`onThreadTsChanged`), so every later reply would land in that thread. The `"0"` placeholder
+is a `threadTs`, so the auto-anchor never runs in a code channel. Streaming uses
+`chat.startStream` without `thread_ts` (or with `"0"`), which Slack supports for top-level
+messages in code channels.
 
 ### Mentions
 
@@ -146,6 +159,27 @@ Slack asks agents to respond in a code channel without a mention. The default me
 every human message in a code channel as a turn, the same way it treats DMs today. An authored
 `onMessage` keeps full control. A new `ctx.isCodeChannel()` helper joins `isDMOrPrivateChannel()`
 and `isSubscribed()`.
+
+When Slack creates a code channel from an origin message, it posts a context message into the new
+channel that quotes the origin (a block with `block_id: "agent_channel_origin_context"`, with
+fallback text that starts `Context from #channel`). The default hook skips it, so it never starts
+a turn. The forked session already has the origin conversation as history.
+
+### Participants
+
+Code channels admit members of the origin channel, so more people can talk in one than asked for
+it. The session's auth comes from whoever started it, so an unrestricted channel lets any member
+drive work under the starter's identity. `codeChannels.participants` sets the policy:
+
+| Value       | Behavior                                                                                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"owner"`   | Only the person who opened the channel starts turns. Other messages are ignored.                                                                           |
+| `"confirm"` | Other members' messages become an approval request to the owner, using eve's existing HITL. A confirmed request runs as a turn; a rejected one is dropped. |
+| `"all"`     | Every member starts turns, with auth derived per message as in ordinary threads.                                                                           |
+
+The owner is the person who triggered the fork, or the channel's `creator` for a channel opened
+from Slack's UI. eve checks channel membership before admitting a message from a channel it did
+not create, because a mention event alone does not prove the speaker can see the channel.
 
 ### Session status
 
@@ -179,6 +213,13 @@ session once eve adopts thread agent sessions; that is outside this plan.
 gets un-mentioned code channel messages without subscribing to every channel message. Vercel
 Connect connectors need the same scopes and events.
 
+### Slack method names
+
+Slack documents the `agents.conversations.*` methods. Some workspaces still answer only the older
+`codeChannels.*` names. eve calls `agents.conversations.*` and retries the same call under
+`codeChannels.*` when Slack returns `unknown_method`. Only `unknown_method` from the fallback
+counts as a permanent failure.
+
 ## Phase 2: fork a thread into a code channel
 
 ### Flow
@@ -190,11 +231,11 @@ Connect connectors need the same scopes and events.
 async execute(input, ctx) {
   "use workflow";
   const auth = ctx.session.auth.current;
-  const origin = slackOrigin(auth); // channel_id, thread_ts, user_id from Slack's default auth
+  const origin = slackOrigin(auth); // channel_id, thread_ts, message_ts, user_id from Slack's auth
   if (!origin) return { opened: false, reason: "This conversation is not in Slack." };
 
   if (!(await isOriginEligible(origin))) return { opened: false, reason: "ineligible" }; // step
-  const channelId = await createCodeChannel(origin, input.name, ctx.session.id); // step
+  const channelId = await createCodeChannel(origin, input.name); // step
   const history = await readTranscript(ctx.session.id); // step
   const { sessionId } = await ctx
     .to<typeof slack>("slack", { channelId, codeChannel: true })
@@ -203,14 +244,20 @@ async execute(input, ctx) {
 }
 ```
 
-1. **Check the origin.** Shared and Slack Connect origins may include people outside the
-   workspace. The tool does not fork them.
-2. **Create the channel.** `agents.conversations.create` with the origin channel, an origin
-   message `ts`, and a `session_id`. Slack's default auth carries `thread_ts` but not the
-   triggering message's `ts`, so the tool links the thread root. Adding `message_ts` to the
-   default auth attributes would let it link the exact message. Slack treats `session_id` as an
-   idempotency key (at most 64 characters), so the tool derives it from the calling session id
-   and the tool call. A retried step gets the same channel.
+1. **Check the origin.** Slack Connect origins may include people outside the workspace, and the
+   tool does not fork them: `is_ext_shared`, `is_pending_ext_shared`, or a non-empty
+   `pending_shared`. `is_shared` and `is_org_shared` also block a fork, except on DMs: Enterprise
+   Grid marks every DM as org-shared, so treating that as Slack Connect would block every DM on
+   Grid.
+2. **Create the channel.** `agents.conversations.create` with the origin channel, the triggering
+   message's `ts`, `is_private` copied from the origin (DMs and group DMs count as private), and a
+   `session_id`. eve's default Slack auth gains a `message_ts` attribute so the tool can link the
+   exact message, not the thread root. Slack treats `session_id` as an idempotency key (at most
+   64 characters). The tool uses a hash of team, requester, origin channel, and origin thread, so
+   one requester gets one code channel per thread: a retried step, or the model calling the tool
+   again, returns the same channel. Right after creation, the tool sets the channel's status to
+   `processing`, publishes the [binding](#the-channel-binding), and clears the origin thread's
+   status line.
 3. **Read the transcript.** Fold the calling session's stream with `transcriptReducer()`, as in
    the fork pattern. It keeps the current turn's user message and finished assistant text, and
    leaves out partial text and tool calls.
@@ -220,6 +267,11 @@ async execute(input, ctx) {
 5. **Point back.** The tool returns the channel, and the model's reply in the thread links to it.
    The source thread stays a normal session for quick questions.
 
+Because the channel is keyed per requester and thread, a second call can reach a channel that
+already has its session. With `to().create()` (see [Retries and races](#retries-and-races)) that
+returns `created: false`, and the tool reports `alreadyOpen` without delivering anything. Until
+then, the tool checks for a binding with a session before sending.
+
 The `ctx.slack.openCodeChannel()` helper for inbound handlers runs the same steps with `from()`.
 
 ### The code channel target
@@ -228,10 +280,29 @@ The Slack channel's `receive()` maps a target with only a `channelId` to a new t
 random continuation token until the first post, then aliases the session to that post's `ts`. A
 code channel needs the opposite. `receive()` gains a `codeChannel: true` target that:
 
-- keys the session by `slackContinuationToken(channelId, "")`, the same address phase 1 uses for
+- keys the session by `slackContinuationToken(channelId, "0")`, the same address phase 1 uses for
   inbound messages, so later messages in the channel reach the forked session;
-- marks session state as a code channel, which disables the thread auto-anchor;
+- marks session state as a code channel and records its owner for [Participants](#participants);
 - seeds the state with `forkedFrom` (source session id and turn), until eve has lineage.
+
+### The channel binding
+
+A code channel needs a durable record of where it came from: the source session, the turn it
+forked at, and its owner. eve can keep that record on the channel itself, in the `agent_resource`
+property that `agents.conversations.setProperties` sets, so any deployment can read it back with
+`conversations.info` and eve needs no store of its own.
+
+The binding must be signed. Slack lets any member of a code channel call
+`agents.conversations.*` methods on it, so an unsigned binding could be rewritten to point a
+channel at another session. eve HMAC-signs the binding with a deployment secret and ignores a
+binding whose signature does not verify. `agent_resource` takes a URL, so the signed binding rides
+in the fragment of a link the app chooses, which also gives the channel a useful "open" link.
+
+Signing needs a secret. Without one, eve skips the binding and falls back to `origin_link`, which
+Slack writes and members cannot change, but which identifies only the origin message, not the
+source session or turn. A binding that fails to publish after the channel exists is reported to
+the model like a creation failure: the work continues in the thread, and the model is told not to
+retry.
 
 ### Retries and races
 
@@ -274,6 +345,15 @@ token to it. This plan forks instead:
 - #5096 already gives workflow tools a supported fork path. Moving a live session between
   addresses mid-turn has no precedent in eve.
 
+### Without history
+
+Some agents keep their working state outside the eve transcript, for example in an external task
+or job that the session drives. For them, the code channel session does not need the thread's
+conversation, only a pointer to that state. `history: false` starts the code channel session
+with just the first message, and the app carries the pointer in the message or in the binding.
+Such apps usually want the `queue` turn policy in the code channel, so later messages line up
+behind the running work instead of interrupting it.
+
 ### Who decides
 
 Slack's guidance is that the model decides from the request and its context, and that users
@@ -288,21 +368,27 @@ that want to hide it there can wrap it in a dynamic tool resolver on the Slack c
 These Slack errors are permanent for the installation or origin, and the tool returns
 `unavailable` without retrying: `feature_disabled`, `invalid_agent`, `invalid_origin_link`,
 `missing_scope`, `not_allowed_token_type`, `origin_channel_externally_shared`,
-`origin_channel_is_file_channel`, `restricted_action`, `unknown_method`, `user_not_enabled`.
-Other errors are retried by the step. When the tool returns `unavailable` or `ineligible`, the
-model continues in place.
+`origin_channel_is_file_channel`, `restricted_action`, `unknown_method` (after the
+[fallback](#slack-method-names)), `user_not_enabled`. Other errors are retried by the step. When
+the tool returns `unavailable` or `ineligible`, the model continues in place, and the tool result
+tells it not to retry channel creation on its own.
 
 ### Channels opened from Slack's UI
 
 A person can open a code channel from Slack directly, then mention the agent in it. eve detects
-the channel and reads `agent_session.origin_link` (`channel_id`, `ts`). The origin message may be
-a reply, so eve looks up that message's `thread_ts` and resolves
-`slackContinuationToken(origin.channel_id, thread_ts)`. When a source session exists, eve seeds
-history from it, as in a fork. A channel with no origin, or an origin with no session, starts
-fresh.
+the channel and first reads a verified [binding](#the-channel-binding). Without one, it reads
+`agent_session.origin_link` (`channel_id`, `ts`). The origin message may be a reply, so eve looks
+up that message's `thread_ts` and resolves `slackContinuationToken(origin.channel_id, thread_ts)`.
+When a source session exists, eve seeds history from it, as in a fork. A channel with no origin,
+or an origin with no session, starts fresh.
 
-The same resolution serves the race in [Retries and races](#retries-and-races), so eve needs no
-separate store of forks. A fork and a discovery can resolve slightly different cut points in the
+eve ignores a code channel that is archived, shared outside the workspace, or not assigned to this
+app's bot (`agent_session.encoded_agent_bot_user_ids`). The channel's `creator` becomes its owner
+for [Participants](#participants).
+
+The same resolution serves the race in [Retries and races](#retries-and-races). A fork that
+published its binding gives discovery the exact source session and turn. Without a binding, a
+fork and a discovery can resolve slightly different cut points in the
 source session (the fork stops at its own turn; discovery reads up to the current tail). Once
 `create()` takes a first message, only the claim winner's history is used.
 
@@ -398,12 +484,11 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 
 ## Open questions
 
-1. **Method name.** Slack documents `agents.conversations.create`. At least one existing
-   integration calls `codeChannels.create`. Confirm which name is generally available before
-   implementing.
-2. **Auth for the forked session.** The tool passes the caller's auth, which the session keeps.
-   Code channels can gain members from the origin channel, so apps that scope auth per user may
-   want auth derived per message instead, as in ordinary threads.
+1. **Binding secret.** Whether eve derives the binding's signing key from an existing deployment
+   secret or asks apps for a dedicated one, and what eve does when neither exists.
+2. **Confirmed requests' auth.** Under `"confirm"`, whether a confirmed request runs as the owner
+   (the session's auth) or as the requester. Running as the owner is simpler but lets the owner
+   approve work they could not have asked for in the requester's name.
 3. **Chat SDK.** eve's Slack transport calls the Web API directly, so this does not depend on the
    Chat SDK Slack adapter. If the adapter adds code channel APIs, eve should match its naming.
 4. **Default `history`.** The whole source transcript can be noisy. A model-written handoff brief
@@ -417,9 +502,11 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 ## Validation plan
 
 - Unit: code channel detection and caching; channel-scoped keying for top-level and threaded
-  messages; auto-anchor disabled in code channels; status transitions per lifecycle event;
-  `session_id` derivation within 64 characters; permanent error classification; the `codeChannel`
-  receive target maps to `C123:`.
+  messages; the `"0"` placeholder omits `thread_ts` and never auto-anchors; Slack's origin context
+  message is skipped; status transitions per lifecycle event; `session_id` derivation within 64
+  characters; origin eligibility, including Grid DMs marked org-shared; the `unknown_method`
+  fallback; permanent error classification; binding signing and rejection of a tampered binding;
+  each `participants` policy; the `codeChannel` receive target maps to `C123:0`.
 - Integration, modeled on #5096's `channel-handoff.integration.test.ts` against the real
   `slackChannel()` with Slack's API mocked: the tool forks a thread into a code channel, the code
   channel session's first model call sees the thread's history, a later message in the code
