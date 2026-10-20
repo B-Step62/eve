@@ -1014,8 +1014,8 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
       }),
     ],
 
-    receive(input, { from }) {
-      return receiveOnSlack(input, { from, api, credentials: config.credentials });
+    receive(input, { from, resolveSession }) {
+      return receiveOnSlack(input, { from, resolveSession, api, credentials: config.credentials });
     },
 
     events,
@@ -1050,6 +1050,7 @@ async function receiveOnSlack(
   },
   deps: {
     readonly from: ChannelFrom<SlackChannelState>;
+    readonly resolveSession: ChannelResolveSession;
     readonly api: SlackTransportOptions | undefined;
     readonly credentials: SlackChannelCredentials | undefined;
     /** Installation workspace inherited from an inbound trigger. */
@@ -1164,6 +1165,11 @@ async function receiveInNewCodeChannel(
     requester: input.auth?.principalId ?? "anonymous",
     request,
   });
+  const address = slackContinuationToken(created.channelId, CODE_CHANNEL_THREAD_TS);
+  // The same requester and origin message reach the same channel; a repeated
+  // call joins its session instead of linking and seeding it again.
+  const existing = await deps.resolveSession(address);
+  if (existing !== undefined) return existing;
   await setSlackCodeChannelStatus(request, created.channelId, "processing");
   try {
     await request("chat.postMessage", {
@@ -1184,7 +1190,7 @@ async function receiveInNewCodeChannel(
     triggeringUserId: deps.triggeringUserId ?? slackUserIdFromAuthContext(input.auth) ?? null,
   };
   return await deps
-    .from(slackContinuationToken(created.channelId, CODE_CHANNEL_THREAD_TS))
+    .from(address)
     .send(input.message, { auth: input.auth, history: input.history, state, title: input.title });
 }
 
@@ -1606,6 +1612,7 @@ async function dispatchSlackEvent(input: {
         { auth, history, message, target, title },
         {
           from: input.from,
+          resolveSession: input.resolveSession,
           api: input.api,
           credentials: input.credentials,
           installationTeamId: input.installationTeamId,

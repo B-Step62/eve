@@ -310,10 +310,20 @@ describe("workflow tool channel handoffs", () => {
         await waitForCompletedTurns(codeSession, 2);
         expect(lastModelInput(modelInputs, codeSession)).toContain("Alice prefers Friday.");
         expect(lastModelInput(modelInputs, source.runId)).not.toContain("Alice prefers Friday.");
+        const codeSessionModelCalls = modelInputs.filter(
+          ({ sessionId }) => sessionId === codeSession,
+        ).length;
 
-        // A repeat call for the same message reaches the same channel and session.
+        // A repeat call for the same message joins the same session without linking or
+        // seeding it again.
         await sendToSession(source.runId, request);
         expect(forkedSessionId(await sourceTurns.nextTurn())).toBe(codeSession);
+        expect(
+          slackCalls.filter(({ body }) => body.text === "Continuing in <#C_CODE>."),
+        ).toHaveLength(1);
+        expect(modelInputs.filter(({ sessionId }) => sessionId === codeSession)).toHaveLength(
+          codeSessionModelCalls,
+        );
       } finally {
         sourceTurns.dispose();
         await source.cancel();

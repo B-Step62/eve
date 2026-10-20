@@ -336,7 +336,7 @@ The model calls the tool with a channel name and a first message for the new cha
 
 The tool returns `unavailable` outside Slack, inside a code channel, for conversations shared outside the workspace through Slack Connect, and when Slack refuses to create the channel, for example when code channels are disabled or a scope is missing. The model then continues in the thread.
 
-One person gets one code channel per message, so a repeated call for the same message reaches the same channel and session. A failed step that retries after the session started delivers the history and first message again.
+One person gets one code channel per message. A repeated call for the same message, or a retried step, reaches the same channel and joins its session without linking or seeding it again. If someone writes in the new channel before its session starts, that message starts the session without the thread's history.
 
 ### Other Events API callbacks
 

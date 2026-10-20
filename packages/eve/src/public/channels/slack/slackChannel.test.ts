@@ -5907,6 +5907,35 @@ describe("slackChannel().receive", () => {
     });
   });
 
+  it("joins the code channel's session when a repeated call reaches the same channel", async () => {
+    fetchMock.mockImplementation(async (url: string | URL) =>
+      String(url).endsWith("/agents.conversations.create")
+        ? Response.json({ ok: true, channel_id: "C_CODE_REPEAT" })
+        : Response.json({ ok: true, channel: { is_private: false }, ts: "1700000001.000001" }),
+    );
+    const send = vi.fn();
+    const context = mockChannelContext(send);
+    const resolveSession = vi.fn(async (address: string) =>
+      address === "C_CODE_REPEAT:0" ? ({ id: "session_code" } as never) : undefined,
+    );
+
+    const session = await buildReceive()(
+      {
+        message: "Start by reproducing it.",
+        target: {
+          channelId: "C_ORIGIN",
+          codeChannel: { name: "Fix it", originTs: "1700000000.000002" },
+        },
+        auth: null,
+      },
+      { ...context, resolveSession },
+    );
+
+    expect(session).toEqual({ id: "session_code" });
+    expect(send).not.toHaveBeenCalled();
+    expect(slackCalls(fetchMock, "chat.postMessage")).toHaveLength(0);
+  });
+
   it("rejects a code channel target combined with a thread", async () => {
     const send = vi.fn();
     await expect(
