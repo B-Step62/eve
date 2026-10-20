@@ -45,7 +45,7 @@ export function createEveChatSession(
   );
   const error = computed(() => agent.value.error.value);
 
-  const isBusy = computed(() => status.value === "submitted" || status.value === "streaming");
+  const isBusy = computed(() => status.value === "streaming");
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();

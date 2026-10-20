@@ -105,7 +105,7 @@ function isSaveMemoryRequest(request: PendingInputRequest) {
 
 function denyResponses(requests: readonly PendingInputRequest[]) {
   return requests.map((request) => ({
-    requestId: request.requestId,
+    interactionId: request.requestId,
     optionId: "deny" as const,
   }));
 }
@@ -143,7 +143,7 @@ async function resolvePendingInput(
     };
     await source.respond(
       pending.map((request) => ({
-        requestId: request.requestId,
+        interactionId: request.requestId,
         optionId: approval,
       })),
       { auth: sendOptions.auth },
