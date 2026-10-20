@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
@@ -24,12 +25,34 @@ export async function checkPublicApiShapes({ write = false, initialize = false }
     });
     const manifest = JSON.parse(await readFile(join(eve, "package.json"), "utf8"));
     const declarations = join(temp, "declarations");
+    // Bundled extensions self-import eve before a clean checkout has a dist tree.
+    const paths = Object.fromEntries(
+      Object.entries(manifest.exports).flatMap(([entry, target]) => {
+        if (typeof target !== "object" || !target.types?.endsWith(".d.ts")) return [];
+        const declaration = join(eve, target.types.replace(/^\.\/dist\//u, ""));
+        const source = declaration.replace(/\.d\.ts$/u, ".ts");
+        return [
+          [
+            entry === "." ? "eve" : `eve${entry.slice(1)}`,
+            [existsSync(source) ? source : declaration],
+          ],
+        ];
+      }),
+    );
+    const config = join(temp, "tsconfig.json");
+    await writeFile(
+      config,
+      JSON.stringify({
+        extends: join(eve, "tsconfig.build.json"),
+        compilerOptions: { paths },
+      }),
+    );
     execFileSync(
       process.execPath,
       [
         join(dirname(require.resolve("typescript/package.json")), "bin/tsc"),
         "-p",
-        join(eve, "tsconfig.build.json"),
+        config,
         "--outDir",
         declarations,
       ],
