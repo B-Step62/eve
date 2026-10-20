@@ -21,6 +21,8 @@ agent/
   tools/                        also disables write_file and agent, as in the coding agent template
 ```
 
+Files shared with the [coding agent template](../eve-coding-agent-template), such as the extensions, sandbox, and GitHub broker, are copied from it by `pnpm sync:template-files`. Edit them there.
+
 1. **Opening a channel.** When a mention asks for a code channel, `onAppMention` calls `agents.conversations.create` with the requesting message as the origin, before the agent runs. The first turn starts in the new channel with the request and the earlier thread messages as context. If Slack refuses, for example because Slack Code isn't enabled for the workspace, the agent answers in the thread instead. Other mentions behave like the [coding agent template](../eve-coding-agent-template).
 2. **One session per channel.** A code channel is one task, but eve gives each Slack thread its own session. `withCodeChannelSessions` sends every turn from a code channel to a single channel-wide session instead. Code channels people open from Slack's own UI with this agent selected are detected with `conversations.info` and handled the same way.
 3. **No mention needed.** In a code channel, every human message continues the task, except messages that mention other people but not the agent. Slack's origin context message is skipped.
@@ -58,10 +60,10 @@ For a Connect-managed app, add the scopes and events under **Advanced** when cre
 **GitHub.** Create a GitHub connector so the agent can push branches and open pull requests:
 
 ```bash
-vercel connect create github --name code-channels
+vercel connect create github --name coding-agent
 ```
 
-Then set `GITHUB_ORG` (and `GITHUB_CONNECTOR` if it is not `github/code-channels`) in `.env.local` and your Vercel project, deploy with `eve deploy`, and install the GitHub App on your repositories from the Connect dashboard.
+Then set `GITHUB_ORG` (and `GITHUB_CONNECTOR` if it is not `github/coding-agent`) in `.env.local` and your Vercel project, deploy with `eve deploy`, and install the GitHub App on your repositories from the Connect dashboard.
 
 ## Limitations
 

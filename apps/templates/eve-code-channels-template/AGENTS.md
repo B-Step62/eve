@@ -56,4 +56,4 @@ Run the validation the task requests. When it does not establish the behavior yo
 
 ## This agent
 
-A coding agent built on `eve/extensions/code` and `eve/extensions/git` that works in Slack code channels. Read `node_modules/eve/docs/code-extension.mdx` before changing `agent/extensions/`, `agent/sandbox.ts`, or `agent/lib/github.ts`, and `node_modules/eve/docs/channels/slack.mdx` before changing `agent/channels/slack.ts`. Code channel routing lives in `agent/lib/code-channels.ts`: every message in a code channel goes to one session at `<channelId>:0`, and the renderer in `agent/channels/slack.ts` posts that session's replies top-level. The `git__gh` tool depends on the Vercel Sandbox network policy, so keep the sandbox on a provider with `setNetworkPolicy()`.
+A coding agent built on `eve/extensions/code` and `eve/extensions/git`. Read `node_modules/eve/docs/code-extension.mdx` before changing `agent/extensions/`, `agent/sandbox.ts`, or `agent/lib/github.ts`. The `git__gh` tool depends on the Vercel Sandbox network policy, so keep the sandbox on a provider with `setNetworkPolicy()`.
