@@ -130,12 +130,11 @@ doesn't need to repeat goes in a memo ([change 2](#2-ctxmemo-keeps-what-eve-lear
 <details>
 <summary>What the function can read</summary>
 
-| Context       | Fields                                                                                                               |
-| ------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Dynamic value | `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.model`, `ctx.messages()`, `ctx.memo`           |
-| Hook function | `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.memo`, `ctx.once`, `ctx.cancel`, `ctx.compact` |
-| Event handler | The hook context, plus the event and `ctx.occurrence`                                                                |
-| Memo or once  | `fn(occurrence)` gets `occurrence.idempotencyKey` and `occurrence.abortSignal`, and can read the enclosing `ctx`     |
+| Context       | Fields                                                                                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Dynamic value | `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.model`, `ctx.messages()`, `ctx.memo`                                             |
+| Hook handler  | The event, plus `ctx.session`, `ctx.channel`, `ctx.view`, `ctx.turn`, `ctx.now`, `ctx.occurrence`, `ctx.memo`, `ctx.once`, `ctx.cancel`, `ctx.compact` |
+| Memo or once  | `fn(occurrence)` gets `occurrence.idempotencyKey` and `occurrence.abortSignal`, and can read the enclosing `ctx`                                       |
 
 - **`ctx.view` is the same view a client folds from the stream,** so selectors from `eve/events`,
   such as `idle(view)`, give the same answer on both sides.
@@ -334,55 +333,33 @@ new key runs it again, so this router reads the conversation and still decides o
 
 </details>
 
-### 4. Hooks act on state, with `ctx.once` and commands
+### 4. Hooks can act, with `ctx.once` and commands
 
-**Today.** A hook is a map of event handlers. That fits "send a notification for every settled
-turn", but a condition such as "the session is idle" isn't one event: the hook has to work out
-which events can cause it. Doing something once, such as one alert per session, means keeping a
-flag in `defineState` and building an idempotency key by hand. Cancelling means calling
-`ctx.cancel()` before the handler's promise settles, and there's no way to ask for a compaction.
+**Today.** A hook is a map of event handlers that can watch but barely act. Doing something once,
+such as one alert per session, means keeping a flag in `defineState` and building an idempotency
+key by hand. Cancelling means calling `ctx.cancel()` before the handler's promise settles, and
+there's no way to ask for a compaction.
 
-**The change.** A hook can also be a function that eve runs after every commit. It reads the same
-view a client sees. Either form can change something with `ctx.once(key, fn)`, which runs `fn`
-once per key for the life of the session:
+**The change.** A hook stays a map of event handlers, one call per matching fact. A handler reads
+the same view a client sees, and changes something with `ctx.once(key, fn)`, which runs `fn` once
+per key for the life of the session:
 
 ```ts
 // agent/hooks/budget-alert.ts
-export default defineHook(async (ctx) => {
-  if (spentUsd(ctx.view) <= 50) return;
-  await ctx.once(ctx.session.id, ({ idempotencyKey }) =>
-    email.send({ template: "budget", idempotencyKey }),
-  );
+export default defineHook({
+  events: {
+    async "model.settled"(_event, ctx) {
+      if (spentUsd(ctx.view) <= 50) return;
+      await ctx.once(ctx.session.id, ({ idempotencyKey }) =>
+        email.send({ template: "budget", idempotencyKey }),
+      );
+    },
+  },
 });
 ```
 
 eve's own commands are effects too. `ctx.cancel(reason)` stops the running turn, and
 `ctx.compact(reason)` compacts before the next model call:
-
-```ts
-// agent/hooks/compact-when-idle.ts
-import { idle } from "eve/events";
-import { defineHook } from "eve/hooks";
-
-export default defineHook((ctx) => {
-  if (ctx.turn && idle(ctx.view)) ctx.compact("The session went idle.");
-});
-```
-
-A command acts once on its target, so calling it again while its condition holds is safe:
-`cancel` acts once on the running turn, and `compact` once on the next model call. The hook above
-compacts once each time the session goes idle. To act at most once per turn or per session, wrap
-the command in `ctx.once`, the same way as an email:
-
-```ts
-// agent/hooks/compact-over-budget.ts
-export default defineHook(async (ctx) => {
-  if (contextTokens(ctx.view) <= 150_000) return;
-  await ctx.once(ctx.turn?.id ?? null, () => ctx.compact("Over the context budget."));
-});
-```
-
-The event form stays, and its handlers use the same commands:
 
 ```ts
 // agent/hooks/require-credentials.ts
@@ -399,19 +376,39 @@ export default defineHook({
 
 eve applies the cancel before the turn's dynamic values run or its model is called.
 
+A command acts once on its target, so asking again is safe: `cancel` acts once on the running
+turn, and `compact` once on the next model call. To act at most once per turn or per session, wrap
+the command in `ctx.once`, the same way as an email:
+
+```ts
+// agent/hooks/compact-over-budget.ts
+export default defineHook({
+  events: {
+    async "model.settled"(_event, ctx) {
+      if (contextTokens(ctx.view) <= 150_000) return;
+      await ctx.once(ctx.turn?.id ?? null, () => ctx.compact("Over the context budget."));
+    },
+  },
+});
+```
+
+A handler on `"*"` runs for every fact except streamed progress. It's the way to act on a
+condition over the view, such as `idle(ctx.view)`, when no one event causes it.
+
 **Why it's useful.**
 
-- "Whenever the session is idle" and "for every settled turn" are different requests, and each
-  gets its own form.
 - One rule covers every effect a hook has: to do something at most once per X, wrap it in
   `ctx.once(X, …)`. That holds for an email, a compaction, and a cancel.
 - A hook acts with a plain `if`, without tracking whether it already acted.
+- The split between the two kinds stays simple. A dynamic value is a function of the session,
+  because a value has to exist at every model call. A hook reacts to facts, because it acts when
+  something happens, and it only lists the events it cares about.
 
-**The cost.** A hook function runs after every commit, so it must be cheap: reads go in
-`ctx.memo`, and effects in `ctx.once`. Hooks run before the next model call, as on `main`, so a
-hook's I/O delays it. A command whose condition stays true asks again at each new target: without
-the `once` above, a hook that compacts over a token count compacts before every model call if
-compaction can't get below it.
+**The cost.** Handlers run before the next model call, as on `main`, so a handler's I/O delays it.
+Reads that repeat go in `ctx.memo`. A command whose condition stays true asks again at each new
+target: without the `once` above, a hook that compacts over a token count compacts before every
+model call if compaction can't get below it. A condition that several events can cause either
+lists them all or uses `"*"`, which runs once per fact.
 
 <details>
 <summary>Retries and idempotency keys</summary>
@@ -479,7 +476,7 @@ export default defineDynamic(async (ctx) => {
 ```
 
 Without the `try`, a CRM outage fails the turn. A required check, such as the credentials hook in
-[change 4](#4-hooks-act-on-state-with-ctxonce-and-commands), doesn't catch, so it can't be skipped.
+[change 4](#4-hooks-can-act-with-ctxonce-and-commands), doesn't catch, so it can't be skipped.
 
 **Why it's useful.**
 
@@ -496,8 +493,9 @@ failure and returns `null` keeps that `null` until its key changes, while a `try
 <summary>Errors outside a turn</summary>
 
 - **A hook that fails between turns has no turn to fail.** eve logs the hook, the occurrence, and
-  the error, and doesn't retroactively fail a finished turn. A failed `once` runs again at the next
-  commit. A public fact for these failures can come later: readers ignore fact types they don't
+  the error, and doesn't retroactively fail a finished turn. A handler isn't retried on a later
+  fact, but a failed `once` keeps nothing, so it runs the next time any handler reaches the same
+  key. A public fact for these failures can come later: readers ignore fact types they don't
   recognize.
 - **A dynamic value's error fails the turn before the model call it was evaluated for; a hook's,**
   before the turn's next model call or as the turn would otherwise settle.
@@ -637,8 +635,8 @@ new binding as soon as the child opens, so the error appears on the first run.
 The changes above are one model, seen from different sides. A definition is a function of a
 **frame**, the session at a commit, and its **records**, the results of outside interactions kept
 under a key. It returns what it wants to be true, and eve compares that with what's in place and
-acts on the difference. A dynamic value returns a capability, and eve installs it. A hook returns
-nothing; its effects and commands are records, and eve applies each once.
+acts on the difference. A dynamic value returns a capability, and eve installs it. A hook handler
+returns nothing; its effects and commands are records, and eve applies each once.
 
 ```text
 frame (session at a commit) ──┐
@@ -657,7 +655,8 @@ The two kinds of record differ in one property: whether eve may redo them.
 | On a deployment change | Discarded                           | Kept                                   |
 | Available in           | Dynamic values and hooks            | Hooks                                  |
 
-Event handlers fit the same model: an event handler is a hook whose occurrence is the fact's
+Hooks fit the same model with a different trigger. A dynamic value is evaluated whenever a step
+needs the value; a hook handler is evaluated once per fact, and its occurrence is the fact's
 position, so it acts once per fact. Internally, one runner evaluates every definition, and one
 record store holds memos, once records, and queued commands. A kind only supplies how its value
 joins the session.
@@ -672,9 +671,9 @@ This is the contract authors can rely on, rather than an incidental order of int
 - **Everywhere else, eve restores.** Today that's only remote children
   ([change 7](#7-remote-agents-are-restored-from-their-binding)). A request for what a session can
   do, such as agent info, reads what the last evaluation installed and never evaluates.
-- **Hooks run after each commit,** inside a turn or between turns. A hook function runs once per
-  commit; an event handler runs for each matching fact. Streamed progress, such as content deltas,
-  reaches only event handlers that subscribe to it.
+- **Hooks run after each commit,** inside a turn or between turns: each handler runs once for each
+  matching fact the commit carries. Streamed progress, such as content deltas, reaches only handlers
+  that subscribe to it by name, not `"*"`.
 - **Hooks run first.** Before a model call, hooks finish with the latest commit before dynamic
   values run, as on `main`, so a hook that cancels stops the turn before any dynamic value fetches
   data. Hooks run in path order. If one commit produces both `cancel` and `compact`, `cancel` wins.
@@ -1196,7 +1195,9 @@ export default defineHook({
   new caller, compaction. Each new case adds to the event list, which is public API.
 - **Several listed events need a merge rule,** and that brings back precedence.
 - **Every value is two callbacks,** including the common one that only reads the session.
-- **Hooks still keep their own memory** for "once", as the budget alert does with `defineState`.
+- **Hooks still keep their own memory** for "once". The budget alert above differs from this
+  proposal's only in its `defineState` flag and hand-built idempotency key, where this proposal
+  uses `ctx.once`.
 
 This proposal can express the event-keyed model, because an event's position is a key: "once per
 `turn.started`" is `ctx.memo(ctx.turn.id, …)`. The reverse doesn't hold: a key such as a tenant ID
@@ -1301,7 +1302,7 @@ matters most. A definition that loops over accounts has to fetch everything in o
   conversation, which hooks don't.
 - **Field-level dynamic values,** such as `available` or a dynamic `description`, would be a second
   way to vary a capability.
-- **Time passing without a commit.** A hook function runs after commits, so "remind after an
+- **Time passing without a commit.** Hooks run after commits, so "remind after an
   approval has waited 30 minutes" never fires on its own. A command that schedules a later commit
   would fit the model, and can come later.
 
@@ -1330,17 +1331,16 @@ The rest follows from having one model:
 The first change, on the v27 view:
 
 - `defineDynamic(fn)` for every kind that takes a dynamic value today, with `ctx.memo`.
-- Hook functions, `ctx.once`, and the `ctx.cancel` and `ctx.compact` commands, alongside event
-  handlers.
+- `ctx.once`, `ctx.memo`, and the `ctx.cancel` and `ctx.compact` commands in hook handlers.
 - The error rule, the user-instruction rule, and remote-child bindings with the folded view.
 - `auto()`, memory tools, and schedule tools rebuilt on the new runner. Memory recall and capture
   stay internal kinds.
 - The function form of a remote agent's `url` is replaced by a dynamic file.
 
 Moving #4616 to this API changes its definitions and hook kind: the runner keeps records per name
-and key rather than one record per definition, hook commands become methods on the queue it
-already has, and remote credentials come from running the definition with the child's binding
-rather than calling `render`.
+and key rather than one record per definition, select-form hooks go, hook commands become methods
+on the queue it already has, and remote credentials come from running the definition with the
+child's binding rather than calling `render`.
 
 Not included: field-level dynamic values, a command that schedules a later commit, testing helpers
 for hooks and dynamic values, an `onError` option, the conversation in hooks, a lint for `await`
