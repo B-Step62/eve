@@ -240,9 +240,7 @@ impl State {
                 self.usage,
             )
         {
-            if let Some(keep_from) =
-                compaction::keep_from(&self.history, self.config.compaction.recent_messages)
-            {
+            if let Some(keep_from) = compaction::keep_from(&self.history, &self.config.compaction) {
                 self.start_compaction(keep_from, out);
                 return;
             }
@@ -467,8 +465,11 @@ impl State {
             keep_from,
             summary: None,
         };
+        let estimated_tokens =
+            compaction::estimate_tokens(&self.config.system, &self.history, self.usage);
         out.events.push(Event::CompactionStarted {
             messages: keep_from,
+            estimated_tokens,
         });
         out.effects.push(effect(
             key,
@@ -568,16 +569,7 @@ impl State {
             };
             if descriptor.is_some() {
                 pending.stage = if self.config.host_policy {
-                    let key = format!("t{n}.tool.{}.policy", pending.call_id);
-                    out.effects.push(effect(
-                        key.clone(),
-                        Effect::PolicyDecide {
-                            call_id: pending.call_id.clone(),
-                            name: pending.name.clone(),
-                            input: pending.input.clone(),
-                        },
-                    ));
-                    Stage::Policy { key }
+                    self.policy(n, &pending, out)
                 } else {
                     self.by_tool_policy(n, &pending, out)
                 };
@@ -586,6 +578,19 @@ impl State {
         }
         self.turn_mut().phase = Phase::Tools { calls };
         self.maybe_finish_tools(out);
+    }
+
+    fn policy(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
+        let key = format!("t{n}.tool.{}.policy", call.call_id);
+        out.effects.push(effect(
+            key.clone(),
+            Effect::PolicyDecide {
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                input: call.input.clone(),
+            },
+        ));
+        Stage::Policy { key }
     }
 
     /// The stage a call goes to under its tool's own policy.
@@ -601,6 +606,7 @@ impl State {
                 out,
             ),
             Approval::Auto => self.review(n, call, out),
+            Approval::Host => self.policy(n, call, out),
         }
     }
 
@@ -767,6 +773,9 @@ impl State {
                 out,
             ),
             "review" => self.review(n, call, out),
+            _ if call.approval == Approval::Host => {
+                self.ask(n, call, "The tool's policy did not decide.", out)
+            }
             _ => self.by_tool_policy(n, call, out),
         }
     }

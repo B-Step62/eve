@@ -40,6 +40,7 @@ export {
   admitApprovedWork,
   dispatchApprovedWorkflows,
   hasApprovedWork,
+  holdForInput,
   runApprovedLocalCalls,
   type ApprovedWork,
   type HumanInputIntake,

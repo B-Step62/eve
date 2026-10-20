@@ -26,6 +26,8 @@ pub enum Approval {
     Once,
     /// A review model decides: clear runs, caution follows `caution` (eve `auto()`).
     Auto,
+    /// The host's policy decides with `policy.decide` (an eve policy function). `default` asks.
+    Host,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -316,6 +318,7 @@ pub enum Event {
     },
     CompactionStarted {
         messages: usize,
+        estimated_tokens: u64,
     },
     CompactionCompleted {
         removed: usize,

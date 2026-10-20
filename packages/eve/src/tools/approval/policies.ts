@@ -3,7 +3,10 @@ import type { Experimental_DecisionModel as DecisionModel } from "ai";
 import type { ApprovalContext, ApprovalPolicy } from "#approval/definition.js";
 import { decide } from "#ai/decide.js";
 import { parseJsonValue, type JsonObject } from "#shared/json.js";
-import { stampDurableDynamicCallback } from "#tools/durable-callbacks.js";
+import {
+  readDurableDynamicCallback,
+  stampDurableDynamicCallback,
+} from "#tools/durable-callbacks.js";
 
 const MAX_ACTION_BYTES = 64 * 1024;
 
@@ -76,6 +79,15 @@ function onceApproval(
   context: ApprovalContext,
 ): "not-applicable" | "user-approval" {
   return context.approvedTools.has(context.toolName) ? "not-applicable" : "user-approval";
+}
+
+/** EXPERIMENTAL (kernel-spike): which built-in policy `policy` is, if it is one. */
+export function builtinApprovalPolicy(policy: unknown): "always" | "never" | "once" | undefined {
+  const callback = readDurableDynamicCallback(policy)?.callback;
+  if (callback === alwaysApproval) return "always";
+  if (callback === neverApproval) return "never";
+  if (callback === onceApproval) return "once";
+  return undefined;
 }
 
 /**

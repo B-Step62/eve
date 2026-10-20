@@ -15,6 +15,8 @@ import type {
   KernelToolCall,
 } from "#harness/kernel/contract.js";
 import { startStep } from "#harness/session-machine/transitions.js";
+import { classifyModelCallError } from "#harness/model-call/errors.js";
+import { evaluateApproval } from "#harness/tools.js";
 import type { Step } from "#harness/step/context.js";
 import { requireSessionModelReference } from "#harness/types.js";
 import {
@@ -52,14 +54,93 @@ export async function flushStepCompleted(step: Step): Promise<void> {
 export async function runKernelEffect(
   step: Step,
   request: KernelEffectRequest,
+  approvedTools: ReadonlySet<string>,
 ): Promise<KernelEffectResult> {
   const effect = request.effect;
-  if (effect.kind === "model_call")
-    return await runModelCall(step, effect.request.messages, effect.request.system);
-  if (effect.kind === "tool_call")
-    return await runToolCall(step, effect.call_id, effect.name, effect.input);
-  await new Promise((resolve) => setTimeout(resolve, effect.ms));
-  return { status: "completed", output: null };
+  switch (effect.kind) {
+    case "model_call":
+      return effect.purpose === "agent"
+        ? await runModelCall(step, effect.request.messages, effect.request.system)
+        : await runSideModelCall(step, effect.request.messages, effect.request.system);
+    case "tool_call":
+      return await runToolCall(step, effect.call_id, effect.name, effect.input);
+    case "policy_decide":
+      return await decideByToolPolicy(step, effect, approvedTools);
+    case "wait":
+      await new Promise((resolve) => setTimeout(resolve, effect.ms));
+      return { status: "completed", output: null };
+    case "user_ask":
+    case "blob_put":
+      // `user_ask` parks the turn in the harness; eve keeps no compaction records.
+      throw new Error(`The kernel harness does not run ${effect.kind} as an effect.`);
+  }
+}
+
+/** The tool's own eve policy function decides (kernel approval `host`). */
+async function decideByToolPolicy(
+  step: Step,
+  call: {
+    readonly call_id: string;
+    readonly name: string;
+    readonly input: Record<string, unknown>;
+  },
+  approvedTools: ReadonlySet<string>,
+): Promise<KernelEffectResult> {
+  const definition = step.config.tools.get(call.name);
+  if (definition === undefined) return { status: "completed", output: { decision: "default" } };
+  const status = await evaluateApproval(definition, {
+    abortSignal: step.config.abortSignal,
+    approvedTools,
+    callId: call.call_id,
+    input: call.input,
+    recheck: false,
+  });
+  if (status === undefined || status === "not-applicable" || status === "approved")
+    return { status: "completed", output: { decision: "allow" } };
+  if (status === "denied") return { status: "completed", output: { decision: "deny" } };
+  if (typeof status === "object" && status !== null && status.type === "denied")
+    return { status: "completed", output: { decision: "deny", reason: status.reason } };
+  return { status: "completed", output: { decision: "ask" } };
+}
+
+/** A compaction or review call: the session's model, no tools, no stream events. */
+async function runSideModelCall(
+  step: Step,
+  messages: readonly KernelMessage[],
+  system: string,
+): Promise<KernelEffectResult> {
+  const reference =
+    step.session.agent.compactionModelReference ?? requireSessionModelReference(step.session);
+  const model = await step.config.resolveModel(reference);
+  if (typeof model === "string")
+    return {
+      status: "failed",
+      error: `The kernel prototype needs a model object, not "${model}".`,
+    };
+  try {
+    const result = await (model as LanguageModelV4).doGenerate({
+      prompt: toPrompt(system, messages),
+      abortSignal: step.config.abortSignal,
+    });
+    return { status: "completed", output: { text: textOf(result.content) } };
+  } catch (error) {
+    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function textOf(content: readonly { readonly type: string; readonly text?: string }[]): string {
+  return content
+    .filter((p) => p.type === "text")
+    .map((p) => p.text ?? "")
+    .join("");
+}
+
+/** Input tokens from either usage shape the AI SDK providers report. */
+function inputTokens(usage: unknown): number | undefined {
+  const input = (usage as { inputTokens?: unknown } | undefined)?.inputTokens;
+  if (typeof input === "number") return input;
+  const total = (input as { total?: unknown } | undefined)?.total;
+  return typeof total === "number" ? total : undefined;
 }
 
 async function runModelCall(
@@ -97,12 +178,13 @@ async function runModelCall(
       abortSignal: step.config.abortSignal,
     });
   } catch (error) {
-    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+    return {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      retryable: classifyModelCallError(error) === "retry",
+    };
   }
-  const text = result.content
-    .filter((p) => p.type === "text")
-    .map((p) => p.text)
-    .join("");
+  const text = textOf(result.content);
   const toolCalls: KernelToolCall[] = result.content.flatMap((p) =>
     p.type === "tool-call"
       ? [{ id: p.toolCallId, name: p.toolName, input: parseInput(p.input) }]
@@ -127,7 +209,10 @@ async function runModelCall(
     );
   }
   setPendingStep(step, { ...at, finishReason });
-  return { status: "completed", output: { text, tool_calls: toolCalls } };
+  return {
+    status: "completed",
+    output: { text, tool_calls: toolCalls, usage: { input_tokens: inputTokens(result.usage) } },
+  };
 }
 
 async function runToolCall(

@@ -245,7 +245,7 @@ export async function recheckApprovedCall(
 }
 
 /** Runs `definition`'s approval policy for one call, in the status form the AI SDK reads. */
-async function evaluateApproval(
+export async function evaluateApproval(
   definition: HarnessToolDefinition,
   call: {
     readonly abortSignal?: AbortSignal;

@@ -2,24 +2,32 @@
 // See packages/kernel-spike and research/fx-kernel-convergence.md. Nothing in
 // eve uses this unless a session sets the `eve.kernelMode` context key.
 
-export type KernelReplay = "safe" | "never";
+/** Every effect may run again after a crash (eve's rule). */
+export type KernelReplay = "safe";
+
+/** `host`: an eve policy function decides, through `policy_decide`. */
+export type KernelApproval = "never" | "always" | "once" | "auto" | "host";
 
 export interface KernelToolDescriptor {
   readonly name: string;
   readonly description: string;
-  readonly read_only: boolean;
-  readonly replay: KernelReplay;
+  readonly approval: KernelApproval;
 }
 
 export interface KernelSessionConfig {
   readonly system: string;
   readonly tools: readonly KernelToolDescriptor[];
   readonly step_limit: number;
+  readonly compaction?: {
+    readonly context_window_tokens: number;
+    readonly threshold_percent: number;
+    readonly recent_messages: number;
+  };
 }
 
 export type KernelEffectResult =
   | { readonly status: "completed"; readonly output: unknown }
-  | { readonly status: "failed"; readonly error: string }
+  | { readonly status: "failed"; readonly error: string; readonly retryable?: boolean }
   | {
       readonly status: "interrupted";
       readonly reason: "cancelled" | "crashed";
@@ -52,21 +60,35 @@ export interface KernelToolCall {
   readonly input: Record<string, unknown>;
 }
 
+export type KernelModelPurpose = "agent" | "permission_review" | "compaction";
+
+export interface KernelToolInvocation {
+  readonly call_id: string;
+  readonly name: string;
+  readonly input: Record<string, unknown>;
+}
+
 export type KernelEffect =
   | {
       readonly kind: "model_call";
+      readonly purpose: KernelModelPurpose;
+      readonly model?: string | null;
       readonly request: {
         readonly system: string;
         readonly messages: readonly KernelMessage[];
         readonly tools: readonly { readonly name: string; readonly description: string }[];
       };
     }
+  | ({ readonly kind: "tool_call" } & KernelToolInvocation)
+  | ({ readonly kind: "policy_decide" } & KernelToolInvocation)
   | {
-      readonly kind: "tool_call";
-      readonly call_id: string;
-      readonly name: string;
-      readonly input: Record<string, unknown>;
+      readonly kind: "user_ask";
+      readonly request: {
+        readonly kind: "approval";
+        readonly reason: string;
+      } & KernelToolInvocation;
     }
+  | { readonly kind: "blob_put"; readonly name: string; readonly content: string }
   | { readonly kind: "wait"; readonly ms: number };
 
 export interface KernelEffectRequest {
@@ -118,12 +140,6 @@ export interface KernelStepOutput {
 
 export function kernelTurnEnded(events: readonly KernelEvent[]): KernelEvent | undefined {
   return events.find((e) => e.type === "turn_ended");
-}
-
-/** The prototype's read-only rule: tools named `read_*` read; everything else writes. */
-export function kernelToolDescriptor(name: string, description: string): KernelToolDescriptor {
-  const readOnly = name.startsWith("read_");
-  return { name, description, read_only: readOnly, replay: readOnly ? "safe" : "never" };
 }
 
 /** Effects that may start now: their `after` keys are no longer open. */

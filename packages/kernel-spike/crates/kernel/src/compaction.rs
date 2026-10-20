@@ -51,6 +51,15 @@ pub fn estimate_tokens(system: &str, history: &[Message], mark: Option<UsageMark
     }
 }
 
+/// The compaction prompt with an empty transcript, as eve's `COMPACTION_PROMPT_OVERHEAD_TOKENS`.
+fn prompt_overhead() -> u64 {
+    let empty = request(&[]);
+    let size = serde_json::to_string(&empty.messages)
+        .map(|s| s.len())
+        .unwrap_or(0);
+    chars_to_tokens(empty.system.len() + size)
+}
+
 pub fn due(
     config: &CompactionConfig,
     system: &str,
@@ -61,7 +70,8 @@ pub fn due(
         return false;
     }
     let threshold = (config.context_window_tokens as f64 * config.threshold_percent) as u64;
-    estimate_tokens(system, history, mark) >= threshold
+    // eve counts the summary call's own prompt too, so the summary call fits.
+    estimate_tokens(system, history, mark) + prompt_overhead() > threshold
 }
 
 fn is_checkpoint(history: &[Message]) -> bool {
@@ -69,14 +79,42 @@ fn is_checkpoint(history: &[Message]) -> bool {
         && matches!(history.get(1), Some(Message::Assistant { .. }))
 }
 
-/// Where the kept tail starts, or `None` when there is nothing new to summarize.
-pub fn keep_from(history: &[Message], recent: usize) -> Option<usize> {
-    let mut start = history.len().saturating_sub(recent);
-    while start > 0 && matches!(history[start], Message::Tool { .. }) {
-        start -= 1;
+/// eve's room for the summary itself, inside the threshold.
+fn summary_reserve(threshold: u64) -> u64 {
+    (threshold / 4).clamp(64, 2_048)
+}
+
+/// Where the kept tail starts, or `None` when there is nothing to summarize.
+///
+/// As eve: the tail is the last `recent_messages` messages that fit in the
+/// threshold beside the summary reserve, and a tool result at its start moves
+/// to the summarized part (a result never survives without its call).
+pub fn keep_from(history: &[Message], config: &CompactionConfig) -> Option<usize> {
+    let base = if is_checkpoint(history) { 2 } else { 0 };
+    let conversation = &history[base..];
+    let threshold = (config.context_window_tokens as f64 * config.threshold_percent) as u64;
+    let reserve = summary_reserve(threshold);
+    let max_keep = config
+        .recent_messages
+        .min(conversation.len().saturating_sub(1));
+    let (mut keep, mut tokens) = (0, 0);
+    for message in conversation.iter().rev().take(max_keep) {
+        let size = chars_to_tokens(
+            serde_json::to_string(&[message])
+                .map(|s| s.len())
+                .unwrap_or(0),
+        );
+        if tokens + size + reserve > threshold {
+            break;
+        }
+        tokens += size;
+        keep += 1;
     }
-    let summarized = if is_checkpoint(history) { 2 } else { 0 };
-    (start > summarized).then_some(start)
+    let mut split = conversation.len() - keep;
+    while split < conversation.len() && matches!(conversation[split], Message::Tool { .. }) {
+        split += 1;
+    }
+    (split > 0 || base > 0).then_some(base + split)
 }
 
 pub fn request(older: &[Message]) -> ModelRequest {
@@ -176,18 +214,39 @@ mod tests {
         }
     }
 
+    fn window(recent: usize) -> CompactionConfig {
+        CompactionConfig {
+            context_window_tokens: 100_000,
+            threshold_percent: 0.9,
+            recent_messages: recent,
+            records: false,
+        }
+    }
+
     #[test]
-    fn the_kept_tail_never_starts_with_a_tool_result() {
+    fn a_tool_result_at_the_tail_start_moves_to_the_summary() {
         let h = vec![user("a"), call("1"), result("1"), call("2"), result("2")];
-        // A tail of 1 would start at a tool result; it moves back to its call.
-        assert_eq!(keep_from(&h, 1), Some(3));
-        assert_eq!(keep_from(&h, 10), None);
+        // A tail of 3 would start at result 1; it moves into the summarized part.
+        assert_eq!(keep_from(&h, &window(3)), Some(3));
+        assert_eq!(keep_from(&h, &window(10)), Some(1));
+    }
+
+    #[test]
+    fn the_tail_stops_where_it_would_not_fit() {
+        let big = user(&"x".repeat(4_000));
+        let h = vec![user("a"), big.clone(), big.clone(), big];
+        let small = CompactionConfig {
+            context_window_tokens: 2_000,
+            ..window(10)
+        };
+        // Each big message is about 1000 tokens; with the 450-token reserve only one fits in 1800.
+        assert_eq!(keep_from(&h, &small), Some(3));
     }
 
     #[test]
     fn a_previous_checkpoint_is_carried_not_summarized_again() {
         let h = compacted("old summary".into(), &[user("b"), call("1"), result("1")]);
-        assert_eq!(keep_from(&h, 3), None);
+        assert_eq!(keep_from(&h, &window(10)), Some(3));
         let r = request(&[h[0].clone(), h[1].clone(), user("b")]);
         let Message::User { text } = &r.messages[0] else {
             panic!()

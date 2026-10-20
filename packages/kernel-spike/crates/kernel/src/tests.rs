@@ -548,3 +548,18 @@ fn the_same_inputs_give_the_same_outputs_and_state_round_trips() {
     let back = migrate(serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap()).unwrap();
     assert_eq!(back, s);
 }
+
+#[test]
+fn a_host_tool_asks_the_host_policy_and_default_asks_a_person() {
+    let mut s = open(SessionConfig {
+        tools: vec![tool("custom", Approval::Host)],
+        ..config()
+    });
+    let out = calling(&mut s, "custom");
+    assert_eq!(kinds(&out), vec![("t1.tool.c.policy".into(), "policy")]);
+    let out = advance(
+        &mut s,
+        vec![done("t1.tool.c.policy", json!({ "decision": "default" }))],
+    );
+    assert_eq!(kinds(&out), vec![("t1.tool.c.ask".into(), "ask")]);
+}
