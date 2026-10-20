@@ -318,9 +318,9 @@ export default slackChannel({
 });
 ```
 
-Every member of a code channel can start turns, with auth derived from each message's author, the same as in an ordinary thread. Without `codeChannels`, eve still serves mentions in a code channel as the channel's one session.
+Every member of a code channel can start turns, with auth derived from each message's author, the same as in an ordinary thread. Un-mentioned messages go to `onMessage` when you define it, else to `onAppMention`, else the default handler, so a mention handler that filters who can reach the agent also filters code channel messages. Without `codeChannels`, eve never looks a channel up and treats a code channel like any other channel.
 
-eve detects a code channel with Slack's `conversations.info` API, so the app needs `channels:read` (and `groups:read` for private code channels). With `codeChannels` set, the generated app manifest enables the code channels feature, adds the `code_channels:manage`, `channels:history`, `channels:read`, `groups:history`, and `groups:read` bot scopes, and subscribes to the `message.session` and `agent_session_stopped` events. For Vercel Connect, add the same scopes and events under **Advanced** when you create the connector. In message hooks, `ctx.isCodeChannel()` returns whether the message was posted in a code channel.
+eve detects a code channel with Slack's `conversations.info` API, so the app needs `channels:read` (and `groups:read` for private code channels). If the lookup fails, eve logs an error, serves the channel per thread, and retries the lookup a minute later. With `codeChannels` set, the generated app manifest enables the code channels feature, adds the `code_channels:manage`, `channels:history`, `channels:read`, `groups:history`, and `groups:read` bot scopes, and subscribes to the `message.session` and `agent_session_stopped` events. For Vercel Connect, add the same scopes and events under **Advanced** when you create the connector. In message hooks, `ctx.isCodeChannel()` returns whether the message was posted in a code channel.
 
 ### Other Events API callbacks
 

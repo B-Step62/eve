@@ -16,40 +16,57 @@ export const CODE_CHANNEL_THREAD_TS = "0";
 type SlackRequest = (operation: string, body: unknown) => Promise<SlackApiResponse>;
 
 const MAX_CACHED_CHANNELS = 1_000;
+/** A failed lookup is retried after this, so a broken install doesn't call Slack per message. */
+const FAILED_LOOKUP_TTL_MS = 60_000;
 // Slack sets a channel's kind at creation, so a lookup holds for the process.
-const codeChannelCache = new Map<string, boolean>();
+const codeChannelCache = new Map<string, boolean | { readonly failedAtMs: number }>();
 
 /**
- * Whether the conversation is a code channel. A failed lookup (for example a
- * missing `channels:read` scope) counts as not a code channel and is retried
- * on the next message.
+ * Whether the conversation is a code channel. A failed lookup counts as not a
+ * code channel, so its messages get per-thread sessions until a retry
+ * succeeds a minute later.
  */
 export async function isSlackCodeChannel(
   channelId: string,
   request: SlackRequest,
 ): Promise<boolean> {
   const cached = codeChannelCache.get(channelId);
-  if (cached !== undefined) return cached;
-  let response: SlackApiResponse;
+  if (typeof cached === "boolean") return cached;
+  if (cached !== undefined && Date.now() - cached.failedAtMs < FAILED_LOOKUP_TTL_MS) return false;
+  let codeChannel: boolean;
   try {
-    response = await request("conversations.info", { channel: channelId });
+    const response = await request("conversations.info", { channel: channelId });
+    if (response.ok !== true) {
+      log.error(
+        response.error === "missing_scope"
+          ? "conversations.info needs the channels:read and groups:read scopes to detect code channels; reinstall the Slack app"
+          : "conversations.info failed; treating the channel as an ordinary channel",
+        { channelId, error: response.error },
+      );
+      cacheLookup(channelId, { failedAtMs: Date.now() });
+      return false;
+    }
+    const channel = response.channel as
+      | { readonly properties?: { readonly record_channel?: { readonly record_type?: unknown } } }
+      | undefined;
+    codeChannel = channel?.properties?.record_channel?.record_type === "agent_channel";
   } catch (error) {
-    logError(log, "conversations.info threw", error, { channelId });
+    logError(log, "conversations.info threw; treating the channel as an ordinary channel", error, {
+      channelId,
+    });
+    cacheLookup(channelId, { failedAtMs: Date.now() });
     return false;
   }
-  if (response.ok !== true) {
-    log.warn("conversations.info returned not-ok", { channelId, error: response.error });
-    return false;
-  }
-  const channel = response.channel as
-    | { readonly properties?: { readonly record_channel?: { readonly record_type?: unknown } } }
-    | undefined;
-  const codeChannel = channel?.properties?.record_channel?.record_type === "agent_channel";
+  cacheLookup(channelId, codeChannel);
+  return codeChannel;
+}
+
+function cacheLookup(channelId: string, value: boolean | { readonly failedAtMs: number }): void {
+  codeChannelCache.delete(channelId);
   if (codeChannelCache.size >= MAX_CACHED_CHANNELS) {
     codeChannelCache.delete(codeChannelCache.keys().next().value!);
   }
-  codeChannelCache.set(channelId, codeChannel);
-  return codeChannel;
+  codeChannelCache.set(channelId, value);
 }
 
 /**

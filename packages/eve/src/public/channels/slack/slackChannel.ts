@@ -234,6 +234,8 @@ export interface SlackChannelState {
    * Replies post there; `null` posts them top-level.
    */
   replyThreadTs?: string | null;
+  /** The thread of the latest delivered message, which the next turn replies in. */
+  pendingReplyThreadTs?: string | null;
   /** Slack team id, when the inbound event carried one. */
   teamId: string | null;
   /** Slack message ts that triggered the active turn. */
@@ -670,10 +672,11 @@ export interface SlackChannelConfig {
   readonly turnPolicy?: TurnPolicy;
 
   /**
-   * Answers every message in a Slack code channel, not just mentions, and adds
-   * the code channel scopes, events, and feature flag to the app manifest.
-   * Without it, eve still serves mentions in a code channel as the channel's
-   * one session.
+   * Serves each Slack code channel as one session and answers every message in
+   * it, not just mentions. Un-mentioned messages go to `onMessage`, else
+   * `onAppMention`, else the default handler. Adds the code channel scopes,
+   * events, and feature flag to the app manifest. Without it, eve treats a
+   * code channel like any other channel and never looks one up.
    */
   readonly codeChannels?: boolean;
 
@@ -896,6 +899,11 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
         const triggeringUserId = slackUserIdFromAuthContext(ctx.session.auth.current);
         if (triggeringUserId !== undefined) {
           channel.state.triggeringUserId = triggeringUserId;
+        }
+        // A message folded into a running turn doesn't move that turn's replies.
+        if (channel.state.pendingReplyThreadTs !== undefined) {
+          channel.state.replyThreadTs = channel.state.pendingReplyThreadTs;
+          channel.state.pendingReplyThreadTs = undefined;
         }
         await renderTurnStarted?.(data, channel, ctx);
       },
@@ -1182,6 +1190,7 @@ async function handleEventPost(input: {
         appId,
         botUserId,
         codeChannelOnly,
+        detectCodeChannels: config.codeChannels === true,
         receivingBotUserId,
         from: input.from,
         resolveSession: input.resolveSession,
@@ -1222,7 +1231,8 @@ async function handleEventPost(input: {
     }
   }
 
-  // Slack asks agents to answer in a code channel without a mention.
+  // Slack asks agents to answer in a code channel without a mention. Every message
+  // there is addressed to the agent, so an authored mention handler still gates it.
   if (dispatch === null && builtinDefault === null && config.codeChannels === true) {
     const message = parseMessageEvent(envelope);
     if (
@@ -1232,7 +1242,12 @@ async function handleEventPost(input: {
       !isSlackCodeChannelOriginContext(message.raw) &&
       (botUserId === undefined || !message.text.includes(`<@${botUserId}`))
     ) {
-      builtinDefault = dispatchMessage("channel_message", message, defaultOnMessage, true);
+      const onAppMention = config.onAppMention;
+      if (onAppMention !== undefined) {
+        dispatch = dispatchMessage("channel_message", message, onAppMention, true);
+      } else {
+        builtinDefault = dispatchMessage("channel_message", message, defaultOnMessage, true);
+      }
     }
   }
 
@@ -1292,6 +1307,7 @@ async function dispatchSlackMessage(input: {
   readonly botUserId: string | undefined;
   /** Drops the message unless it was posted in a code channel. */
   readonly codeChannelOnly: boolean;
+  readonly detectCodeChannels: boolean;
   readonly receivingBotUserId: string | undefined;
   readonly from: ChannelFrom<SlackChannelState>;
   readonly resolveSession: ChannelResolveSession;
@@ -1319,6 +1335,7 @@ async function dispatchSlackMessage(input: {
       ? (conversationInfo ??= request(operation, body))
       : request(operation, body);
   const codeChannel =
+    input.detectCodeChannels &&
     input.kind !== "direct_message" &&
     (await isSlackCodeChannel(input.message.channelId, conversationRequest));
   if (!codeChannel && input.codeChannelOnly) return;
@@ -1389,8 +1406,9 @@ async function dispatchSlackMessage(input: {
 
   // A mention or DM is addressed to the agent, so it is acknowledged while the
   // hook decides. Other channel messages are mostly dropped, so they are
-  // acknowledged only once the hook dispatches.
-  const acknowledgeFirst = input.kind !== "channel_message";
+  // acknowledged only once the hook dispatches. A code channel's status belongs
+  // to its one session, so a dropped message must not clear it mid-turn.
+  const acknowledgeFirst = input.kind !== "channel_message" && !codeChannel;
   const acknowledged = acknowledgeFirst
     ? acknowledgeMessage(input.received, input.message, { slack, thread })
     : undefined;
@@ -1622,13 +1640,11 @@ function slackTypedText(text: string, botUserId: string | undefined): string {
   return text.replace(new RegExp(`<@${botUserId}(?:\\|[^>]*)?>`, "gu"), "").trim();
 }
 
-/** In a code channel, replies follow the thread of the latest message delivered. */
+/** In a code channel, the next turn replies in the thread of the latest message delivered. */
 function followReplyThread(state: SlackChannelState, payload: DeliverPayload): void {
   if (payload.message === undefined || state.codeChannel !== true) return;
   const stamped = payload.state as Partial<SlackChannelState> | undefined;
-  if (stamped !== undefined && "replyThreadTs" in stamped) {
-    state.replyThreadTs = stamped.replyThreadTs ?? null;
-  }
+  state.pendingReplyThreadTs = stamped?.replyThreadTs ?? null;
 }
 
 /**

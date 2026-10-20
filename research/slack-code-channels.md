@@ -76,17 +76,16 @@ import { slackChannel } from "eve/channels/slack";
 
 export default slackChannel({
   credentials: connectSlackCredentials("slack/my-agent"),
-  codeChannels: {
-    // Who can start turns in a code channel. Defaults to "confirm".
-    participants: "confirm",
-  },
+  codeChannels: true,
 });
 ```
 
-Without `codeChannels`, a mention inside a code channel that a person opened from Slack's UI is
-still served as a code channel once the Slack app has the feature enabled. The option controls
-the manifest additions, the default for un-mentioned messages, and who can drive the session (see
-[Participants](#participants)).
+The option turns on code channel detection (Slack's `conversations.info`), the manifest additions,
+and answers to un-mentioned messages. Those go to `onMessage`, else `onAppMention`, else the
+default handler, so an authored mention handler still gates who reaches the agent. Without the
+option, eve never looks a channel up and serves a code channel like any other channel.
+[Participants](#participants) is deferred; if it lands, `codeChannels` widens to
+`true | { participants }`, which keeps `true` valid.
 
 Phase 2 is a workflow tool. A channel cannot contribute tools to the agent, so the app adds the
 tool as a file. eve ships a factory for it:
@@ -173,6 +172,9 @@ fallback text that starts `Context from #channel`). The default hook skips it, s
 a turn. The forked session already has the origin conversation as history.
 
 ### Participants
+
+Deferred. Phase 1 lets every member start turns, as in an ordinary thread, because eve can't read
+a forked channel's owner before dispatch. The design below stays as the plan if it lands.
 
 Code channels admit members of the origin channel, so more people can talk in one than asked for
 it. The session's auth comes from whoever started it, so an unrestricted channel lets any member
@@ -289,7 +291,7 @@ code channel needs the opposite. `receive()` gains a `codeChannel: true` target 
 
 - keys the session by `slackContinuationToken(channelId, "0")`, the same address phase 1 uses for
   inbound messages, so later messages in the channel reach the forked session;
-- marks session state as a code channel and records its owner for [Participants](#participants);
+- marks session state as a code channel;
 - seeds the state with `forkedFrom` (source session id and turn), until eve has lineage.
 
 ### The channel binding
@@ -390,7 +392,7 @@ When a source session exists, eve seeds history from it, as in a fork. A channel
 or an origin with no session, starts fresh.
 
 eve ignores a code channel that is archived, shared outside the workspace, or not assigned to this
-app's bot (`agent_session.encoded_agent_bot_user_ids`). The channel's `creator` becomes its owner
+app's bot (`agent_session.encoded_agent_bot_user_ids`). The channel's `creator` would be its owner
 for [Participants](#participants).
 
 The same resolution serves the race in [Retries and races](#retries-and-races). A fork that
@@ -493,7 +495,7 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 
 1. **Binding secret.** Whether eve derives the binding's signing key from an existing deployment
    secret or asks apps for a dedicated one, and what eve does when neither exists.
-2. **Confirmed requests' auth.** Under `"confirm"`, whether a confirmed request runs as the owner
+2. **Confirmed requests' auth (deferred with participants).** Under `"confirm"`, whether a confirmed request runs as the owner
    (the session's auth) or as the requester. Running as the owner is simpler but lets the owner
    approve work they could not have asked for in the requester's name.
 3. **Chat SDK.** eve's Slack transport calls the Web API directly, so this does not depend on the
@@ -513,7 +515,7 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
   message is skipped; status transitions per lifecycle event; `session_id` derivation within 64
   characters; origin eligibility, including Grid DMs marked org-shared; the `unknown_method`
   fallback; permanent error classification; binding signing and rejection of a tampered binding;
-  each `participants` policy; the `codeChannel` receive target maps to `C123:0`.
+  the `codeChannel` receive target maps to `C123:0`.
 - Integration, modeled on #5096's `channel-handoff.integration.test.ts` against the real
   `slackChannel()` with Slack's API mocked: the tool forks a thread into a code channel, the code
   channel session's first model call sees the thread's history, a later message in the code
