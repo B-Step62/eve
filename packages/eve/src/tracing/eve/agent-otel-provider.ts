@@ -157,10 +157,7 @@ export function createAgentOtelInstrumentation(
   };
 
   const onStepTerminal = async (event: InstrumentationModelTerminalEvent): Promise<void> => {
-    const failure =
-      event.type === "model.retried" || event.outcome !== "completed"
-        ? { error: event.error }
-        : undefined;
+    const failure = attemptFailed(event) ? { error: event.error } : undefined;
     await drainOpenSpans(event);
     await tools.drain(attemptIdempotencyKey(event.scope), failure);
     const attempt =
@@ -287,8 +284,7 @@ export function createAgentOtelInstrumentation(
 
   async function drainOpenSpans(event: InstrumentationModelTerminalEvent): Promise<void> {
     for (const operation of modelSpans.get(attemptIdempotencyKey(event.scope))?.values() ?? []) {
-      if (event.type === "model.retried" || event.outcome !== "completed")
-        await operation.fail(event.error);
+      if (attemptFailed(event)) await operation.fail(event.error);
       else
         await operation.complete({
           outcome: "completed",
@@ -297,4 +293,12 @@ export function createAgentOtelInstrumentation(
     }
     modelSpans.delete(attemptIdempotencyKey(event.scope));
   }
+}
+
+/** A retry or an unfinished run fails its attempt; a cancelled turn stopped it on purpose. */
+function attemptFailed(event: InstrumentationModelTerminalEvent): boolean {
+  return (
+    event.type === "model.retried" ||
+    (event.outcome !== "completed" && event.outcome !== "cancelled")
+  );
 }

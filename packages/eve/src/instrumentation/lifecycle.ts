@@ -356,9 +356,15 @@ export interface InstrumentationModelRetriedEvent {
   readonly error?: unknown;
 }
 
+/**
+ * How a model run ended, as its `model.settled` says, except that a run its turn's cancellation
+ * cut is `cancelled` rather than `interrupted`: it stopped on purpose, not as a failure.
+ */
+export type InstrumentationModelOutcome = ModelOutcome | "cancelled";
+
 export interface InstrumentationModelSettledEvent {
   readonly type: "model.settled";
-  readonly outcome: ModelOutcome;
+  readonly outcome: InstrumentationModelOutcome;
   readonly idempotencyKey: string;
   readonly scope: InstrumentationScope;
   readonly error?: unknown;
