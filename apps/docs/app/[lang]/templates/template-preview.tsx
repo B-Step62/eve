@@ -1,5 +1,6 @@
 import { LogoEveSvg } from "@vercel/geistdocs/assets/logos/logo-eve-svg";
 import { ChevronRightIcon, TerminalIcon, WrenchIcon } from "lucide-react";
+import { Lato } from "next/font/google";
 import type { ReactNode } from "react";
 import type {
   TemplateIntegration,
@@ -7,6 +8,9 @@ import type {
   TemplatePreviewMessage,
 } from "@/lib/templates/manifest";
 import { integrationIcons } from "./integration-icons";
+
+/** Slack's UI typeface. Loaded only for the Slack preview. */
+const lato = Lato({ subsets: ["latin"], weight: ["400", "700", "900"], display: "swap" });
 
 interface TemplatePreviewProps {
   integrations: TemplateIntegration[];
@@ -53,21 +57,6 @@ const Window = ({ children, header }: { children: ReactNode; header: ReactNode }
     <div className="flex flex-col gap-2 px-3 py-2.5">{children}</div>
   </div>
 );
-
-const ToolCalls = ({ tools }: { tools?: string[] }) =>
-  tools && tools.length > 0 ? (
-    <div className="flex flex-wrap gap-1.5">
-      {tools.map((tool) => (
-        <span
-          className="inline-flex items-center gap-1 rounded-full border border-gray-alpha-400 bg-gray-alpha-100 px-1.5 font-mono text-[10px] text-gray-900"
-          key={tool}
-        >
-          <span className="text-green-700">✓</span>
-          {tool}
-        </span>
-      ))}
-    </div>
-  ) : null;
 
 const WebChat = ({
   address,
@@ -119,6 +108,7 @@ const WebToolCall = ({ name }: { name: string }) => {
 };
 
 const SLACK_USER = "Alex";
+const SLACK_TIMESTAMP = "10:42 AM";
 
 /** The template's own icon when it has one, otherwise the eve logo on `fallbackClassName`. */
 const AgentIcon = ({
@@ -141,6 +131,11 @@ const AgentIcon = ({
     </span>
   );
 
+/**
+ * Laid out at Slack's real desktop metrics (Lato 15/22, 36px avatars, 8px 20px
+ * message gutters, 49px channel header) and zoomed down as a whole, so the
+ * proportions match Slack at any card size.
+ */
 const Slack = ({
   agent,
   channel,
@@ -152,54 +147,81 @@ const Slack = ({
   icon?: string;
   messages: TemplatePreviewMessage[];
 }) => (
-  <Window
-    header={
-      <span className="font-medium text-gray-1000">
-        <span className="font-normal text-gray-800"># </span>
+  <div className="absolute top-3 -right-3 -bottom-5 left-6 overflow-hidden rounded-lg border border-gray-alpha-400 bg-background-100 shadow-sm">
+    <div
+      className={`${lato.className} text-[15px] leading-[1.46668] text-gray-1000 antialiased [zoom:0.72]`}
+    >
+      <div className="flex h-[49px] items-center border-b border-gray-alpha-400 px-5 font-black text-[18px] leading-none">
+        <span className="mr-1 font-bold">#</span>
         {channel ?? "general"}
-      </span>
-    }
-  >
-    {messages.map((message) => {
-      const isAgent = message.from === "agent";
-      return (
-        <div className="flex gap-2" key={message.text}>
-          {isAgent ? (
-            <AgentIcon
-              className="size-5.5 shrink-0 rounded-[5px]"
-              fallbackClassName="bg-gray-1000 text-background-100"
-              icon={icon}
-              logoHeight={7}
-            />
-          ) : (
-            <div className="flex size-5.5 shrink-0 items-center justify-center rounded-[5px] bg-purple-700 font-semibold text-[9.5px] text-white">
-              {SLACK_USER[0]}
-            </div>
-          )}
-          <div className="flex min-w-0 flex-col gap-1">
-            <div className="flex items-center gap-1">
-              <span className="font-semibold">{isAgent ? agent : SLACK_USER}</span>
+      </div>
+      <div className="flex flex-col pt-2">
+        {messages.map((message) => {
+          const isAgent = message.from === "agent";
+          return (
+            <div className="flex gap-2 px-5 py-2" key={message.text}>
               {isAgent ? (
-                <span className="rounded-[3px] bg-gray-alpha-200 px-1 text-[9px] text-gray-900">
-                  APP
-                </span>
-              ) : null}
+                <AgentIcon
+                  className="size-9 shrink-0 rounded-lg"
+                  fallbackClassName="bg-gray-1000 text-background-100"
+                  icon={icon}
+                  logoHeight={11}
+                />
+              ) : (
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[#4a154b] font-bold text-[16px] text-white">
+                  {SLACK_USER[0]}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline">
+                  <span className="font-black">{isAgent ? agent : SLACK_USER}</span>
+                  {isAgent ? (
+                    <span className="ml-1 self-center rounded-[2px] bg-gray-alpha-300 px-[3px] py-px font-bold text-[10px] text-gray-900 leading-[1.25]">
+                      APP
+                    </span>
+                  ) : null}
+                  <span className="ml-2 text-[12px] text-gray-900">{SLACK_TIMESTAMP}</span>
+                </div>
+                {message.tools && message.tools.length > 0 ? (
+                  <div className="mt-0.5 mb-1">
+                    <SlackToolCalls tools={message.tools} />
+                  </div>
+                ) : null}
+                <p>
+                  <Mentions text={message.text} />
+                </p>
+              </div>
             </div>
-            <ToolCalls tools={message.tools} />
-            <p>
-              <Mentions text={message.text} />
-            </p>
-          </div>
-        </div>
-      );
-    })}
-  </Window>
+          );
+        })}
+      </div>
+    </div>
+  </div>
 );
 
+/** Completed tool calls as Slack-sized pills: 12px monospace on a 20px row. */
+const SlackToolCalls = ({ tools }: { tools: string[] }) => (
+  <div className="flex flex-wrap gap-1.5">
+    {tools.map((tool) => (
+      <span
+        className="inline-flex h-5 items-center gap-1 rounded-full border border-gray-alpha-400 bg-gray-alpha-100 px-2 font-mono text-[12px] text-gray-900"
+        key={tool}
+      >
+        <span className="text-green-700">✓</span>
+        {tool}
+      </span>
+    ))}
+  </div>
+);
+
+/** Slack's user mention: link blue on a 10% tint, 2px padding, 3px corners. */
 const Mentions = ({ text }: { text: string }) =>
   text.split(/(@\w+)/).map((part, index) =>
     part.startsWith("@") ? (
-      <span className="rounded-[3px] bg-blue-200 px-0.5 text-blue-900" key={`${index}${part}`}>
+      <span
+        className="rounded-[3px] bg-[#1d9bd1]/10 px-0.5 text-[#1264a3] dark:text-[#1d9bd1]"
+        key={`${index}${part}`}
+      >
         {part}
       </span>
     ) : (
