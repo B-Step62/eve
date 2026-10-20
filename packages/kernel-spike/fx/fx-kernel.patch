@@ -47,10 +47,10 @@ index 11e26248..6551d10c 100644
  
 diff --git a/src/core/cli/kernel_ask.zig b/src/core/cli/kernel_ask.zig
 new file mode 100644
-index 00000000..efeafe8f
+index 00000000..86faed1f
 --- /dev/null
 +++ b/src/core/cli/kernel_ask.zig
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,372 @@
 +//! EXPERIMENTAL (kernel-spike): `fx ask` with the Rust kernel as the agent loop.
 +//!
 +//! Built only with `-Dkernel-lib=<libkernel_ffi.a>`, and used only when
@@ -59,8 +59,13 @@ index 00000000..efeafe8f
 +//! `write_file` through fx's file mutation pipeline. Results reach `fx ask`
 +//! through the same deps the orchestrator uses, so `--json` output is fx's.
 +//!
-+//! Tools run in the order the kernel lists them, which satisfies its order
-+//! constraints; this prototype does not run read-only groups in parallel.
++//! Kernel v2 seams, as fx answers them:
++//! - `policy_decide`: fx's own permission admission (mode, rules, grants),
++//!   with the remote review turned off, so the kernel runs the review.
++//! - `model_call` for `permission_review` and `compaction`: fx's gateway.
++//! - `user_ask`: `fx ask` has no person, so it fails.
++//!
++//! Effects of one batch run in order; this prototype does not run them in parallel.
 +
 +const std = @import("std");
 +const Allocator = std.mem.Allocator;
@@ -75,6 +80,8 @@ index 00000000..efeafe8f
 +const tool_dispatch = @import("../tooling/tool_dispatch.zig");
 +const file_mutation_execution = @import("../tooling/file_mutation_execution.zig");
 +const permissions = @import("../permissions/permissions.zig");
++const model_tool_schema = @import("../tooling/model_tool_schema.zig");
++const permission_auto_classifier = @import("../permissions/auto_classifier.zig");
 +const types = @import("../shared/types.zig");
 +const io_mod = @import("../shared/io.zig");
 +
@@ -108,6 +115,7 @@ index 00000000..efeafe8f
 +    defer fxk_free(p, n);
 +    const bytes = p[0..n];
 +    if (n > 0 and bytes[0] == '!') return error.KernelInputRejected;
++    if (io_mod.getenv("FX_KERNEL_TRACE") != null) std.debug.print("kernel> {s}\nkernel< {s}\n", .{ inputs_json, bytes });
 +    return try std.json.parseFromSliceLeaky(Value, arena, bytes, .{ .allocate = .alloc_always });
 +}
 +
@@ -147,14 +155,25 @@ index 00000000..efeafe8f
 +    defer arena_state.deinit();
 +    const arena = arena_state.allocator();
 +
++    const window = (try deps.resolve_model_capabilities(deps.ctx, arena, job.model)).context_window orelse 0;
 +    const kernel_config = try std.json.Stringify.valueAlloc(arena, .{
 +        .system = config.system_prompt,
 +        .step_limit = 0,
++        // fx's session policy decides every call; a review caution holds the action.
++        .host_policy = true,
++        .caution = "hold",
 +        .tools = .{
-+            .{ .name = "read_file", .description = builtin_tools.read_file.description, .read_only = true, .replay = "safe" },
-+            .{ .name = "write_file", .description = builtin_tools.write_file.description, .read_only = false, .replay = "never" },
++            .{ .name = "read_file", .description = builtin_tools.read_file.description },
++            .{ .name = "write_file", .description = builtin_tools.write_file.description },
++        },
++        .compaction = .{
++            .context_window_tokens = window,
++            .threshold_percent = 0.9,
++            .recent_messages = 10,
++            .envelope_tokens = try toolSchemaTokens(arena, deps, config),
 +        },
 +    }, .{});
++    if (io_mod.getenv("FX_KERNEL_TRACE") != null) std.debug.print("kernel config {s}\n", .{kernel_config});
 +    const k = fxk_new(kernel_config.ptr, kernel_config.len) orelse return error.KernelConfigRejected;
 +    defer fxk_drop(k);
 +
@@ -179,9 +198,13 @@ index 00000000..efeafe8f
 +            const effect = field(effect_request, "effect") orelse return error.KernelEffectMalformed;
 +            const kind = str(field(effect, "kind"));
 +            const result = if (std.mem.eql(u8, kind, "model_call"))
-+                try modelCall(arena, deps, config, job, field(effect, "request") orelse return error.KernelEffectMalformed)
++                try modelCall(arena, deps, config, job, effect)
 +            else if (std.mem.eql(u8, kind, "tool_call"))
 +                try toolCall(arena, config, effect)
++            else if (std.mem.eql(u8, kind, "policy_decide"))
++                try policyDecide(arena, deps, job, effect)
++            else if (std.mem.eql(u8, kind, "user_ask"))
++                try std.json.Stringify.valueAlloc(arena, .{ .status = "failed", .@"error" = "fx ask has no person to approve", .retryable = false }, .{})
 +            else
 +                try std.json.Stringify.valueAlloc(arena, .{ .status = "completed", .output = null }, .{});
 +            try inputs.print(arena, "{{\"type\":\"effect_result\",\"key\":{f},\"result\":{s}}}", .{ std.json.fmt(key, .{}), result });
@@ -199,14 +222,37 @@ index 00000000..efeafe8f
 +    try deps.push_event(deps.ctx, .{ .finish_prompt = finished });
 +}
 +
++/// The size of the tool schemas fx sends with each agent call, which the
++/// kernel cannot see, in the kernel's estimate unit (4 bytes a token).
++fn toolSchemaTokens(arena: Allocator, deps: *const agent_runtime.AgentRuntimeDeps, config: agent_runtime.Config) !u64 {
++    // An advertised function replaces the registry schema of the same name.
++    const selection: agent_stream_provider.ToolSelection = .{ .advertised_functions = config.advertised_functions };
++    var bytes: usize = 0;
++    for (config.advertised_tool_names) |name| {
++        const schema = selection.advertisedFunction(name) orelse
++            (deps.tool_registry.lookup(name) orelse continue).model_schema;
++        bytes += (try model_tool_schema.builtinFunctionSchemaJsonAlloc(arena, schema)).len;
++    }
++    return (bytes + 3) / 4;
++}
++
 +/// One model call through fx's own gateway client. Returns the kernel effect result as JSON.
 +fn modelCall(
 +    arena: Allocator,
 +    deps: *const agent_runtime.AgentRuntimeDeps,
 +    config: agent_runtime.Config,
 +    job: worker_runtime.QueuedPrompt,
-+    request: Value,
++    effect: Value,
 +) ![]const u8 {
++    const request = field(effect, "request") orelse return error.KernelEffectMalformed;
++    const agent_call = std.mem.eql(u8, str(field(effect, "purpose")), "agent");
++    // A review or compaction call offers only the kernel's own tools, such as `permission_decision`.
++    var side_tools: std.ArrayList(agent_stream_provider.DynamicFunctionTool) = .empty;
++    for (items(field(request, "tools"))) |t| {
++        const schema = field(t, "input_schema") orelse continue;
++        if (schema == .null) continue;
++        try side_tools.append(arena, .{ .name = str(field(t, "name")), .description = str(field(t, "description")), .input_schema = schema });
++    }
 +    var messages: std.ArrayList(types.ChatMessage) = .empty;
 +    for (items(field(request, "messages"))) |m| {
 +        const role = str(field(m, "role"));
@@ -250,12 +296,12 @@ index 00000000..efeafe8f
 +        .retry_count = config.gateway_retry_count,
 +        .instructions = &instructions,
 +        .messages = messages.items,
-+        .tools = .{
++        .tools = if (agent_call) .{
 +            .registry = deps.tool_registry,
 +            .advertised_names = config.advertised_tool_names,
 +            .advertised_functions = config.advertised_functions,
-+        },
-+        .tool_choice = .auto,
++        } else .{ .selected_dynamic = side_tools.items },
++        .tool_choice = if (side_tools.items.len > 0) .required else .auto,
 +        .provider_options = model_capabilities.resolveProviderOptionsForCapabilities(
 +            vercel_model_policy.capabilitiesForModel(job.model),
 +            config.effort,
@@ -279,14 +325,56 @@ index 00000000..efeafe8f
 +            }
 +            return try std.json.Stringify.valueAlloc(arena, .{
 +                .status = "completed",
-+                .output = .{ .text = completion.content orelse "", .tool_calls = calls.items },
++                .output = .{
++                    .text = completion.content orelse "",
++                    .tool_calls = calls.items,
++                    .usage = .{ .input_tokens = completion.usage.input_tokens },
++                },
 +            }, .{});
 +        },
++        // fx's gateway client already retried; the kernel does not try again.
 +        .failed => |failure| return try std.json.Stringify.valueAlloc(arena, .{
 +            .status = "failed",
 +            .@"error" = failure.detail orelse @tagName(failure.kind),
++            .retryable = false,
 +        }, .{}),
 +    }
++}
++
++/// The kernel's `policy_decide`, answered by fx's own permission admission:
++/// its mode, rules, and grants. The remote review is off, so a call that
++/// needs one comes back as `review` and the kernel runs it.
++fn policyDecide(
++    arena: Allocator,
++    deps: *const agent_runtime.AgentRuntimeDeps,
++    job: worker_runtime.QueuedPrompt,
++    effect: Value,
++) ![]const u8 {
++    const call: types.ToolCall = .{
++        .id = str(field(effect, "call_id")),
++        .name = str(field(effect, "name")),
++        .arguments_json = try std.json.Stringify.valueAlloc(arena, field(effect, "input") orelse Value{ .null = {} }, .{}),
++    };
++    const review_turn: permission_auto_classifier.ReviewTurnContext = .{
++        .model = job.model,
++        .pending_assistant = .{ .role = .assistant, .tool_calls = &.{call} },
++        .target_call_id = call.id,
++        .origin = .root,
++        .review_attempt_available = false,
++    };
++    const outcome = try deps.request_tool_permission(deps.ctx, arena, call, review_turn, job.permission_mode, &.{}, null, null, &.{}, null);
++    const reason = outcome.feedback orelse outcome.tool_failure orelse "";
++    // fx refuses a call whose review it could not run; here that means "the kernel reviews it".
++    const needs_review = outcome.auto_review_failure == .turn_review_budget_exhausted;
++    const decision: []const u8 = if (needs_review) "review" else switch (outcome.decision) {
++        .once, .always => "allow",
++        .permission_required => "ask",
++        .deny, .policy_denied => "deny",
++    };
++    return try std.json.Stringify.valueAlloc(arena, .{
++        .status = "completed",
++        .output = .{ .decision = decision, .reason = reason },
++    }, .{});
 +}
 +
 +/// One built-in tool call through fx's own tool code. Returns the kernel effect result as JSON.

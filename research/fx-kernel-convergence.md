@@ -907,3 +907,65 @@ These results change the proposal:
    16 ms faster on each run only because it does less work than fx's loop.
    It does not build the full prompt prefix, and it does not run observer
    hooks or admission. This is not a speedup that a full kernel would keep.
+
+### 13.3 Kernel version 2: approval and compaction
+
+Kernel version 2 decides tool approval and compaction
+([`fx-eve-behavior-alignment.md`](./fx-eve-behavior-alignment.md)). The tests
+use the same sessions on each pair of hosts.
+
+eve, and eve with the native kernel (`baseline/test/hitl.integration.test.ts`):
+
+| Session                                   | Result on both | Same protocol events, in the same order |
+| ----------------------------------------- | -------------- | --------------------------------------- |
+| `always()`, the person approves           | Pass           | Yes                                     |
+| `always()`, the person denies with a note | Pass           | Yes                                     |
+| `once()`, two turns                       | Pass           | Yes                                     |
+| 6 turns in a 2,000-token window           | Pass           | Yes, 2 compactions at the same points   |
+
+fx, and fx with the kernel (`ReleaseSafe`, fx `0b31a736`, median of 5 runs):
+
+| Session                        | fx: time, model calls | fx with the kernel: time, model calls |
+| ------------------------------ | --------------------- | ------------------------------------- |
+| `plain`                        | 49 ms, 2              | 47 ms, 2                              |
+| Review returns `clear`         | 48 ms, 3              | 65 ms, 3                              |
+| Review returns `caution`       | 48 ms, 3              | 66 ms, 3                              |
+| `ask` mode, no person          | 37 ms, 1              | 36 ms, 1                              |
+| 20 reads in a 16k-token window | 340 ms, 23            | 321 ms, 22                            |
+
+Binary size with kernel version 2: 12,524,592 B (+573 KB, +4.8%). Version 2
+adds 36 KB to the version 1 kernel.
+
+These results change the proposal:
+
+1. **The decision logic is shared.** The kernel decides approval and
+   compaction for both products. The hosts do only the work. eve and fx
+   give the same results as without the kernel.
+2. **eve and fx already use the same review contract.** Both send a
+   `permission_decision` tool with `clear` or `caution` and a rationale.
+   Only the result of `caution` is different, and that is a config value.
+3. **When no person can approve, eve and fx both fail the turn.** The first
+   kernel version gave the model an error result. That was not the behavior
+   of either product. Version 2 fails the turn.
+4. **fx admission is not separated into decide, ask, and review.** One call
+   does all three. The fx host gets a decision with no prompt and no review,
+   but it must read "this needs a review" from a refusal reason
+   (`turn_review_budget_exhausted`). A real port needs fx admission to return
+   `review` directly.
+5. **The compaction trigger needs the full request size.** To match eve, the
+   kernel uses eve's token-bounded tail, eve's summary reserve, and the size
+   of the summary prompt. It must also know the size of the tool schemas,
+   which the host owns. eve's host sends `requestEnvelopeTokens`; the kernel
+   has `envelope_tokens` for this. Without it, fx with the kernel did not
+   compact.
+6. **fx compacts earlier.** fx compacts at 80% with its own notes, two times
+   in the 20-read session. The kernel compacts at 90%, one time. This is the
+   decided change for fx.
+7. **The review sessions are 17 ms slower on the kernel path.** The time is
+   in the review call. fx sends its review through its own reviewer
+   transport. The fx host sends the kernel's review through fx's agent
+   stream client, which takes about 13 ms more for each call here. The fix
+   is to send `permission_review` calls through fx's reviewer transport.
+8. **One difference stays in the prompt.** After an approval, eve keeps a
+   `[Pending approvals]` message in the model history. The kernel does not
+   add it. The protocol events are the same, but the prompts are not.

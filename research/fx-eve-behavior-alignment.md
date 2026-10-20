@@ -59,13 +59,13 @@ eve is the reference. fx changes to eve's behavior, with two exceptions:
 
 ### Approval and permission
 
-| Capability           | eve                                                            | fx                                                                                  | Class         | Kernel behavior                                                                                                                                            |
-| -------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Policy for each tool | `approval`: `always`, `never`, `once`, `auto()`, or a function | Tool descriptor `requires_approval`                                                 | **eve**       | eve's policy values on the tool descriptor.                                                                                                                |
-| Session policy       | None                                                           | Mode (`ask`, `auto`, `full-access`), rules, remembered grants, routine command list | **Extension** | A `policy.decide` seam before each tool call. eve's default uses only the tool policy. fx's implementation adds mode, rules, grants, and the routine list. |
-| `auto()` review      | Decision model. `caution` asks a person.                       | Review model. `caution` holds the action and tells the model.                       | **Extension** | The review is a `model.call` with the purpose `permission_review`. What `caution` does is set in the session config: `ask` (eve) or `hold` (fx).           |
-| Asking a person      | Input request. The turn parks durably until an answer arrives. | Prompt in the terminal, or `permission_required` when no person is present          | **Extension** | `user.ask` effect. The host parks (eve) or prompts (fx). With no person, the host returns `unavailable`.                                                   |
-| Grant scope          | `once()` with an `approvalKey`, for the session                | Exact action and environment, for the session                                       | **eve**       | `once` grants with an `approvalKey` in kernel state. fx's key is the exact action.                                                                         |
+| Capability           | eve                                                                                               | fx                                                                                  | Class         | Kernel behavior                                                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Policy for each tool | `approval`: `always`, `never`, `once`, `auto()`, or a function                                    | Tool descriptor `requires_approval`                                                 | **eve**       | eve's policy values on the tool descriptor.                                                                                                                |
+| Session policy       | None                                                                                              | Mode (`ask`, `auto`, `full-access`), rules, remembered grants, routine command list | **Extension** | A `policy.decide` seam before each tool call. eve's default uses only the tool policy. fx's implementation adds mode, rules, grants, and the routine list. |
+| `auto()` review      | Decision model. `caution` asks a person.                                                          | Review model. `caution` holds the action and tells the model.                       | **Extension** | The review is a `model.call` with the purpose `permission_review`. What `caution` does is set in the session config: `ask` (eve) or `hold` (fx).           |
+| Asking a person      | Input request. The turn parks durably until an answer arrives. With no person, the session fails. | Prompt in the terminal. With no person, `fx ask` stops with `permission_required`.  | **Extension** | `user.ask` effect. The host parks (eve) or prompts (fx). With no person, the host returns `failed` and the turn fails, as in both.                         |
+| Grant scope          | `once()` with an `approvalKey`, for the session                                                   | Exact action and environment, for the session                                       | **eve**       | `once` grants with an `approvalKey` in kernel state. fx's key is the exact action.                                                                         |
 
 ### Context
 
@@ -121,32 +121,56 @@ the kernel stays free of I/O.
 
 ## Decisions
 
-| Item                                 | Decision | Effect                                              |
-| ------------------------------------ | -------- | --------------------------------------------------- |
-| A steer stops generation             | fx       | eve changes.                                        |
-| Hooks that act                       | fx       | eve's `defineHook` gets `PreToolUse` and `Stop`.    |
-| Never run a tool again after a crash | eve      | fx loses R2. The kernel has no `never` replay rule. |
-| Write fence                          | eve      | All calls of a response run together.               |
-| Patient retry                        | eve      | 3 attempts, then the turn fails.                    |
-| Large result handles                 | eve      | Each tool cuts its own output.                      |
+| Item                                 | Decision | Effect                                                  |
+| ------------------------------------ | -------- | ------------------------------------------------------- |
+| A steer stops generation             | fx       | eve changes.                                            |
+| Hooks that act                       | fx       | eve's `defineHook` gets `PreToolUse` and `Stop`.        |
+| Never run a tool again after a crash | eve      | fx loses R2. The kernel has no `never` replay rule.     |
+| Write fence                          | eve      | All calls of a response run together.                   |
+| Patient retry                        | eve      | 3 attempts, then the turn fails.                        |
+| Large result handles                 | eve      | Each tool cuts its own output.                          |
+| No person to approve                 | both     | The turn fails. The model does not get an error result. |
 
 ## Kernel version 2
 
-The prototype kernel has the loop, tool order, steer, cancel, the replay
-rule, and the recovery policy. Version 2 adds the decisions that eve and fx
-both make, so that the kernel has real work to do:
+Version 2 adds approval and compaction, and applies the decisions above.
+`packages/kernel-spike/README.md` has the measurements.
 
-1. **Approval and permission.** Tool policies (`always`, `never`, `once`,
-   `auto`), `policy.decide`, the `permission_review` model call, `caution` as
-   `ask` or `hold`, `user.ask`, and `once` grants in kernel state.
-2. **Compaction.** eve's trigger and summary shape, with a `compaction`
-   model call. Optional records go through `blob.put`.
+### Approval
 
-Version 2 also applies the decisions above: no write fence, no `never`
-replay rule, and eve's retry policy in place of `decide(Evidence)`.
+- A tool descriptor has `approval`: `never`, `always`, `once`, `auto`, or
+  `host`. The kernel decides the first four. `host` sends `policy_decide` to
+  the host for that tool.
+- `host_policy: true` sends `policy_decide` for every call. The host answers
+  `allow`, `deny`, `ask`, `review`, or `default`. `default` uses the tool's
+  `approval`; for a `host` tool it asks a person.
+- `review` is a `model_call` with the purpose `permission_review` and the
+  `permission_decision` tool. Only an explicit `clear` clears. A failed
+  review, or an action over 64 KiB, is `caution`.
+- `caution` is `ask` (eve) or `hold` (fx).
 
-Each item is tested in the kernel crate, and then on two hosts: eve with the
-native kernel, and fx with the kernel linked in. eve already has both behaviors, so eve's behavior is the reference.
+How each host uses it:
+
+| Host           | Tool `approval`                                                                                                               | `policy_decide`                                                                                          | `user_ask`                                                                       |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| eve-native     | `always()`, `never()`, `once()` map to the kernel. `auto()`, policy functions, and `once()` with an `approvalKey` are `host`. | eve runs the tool's own policy function.                                                                 | eve's own approval machinery parks the turn. The answer goes back to the kernel. |
+| fx with kernel | All `never`, with `host_policy: true`.                                                                                        | fx's own admission: mode, rules, grants. Its remote review is off, so a call that needs one is `review`. | `fx ask` has no person, so it fails.                                             |
+
+### Compaction
+
+The kernel uses eve's rules:
+
+- The trigger: the estimate plus the summary prompt is more than
+  `threshold_percent` of the window. The estimate is the last reported input
+  tokens plus the new messages, or, with no report, the system prompt, the
+  tool list, the history, and `envelope_tokens` (the host's tool schemas).
+- The kept tail: up to `recent_messages` messages that fit beside the summary
+  reserve. A tool result at its start goes into the summary.
+- The prompt, the checkpoint marker, and the carried previous checkpoint.
+
+Each item is tested in the kernel crate, and on two hosts: eve with the
+native kernel, and fx with the kernel linked in.
 
 Later versions can add session budgets, turn policy, hooks, tasks,
-structured output, dynamic tools, memory, and subagents. These items need host plumbing that the prototype does not have.
+structured output, dynamic tools, memory, and subagents. These items need
+host plumbing that the prototype does not have.

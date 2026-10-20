@@ -63,6 +63,9 @@ pub struct Turn {
     pub cancelling: bool,
     /// Compaction ran (or was skipped) for this step's model call.
     pub compacted: bool,
+    /// A call needed a person and none can answer: the turn fails, as in eve and fx.
+    #[serde(default)]
+    pub unavailable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,6 +170,23 @@ impl State {
         self.turn.is_none() && self.queued.is_empty()
     }
 
+    fn tool_specs(&self) -> Vec<ToolSpec> {
+        let spec = |t: &ToolDescriptor| ToolSpec {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            input_schema: None,
+        };
+        self.config.tools.iter().map(spec).collect()
+    }
+
+    /// The request before its history: the system prompt and the tool list.
+    fn prefix_chars(&self) -> usize {
+        self.config.system.len()
+            + serde_json::to_string(&self.tool_specs())
+                .map(|s| s.len())
+                .unwrap_or(0)
+    }
+
     fn turn_mut(&mut self) -> &mut Turn {
         self.turn.as_mut().expect("a turn")
     }
@@ -221,6 +241,7 @@ impl State {
             steers: Vec::new(),
             cancelling: false,
             compacted: false,
+            unavailable: false,
         });
         out.events.push(Event::TurnStarted { turn: self.turns });
         self.request_model(out);
@@ -235,7 +256,7 @@ impl State {
         if !self.turn_mut().compacted
             && compaction::due(
                 &self.config.compaction,
-                &self.config.system,
+                self.prefix_chars(),
                 &self.history,
                 self.usage,
             )
@@ -245,6 +266,7 @@ impl State {
                 return;
             }
         }
+        let tools = self.tool_specs();
         let turn = self.turn.as_mut().expect("a turn");
         let key = format!("t{}.s{}.a{}.model", turn.n, turn.step, turn.attempt);
         turn.phase = Phase::Model {
@@ -254,16 +276,7 @@ impl State {
         let request = ModelRequest {
             system: self.config.system.clone(),
             messages: self.history.clone(),
-            tools: self
-                .config
-                .tools
-                .iter()
-                .map(|t| ToolSpec {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    input_schema: None,
-                })
-                .collect(),
+            tools,
         };
         out.effects.push(effect(
             key,
@@ -466,7 +479,7 @@ impl State {
             summary: None,
         };
         let estimated_tokens =
-            compaction::estimate_tokens(&self.config.system, &self.history, self.usage);
+            compaction::estimate_tokens(self.prefix_chars(), &self.history, self.usage);
         out.events.push(Event::CompactionStarted {
             messages: keep_from,
             estimated_tokens,
@@ -811,14 +824,33 @@ impl State {
                     is_error: true,
                 }
             }
-            EffectResult::Failed { .. } => Stage::Done {
-                content: approval::NO_PERSON.into(),
-                is_error: true,
-            },
+            EffectResult::Failed { .. } => {
+                self.stop_for_no_person(&call.call_id, out);
+                Stage::Done {
+                    content: approval::NO_PERSON.into(),
+                    is_error: true,
+                }
+            }
             EffectResult::Interrupted { .. } => Stage::Done {
                 content: CANCELLED_TOOL.into(),
                 is_error: true,
             },
+        }
+    }
+
+    /// Stops the other calls of the response; the turn fails once they settle.
+    fn stop_for_no_person(&mut self, call_id: &str, out: &mut Output) {
+        let turn = self.turn_mut();
+        turn.unavailable = true;
+        turn.cancelling = true;
+        if let Phase::Tools { calls } = &turn.phase {
+            for c in calls.iter().filter(|c| c.call_id != call_id) {
+                if let Some(key) = c.stage.open_key() {
+                    out.commands.push(Command::Cancel {
+                        key: key.to_string(),
+                    });
+                }
+            }
         }
     }
 
@@ -830,7 +862,7 @@ impl State {
         if calls.iter().any(|c| c.stage.open_key().is_some()) {
             return;
         }
-        let cancelling = turn.cancelling;
+        let (cancelling, unavailable) = (turn.cancelling, turn.unavailable);
         let messages: Vec<Message> = calls
             .iter()
             .map(|c| {
@@ -846,6 +878,10 @@ impl State {
             })
             .collect();
         self.history.extend(messages);
+        if unavailable {
+            self.end_turn(TurnEnd::Failed, Some(approval::NO_PERSON.into()), out);
+            return;
+        }
         if cancelling {
             self.end_turn(TurnEnd::Cancelled, None, out);
             return;

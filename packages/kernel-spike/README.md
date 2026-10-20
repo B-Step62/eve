@@ -12,18 +12,18 @@ prefix.
 
 ## Layout
 
-| Path                                       | What                                                                                                                                                                       |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crates/kernel`                            | The kernel. `advance(state, inputs) → effects, commands, events`. No I/O. Includes a port of fx `model_response_recovery.zig` with its tests, and fx's tool grouping rule. |
-| `crates/runner`                            | The in-process runner (R29): threads for effects, `cancel` commands, and an optional store (none, memory, or a JSONL session log).                                         |
-| `crates/fx-mini`                           | Host A. An fx-shaped binary on the runner: a scripted model, file tools, and a real `abort()` for crash scenarios.                                                         |
-| `crates/kernel-napi`, `crates/kernel-wasm` | The Node-API and WebAssembly builds of the kernel.                                                                                                                         |
-| `hosts/workflow`                           | Host B. The kernel on Workflow SDK workflows (the eve case). The kernel runs either in step code (Node-API) or in workflow code (WASM).                                    |
-| `hosts/durable-harness`                    | Host C. The kernel as a durable-harness `Harness` (the durable libfx case), in child processes that are SIGKILLed.                                                         |
-| `scenarios/scenarios.json`                 | The five scenarios every host runs.                                                                                                                                        |
-| `src/scenario.ts`, `test/assertions.ts`    | The TypeScript scenario host (the same script and tools as fx-mini) and one set of checks for every host.                                                                  |
-| `bench/napi.ts`                            | The cost of crossing the kernel boundary as the session grows.                                                                                                             |
-| `baseline/`, `bench/kernel-turn.ts`        | eve three ways on the same work: today's eve, eve with the native kernel, eve with the WASM kernel (see below).                                                            |
+| Path                                       | What                                                                                                                                                                  |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/kernel`                            | The kernel. `advance(state, inputs) → effects, commands, events`. No I/O. Version 2 decides tool approval (`approval.rs`) and compaction (`compaction.rs`) after eve. |
+| `crates/runner`                            | The in-process runner (R29): threads for effects, `cancel` commands, and an optional store (none, memory, or a JSONL session log).                                    |
+| `crates/fx-mini`                           | Host A. An fx-shaped binary on the runner: a scripted model, file tools, and a real `abort()` for crash scenarios.                                                    |
+| `crates/kernel-napi`, `crates/kernel-wasm` | The Node-API and WebAssembly builds of the kernel.                                                                                                                    |
+| `hosts/workflow`                           | Host B. The kernel on Workflow SDK workflows (the eve case). The kernel runs either in step code (Node-API) or in workflow code (WASM).                               |
+| `hosts/durable-harness`                    | Host C. The kernel as a durable-harness `Harness` (the durable libfx case), in child processes that are SIGKILLed.                                                    |
+| `scenarios/scenarios.json`                 | The five scenarios every host runs.                                                                                                                                   |
+| `src/scenario.ts`, `test/assertions.ts`    | The TypeScript scenario host (the same script and tools as fx-mini) and one set of checks for every host.                                                             |
+| `bench/napi.ts`                            | The cost of crossing the kernel boundary as the session grows.                                                                                                        |
+| `baseline/`, `bench/kernel-turn.ts`        | eve three ways on the same work: today's eve, eve with the native kernel, eve with the WASM kernel (see below).                                                       |
 
 ## Run it
 
@@ -42,24 +42,30 @@ pnpm spike:baseline   # eve vs eve + native kernel vs eve + WASM kernel
 
 | Scenario         | What happens                                                                 | What every host must show                                                                                               |
 | ---------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `plain`          | The model reads two files and writes one, then answers.                      | The reads run at the same time. The write starts after both reads end. The model gets the results in call order.        |
-| `crash_in_write` | The process stops after the write's side effect, before its result is saved. | The write ran once. The model is told it "may or may not have taken effect". The turn finishes.                         |
+| `plain`          | The model reads two files and writes one, then answers.                      | All three calls run together (eve's rule, no write fence). The model gets the results in call order.                    |
+| `crash_in_write` | The process stops after the write's side effect, before its result is saved. | The write runs again (eve's rule), so its side effect happens twice. The turn finishes.                                 |
 | `crash_in_model` | The process stops during the second model call.                              | The second call runs again. The first call is not requested again. One tool call in total.                              |
 | `steer`          | The user steers after the second chunk of a streamed reply.                  | The kernel returns `cancel` for the model call. The partial reply stays in history, then the steer, then the new reply. |
 | `cancel`         | The user cancels during a slow tool call.                                    | The kernel returns `cancel` for the tool. The tool result says it was cancelled. The turn ends `cancelled`.             |
 
 How each host crashes:
 
-| Host | Crash                                                                                                        | Recovery                                                                                           |
-| ---- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| A    | `abort()` in the real process.                                                                               | A second process with `--resume` reads the JSONL session log.                                      |
-| B    | The step throws. This test is in one process, so Workflow retries the step, as it does when a process stops. | Workflow runs the step again. A `never` step with `attempt > 1` reports `interrupted { crashed }`. |
-| C    | `SIGKILL` of the child process.                                                                              | A second process with `recoverActiveRuns` replays the session from world-local.                    |
+| Host | Crash                                                                                                        | Recovery                                                                        |
+| ---- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| A    | `abort()` in the real process.                                                                               | A second process with `--resume` reads the JSONL session log.                   |
+| B    | The step throws. This test is in one process, so Workflow retries the step, as it does when a process stops. | Workflow runs the step again.                                                   |
+| C    | `SIGKILL` of the child process.                                                                              | A second process with `recoverActiveRuns` replays the session from world-local. |
 
 ## Results
 
-All 20 host runs pass, plus 22 kernel tests: hosts A and C, and host B in both
-of its modes. Three repeated runs gave the same results.
+All 20 host runs pass, plus 23 kernel tests: hosts A and C, and host B in both
+of its modes.
+
+The sections below up to "Kernel version 2" are the version 1 results. Version 2
+removed the `never` replay rule, the write fence, and the port of fx's
+recovery policy (`recovery.rs`), as decided in
+[`fx-eve-behavior-alignment.md`](../../research/fx-eve-behavior-alignment.md).
+The version 1 measurements stay here as a record.
 
 ### The contract held
 
@@ -298,12 +304,65 @@ but I did not measure how much that would save.
 - **With `FX_KERNEL` unset, the kernel binary is fx.** Its times match the
   baseline.
 
+## Kernel version 2: approval and compaction
+
+Version 2 decides tool approval and compaction after eve
+(`crates/kernel/src/approval.rs`, `compaction.rs`). See
+[`research/fx-eve-behavior-alignment.md`](../../research/fx-eve-behavior-alignment.md)
+for the behavior and the extension points.
+
+### eve and eve with the native kernel
+
+`baseline/test/hitl.integration.test.ts` runs the same sessions on eve and on
+eve with the native kernel, and checks that both publish the same protocol
+events in the same order (`turn.*`, `input.*`, `action*`, `message.completed`,
+`compaction.*`). All 12 tests pass. It runs as part of `pnpm spike:baseline`.
+
+| Session                                   | Checks                                                       |
+| ----------------------------------------- | ------------------------------------------------------------ |
+| `always()`, approved                      | The write runs once; one `input.requested`.                  |
+| `always()`, denied with "Not now."        | The write does not run; the model gets the denial and note.  |
+| `once()`, two turns                       | Only the first turn asks.                                    |
+| 6 turns of 1.5 KB in a 2,000-token window | Compaction runs; the next prompt has the checkpoint summary. |
+
+In native mode, eve's own approval machinery still owns the person: the
+kernel's `user_ask` parks the turn through `parkOnApprovals`, and the answer
+is read back into the kernel. `auto()` and policy functions stay in eve
+(`approval: "host"`).
+
+### fx and fx with the kernel
+
+`FX_PERMISSION_MODE` is set for each session. The scripted gateway answers
+both fx's review and the kernel's review, because both use the
+`permission_decision` tool.
+
+| Session                       | fx                              | fx with the kernel             |
+| ----------------------------- | ------------------------------- | ------------------------------ |
+| plain (full access)           | 49 ms, 2 calls                  | 47 ms, 2 calls                 |
+| review-clear (auto, `.zshrc`) | 48 ms, 3 calls                  | 65 ms, 3 calls                 |
+| review-caution                | 48 ms, 3 calls                  | 66 ms, 3 calls                 |
+| ask-no-person (ask mode)      | 37 ms, 1 call, exit 1           | 36 ms, 1 call, exit 1          |
+| compaction (20 reads, 16k)    | 340 ms, 23 calls, 2 compactions | 321 ms, 22 calls, 1 compaction |
+| steps-20                      | 318 ms                          | 305 ms                         |
+
+Median of 5 runs. Binary: 12,524,592 B (+573 KB over fx; +36 KB over the
+version 1 kernel).
+
+- The `plain` gap went from 17 ms to 2 ms, because the kernel path now runs
+  fx's admission for each call (`policy_decide`).
+- The review sessions are 17 ms slower: the kernel's review goes through
+  fx's agent stream client, which costs about 13 ms more for each call here
+  than fx's own reviewer transport.
+- fx compacts at 80% with its own notes; the kernel at 90% with eve's
+  checkpoint, as decided.
+
 ## What this prototype does not test
 
 - **Crashes on Workflow are simulated.** Host B throws in-process instead of
   killing the process, and it runs only on world-local, not world-vercel.
-- **Real model, tool, and session work:** no real providers, codecs,
-  permissions, compaction, MCP, ACP, or TUI.
+- **Real model, tool, and session work:** no real providers, codecs, MCP,
+  ACP, or TUI. Approval and compaction run on eve and fx, but only with
+  scripted models.
 - **eve itself:** the eve features in the contract (tasks, approvals, the
   deferred tool catalog) are not exercised. eve's real `turnStep` was not
   replaced. That is the next step after this prototype.

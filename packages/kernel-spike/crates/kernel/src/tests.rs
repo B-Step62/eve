@@ -311,10 +311,20 @@ fn the_host_policy_decides_first_and_default_falls_back_to_the_tool() {
 }
 
 #[test]
-fn with_no_person_to_ask_the_call_fails_with_a_reason() {
+fn with_no_person_to_ask_the_turn_fails_as_in_eve_and_fx() {
     let mut s = open(config());
-    calling(&mut s, "deploy");
+    advance(&mut s, vec![prompt("go")]);
     advance(
+        &mut s,
+        vec![done(
+            "t1.s0.a0.model",
+            json!({ "tool_calls": [
+                { "id": "c", "name": "deploy", "input": {} },
+                { "id": "r", "name": "read_file", "input": {} },
+            ]}),
+        )],
+    );
+    let out = advance(
         &mut s,
         vec![Input::EffectResult {
             key: "t1.tool.c.ask".into(),
@@ -324,7 +334,27 @@ fn with_no_person_to_ask_the_call_fails_with_a_reason() {
             },
         }],
     );
-    assert_eq!(last_tool(&s), (approval::NO_PERSON.into(), true));
+    assert_eq!(
+        out.commands,
+        vec![Command::Cancel {
+            key: "t1.tool.r".into()
+        }]
+    );
+    let out = advance(
+        &mut s,
+        vec![Input::EffectResult {
+            key: "t1.tool.r".into(),
+            result: EffectResult::Interrupted {
+                reason: InterruptReason::Cancelled,
+                partial: Value::Null,
+            },
+        }],
+    );
+    assert_eq!(ended(&out), Some(TurnEnd::Failed));
+    assert!(
+        out.effects.is_empty(),
+        "no model call after a missing approval"
+    );
 }
 
 #[test]
@@ -359,6 +389,7 @@ fn compacting() -> SessionConfig {
             threshold_percent: 0.9,
             recent_messages: 2,
             records: true,
+            envelope_tokens: 0,
         },
         ..config()
     }

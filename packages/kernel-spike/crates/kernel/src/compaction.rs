@@ -40,14 +40,16 @@ fn chars_to_tokens(chars: usize) -> u64 {
     (chars as u64).div_ceil(4)
 }
 
-/// eve's estimate: the last reported prompt tokens plus the size of what was appended since.
-pub fn estimate_tokens(system: &str, history: &[Message], mark: Option<UsageMark>) -> u64 {
+/// eve's estimate: the last reported prompt tokens plus the size of what was
+/// appended since. With no report, the whole request: `prefix_chars` is the
+/// system prompt and tool list, which eve also counts (`requestEnvelopeTokens`).
+pub fn estimate_tokens(prefix_chars: usize, history: &[Message], mark: Option<UsageMark>) -> u64 {
     let size = |m: &[Message]| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0);
     match mark {
         Some(mark) if mark.messages <= history.len() => {
             mark.input_tokens + chars_to_tokens(size(&history[mark.messages..]))
         }
-        _ => chars_to_tokens(system.len() + size(history)),
+        _ => chars_to_tokens(prefix_chars + size(history)),
     }
 }
 
@@ -62,7 +64,7 @@ fn prompt_overhead() -> u64 {
 
 pub fn due(
     config: &CompactionConfig,
-    system: &str,
+    prefix_chars: usize,
     history: &[Message],
     mark: Option<UsageMark>,
 ) -> bool {
@@ -71,7 +73,12 @@ pub fn due(
     }
     let threshold = (config.context_window_tokens as f64 * config.threshold_percent) as u64;
     // eve counts the summary call's own prompt too, so the summary call fits.
-    estimate_tokens(system, history, mark) + prompt_overhead() > threshold
+    let envelope = if mark.is_some() {
+        0
+    } else {
+        config.envelope_tokens
+    };
+    estimate_tokens(prefix_chars, history, mark) + envelope + prompt_overhead() > threshold
 }
 
 fn is_checkpoint(history: &[Message]) -> bool {
@@ -220,6 +227,7 @@ mod tests {
             threshold_percent: 0.9,
             recent_messages: recent,
             records: false,
+            envelope_tokens: 0,
         }
     }
 
@@ -259,10 +267,10 @@ mod tests {
     #[test]
     fn the_estimate_uses_reported_usage_when_it_has_it() {
         let h = vec![user(&"x".repeat(400))];
-        assert!(estimate_tokens("", &h, None) >= 100);
+        assert!(estimate_tokens(0, &h, None) >= 100);
         assert_eq!(
             estimate_tokens(
-                "",
+                0,
                 &h,
                 Some(UsageMark {
                     input_tokens: 7,

@@ -30,14 +30,32 @@ function answer(step) {
   ]);
 }
 
-/** `script(index)` returns the model step for a request with `index` assistant messages. */
-export function startFakeGateway(script, model) {
+/**
+ * `script(index, kind, agentCalls)` returns the model step for a request with `index`
+ * assistant messages. `kind` is `review` for a permission review (fx's and the
+ * kernel's both offer `permission_decision`), `compaction` for the kernel's
+ * summary call, `fx-compaction` for fx's notes call, and `agent` otherwise.
+ * `agentCalls` counts earlier agent calls, for scripts that outlive a
+ * compaction (which removes assistant messages).
+ */
+export function startFakeGateway(script, model, contextWindow) {
   const requests = [];
   const server = createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
     if (url.pathname === "/coding-agent/v1/models") {
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ data: [{ id: model, type: "language", tags: ["tool-use"] }] }));
+      res.end(
+        JSON.stringify({
+          data: [
+            {
+              id: model,
+              type: "language",
+              tags: ["tool-use"],
+              ...(contextWindow === undefined ? {} : { context_window: contextWindow }),
+            },
+          ],
+        }),
+      );
       return;
     }
     let body = "";
@@ -50,9 +68,28 @@ export function startFakeGateway(script, model) {
       }
       const request = JSON.parse(body);
       const index = (request.prompt ?? []).filter((m) => m.role === "assistant").length;
-      requests.push({ index, bytes: body.length, ...(process.env.FX_BENCH_DUMP ? { body } : {}) });
+      const kind = body.includes('"permission_decision"')
+        ? "review"
+        : body.includes("CONTEXT CHECKPOINT COMPACTION")
+          ? "compaction"
+          : body.includes("You write compaction notes")
+            ? "fx-compaction"
+            : "agent";
+      requests.push({
+        index,
+        kind,
+        at: performance.now(),
+        bytes: body.length,
+        ...(process.env.FX_BENCH_DUMP ? { body } : {}),
+      });
       res.setHeader("content-type", "text/event-stream");
-      res.end(answer(script(index)));
+      res.end(
+        answer(
+          kind === "compaction" || kind === "fx-compaction"
+            ? { text: "Alice asked to read big.txt; it holds x characters." }
+            : script(index, kind, requests.filter((r) => r.kind === "agent").length - 1),
+        ),
+      );
     });
   });
   return new Promise((resolve) => {

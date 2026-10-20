@@ -70,6 +70,10 @@ pub struct CompactionConfig {
     /// Store each compacted transcript with a `blob.put` effect.
     #[serde(default)]
     pub records: bool,
+    /// Request tokens the kernel does not build, such as the host's tool
+    /// schemas (eve's `requestEnvelopeTokens`).
+    #[serde(default)]
+    pub envelope_tokens: u64,
 }
 
 fn default_threshold() -> f64 {
@@ -86,6 +90,7 @@ impl Default for CompactionConfig {
             threshold_percent: 0.9,
             recent_messages: 10,
             records: false,
+            envelope_tokens: 0,
         }
     }
 }
