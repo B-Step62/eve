@@ -124,6 +124,7 @@ async function probeHealth(url: string, startToken: string): Promise<"own" | "fo
   try {
     response = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, url), {
       method: "HEAD",
+      redirect: "manual",
       signal: AbortSignal.timeout(2_000),
     });
   } catch {
