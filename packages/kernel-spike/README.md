@@ -172,22 +172,29 @@ wrote, and the final reply in the event stream.
 
 ### One `plain` turn (2 model calls, 3 tool calls)
 
-Times are the median of 5 runs after a warm-up.
+Times are the median of 5 runs after a warm-up, with kernel version 2. These
+sessions do not ask for approval or compact.
 
 | Mode       | Time   | Steps | Events | Written |
 | ---------- | ------ | ----- | ------ | ------- |
-| eve        | 350 ms | 4     | 19     | 51 KB   |
-| eve-native | 337 ms | 4     | 17     | 56 KB   |
-| eve-wasm   | 539 ms | 8     | 29     | 113 KB  |
+| eve        | 355 ms | 4     | 19     | 51 KB   |
+| eve-native | 345 ms | 4     | 17     | 59 KB   |
+| eve-wasm   | 495 ms | 7     | 26     | 101 KB  |
 
 ### `growth`: N turns, each a 5 KB tool result and a reply
 
 | Turns | eve              | eve-native       | eve-wasm         |
 | ----- | ---------------- | ---------------- | ---------------- |
-| 1     | 195 ms, 48 KB    | 197 ms, 53 KB    | 336 ms, 95 KB    |
-| 5     | 859 ms, 231 KB   | 808 ms, 274 KB   | 1497 ms, 406 KB  |
-| 10    | 1646 ms, 486 KB  | 1576 ms, 586 KB  | 3178 ms, 811 KB  |
-| 20    | 3418 ms, 1065 KB | 3210 ms, 1307 KB | 8988 ms, 1671 KB |
+| 1     | 220 ms, 49 KB    | 185 ms, 57 KB    | 342 ms, 96 KB    |
+| 5     | 939 ms, 231 KB   | 817 ms, 290 KB   | 1458 ms, 411 KB  |
+| 10    | 1988 ms, 487 KB  | 1624 ms, 622 KB  | 3137 ms, 820 KB  |
+| 20    | 3653 ms, 1066 KB | 3289 ms, 1385 KB | 8775 ms, 1689 KB |
+
+Version 1 (before approval and compaction): one turn 350 / 337 / 539 ms;
+20 turns 3418 / 3210 / 8988 ms. eve-native is still as fast as eve or
+faster, and eve-wasm is still 1.4–2.4× slower. eve-native's state grew a
+little (approval and compaction fields), so it now writes 16–30% more than
+eve.
 
 ### What this shows
 

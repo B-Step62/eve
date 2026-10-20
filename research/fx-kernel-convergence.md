@@ -847,17 +847,24 @@ is eve's own code. The README of `packages/kernel-spike` has the full tables.
 - **eve-wasm:** the kernel (WebAssembly) runs in eve's session workflow code.
   Each `turnStep` runs one batch of effects.
 
+Kernel version 2 (approval and compaction), median of 5 runs. These
+sessions do not ask for approval or compact, so version 2 adds only its
+checks for each call.
+
 | One turn (2 model calls, 3 tool calls) | Time   | Steps | Bytes written |
 | -------------------------------------- | ------ | ----- | ------------- |
-| eve                                    | 350 ms | 4     | 51 KB         |
-| eve-native                             | 337 ms | 4     | 56 KB         |
-| eve-wasm                               | 539 ms | 8     | 113 KB        |
+| eve                                    | 355 ms | 4     | 51 KB         |
+| eve-native                             | 345 ms | 4     | 59 KB         |
+| eve-wasm                               | 495 ms | 7     | 101 KB        |
 
 | 20 turns, each with a 5 KB tool result | Time    | Bytes written |
 | -------------------------------------- | ------- | ------------- |
-| eve                                    | 3418 ms | 1065 KB       |
-| eve-native                             | 3210 ms | 1307 KB       |
-| eve-wasm                               | 8988 ms | 1671 KB       |
+| eve                                    | 3653 ms | 1066 KB       |
+| eve-native                             | 3289 ms | 1385 KB       |
+| eve-wasm                               | 8775 ms | 1689 KB       |
+
+Version 1 gave 350, 337, and 539 ms for one turn, and 3418, 3210, and
+8988 ms for 20 turns. The order of the modes did not change.
 
 These results change the proposal:
 
@@ -865,13 +872,13 @@ These results change the proposal:
    that exists today (`turnStep`). It is as fast as eve. Do not use option B
    for eve. eve-wasm needs more steps, and each eve step carries eve's session
    values. Workflow also replays the workflow code, so each WebAssembly call
-   to the kernel runs again on each replay. eve-wasm is 1.6 times slower than
-   eve on one turn and 2.6 times slower at 20 turns.
-2. **R2.** eve-native keeps eve's step size: one model call and all of its
+   to the kernel runs again on each replay. eve-wasm is 1.4 times slower than
+   eve on one turn and 2.4 times slower at 20 turns.
+2. **R2 (withdrawn in version 2).** eve-native keeps eve's step size: one model call and all of its
    tools in one step. If a crash occurs during a tool, the step runs again.
    To obey R2, the step must record an intent before each `never` tool, and
    give `interrupted` when it runs again. The step boundary does not do this.
-3. **Bytes in eve-native.** eve-native writes 10–23% more bytes than eve.
+3. **Bytes in eve-native.** eve-native writes 16–30% more bytes than eve.
    The kernel state keeps a copy of the history in eve's session state. eve's
    session machine also keeps the user messages. We must keep only one
    history.
@@ -879,7 +886,7 @@ These results change the proposal:
    of each Workflow step. The kernel uses less CPU than eve's harness. At
    1 MB of history, one model step takes 0.86 ms in the kernel and 10 ms in
    eve's harness. But this difference is small compared to the step cost.
-5. **R9.** eve ran the write at the same time as the two reads. The kernel
+5. **R9 (withdrawn in version 2).** eve ran the write at the same time as the two reads. The kernel
    runs the write after the reads. eve has no write fence today.
 
 ### 13.2 Comparison with fx
