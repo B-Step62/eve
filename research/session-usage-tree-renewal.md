@@ -1,5 +1,5 @@
 ---
-issue: PR_URL
+issue: https://github.com/vercel/eve/pull/5061
 status: implemented
 last_updated: "2026-10-20"
 ---
