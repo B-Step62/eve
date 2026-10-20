@@ -58,7 +58,7 @@ import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { Transition } from "./commit.js";
 import { signInAttemptKey } from "#harness/hitl/sign-ins.js";
 import type { Relay, WorkflowAskRoute } from "#harness/hitl/relays.js";
-import type { ApprovalAsk, SuspendedStep, TurnState } from "./state.js";
+import type { ApprovedCall, SuspendedStep, TurnState } from "./state.js";
 import {
   activeTurnId,
   answeredCallIds,
@@ -583,9 +583,20 @@ export function withoutApproved(step: SuspendedStep, callIds: ReadonlySet<string
   return approved.length === 0 ? rest : { ...rest, approved };
 }
 
-/** Approved calls of suspended steps that haven't run. */
-export function approvedCalls(turn: TurnState): readonly ApprovalAsk[] {
-  return turn.suspended.flatMap((step) => step.approved ?? []);
+/**
+ * The approved calls of `step` that can run. A call a sign-in stopped is approved too, but waits
+ * until every sign-in it stopped on has called back.
+ */
+export function runnableCalls(view: SessionView, step: SuspendedStep): readonly ApprovedCall[] {
+  const waiting = new Set(view.signIns.map(signInAttemptKey));
+  return (step.approved ?? []).filter((call) =>
+    (call.signIns ?? []).every((challenge) => !waiting.has(signInAttemptKey(challenge))),
+  );
+}
+
+/** Approved calls of suspended steps that can run and haven't. */
+export function approvedCalls(view: SessionView): readonly ApprovedCall[] {
+  return view.turn.suspended.flatMap((step) => runnableCalls(view, step));
 }
 
 export function suspend(turn: TurnState, step: SuspendedStep): TurnState {
@@ -632,6 +643,20 @@ export function withResult(
     next.splice(asking.index + 1, 0, { content: [part], role: "tool" });
   }
   return next;
+}
+
+/** The messages without the results of the calls in `callIds`, which stay as unanswered calls. */
+function withoutResults(
+  messages: readonly ModelMessage[],
+  callIds: ReadonlySet<string>,
+): ModelMessage[] {
+  return messages.flatMap((message): ModelMessage[] => {
+    if (message.role !== "tool") return [message];
+    const content = message.content.filter(
+      (part) => part.type !== "tool-result" || !callIds.has(part.toolCallId),
+    );
+    return content.length === 0 ? [] : [{ ...message, content }];
+  });
 }
 
 /** The call with this id, and the index of the message that made it. */
@@ -1074,7 +1099,8 @@ export function runSignIn(
 
 /**
  * Sign-in callbacks matched the attempts `attemptIds` name: the session stops waiting on them.
- * Their completions report once the turn they resume runs (`completeSignIn`).
+ * A call they stopped runs once every sign-in it waits on has called back (`runnableCalls`); any
+ * other completion reports once the turn it resumes runs (`completeSignIn`).
  */
 export function matchSignIns(
   view: SessionView,
@@ -1087,37 +1113,128 @@ export function matchSignIns(
   };
 }
 
+/** The sign-ins calls stopped on, which the calls report when they settle. */
+export function callSignIns(turn: TurnState): readonly AuthorizationChallenge[] {
+  return turn.suspended.flatMap((step) =>
+    (step.approved ?? []).flatMap((call) => call.signIns ?? []),
+  );
+}
+
 /**
- * Sign-in callbacks arrived: each attempt the session still waits on is accepted. A callback is a
- * delivery whose response carries no value: the provider's payload stays private, and the
- * public record says only that the attempt completed.
+ * The `stopped` calls wait for a sign-in: their results leave the step, and they stay approved and
+ * open, to run once the sign-ins call back, rather than the model asking for them again.
+ */
+export function awaitSignIns(
+  step: SuspendedStep,
+  input: {
+    readonly stopped: readonly {
+      readonly call: ApprovedCall["call"];
+      readonly connections: readonly string[];
+    }[];
+    readonly challenges: readonly AuthorizationChallenge[];
+  },
+): SuspendedStep {
+  const ids = stepCallIds(step);
+  const stopped = input.stopped.filter(({ call }) => ids.has(call.callId));
+  if (stopped.length === 0) return step;
+  const calls = stopped.map(({ call, connections }): ApprovedCall => {
+    // A call approved before keeps its approval, and the sign-ins it already waited on report
+    // with it, beside the ones it waits on now.
+    const earlier = step.approved?.find((approved) => approved.call.callId === call.callId);
+    return {
+      call,
+      ...(earlier?.interactionId !== undefined && { interactionId: earlier.interactionId }),
+      signIns: [
+        ...(earlier?.signIns ?? []),
+        ...input.challenges.filter((challenge) => connections.includes(challenge.name)),
+      ],
+    };
+  });
+  const callIds = new Set(calls.map((call) => call.call.callId));
+  return {
+    ...step,
+    messages: withoutResults(step.messages, callIds),
+    approved: [...(step.approved ?? []).filter((call) => !callIds.has(call.call.callId)), ...calls],
+  };
+}
+
+/**
+ * The facts that settle a sign-in its callback completed, while the session still waits on it. A
+ * callback is a delivery whose response carries no value: the provider's payload stays private,
+ * and the public record says only that the attempt completed and how it came out.
+ */
+function signInCallbackFacts(
+  tables: PublicView,
+  challenge: AuthorizationChallenge,
+  settled: {
+    readonly outcome: "accepted" | "failed";
+    readonly reason?: string;
+    readonly retryable?: boolean;
+  },
+): SessionEvent[] {
+  const interactionId = signInInteractionId(challenge);
+  const row = tables.interactions[interactionId];
+  if (row?.status !== "open") return [];
+  // One callback per attempt reaches the session, so the attempt names its delivery.
+  const deliveryId = `callback_${interactionId}`;
+  const responseId = `response_${deliveryId}`;
+  const owner = interactionOwner(tables, row);
+  const scope: { turnId?: string; taskId?: string } = {};
+  if (owner.turnId !== undefined) scope.turnId = owner.turnId;
+  if (owner.taskId !== undefined) scope.taskId = owner.taskId;
+  const ended = interactionSettled(interactionId, settled.outcome, {
+    cause: { responseId },
+    scope,
+    ...(settled.reason !== undefined && { reason: settled.reason }),
+  });
+  return [
+    { data: { deliveryId, source: { callback: "authorization" } }, type: "delivery.admitted" },
+    responseSubmitted({ deliveryId, interactionId, responseId }),
+    responseSettled(responseId, "applied"),
+    // A terminal failure says so: the turn reports it rather than asking for the sign-in again.
+    settled.retryable === false
+      ? { ...ended, data: { ...ended.data, response: { retryable: false } } }
+      : ended,
+    deliveryApplied(deliveryId),
+  ];
+}
+
+/**
+ * A call a sign-in stopped settled: the sign-ins it waited on end with it, accepted if it returned
+ * and failed with the reason it didn't. A failure with `retryable: false` is terminal, recorded as
+ * the settlement's `response.retryable`. Published before the call's own settlement.
+ */
+export function callSignInsSettled(
+  view: Pick<SessionView, "projection">,
+  call: ApprovedCall,
+  failure?: { readonly reason?: string; readonly retryable?: boolean },
+): SessionEvent[] {
+  const tables = view.projection.view;
+  const settled =
+    failure === undefined
+      ? { outcome: "accepted" as const }
+      : { ...failure, outcome: "failed" as const };
+  return (call.signIns ?? []).flatMap((challenge) =>
+    signInCallbackFacts(tables, challenge, settled),
+  );
+}
+
+/**
+ * Sign-in callbacks arrived: each attempt the session still waits on is accepted. A sign-in a
+ * call stopped on settles with the call instead (`callSignInsSettled`).
  */
 export function completeSignIn(
   view: SessionView,
   input: { readonly completions: readonly AuthorizationChallenge[] },
 ): Transition {
   const tables = view.projection.view;
+  // A call a sign-in stopped reports it when the call settles.
+  const reportedByCalls = new Set(callSignIns(view.turn).map(signInAttemptKey));
   return unchanged(
     view,
-    input.completions.flatMap((challenge): SessionEvent[] => {
-      const interactionId = signInInteractionId(challenge);
-      const row = tables.interactions[interactionId];
-      if (row?.status !== "open") return [];
-      // One callback per attempt reaches the session, so the attempt names its delivery.
-      const deliveryId = `callback_${interactionId}`;
-      const responseId = `response_${deliveryId}`;
-      const owner = interactionOwner(tables, row);
-      const scope: { turnId?: string; taskId?: string } = {};
-      if (owner.turnId !== undefined) scope.turnId = owner.turnId;
-      if (owner.taskId !== undefined) scope.taskId = owner.taskId;
-      return [
-        { data: { deliveryId, source: { callback: "authorization" } }, type: "delivery.admitted" },
-        responseSubmitted({ deliveryId, interactionId, responseId }),
-        responseSettled(responseId, "applied"),
-        interactionSettled(interactionId, "accepted", { cause: { responseId }, scope }),
-        deliveryApplied(deliveryId),
-      ];
-    }),
+    input.completions
+      .filter((challenge) => !reportedByCalls.has(signInAttemptKey(challenge)))
+      .flatMap((challenge) => signInCallbackFacts(tables, challenge, { outcome: "accepted" })),
   );
 }
 

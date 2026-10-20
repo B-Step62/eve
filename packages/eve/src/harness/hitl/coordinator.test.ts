@@ -19,7 +19,7 @@ import { resolveTypedApproval } from "#harness/hitl/delivery.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { captureLogRecords } from "#internal/testing/log-records.js";
 import { parkedSteps, withParkedStep } from "#internal/testing/session-machine.js";
-import type { HarnessSession } from "#harness/types.js";
+import type { HarnessSession, HarnessStepInput } from "#harness/types.js";
 import type { ApprovalAsk } from "#harness/session-machine/state.js";
 
 const request: ApprovalAsk = {
@@ -66,6 +66,7 @@ describe("coordinateApprovalDelivery", () => {
     session: HarnessSession,
     response: ApprovalResponsePolicy,
     prepareTools?: () => Promise<Map<string, HarnessToolDefinition>>,
+    stepInput?: HarnessStepInput,
   ) {
     const ctx = new ContextContainer();
     ctx.set(SessionKey, {
@@ -85,6 +86,7 @@ describe("coordinateApprovalDelivery", () => {
         now: 101,
         prepareTools,
         session,
+        stepInput,
         tools: new Map([["gate", tool]]),
       }),
     );
@@ -290,11 +292,62 @@ describe("coordinateApprovalDelivery", () => {
     );
   });
 
-  it("does not complete a duplicate while its candidate is active", async () => {
+  it("authorizes the active candidate once when its duplicate arrives", async () => {
     const ingested = await ingest();
-    const duplicate = await ingest(ingested.session);
-    expect(duplicate.kind).toBe("continue");
-    expect(getApprovalAuditState(duplicate.session.state).activeCandidates).toHaveLength(1);
+    const response = vi.fn<ApprovalResponsePolicy>(() => ({ status: "allowed" }));
+    const duplicate = await authorize(ingested.session, response, undefined, {
+      attributedAnswers: [
+        {
+          auth: responder,
+          response: { interactionId: request.interactionId, optionId: "approve" },
+        },
+      ],
+    });
+    expect(response).toHaveBeenCalledOnce();
+    expect(duplicate.kind).toBe("responses-completed");
+    expect(duplicate.stepInput?.answers).toEqual([
+      { interactionId: request.interactionId, optionId: "approve" },
+    ]);
+  });
+
+  it("authorizes the active candidate when a sibling's direct answer arrives", async () => {
+    const direct: ApprovalAsk = {
+      ...request,
+      call: { ...request.call, callId: "call-2" },
+      interactionId: "approval-2",
+    };
+    const parked = withParkedStep(
+      {
+        agent: { modelReference: { id: "test" }, system: "", tools: [] },
+        compaction: { recentWindowSize: 10, threshold: 0.8 },
+        continuationToken: "test",
+        history: [],
+        sessionId: "session-1",
+      },
+      {
+        requester: responder,
+        requests: [request, direct],
+        responseAuthRequiredRequestIds: [request.interactionId],
+      },
+    );
+    const ingested = await ingest(parked);
+    expect(ingested.kind).toBe("continue-coordination");
+
+    const response = vi.fn<ApprovalResponsePolicy>(() => ({ status: "allowed" }));
+    const result = await authorize(ingested.session, response, undefined, {
+      attributedAnswers: [
+        { auth: responder, response: { interactionId: direct.interactionId, optionId: "approve" } },
+      ],
+    });
+    expect(response).toHaveBeenCalledOnce();
+    expect(result.kind).toBe("responses-completed");
+    expect(getApprovalAuditState(result.session.state).activeCandidates).toEqual([]);
+    expect(result.stepInput?.answers).toEqual(
+      expect.arrayContaining([
+        { interactionId: request.interactionId, optionId: "approve" },
+        { interactionId: direct.interactionId, optionId: "approve" },
+      ]),
+    );
   });
 
   it("keeps authorization-required candidates parked instead of completing", async () => {
@@ -429,6 +482,30 @@ describe("coordinateApprovalDelivery", () => {
     ]);
   });
 
+  it("keeps the note an authorized Cancel was sent with", async () => {
+    const ingested = await coordinateApprovalDelivery({
+      now: 100,
+      session: parkedSession(),
+      stepInput: {
+        attributedAnswers: [
+          {
+            auth: responder,
+            response: {
+              interactionId: request.interactionId,
+              optionId: "deny",
+              text: "only the three-pack",
+            },
+          },
+        ],
+      },
+      tools: new Map(),
+    });
+    const settled = await authorize(ingested.session, () => ({ status: "allowed" }));
+    expect(settled.stepInput?.answers).toEqual([
+      { interactionId: request.interactionId, optionId: "deny", text: "only the three-pack" },
+    ]);
+  });
+
   it("forwards an unrelated message while a response-authorized approval remains pending", async () => {
     const messageAuth: SessionAuthContext = { ...responder, principalId: "user-2" };
     const result = await coordinateApprovalDelivery({
@@ -491,17 +568,135 @@ describe("approval responses without a response policy", () => {
     expect(parkedSteps(result.session)).toHaveLength(1);
   });
 
+  it("doesn't recheck a settled answer replayed with another responder's delivery", async () => {
+    const second: ApprovalAsk = {
+      ...request,
+      call: { ...request.call, callId: "call-2" },
+      interactionId: "approval-2",
+    };
+    const parked = withParkedStep(
+      { ...parkedSession(), state: undefined },
+      { requester: alice, requests: [request, second] },
+    );
+    const settled = await respond(parked, alice);
+    // `answer` queues the settled response while the batch waits; Bob's delivery brings it back.
+    const ctx = new ContextContainer();
+    ctx.set(SessionKey, {
+      auth: { current: bob, initiator: alice },
+      sessionId: parked.sessionId,
+      turn: { id: "turn-2", sequence: 2 },
+    });
+    const replayed = await contextStorage.run(ctx, () =>
+      coordinateApprovalDelivery({
+        now: 101,
+        session: settled.session,
+        stepInput: {
+          answers: settled.stepInput?.answers,
+          attributedAnswers: [
+            { auth: bob, response: { interactionId: second.interactionId, optionId: "approve" } },
+          ],
+        },
+        tools: new Map(),
+      }),
+    );
+    expect(replayed.feedback).toEqual([
+      "Only the person who requested this action can respond to this approval.",
+    ]);
+    expect(
+      getApprovalAuditState(replayed.session.state).settlements.map((entry) => entry.requestId),
+    ).toEqual([request.interactionId]);
+    expect(replayed.stepInput?.answers).toEqual([
+      { interactionId: request.interactionId, optionId: "approve" },
+    ]);
+  });
+
+  it.each([
+    ["an unknown option", { optionId: "bogus" }],
+    ["text alone", { text: "hmm, not sure" }],
+  ])("rejects %s with feedback and settles nothing", async (_label, answer) => {
+    const result = await coordinateApprovalDelivery({
+      now: 100,
+      session: parkedFor(alice),
+      stepInput: {
+        attributedAnswers: [
+          { auth: alice, response: { ...answer, interactionId: request.interactionId } },
+        ],
+      },
+      tools: new Map(),
+    });
+    expect(result.feedback).toEqual(["Respond to this approval with Approve or Cancel."]);
+    expect(getApprovalAuditState(result.session.state).settlements).toEqual([]);
+    expect(result.stepInput?.answers ?? []).toEqual([]);
+    expect(parkedSteps(result.session)).toHaveLength(1);
+  });
+
   it("lets anyone respond when the requester is unauthenticated", async () => {
     const result = await respond(parkedFor(null), bob);
     expect(result.feedback).toEqual([]);
     expect(getApprovalAuditState(result.session.state).settlements).toHaveLength(1);
+  });
+
+  it("settles nothing for an unauthenticated answer to a requester's call", async () => {
+    const result = await coordinateApprovalDelivery({
+      now: 100,
+      session: parkedFor(alice),
+      stepInput: {
+        attributedAnswers: [
+          { auth: null, response: { interactionId: request.interactionId, optionId: "approve" } },
+        ],
+      },
+      tools: new Map(),
+    });
+    expect(result.feedback).toEqual(["Authentication is required to respond to this approval."]);
+    expect(getApprovalAuditState(result.session.state).settlements).toEqual([]);
+    expect(result.stepInput?.answers ?? []).toEqual([]);
+    expect(parkedSteps(result.session)).toHaveLength(1);
+  });
+
+  it("keeps the requester's Cancel decisive after an unauthenticated answer", async () => {
+    const afterAnonymous = await coordinateApprovalDelivery({
+      now: 100,
+      session: parkedFor(alice),
+      stepInput: {
+        attributedAnswers: [
+          { auth: null, response: { interactionId: request.interactionId, optionId: "approve" } },
+        ],
+      },
+      tools: new Map(),
+    });
+    const result = await respond(afterAnonymous.session, alice, "deny");
+    expect(getApprovalAuditState(result.session.state).settlements).toEqual([
+      expect.objectContaining({ outcome: "cancelled" }),
+    ]);
+  });
+
+  it("records an unauthenticated answer as the anonymous principal", async () => {
+    const result = await coordinateApprovalDelivery({
+      now: 100,
+      session: parkedFor(null),
+      stepInput: {
+        attributedAnswers: [
+          { auth: null, response: { interactionId: request.interactionId, optionId: "approve" } },
+        ],
+      },
+      tools: new Map(),
+    });
+    expect(getApprovalAuditState(result.session.state).settlements).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({ principalId: "anonymous", principalType: "anonymous" }),
+        outcome: "allowed",
+      }),
+    ]);
+    expect(result.stepInput?.answers).toEqual([
+      { interactionId: request.interactionId, optionId: "approve" },
+    ]);
   });
 });
 
 describe("text approval replay preparation", () => {
   function shouldPrepareApprovalReplayTools(input: {
     session: HarnessSession;
-    stepInput?: import("#harness/types.js").StepInput;
+    stepInput?: HarnessStepInput;
   }) {
     const view = viewOf(input.session);
     return approvingSteps(view, resolveTypedApproval(view, input.stepInput)).length > 0;

@@ -220,8 +220,11 @@ function instrumentationEventsOf(
       if (scope === undefined) return [];
       const { error, outcome } = event.data;
       const idempotencyKey = attemptIdempotencyKey(scope);
+      // A cancelled turn stops its run on purpose: the attempt ended without failing.
+      const cancelled =
+        outcome === "interrupted" && line.view?.turns[scope.turnId]?.outcome === "cancelled";
       return [
-        outcome === "completed"
+        outcome === "completed" || cancelled
           ? { idempotencyKey, scope, type: "step.attempt.completed" }
           : {
               error: error === undefined ? undefined : new Error(error.message),

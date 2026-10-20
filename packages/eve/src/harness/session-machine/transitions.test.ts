@@ -5,16 +5,24 @@ import { getApprovalAuditState } from "#harness/hitl/candidates.js";
 import { cascade } from "#harness/session-machine/cascade.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import {
+  awaitSignIns,
+  callSignInsSettled,
+  CANCELLED_CALL_RESULT,
   cancel,
   clear,
   completeSignIn,
   controlled,
   discardAttempt,
   fail,
+  matchSignIns,
   relay,
   routeAnswer,
+  runnableCalls,
   sessionEndedFacts,
 } from "#harness/session-machine/transitions.js";
+import type { SuspendedStep } from "#harness/session-machine/state.js";
+import type { SessionView } from "#harness/session-machine/view.js";
+import type { AuthorizationChallenge } from "#harness/authorization.js";
 import { createStreamChecker } from "#protocol/session-events/checker.js";
 import type { SessionEvent } from "#protocol/session-event.js";
 import { initialSessionProjection } from "#protocol/session-projection.js";
@@ -99,23 +107,57 @@ describe("the budget prompt", () => {
 });
 
 describe("requireSignIn", () => {
-  it("settles the call a sign-in stopped, before it opens the sign-in", () => {
-    const { events } = requireSignIn(viewOf(runningCall()), {
-      callIdsByName: new Map([["auth-probe", ["probe"]]]),
-      challenges: [
+  it("keeps the call a sign-in stopped open in its step, to run once the sign-in calls back", () => {
+    const session = runningCall();
+    const base = viewOf(session);
+    const view = {
+      ...base,
+      turn: {
+        ...base.turn,
+        suspended: [
+          {
+            event: { sequence: 0, stepIndex: 0, turnId },
+            messages: [
+              {
+                content: [
+                  {
+                    input: {},
+                    toolCallId: "probe",
+                    toolName: "auth-probe",
+                    type: "tool-call" as const,
+                  },
+                ],
+                role: "assistant" as const,
+              },
+            ],
+            requests: [],
+            tasks: [],
+          },
+        ],
+      },
+    };
+    const challenge = {
+      attemptId: "attempt-1",
+      challenge: { url: "https://example.test/sign-in" },
+      hookUrl: "https://example.test/callback",
+      name: "auth-probe",
+    };
+    const { events, turn } = requireSignIn(view, {
+      calls: [
         {
-          attemptId: "attempt-1",
-          challenge: { url: "https://example.test/sign-in" },
-          hookUrl: "https://example.test/callback",
-          name: "auth-probe",
+          call: { callId: "probe", input: {}, toolName: "auth-probe" },
+          connections: ["auth-probe"],
         },
       ],
+      challenges: [challenge],
     });
 
-    expect(events.map((event) => event.type)).toEqual(["call.settled", "interaction.opened"]);
-    expect(events[0]).toMatchObject({
-      data: { callId: "probe", outcome: "interrupted", reason: "authorization-required" },
-    });
+    // The call doesn't settle: its sign-in's outcome settles with it once it runs.
+    expect(events.map((event) => event.type)).toEqual(["interaction.opened"]);
+    expect(turn.suspended[0]?.approved).toEqual([
+      { call: { callId: "probe", input: {}, toolName: "auth-probe" }, signIns: [challenge] },
+    ]);
+    expect(accepted(session, events)).toEqual([]);
   });
 });
 
@@ -381,6 +423,151 @@ describe("controls and callbacks as deliveries", () => {
       completions: [GITHUB_CALLBACK],
     });
     expect(events).toEqual([]);
+  });
+});
+
+/** A sign-in for `name`, as its attempt asks for it and its callback completes it. */
+function signIn(name: string): AuthorizationChallenge {
+  return { attemptId: `${name}-1`, challenge: {}, hookUrl: `https://example.test/${name}`, name };
+}
+
+/** A call to `deploy` that the model made, with what a sign-in for `connection` stopped. */
+function stoppedCall(callId: string, connection: string) {
+  return {
+    call: { callId, input: { service: "api" }, toolName: "deploy" },
+    connections: [connection],
+  };
+}
+
+/**
+ * A paused turn whose run made `callIds`, each started and then stopped on a sign-in for the
+ * matching connection in `connections`, which the session still waits on.
+ */
+function stoppedOnSignIns(callIds: readonly string[], connections: readonly string[]) {
+  const session = withPublished(withOpenTurn(BASE, { sequence: 0, stepIndex: 0, turnId }), [
+    ...callIds.flatMap((callId): SessionEvent[] => [
+      {
+        data: { callId, capability: { kind: "tool", name: "deploy" }, owner: { runId } },
+        scope: { runId, turnId },
+        type: "call.requested",
+      },
+      { data: { callId }, scope: { turnId }, type: "call.started" },
+    ]),
+    ...connections.map((name): SessionEvent => ({
+      data: {
+        interactionId: `${name}-1`,
+        request: { kind: "sign-in", prompt: `Sign in to ${name}`, signIn: { name } },
+        subject: { turnId },
+      },
+      scope: { turnId },
+      type: "interaction.opened",
+    })),
+  ]);
+  const step = awaitSignIns(
+    {
+      event: { sequence: 0, stepIndex: 0, turnId },
+      messages: [
+        {
+          content: callIds.map((callId) => ({
+            input: { service: "api" },
+            toolCallId: callId,
+            toolName: "deploy",
+            type: "tool-call" as const,
+          })),
+          role: "assistant",
+        },
+      ],
+      requests: [],
+      tasks: [],
+    },
+    {
+      challenges: connections.map(signIn),
+      stopped: callIds.map((callId, index) => stoppedCall(callId, connections[index]!)),
+    },
+  );
+  const base = viewOf(session);
+  const view: SessionView = {
+    ...base,
+    signIns: connections.map(signIn),
+    turn: { ...base.turn, suspended: [step] },
+  };
+  return { session, step, view };
+}
+
+describe("calls a sign-in stopped", () => {
+  it("runs each call once its own sign-ins call back, and the call reports them, not the callback", () => {
+    const { session, step, view } = stoppedOnSignIns(["call-1", "call-2"], ["google", "slack"]);
+    const runnable = (at: SessionView) => runnableCalls(at, step).map(({ call }) => call.callId);
+    expect(step.approved?.map(({ call }) => call.callId)).toEqual(["call-1", "call-2"]);
+    expect(runnable(view)).toEqual([]);
+
+    // Google calls back: its call can run, and the callback itself records nothing.
+    const matched: SessionView = {
+      ...view,
+      signIns: matchSignIns(view, { attemptIds: ["google-1"] }).signIns!,
+    };
+    expect(completeSignIn(matched, { completions: [signIn("google")] }).events).toEqual([]);
+    expect(runnable(matched)).toEqual(["call-1"]);
+
+    // The call returned: its sign-in is accepted, in a line the contract accepts.
+    const [first, second] = step.approved!;
+    const accepted_ = callSignInsSettled(matched, first!);
+    expect(accepted_.map((event) => event.type)).toEqual([
+      "delivery.admitted",
+      "response.submitted",
+      "response.settled",
+      "interaction.settled",
+      "delivery.settled",
+    ]);
+    expect(settledBy(accepted_)).toMatchObject({ "interaction.settled:google-1": "accepted" });
+    expect(accepted(session, accepted_)).toEqual([]);
+
+    // A call that throws fails its sign-in with why, and says when the failure is terminal.
+    const failed = callSignInsSettled(matched, second!, {
+      reason: "access_denied",
+      retryable: false,
+    });
+    expect(failed.find((event) => event.type === "interaction.settled")?.data).toEqual({
+      cause: { responseId: "response_callback_slack-1" },
+      interactionId: "slack-1",
+      outcome: "failed",
+      reason: "access_denied",
+      response: { retryable: false },
+    });
+    expect(accepted(session, failed)).toEqual([]);
+  });
+
+  it("keeps the approval of an approved call that a sign-in stops again", () => {
+    const stopped = stoppedCall("call-1", "google");
+    const step: SuspendedStep = {
+      approved: [{ call: stopped.call, interactionId: "approval-1" }],
+      event: { sequence: 0, stepIndex: 0, turnId },
+      messages: [
+        {
+          content: [{ input: {}, toolCallId: "call-1", toolName: "deploy", type: "tool-call" }],
+          role: "assistant",
+        },
+      ],
+      requests: [],
+      tasks: [],
+    };
+    const next = awaitSignIns(step, { challenges: [signIn("google")], stopped: [stopped] });
+    expect(next.approved).toEqual([
+      { call: stopped.call, interactionId: "approval-1", signIns: [signIn("google")] },
+    ]);
+  });
+
+  it("cancels the call a sign-in stopped with its turn, answering it as cancelled", () => {
+    const { view } = stoppedOnSignIns(["call-1"], ["google"]);
+    const transition = cancel(view);
+
+    expect(settledBy(committed(view, () => transition))).toMatchObject({
+      "call.settled:call-1": "interrupted",
+      "interaction.settled:google-1": "interrupted",
+      "turn.settled:turn_0": "cancelled",
+    });
+    expect(transition.turn.suspended).toEqual([]);
+    expect(JSON.stringify(transition.commit)).toContain(CANCELLED_CALL_RESULT);
   });
 });
 
