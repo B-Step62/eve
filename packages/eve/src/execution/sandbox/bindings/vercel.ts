@@ -415,7 +415,7 @@ async function ensureTemplate(input: EnsureTemplateInput): Promise<EnsureTemplat
 
   const templateSession = buildSandboxSession(
     createVercelInternalSandboxSession(sandbox, input.createOptions.env),
-    createVercelNetworkPolicyBinding(sandbox, input.createOptions.networkPolicy),
+    createVercelNetworkPolicyBinding(sandbox),
   );
 
   await writeVercelSandboxSeedFiles({
@@ -570,7 +570,7 @@ function createHandle(input: {
     sandbox: {
       ...buildSandboxSession(
         createVercelInternalSandboxSession(sandbox, input.createOptions.env),
-        createVercelNetworkPolicyBinding(sandbox, input.createOptions.networkPolicy),
+        createVercelNetworkPolicyBinding(sandbox),
       ),
       name: sandbox.name,
     },

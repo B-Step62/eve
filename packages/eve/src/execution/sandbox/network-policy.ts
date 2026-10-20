@@ -22,8 +22,8 @@ export interface SandboxNetworkPolicyBinding {
 
 /** eve-internal credential surface on a session; deliberately not exported publicly. */
 interface SandboxNetworkCredentialControl {
-  add(credentials: SandboxNetworkCredentials): Promise<void>;
-  remove(hosts: readonly string[]): Promise<void>;
+  /** Attaches `credentials` and returns the call that removes exactly them. */
+  add(credentials: SandboxNetworkCredentials): Promise<() => Promise<void>>;
 }
 
 const networkCredentialControl = Symbol("eve.sandbox.networkCredentials");
@@ -35,28 +35,42 @@ export interface SandboxNetworkPolicyControl {
 
 /**
  * Owns a session's network policy: the user's policy is the limit, and eve's
- * credential rules are merged onto hosts it already allows. Every write
- * applies the merge, so a user `setNetworkPolicy` keeps eve's credentials and
- * removing a credential restores exactly the user's policy.
+ * credential rules are merged onto hosts it allows. Each `add` is its own
+ * lease; on a host held by several, the newest wins, and releasing it brings
+ * back the one below. Every write applies the merge, so a user
+ * `setNetworkPolicy` keeps eve's credentials only where the new policy allows
+ * them, and releasing every lease restores exactly the user's policy.
  */
 export function createSandboxNetworkPolicyControl(
   binding: SandboxNetworkPolicyBinding,
 ): SandboxNetworkPolicyControl {
   let userPolicy: SandboxNetworkPolicy | undefined;
-  const credentials = new Map<string, readonly NetworkPolicyRule[]>();
+  const leases: SandboxNetworkCredentials[] = [];
   let queue: Promise<unknown> = Promise.resolve();
 
-  function serialized(operation: () => Promise<void>): Promise<void> {
+  function serialized<T>(operation: () => Promise<T>): Promise<T> {
     const next = queue.then(operation);
     queue = next.catch(() => {});
     return next;
   }
 
   async function applyMerged(user: SandboxNetworkPolicy): Promise<void> {
-    await binding.apply(
-      mergeSandboxNetworkCredentials(user, Object.fromEntries(credentials)),
-      user,
-    );
+    await binding.apply(mergeSandboxNetworkCredentials(user, Object.assign({}, ...leases)), user);
+  }
+
+  function release(lease: SandboxNetworkCredentials): () => Promise<void> {
+    return () =>
+      serialized(async () => {
+        const index = leases.indexOf(lease);
+        if (index === -1 || userPolicy === undefined) return;
+        leases.splice(index, 1);
+        try {
+          await applyMerged(userPolicy);
+        } catch (error) {
+          leases.splice(index, 0, lease);
+          throw error;
+        }
+      });
   }
 
   return {
@@ -71,26 +85,22 @@ export function createSandboxNetworkPolicyControl(
               `The sandbox network policy does not allow ${blocked.join(", ")}, so eve cannot attach credentials there. Allow ${blocked.length === 1 ? "this host" : "these hosts"} in the sandbox networkPolicy.`,
             );
           }
-          userPolicy = user;
-          for (const [host, rules] of Object.entries(added)) credentials.set(host, rules);
+          const lease = { ...added };
+          leases.push(lease);
           try {
             await applyMerged(user);
           } catch (error) {
-            for (const host of hosts) credentials.delete(host);
+            leases.pop();
             throw error;
           }
-        }),
-      remove: (hosts) =>
-        serialized(async () => {
-          const removed = hosts.filter((host) => credentials.delete(host));
-          if (removed.length === 0 || userPolicy === undefined) return;
-          await applyMerged(userPolicy);
+          userPolicy = user;
+          return release(lease);
         }),
     },
     setNetworkPolicy: (policy) =>
       serialized(async () => {
-        userPolicy = policy;
         await applyMerged(policy);
+        userPolicy = policy;
       }),
   };
 }
@@ -107,7 +117,7 @@ export async function withSandboxNetworkCredentials<T>(
 ): Promise<T> {
   const control = getSandboxNetworkCredentialControl(sandbox);
   const hosts = Object.keys(credentials);
-  await control.add(credentials);
+  const release = await control.add(credentials);
   let outcome:
     | { readonly ok: true; readonly value: T }
     | { readonly error: unknown; readonly ok: false };
@@ -117,7 +127,7 @@ export async function withSandboxNetworkCredentials<T>(
     outcome = { error, ok: false };
   }
   try {
-    await control.remove(hosts);
+    await release();
   } catch (removalError) {
     throw new Error(
       `Could not remove brokered credentials for ${hosts.join(", ")} from the sandbox.`,
@@ -142,16 +152,22 @@ export function getSandboxNetworkCredentialControl(
   return control;
 }
 
+/**
+ * Merges credential rules onto the hosts `user` allows; credentials for any
+ * other host are left out, so the result never allows more than `user`.
+ */
 export function mergeSandboxNetworkCredentials(
   user: SandboxNetworkPolicy,
   credentials: SandboxNetworkCredentials,
 ): SandboxNetworkPolicy {
-  if (Object.keys(credentials).length === 0) return user;
-  if (user === "deny-all") throw new Error("A deny-all network policy cannot carry credentials.");
   const mutable = Object.fromEntries(
-    Object.entries(credentials).map(([host, rules]) => [host, [...rules]]),
+    Object.entries(credentials)
+      .filter(([host]) => allowsHost(user, host))
+      .map(([host, rules]) => [host, [...rules]]),
   );
+  if (Object.keys(mutable).length === 0) return user;
   if (user === "allow-all") return { allow: { "*": [], ...mutable } };
+  if (user === "deny-all") return user;
   return { ...user, allow: { ...allowRecord(user.allow), ...mutable } };
 }
 
