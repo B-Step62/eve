@@ -27,6 +27,7 @@ import type {
   TemplateManifestEntry,
 } from "@/lib/templates/manifest";
 import { integrationIcons } from "./integration-icons";
+import { TemplatePreview } from "./template-preview";
 
 const ALL = "all" as const;
 
@@ -38,7 +39,7 @@ interface TemplateGalleryProps {
 
 type TemplateGalleryEntry = Pick<
   TemplateManifestEntry,
-  "category" | "description" | "featured" | "integrations" | "slug" | "title"
+  "category" | "description" | "featured" | "integrations" | "preview" | "slug" | "title"
 >;
 
 interface FilterSelectProps<T extends string> {
@@ -96,11 +97,16 @@ const TemplateCard = ({
 }) => (
   <li>
     <Link
-      className="flex h-full min-h-36 flex-col rounded-lg border border-gray-alpha-400 bg-background-100 p-4 no-underline outline-none transition-colors hover:border-gray-alpha-500 hover:bg-gray-alpha-100 focus-visible:border-gray-alpha-600 focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 focus-visible:ring-offset-background-100 motion-reduce:transition-none"
+      className="flex h-full min-h-36 flex-col overflow-hidden rounded-lg border border-gray-alpha-400 bg-background-100 p-4 no-underline outline-none transition-colors hover:border-gray-alpha-500 hover:bg-gray-alpha-100 focus-visible:border-gray-alpha-600 focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2 focus-visible:ring-offset-background-100 motion-reduce:transition-none"
       href={templatePath(entry.slug)}
       onClick={onSelect}
       prefetch={true}
     >
+      <TemplatePreview
+        integrations={entry.integrations}
+        preview={entry.preview}
+        title={entry.title}
+      />
       <div className="flex items-start justify-between gap-3">
         <h3 className="min-w-0 text-gray-1000 text-heading-16">{entry.title}</h3>
         {entry.featured ? (

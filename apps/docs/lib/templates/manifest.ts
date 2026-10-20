@@ -27,6 +27,29 @@ export type TemplateIntegration =
 
 export type TemplateSource = "GitHub" | "Vercel Templates";
 
+export type TemplatePreviewSurface = "imessage" | "slack" | "web";
+
+export interface TemplatePreviewMessage {
+  from: "agent" | "user";
+  text: string;
+  /** Tool or skill names shown as completed calls. Each must match a path in `files`. */
+  tools?: string[];
+}
+
+/**
+ * A short sample conversation rendered on the gallery card in the style of
+ * `surface`. Only the first few messages are visible. Templates without a
+ * preview get a placeholder built from `integrations`.
+ */
+export interface TemplatePreview {
+  surface: TemplatePreviewSurface;
+  /** Display name for the agent. Defaults to the template title. */
+  agent?: string;
+  /** Slack channel name or web chat address shown in the window header. */
+  context?: string;
+  messages: TemplatePreviewMessage[];
+}
+
 export interface TemplateGitHubSource {
   owner: string;
   repo: string;
@@ -54,6 +77,7 @@ export interface TemplateManifestEntry {
   github: TemplateGitHubSource;
   /** Exact paths (relative to `github.pathPrefix`) to embed in the file viewer. */
   files: string[];
+  preview?: TemplatePreview;
 }
 
 export const templateManifest: TemplateManifestEntry[] = [
@@ -85,6 +109,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/skills/plan_a_trip.md",
       "agent/tools/get_weather.ts",
     ],
+    preview: {
+      surface: "web",
+      context: "localhost:3000",
+      messages: [
+        { from: "user", text: "Plan a weekend in Lisbon for me" },
+        {
+          from: "agent",
+          tools: ["plan_a_trip", "get_weather"],
+          text: "Sunny and 24°C both days. Saturday: Alfama and the castle in the morning, then sunset at Miradouro da Graça.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-agent-with-python",
@@ -109,6 +145,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/tools/analyze_text.ts",
       "vercel.ts",
     ],
+    preview: {
+      surface: "web",
+      context: "localhost:3000",
+      messages: [
+        { from: "user", text: 'Add "ship v2 docs" and summarize my open tasks' },
+        {
+          from: "agent",
+          tools: ["create_task", "compute_stats"],
+          text: "Added. You have 7 open tasks, 3 of them due this week.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-voice-template",
@@ -192,6 +240,19 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/tools/query_sql.ts",
       "agent/lib/query.ts",
     ],
+    preview: {
+      surface: "slack",
+      agent: "brain",
+      context: "ask-data",
+      messages: [
+        { from: "user", text: "@brain how many orders did we have, and what did they total?" },
+        {
+          from: "agent",
+          tools: ["get_model", "query_sql"],
+          text: "99 orders from Jan 1 to Apr 9, 2018, with AUD 1,672 in recorded payments.",
+        },
+      ],
+    },
   },
   {
     slug: "eve-coding-agent-template",
@@ -417,6 +478,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       "agent/tools/run_browser.ts",
       "agent/subagents/browser-agent/agent.ts",
     ],
+    preview: {
+      surface: "imessage",
+      agent: "OpenInstinct",
+      messages: [
+        { from: "user", text: "Can you grab 2 tickets for Dune tonight, around 7?" },
+        {
+          from: "agent",
+          text: "Found a 7:15 showing, 2 seats in row G for $38. Book with Link?",
+        },
+        { from: "user", text: "yes please" },
+      ],
+    },
   },
   {
     slug: "kody-eve-template",

@@ -37,6 +37,7 @@ const templateSummaries = templateManifest
       description: templateDescription,
       featured,
       integrations,
+      preview,
       slug,
       title: templateTitle,
     }) => ({
@@ -44,6 +45,7 @@ const templateSummaries = templateManifest
       description: templateDescription,
       featured,
       integrations,
+      preview,
       slug,
       title: templateTitle,
     }),
