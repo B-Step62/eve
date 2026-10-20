@@ -30,10 +30,7 @@ export async function sendToChannelStep(
   return { sessionId: session.id };
 }
 
-/**
- * Channels belong to the root agent, so the session starts as a root session
- * whatever node the tool runs on, outside the calling session's context.
- */
+/** Runs the channel's `receive()` against the root agent, outside the calling session's context. */
 async function withChannelTarget<T>(
   input: ChannelHandoffInput,
   run: (handle: ReturnType<typeof createNamedCrossChannelTargetHandle>) => Promise<T>,

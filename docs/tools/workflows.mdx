@@ -751,8 +751,8 @@ a target the channel gives a new address each time, such as a Slack target with 
 
 - The session belongs to the channel. People on that channel continue it, and it has no parent.
 - It keeps running after the workflow run finishes. The run never sees its replies.
-- It runs the root agent, because channels belong to the root agent, even when the tool runs in a
-  subagent.
+- It runs the root agent, because channels belong to the root agent. Only workflow tools on the
+  root agent can call `ctx.to`; in a subagent's tool it throws.
 - `auth` is required. Pass `ctx.session.auth.current` to start the session as the caller.
 
 An unknown channel name, or a channel without a `receive` hook, fails the step with an error that

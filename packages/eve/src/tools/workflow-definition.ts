@@ -146,6 +146,7 @@ export type WorkflowSharedContext = Pick<
    * Selects a target on one of the agent's channels, named by its path
    * (`agent/channels/slack.ts` is `"slack"`). Type the target with a
    * type-only import: `ctx.to<typeof slack>("slack", { channelId })`.
+   * Only tools on the root agent can call it; it throws in a subagent's tool.
    */
   to<TChannel extends ChannelReference<unknown> = ChannelReference>(
     channel: string,

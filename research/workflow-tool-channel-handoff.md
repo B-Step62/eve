@@ -74,8 +74,9 @@ session's context. Replay reuses the recorded result.
   `ctx.agent()`.
 - **Auth.** `auth` is required and explicit, as in routes. Pass `ctx.session.auth.current` to act
   as the caller.
-- **Subagents.** Workflow tools in subagents can use `ctx.to()`. Channels belong to the root agent,
-  so the session runs the root agent.
+- **Subagents.** Only workflow tools on the root agent can use `ctx.to()`; it throws in a subagent's
+  tool. Channels belong to the root agent, so the session runs the root agent with all its tools, and
+  a subagent must not reach tools its parent withheld from it.
 - **Retries.** `send()` delivers at least once: a step that fails after delivering retries the
   delivery.
 - **Errors.** An unknown channel name, or a channel without `receive()`, throws in the step with the

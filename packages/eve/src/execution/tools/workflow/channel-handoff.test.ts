@@ -1,0 +1,26 @@
+import { expect, it, vi } from "vitest";
+
+import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
+import { createWorkflowChannelTarget } from "#execution/tools/workflow/channel-handoff.js";
+import { ROOT_RUNTIME_AGENT_NODE_ID } from "#runtime/graph.js";
+
+vi.mock("#execution/tools/workflow/channel-handoff-steps.js", () => ({
+  sendToChannelStep: vi.fn(),
+}));
+
+function contextOnNode(nodeId: string | undefined): AgentSessionContext {
+  return { bundle: { nodeId, source: {} } } as unknown as AgentSessionContext;
+}
+
+it.each([undefined, ROOT_RUNTIME_AGENT_NODE_ID])(
+  "allows tools on the root agent (%s)",
+  (nodeId) => {
+    expect(() => createWorkflowChannelTarget(contextOnNode(nodeId), "slack", {})).not.toThrow();
+  },
+);
+
+it("rejects tools on a subagent, which would otherwise start a root-agent session", () => {
+  expect(() => createWorkflowChannelTarget(contextOnNode("researcher"), "slack", {})).toThrow(
+    "ctx.to() is only available to workflow tools on the root agent.",
+  );
+});
