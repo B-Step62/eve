@@ -195,7 +195,7 @@ fails the turn.
   return per-model values from the handler.
 
 The `session.started` runtime identity does not include a model id for a
-dynamic agent. Each public `step.started` event reports the concrete `modelId`
+dynamic agent. Each `model.started` event reports the concrete `modelId`
 selected for that model call.
 
 ## Reasoning effort
@@ -291,7 +291,7 @@ a zero-retention session loses its stored payloads when it ends.
 Input tokens, output tokens, and model token cost are checked independently.
 The model call that crosses a limit is allowed to finish because exact usage
 arrives after the call completes. Before the next model call, eve pauses the
-turn (`turn.waiting`) and sends a deterministic continuation prompt with two options:
+turn (`turn.paused`) and sends a deterministic continuation prompt with two options:
 **Continue** grants a fresh window of each configured size and resumes the same
 turn, and **Stop**
 cancels the in-flight turn through the standard cancellation path
@@ -301,8 +301,8 @@ delegated child's prompt cancels the root turn, which cascades to the whole
 delegation tree — the delegating parent never receives an error result it
 could retry against a fresh quota share. A reply that answers neither option
 is queued while the existing prompt stays pending; eve does not raise another
-copy or start another turn. The reply is received (`message.received`) and
-processed in the held turn once the budget is granted.
+copy or start another turn. The reply waits unconsumed, and the held turn consumes it
+(`delivery.consumed`) once the budget is granted.
 
 For sessions already waiting on a continuation prompt from an older deployment,
 the previous turn has completed. A non-answer message still queues behind the

@@ -2,6 +2,7 @@
 
 ## Export names
 
+- ClientContextValue: src/eve-channel/types.d.ts#ClientContextValue
 - EveChannel: src/eve-channel/types.d.ts#EveChannel
 - EveChannelConfig: src/eve-channel/types.d.ts#EveChannelConfig
 - EveChannelEvents: src/eve-channel/types.d.ts#EveChannelEvents
@@ -67,6 +68,15 @@ export type AuthFn<TEvent = Request> = (
 ) => AuthResult | null | undefined | Promise<AuthResult | null | undefined>;
 ```
 
+### src/channel/channel-address.d.ts
+
+```ts
+export interface ChannelCreateResult {
+  readonly created: boolean;
+  readonly session: Session;
+}
+```
+
 ### src/channel/channel-operations.d.ts
 
 ```ts
@@ -75,6 +85,7 @@ export interface ChannelReceiveContext<TState = undefined> {
   readonly resolveSession: ChannelResolveSession;
 }
 export interface ChannelSource<TState = undefined> {
+  create(options: ChannelCreateOptions<TState>): Promise<ChannelCreateResult>;
   send(message: MessageContent, options: ChannelSendOptions<TState>): Promise<Delivery>;
   respond<const TResponses extends readonly Answer[]>(
     answers: StrictAnswers<TResponses>,
@@ -93,6 +104,16 @@ export interface ChannelSource<TState = undefined> {
     } & SessionControlOptions,
   ): Promise<Delivery>;
 }
+export type ChannelCreateOptions<TState = undefined> = {
+  readonly auth: SessionAuthContext | null;
+  readonly history?: readonly SessionHistoryMessage[];
+  readonly initiatorAuth?: SessionAuthContext | null;
+  readonly title?: string;
+} & ([TState] extends [undefined]
+  ? unknown
+  : {
+      readonly state: TState;
+    });
 export type ChannelFrom<TState = undefined> = (address: string) => ChannelSource<TState>;
 export type ChannelResolveSession = (address: string) => Promise<Session | undefined>;
 export type ChannelRespondOptions<TState = undefined> = BaseChannelRespondOptions<TState>;
@@ -106,6 +127,7 @@ interface BaseChannelRespondOptions<TState = undefined> {
   readonly state?: Partial<TState>;
 }
 interface BaseChannelSendOptions {
+  readonly history?: readonly SessionHistoryMessage[];
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly outputSchema?: JsonObject;
@@ -348,6 +370,7 @@ export interface Session extends SessionReader {
 }
 export type SessionRespondOptions = SessionDeliveryOptions;
 export type SessionSendOptions = SessionDeliveryOptions & {
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
   readonly turnPolicy?: TurnPolicy;
 };
@@ -471,6 +494,7 @@ export interface EveChannelConfig {
 }
 export interface EveHandle {
   readonly caller: SessionAuthContext | null;
+  readonly clientContext?: ClientContextValue;
   readonly invocation?: {
     readonly operationId: string;
   };
@@ -480,11 +504,14 @@ export interface EveHandle {
 export interface EveMessageContext {
   readonly eve: EveHandle;
 }
+export type ClientContextValue = string | readonly string[] | JsonObject;
 export type EveChannelEvents = ChannelEvents<EveEventContext>;
 export type EveEventContext = ChannelContinuationOps;
 export type EveMessageResult = {
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
+  readonly clientContext?: ClientContextValue;
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
 };
 export type EveMessageResultOrPromise = EveMessageResult | Promise<EveMessageResult>;
@@ -812,12 +839,18 @@ export interface DeliveryConsumedData {
   readonly deliveryId: string;
   readonly turnId: string;
   readonly parts: readonly UserPart[];
+  readonly history?: readonly ImportedMessage[];
 }
 export interface DeliverySettledData {
   readonly deliveryId: string;
   readonly outcome: DeliveryOutcome;
   readonly turnId?: string;
   readonly reason?: string;
+}
+export interface ImportedMessage {
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
 }
 export type DeliveryAdmitted = Envelope<"delivery.admitted", DeliveryAdmittedData>;
 export type DeliveryConsumed = Envelope<"delivery.consumed", DeliveryConsumedData>;
@@ -899,6 +932,12 @@ export interface SignInChallenge {
   readonly expiresAt?: string;
   readonly instructions?: string;
   readonly callbackUrl?: string;
+  readonly grant?: string;
+  readonly principal?: {
+    readonly type: string;
+    readonly id?: string;
+    readonly issuer?: string;
+  };
 }
 export type InteractionDisplay = "confirmation" | "select" | "text";
 export type InteractionFact = InteractionOpened | InteractionSettled;
@@ -1609,6 +1648,16 @@ interface WriteOptions<T> {
   path: string;
   content: T;
   signal?: AbortSignal;
+}
+```
+
+### src/shared/session-history.d.ts
+
+```ts
+export interface SessionHistoryMessage {
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
 }
 ```
 

@@ -73,6 +73,7 @@
 - FactType: src/protocol/session-events/catalog.d.ts#FactType
 - Family: src/protocol/session-events/catalog.d.ts#Family
 - INTERACTION_OUTCOMES: src/protocol/session-events/catalog.d.ts#INTERACTION_OUTCOMES
+- ImportedMessage: src/protocol/session-events/families/delivery.d.ts#ImportedMessage
 - Interaction: src/protocol/session-projection/reader.d.ts#Interaction
 - InteractionDisplay: src/protocol/session-events/families/interaction.d.ts#InteractionDisplay
 - InteractionFact: src/protocol/session-events/families/interaction.d.ts#InteractionFact
@@ -570,12 +571,18 @@ export interface DeliveryConsumedData {
   readonly deliveryId: string;
   readonly turnId: string;
   readonly parts: readonly UserPart[];
+  readonly history?: readonly ImportedMessage[];
 }
 export interface DeliverySettledData {
   readonly deliveryId: string;
   readonly outcome: DeliveryOutcome;
   readonly turnId?: string;
   readonly reason?: string;
+}
+export interface ImportedMessage {
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
 }
 export type DeliveryAdmitted = Envelope<"delivery.admitted", DeliveryAdmittedData>;
 export type DeliveryConsumed = Envelope<"delivery.consumed", DeliveryConsumedData>;
@@ -657,6 +664,12 @@ export interface SignInChallenge {
   readonly expiresAt?: string;
   readonly instructions?: string;
   readonly callbackUrl?: string;
+  readonly grant?: string;
+  readonly principal?: {
+    readonly type: string;
+    readonly id?: string;
+    readonly issuer?: string;
+  };
 }
 export type InteractionDisplay = "confirmation" | "select" | "text";
 export type InteractionFact = InteractionOpened | InteractionSettled;

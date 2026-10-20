@@ -342,6 +342,12 @@ export interface SignInChallenge {
   readonly expiresAt?: string;
   readonly instructions?: string;
   readonly callbackUrl?: string;
+  readonly grant?: string;
+  readonly principal?: {
+    readonly type: string;
+    readonly id?: string;
+    readonly issuer?: string;
+  };
 }
 export type InteractionDisplay = "confirmation" | "select" | "text";
 export type InteractionKind = "approval" | "question" | "sign-in" | "budget";

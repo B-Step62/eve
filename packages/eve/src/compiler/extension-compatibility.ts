@@ -28,8 +28,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   tool: {
-    current: 94,
-    supported: [94],
+    current: 95,
+    supported: [95],
     dropped: {
       1: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
       2: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
@@ -124,11 +124,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       91: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
       92: "v27 tool contexts and keyed approval grants replace the previous approval and workflow result APIs; rebuild the extension.",
       93: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      94: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   dynamicTool: {
-    current: 88,
-    supported: [88],
+    current: 89,
+    supported: [89],
     dropped: {
       1: "v27 dynamic tool contexts and keyed approval grants replace the previous approval APIs; rebuild the extension.",
       2: "v27 dynamic tool contexts and keyed approval grants replace the previous approval APIs; rebuild the extension.",
@@ -217,11 +218,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       85: "v27 dynamic tool contexts and keyed approval grants replace the previous approval APIs; rebuild the extension.",
       86: "v27 dynamic tool contexts and keyed approval grants replace the previous approval APIs; rebuild the extension.",
       87: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      88: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   channel: {
-    current: 63,
-    supported: [63],
+    current: 64,
+    supported: [64],
     dropped: {
       1: "Channel commands now return Delivery receipts and session handles read with stream(); rebuild the extension.",
       2: "Channel commands now return Delivery receipts and session handles read with stream(); rebuild the extension.",
@@ -285,11 +287,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       60: "Channel commands now return Delivery receipts and session handles read with stream(); rebuild the extension.",
       61: "Channel commands now return Delivery receipts and session handles read with stream(); rebuild the extension.",
       62: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      63: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   schedule: {
-    current: 35,
-    supported: [35],
+    current: 36,
+    supported: [36],
     dropped: {
       1: "Schedule dispatch now returns Delivery receipts rather than session handles; rebuild the extension.",
       2: "Schedule dispatch now returns Delivery receipts rather than session handles; rebuild the extension.",
@@ -325,11 +328,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       32: "Schedule dispatch now returns Delivery receipts rather than session handles; rebuild the extension.",
       33: "Schedule dispatch now returns Delivery receipts rather than session handles; rebuild the extension.",
       34: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      35: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   subagent: {
-    current: 40,
-    supported: [40],
+    current: 41,
+    supported: [41],
     dropped: {
       1: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
       2: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
@@ -370,11 +374,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       37: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       38: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       39: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      40: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   connection: {
-    current: 52,
-    supported: [52],
+    current: 53,
+    supported: [53],
     dropped: {
       1: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
       2: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
@@ -427,11 +432,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       49: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
       50: "Connection authorization uses principalType and AuthorizationDefinition, and approval context grants changed; rebuild the extension.",
       51: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      52: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   hook: {
-    current: 48,
-    supported: [48],
+    current: 49,
+    supported: [49],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -480,6 +486,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       45: "Hooks now receive the v27 fact and session context contracts; rebuild the extension.",
       46: "Hooks now receive the v27 fact and session context contracts; rebuild the extension.",
       47: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      48: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   skill: {
@@ -492,8 +499,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   dynamicSkill: {
-    current: 40,
-    supported: [40],
+    current: 41,
+    supported: [41],
     dropped: {
       1: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       2: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
@@ -534,6 +541,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       37: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       38: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       39: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      40: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   instructions: {
@@ -545,8 +553,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   dynamicInstructions: {
-    current: 41,
-    supported: [41],
+    current: 42,
+    supported: [42],
     dropped: {
       1: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       2: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
@@ -588,6 +596,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       38: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       39: "Public authoring contexts and resolver keys changed before 1.0; rebuild the extension.",
       40: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
+      41: "v27 session facts, opaque observation snapshots, and canonical session contracts replace the previous authoring API; rebuild the extension.",
     },
   },
   config: { current: 2, supported: [1, 2], dropped: {} },

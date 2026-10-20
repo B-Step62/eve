@@ -201,7 +201,7 @@ export interface InstrumentationModelRetriedEvent {
 }
 export interface InstrumentationModelSettledEvent {
   readonly type: "model.settled";
-  readonly outcome: ModelOutcome;
+  readonly outcome: InstrumentationModelOutcome;
   readonly idempotencyKey: string;
   readonly scope: InstrumentationScope;
   readonly error?: unknown;
@@ -353,6 +353,7 @@ export type InstrumentationInteractionRequest = Pick<
 >;
 export type InstrumentationModelCallTerminalEvent =
   InstrumentationModelCallCompletedEvent | InstrumentationModelCallFailedEvent;
+export type InstrumentationModelOutcome = ModelOutcome | "cancelled";
 export type InstrumentationModelTerminalEvent =
   InstrumentationModelRetriedEvent | InstrumentationModelSettledEvent;
 export type InstrumentationPointEvent =
@@ -547,6 +548,12 @@ export interface SignInChallenge {
   readonly expiresAt?: string;
   readonly instructions?: string;
   readonly callbackUrl?: string;
+  readonly grant?: string;
+  readonly principal?: {
+    readonly type: string;
+    readonly id?: string;
+    readonly issuer?: string;
+  };
 }
 export type InteractionDisplay = "confirmation" | "select" | "text";
 export type InteractionKind = "approval" | "question" | "sign-in" | "budget";

@@ -71,6 +71,15 @@ export interface AgentToolDescription {
 }
 ```
 
+### src/channel/channel-address.d.ts
+
+```ts
+export interface ChannelCreateResult {
+  readonly created: boolean;
+  readonly session: Session;
+}
+```
+
 ### src/channel/channel-operations.d.ts
 
 ```ts
@@ -79,6 +88,7 @@ export interface ChannelReceiveContext<TState = undefined> {
   readonly resolveSession: ChannelResolveSession;
 }
 export interface ChannelSource<TState = undefined> {
+  create(options: ChannelCreateOptions<TState>): Promise<ChannelCreateResult>;
   send(message: MessageContent, options: ChannelSendOptions<TState>): Promise<Delivery>;
   respond<const TResponses extends readonly Answer[]>(
     answers: StrictAnswers<TResponses>,
@@ -97,6 +107,16 @@ export interface ChannelSource<TState = undefined> {
     } & SessionControlOptions,
   ): Promise<Delivery>;
 }
+export type ChannelCreateOptions<TState = undefined> = {
+  readonly auth: SessionAuthContext | null;
+  readonly history?: readonly SessionHistoryMessage[];
+  readonly initiatorAuth?: SessionAuthContext | null;
+  readonly title?: string;
+} & ([TState] extends [undefined]
+  ? unknown
+  : {
+      readonly state: TState;
+    });
 export type ChannelFrom<TState = undefined> = (address: string) => ChannelSource<TState>;
 export type ChannelResolveSession = (address: string) => Promise<Session | undefined>;
 export type ChannelRespondOptions<TState = undefined> = BaseChannelRespondOptions<TState>;
@@ -110,6 +130,7 @@ interface BaseChannelRespondOptions<TState = undefined> {
   readonly state?: Partial<TState>;
 }
 interface BaseChannelSendOptions {
+  readonly history?: readonly SessionHistoryMessage[];
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly outputSchema?: JsonObject;
@@ -357,6 +378,7 @@ export interface Session extends SessionReader {
 }
 export type SessionRespondOptions = SessionDeliveryOptions;
 export type SessionSendOptions = SessionDeliveryOptions & {
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
   readonly turnPolicy?: TurnPolicy;
 };
@@ -880,12 +902,18 @@ export interface DeliveryConsumedData {
   readonly deliveryId: string;
   readonly turnId: string;
   readonly parts: readonly UserPart[];
+  readonly history?: readonly ImportedMessage[];
 }
 export interface DeliverySettledData {
   readonly deliveryId: string;
   readonly outcome: DeliveryOutcome;
   readonly turnId?: string;
   readonly reason?: string;
+}
+export interface ImportedMessage {
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
 }
 export type DeliveryAdmitted = Envelope<"delivery.admitted", DeliveryAdmittedData>;
 export type DeliveryConsumed = Envelope<"delivery.consumed", DeliveryConsumedData>;
@@ -967,6 +995,12 @@ export interface SignInChallenge {
   readonly expiresAt?: string;
   readonly instructions?: string;
   readonly callbackUrl?: string;
+  readonly grant?: string;
+  readonly principal?: {
+    readonly type: string;
+    readonly id?: string;
+    readonly issuer?: string;
+  };
 }
 export type InteractionDisplay = "confirmation" | "select" | "text";
 export type InteractionFact = InteractionOpened | InteractionSettled;
@@ -1311,6 +1345,7 @@ export type LinqCredentialValue = string | (() => string | Promise<string>);
 export type LinqInboundResult = {
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
 } | null;
 ```
@@ -1686,6 +1721,16 @@ interface WriteOptions<T> {
   path: string;
   content: T;
   signal?: AbortSignal;
+}
+```
+
+### src/shared/session-history.d.ts
+
+```ts
+export interface SessionHistoryMessage {
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
 }
 ```
 

@@ -45,7 +45,9 @@ function rewriteDeclarationImports(
       .replaceAll(`from '${moduleName}'`, `from '${replacement}'`)
       .replaceAll(`from "${moduleName}"`, `from "${replacement}"`)
       .replaceAll(`import '${moduleName}'`, `import '${replacement}'`)
-      .replaceAll(`import "${moduleName}"`, `import "${replacement}"`);
+      .replaceAll(`import "${moduleName}"`, `import "${replacement}"`)
+      .replaceAll(`import('${moduleName}')`, `import('${replacement}')`)
+      .replaceAll(`import("${moduleName}")`, `import("${replacement}")`);
   }
   return rewritten;
 }

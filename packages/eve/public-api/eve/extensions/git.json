@@ -1,1 +1,9 @@
-["GitHubAuthorize", "GitHubAuthorizeRequest", "GitHubLeaseBroker", "GitHubLeaseRule", "default"]
+[
+  "GitHubAttribution",
+  "GitHubAuthorize",
+  "GitHubAuthorizeRequest",
+  "GitHubCoAuthor",
+  "GitHubLeaseBroker",
+  "GitHubLeaseRule",
+  "default"
+]

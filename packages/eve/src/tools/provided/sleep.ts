@@ -52,7 +52,7 @@ const SLEEP_OUTPUT_SCHEMA = defineJsonSchema<SleepToolOutput>({
  * ```ts
  * import { sleep } from "eve/tools/sleep";
  *
- * export default sleep();
+ * export default sleep;
  * ```
  *
  * Each call runs as a durable workflow, so the wait does not hold an

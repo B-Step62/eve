@@ -181,6 +181,7 @@ export interface Session extends SessionReader {
 }
 export type SessionRespondOptions = SessionDeliveryOptions;
 export type SessionSendOptions = SessionDeliveryOptions & {
+  readonly history?: readonly SessionHistoryMessage[];
   readonly title?: string;
   readonly turnPolicy?: TurnPolicy;
 };
@@ -729,12 +730,18 @@ export interface DeliveryConsumedData {
   readonly deliveryId: string;
   readonly turnId: string;
   readonly parts: readonly UserPart[];
+  readonly history?: readonly ImportedMessage[];
 }
 export interface DeliverySettledData {
   readonly deliveryId: string;
   readonly outcome: DeliveryOutcome;
   readonly turnId?: string;
   readonly reason?: string;
+}
+export interface ImportedMessage {
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
 }
 export type DeliveryAdmitted = Envelope<"delivery.admitted", DeliveryAdmittedData>;
 export type DeliveryConsumed = Envelope<"delivery.consumed", DeliveryConsumedData>;
@@ -816,6 +823,12 @@ export interface SignInChallenge {
   readonly expiresAt?: string;
   readonly instructions?: string;
   readonly callbackUrl?: string;
+  readonly grant?: string;
+  readonly principal?: {
+    readonly type: string;
+    readonly id?: string;
+    readonly issuer?: string;
+  };
 }
 export type InteractionDisplay = "confirmation" | "select" | "text";
 export type InteractionFact = InteractionOpened | InteractionSettled;
@@ -2021,6 +2034,16 @@ interface WriteOptions<T> {
   path: string;
   content: T;
   signal?: AbortSignal;
+}
+```
+
+### src/shared/session-history.d.ts
+
+```ts
+export interface SessionHistoryMessage {
+  readonly id?: string;
+  readonly role: "user" | "assistant";
+  readonly text: string;
 }
 ```
 

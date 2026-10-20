@@ -70,6 +70,7 @@
   "FactType",
   "Family",
   "INTERACTION_OUTCOMES",
+  "ImportedMessage",
   "Interaction",
   "InteractionDisplay",
   "InteractionFact",
