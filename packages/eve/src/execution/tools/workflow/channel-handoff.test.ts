@@ -9,7 +9,11 @@ vi.mock("#execution/tools/workflow/channel-handoff-steps.js", () => ({
 }));
 
 function contextOnNode(nodeId: string | undefined): AgentSessionContext {
-  return { bundle: { nodeId, source: {} } } as unknown as AgentSessionContext;
+  const bundle: AgentSessionContext["bundle"] = {
+    nodeId,
+    source: {} as AgentSessionContext["bundle"]["source"],
+  };
+  return { bundle } as AgentSessionContext;
 }
 
 it.each([undefined, ROOT_RUNTIME_AGENT_NODE_ID])(
