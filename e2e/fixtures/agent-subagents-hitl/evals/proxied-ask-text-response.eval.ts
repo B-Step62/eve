@@ -34,7 +34,7 @@ export default defineEval({
     if (resolution.type !== "interaction.settled") throw new Error("Question was not resolved.");
     if (
       resolution.data.outcome !== "accepted" ||
-      resolution.data.response?.optionId !== request.options?.[0]?.id
+      resolution.data.response?.optionId !== request.request.options?.[0]?.id
     ) {
       throw new Error("The child did not resolve the proxied question with the selected option.");
     }

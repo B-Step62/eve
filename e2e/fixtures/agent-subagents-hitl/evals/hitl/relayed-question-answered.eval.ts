@@ -14,7 +14,7 @@ export default defineEval({
   async test(t) {
     const started = await t.send("RELAY-question-child Alice asks where the release should go.");
     const { request, session } = await waitForRelayed(t, started.session, "ask_question");
-    const production = request.options?.find((option) => option.label === "Production");
+    const production = request.request.options?.find((option) => option.label === "Production");
     if (production === undefined) throw new Error("Expected a Production option.");
 
     const answered = await session.respond([

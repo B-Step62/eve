@@ -1,4 +1,4 @@
-import type { EveEvalContext, EveEvalSession, EveEvalTurn, AskedInteraction } from "eve/evals";
+import type { EveEvalContext, EveEvalSession, EveEvalTurn, Interaction } from "eve/evals";
 
 /**
  * Follows the parent session, turn by turn, until a child's request about `toolName` (or, for a
@@ -9,11 +9,11 @@ export async function waitForRelayed(
   t: EveEvalContext,
   initial: EveEvalSession,
   toolName: string,
-): Promise<{ readonly request: AskedInteraction; readonly session: EveEvalSession }> {
+): Promise<{ readonly request: Interaction; readonly session: EveEvalSession }> {
   let session = initial;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const request = session.pendingInteractions.find(
-      (pending) => (pending.call?.name ?? pending.kind) === toolName,
+      (pending) => (pending.call?.name ?? pending.request.kind) === toolName,
     );
     if (request !== undefined) return { request, session };
     session = (await next(t, session)).session;

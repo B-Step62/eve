@@ -21,7 +21,7 @@ export default defineEval({
       if (pending.length > 0) {
         for (const request of pending) {
           const ids = seen.get(request.call!.name);
-          if (ids === undefined || ids.size >= 2 || request.kind !== "approval") {
+          if (ids === undefined || ids.size >= 2 || request.request.kind !== "approval") {
             throw new Error(`Unexpected nested approval for ${request.call!.name}.`);
           }
           ids.add(request.interactionId);

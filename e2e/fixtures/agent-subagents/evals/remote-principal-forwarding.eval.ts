@@ -151,7 +151,7 @@ async function waitForRemoteChild(
     if (attempt === 4) break;
     if (turn.interactions.length > 0) {
       const responses = turn.interactions.map((request) => {
-        if (request.kind !== "question" || request.allowFreeform === false) {
+        if (request.request.kind !== "question" || request.request.allowFreeform === false) {
           throw new Error("The remote child continuation requires unsupported input.");
         }
         return { interactionId: request.interactionId, text: CLARIFICATION };

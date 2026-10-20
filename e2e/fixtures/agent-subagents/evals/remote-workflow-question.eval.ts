@@ -9,7 +9,10 @@ export default defineEval({
     started.expectOk();
     const pending = await waitForInput(t, started.session);
     const request = pending.requireInteraction({ toolName: "remote_question" });
-    if (request.kind !== "question" || request.prompt !== "What is Alice's approval word?") {
+    if (
+      request.request.kind !== "question" ||
+      request.request.prompt !== "What is Alice's approval word?"
+    ) {
       throw new Error("Remote workflow question did not reach the parent.");
     }
     const answered = await pending.respond([

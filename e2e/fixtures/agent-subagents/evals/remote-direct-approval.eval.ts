@@ -11,7 +11,8 @@ export default defineEval({
     started.expectOk();
     const pending = await waitForDirectApproval(t, started.session);
     const request = pending.requireInteraction({ toolName: "direct_approval_gate" });
-    if (request.kind !== "approval") throw new Error("The direct remote gate was not an approval.");
+    if (request.request.kind !== "approval")
+      throw new Error("The direct remote gate was not an approval.");
     const answered = await pending.respond([
       { interactionId: request.interactionId, optionId: "approve" },
     ]);
