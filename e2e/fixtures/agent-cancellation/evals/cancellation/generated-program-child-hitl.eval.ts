@@ -11,7 +11,8 @@ export default defineEval({
       prompt: "What marker should the child return?",
       toolName: "ask_question",
     });
-    if (request.kind !== "question") throw new Error("Child input request is not a question.");
+    if (request.request.kind !== "question")
+      throw new Error("Child input request is not a question.");
 
     const resumed = await session.respond([
       { interactionId: request.interactionId, text: "GENERATED-HITL-MARKER" },
