@@ -28,3 +28,8 @@ export const SURVEY_DIRECTIVE = "SURVEY-DELEGATE";
 export const SURVEY_TOOL_DIRECTIVE = "SURVEY-TOOL";
 /** What survey-worker reports for its one model call: more than the parent's default 40M input budget. */
 export const SURVEY_WORKER_INPUT_TOKENS = 50_000_000;
+
+/** Starts the fan-out: the parent starts lease-worker-a and lease-worker-b in one step. */
+export const LEASE_DIRECTIVE = "LEASE-FANOUT";
+/** New input per lease-worker page: worker a's three pages cross the default 40M window, worker b's two do not. */
+export const LEASE_STEP_INPUT_TOKENS = 15_000_000;

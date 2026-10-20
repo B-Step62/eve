@@ -179,7 +179,8 @@ class RunAgentSession implements AgentSession {
           (candidate): candidate is RuntimeSubagentResult => candidate.kind === "subagent-result",
         );
         if (result !== undefined) {
-          if (result.origin === "child") this.#usage.record(result.outcome.usageDelta);
+          if (result.origin === "child")
+            this.#usage.record(result.outcome.usageDelta, result.beforeWindow);
           return { kind: "ended", result: toAgentMessageResult(result, expectsData) };
         }
       }

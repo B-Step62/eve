@@ -187,6 +187,8 @@ export interface SettledTurn {
    * the answer crosses the park boundary to the delegated caller.
    */
   readonly usage?: TokenUsage;
+  /** The part of `usage` spent before the session's current usage window. */
+  readonly beforeWindow?: TokenUsage;
 }
 
 /**

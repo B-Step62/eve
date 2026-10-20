@@ -234,7 +234,13 @@ class WorkflowServeCalls implements WorkflowBodyControl {
       const usage = this.usage.total();
       if (usage === undefined || isSameUsage(usage, this.carriedUsage)) return;
       this.carriedUsage = usage;
-      await this.owner.send({ from, kind: "usage", usage });
+      const beforeWindow = this.usage.beforeWindow();
+      await this.owner.send({
+        from,
+        kind: "usage",
+        usage,
+        ...(beforeWindow !== undefined && { beforeWindow }),
+      });
     });
   }
 
@@ -322,6 +328,7 @@ class WorkflowServeCalls implements WorkflowBodyControl {
     if (latest === undefined) return;
     const callIds = calls.map((served) => served.from.callId);
     const usage = this.usage.total();
+    const beforeWindow = this.usage.beforeWindow();
     this.carriedUsage = usage;
     await this.owner.send({
       callIds,
@@ -329,6 +336,7 @@ class WorkflowServeCalls implements WorkflowBodyControl {
       kind: "reply",
       output,
       ...(usage !== undefined && { usage }),
+      ...(beforeWindow !== undefined && { beforeWindow }),
     });
   }
 }

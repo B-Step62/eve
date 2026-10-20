@@ -47,11 +47,14 @@ export interface ProxiedInputResolutions {
  * Outcome of splitting one deliver payload by the session's proxy map.
  * `forSelf` is the parent-local remainder (or `undefined` when fully
  * routed); `forChildren` carries one entry per descendant token.
+ * `renewsWindow` is set when the payload approves a descendant's
+ * session-limit prompt: the approval starts a new usage window here too.
  */
 export interface RoutedDeliverPayload {
   readonly forChildren: readonly RoutedChildDelivery[];
   readonly forSelf: DeliverPayload | undefined;
   readonly parentAction: { readonly kind: "cancel-turn" } | undefined;
+  readonly renewsWindow: boolean;
 }
 
 /** In-progress accumulation for one `forChildren` bucket. */
@@ -102,6 +105,7 @@ export function routeDeliverPayload(input: {
   const responsesByChild = new Map<string, ChildResponseBucket>();
   const unroutedResponses: InputResponse[] = [];
   let parentAction: RoutedDeliverPayload["parentAction"];
+  let renewsWindow = false;
 
   const bucketFor = (route: ProxyInputRequest): ChildResponseBucket => {
     const bucketKey = JSON.stringify([
@@ -143,8 +147,10 @@ export function routeDeliverPayload(input: {
     if (routedRequestIds.has(response.requestId)) continue;
     routedRequestIds.add(response.requestId);
 
-    if (route.kind === "session-limit" && response.optionId === SESSION_LIMIT_STOP_OPTION_ID) {
-      parentAction = { kind: "cancel-turn" };
+    if (route.kind === "session-limit") {
+      if (response.optionId === SESSION_LIMIT_STOP_OPTION_ID)
+        parentAction = { kind: "cancel-turn" };
+      else renewsWindow = true;
     }
 
     const bucket = bucketFor(route);
@@ -224,7 +230,7 @@ export function routeDeliverPayload(input: {
 
   const forSelf = Object.keys(remainder).length > 0 ? (remainder as DeliverPayload) : undefined;
 
-  return { forChildren, forSelf, parentAction };
+  return { forChildren, forSelf, parentAction, renewsWindow };
 }
 
 function resolveRetiredRequests(input: {

@@ -24,6 +24,8 @@ export interface CancelledTurnSettleResult {
   readonly history: HarnessModelMessage[];
   /** What the session spent since its caller's last report, when asked to report it. */
   readonly usage?: TokenUsage;
+  /** The part of `usage` spent before the session's current usage window. */
+  readonly beforeWindow?: TokenUsage;
 }
 
 /** Takes the history because the steps the cancel stopped commit to it. */
@@ -55,7 +57,7 @@ export async function settleCancelledTurn(
   const durableState = step.durableSession.state;
   const owningTurnId =
     runtimeWait(durableState)?.event.turnId ?? storedProjection(durableState).activeTurnId ?? "";
-  const { published, result: usage } = await publishFromSessionStep(step, {
+  const { published, result: reportedUsage } = await publishFromSessionStep(step, {
     origin: "own",
     publish: (emit, session) =>
       applyTransition(
@@ -76,8 +78,16 @@ export async function settleCancelledTurn(
       // Reported like a settled turn, as usage since the last report, so the
       // caller counts each turn once whether it settled or was cancelled.
       const reported = takeSessionUsageDelta(cancelledSession);
-      return { result: reported.delta, session: reported.session };
+      return {
+        result: { beforeWindow: reported.beforeWindow, usage: reported.delta },
+        session: reported.session,
+      };
     },
   });
-  return usage === undefined ? published : { ...published, usage };
+  if (reportedUsage === undefined) return published;
+  return {
+    ...published,
+    usage: reportedUsage.usage,
+    ...(reportedUsage.beforeWindow !== undefined && { beforeWindow: reportedUsage.beforeWindow }),
+  };
 }

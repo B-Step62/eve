@@ -22,7 +22,7 @@ import {
   type TaskTable,
 } from "#execution/tasks/table.js";
 import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
-import { countRunUsage } from "#execution/agent-sessions/usage.js";
+import { countRunUsage, type RunUsage } from "#execution/agent-sessions/usage.js";
 import type {
   PublishedSessionEvents,
   SessionStepState,
@@ -239,9 +239,17 @@ function countTaskRunUsage(
 ): { readonly session: DurableSession; readonly table: TaskTable } {
   const run = findTask(table, taskId)?.run;
   if (message.usage === undefined || run?.runId !== message.from.runId) return { session, table };
+  const counted: RunUsage = {
+    usage: message.usage,
+    ...(message.beforeWindow !== undefined && { beforeWindow: message.beforeWindow }),
+  };
   return {
-    session: countRunUsage(session, message.usage, run.usage),
-    table: recordTaskRunUsage(table, taskId, message.usage),
+    session: countRunUsage(
+      session,
+      counted,
+      run.usage === undefined ? undefined : { beforeWindow: run.beforeWindow, usage: run.usage },
+    ),
+    table: recordTaskRunUsage(table, taskId, counted),
   };
 }
 

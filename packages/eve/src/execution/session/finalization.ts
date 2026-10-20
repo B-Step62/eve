@@ -14,7 +14,10 @@ import type { WorkflowEntryResult } from "#execution/session/entry-input.js";
 import type { TokenUsage } from "#shared/token-usage.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { getSessionUsage, takeSessionUsageDelta } from "#harness/turn-tag-state.js";
-import { notifyTurnCallerStep } from "#subagents/parent-notification.js";
+import {
+  notifyTurnCallerStep,
+  type SettledTurnNotification,
+} from "#subagents/parent-notification.js";
 
 /** The three ways a session ends. `done` already emitted its terminal event inside the turn. */
 export type SessionTerminalOutcome =
@@ -83,11 +86,12 @@ export async function finalizeSession(
 
   const settled = settledResult(outcome, context);
   if (context.caller !== undefined) {
-    const notification: { isError?: boolean; output: unknown; usage?: TokenUsage } = {
+    const notification: SettledTurnNotification = {
       output: settled.output,
       usage: settled.turnUsage,
+      ...(settled.beforeWindow !== undefined && { beforeWindow: settled.beforeWindow }),
+      ...(settled.isError && { isError: true }),
     };
-    if (settled.isError) notification.isError = true;
     await notifyTurnCallerStep({
       caller: context.caller,
       lifecycle: "terminal",
@@ -118,14 +122,20 @@ function settledResult(
   readonly output: unknown;
   readonly sessionUsage?: TokenUsage;
   readonly turnUsage?: TokenUsage;
+  readonly beforeWindow?: TokenUsage;
 } {
   const session = context.cursor.sessionState?.snapshot.session;
-  const usage =
+  const report =
     session === undefined || context.caller === undefined
+      ? undefined
+      : takeSessionUsageDelta(session);
+  const usage =
+    session === undefined || report === undefined
       ? {}
       : {
           sessionUsage: getSessionUsage(session),
-          turnUsage: takeSessionUsageDelta(session).delta,
+          turnUsage: report.delta,
+          ...(report.beforeWindow !== undefined && { beforeWindow: report.beforeWindow }),
         };
   switch (outcome.kind) {
     case "done":
@@ -134,6 +144,9 @@ function settledResult(
         output: outcome.action.output,
         sessionUsage: outcome.action.usage,
         turnUsage: outcome.action.usageDelta,
+        ...(outcome.action.usageBeforeWindow !== undefined && {
+          beforeWindow: outcome.action.usageBeforeWindow,
+        }),
       };
     case "expired":
       return context.caller === undefined

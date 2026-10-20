@@ -92,6 +92,8 @@ export interface WorkflowToolRunOutcomeMessage {
   readonly result: WorkflowToolRunOutcome;
   /** What the run's `ctx.agent` sessions spent in all, once any of their turns ended. */
   readonly usage?: TokenUsage;
+  /** The part of `usage` its sessions spent before their current usage windows. */
+  readonly beforeWindow?: TokenUsage;
 }
 
 /**
@@ -128,6 +130,8 @@ export interface WorkflowToolRunReplyMessage {
    * last one it counted, and a redelivered reply adds nothing.
    */
   readonly usage?: TokenUsage;
+  /** The part of `usage` its sessions spent before their current usage windows. */
+  readonly beforeWindow?: TokenUsage;
 }
 
 /**
@@ -138,6 +142,8 @@ export interface WorkflowToolRunReplyMessage {
 export interface WorkflowToolRunUsageMessage {
   readonly from: WorkflowToolRunRef;
   readonly usage: TokenUsage;
+  /** The part of `usage` its sessions spent before their current usage windows. */
+  readonly beforeWindow?: TokenUsage;
 }
 
 /** A task's run can take commands: its control hook is registered. */

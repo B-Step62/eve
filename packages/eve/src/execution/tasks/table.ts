@@ -36,6 +36,8 @@ export interface TaskRun extends TaskRunAddress {
   readonly started: boolean;
   /** The run's delegated spend the session counted so far, which later totals count from. */
   readonly usage?: TokenUsage;
+  /** The part of `usage` spent before the run's sessions started their current windows. */
+  readonly beforeWindow?: TokenUsage;
 }
 
 /** A call the task admitted and hasn't settled, with the turn that made it. */
@@ -335,9 +337,22 @@ export function settleRemainingTaskCalls(
 }
 
 /** Records the run's delegated spend the session just counted. */
-export function recordTaskRunUsage(table: TaskTable, taskId: string, usage: TokenUsage): TaskTable {
+export function recordTaskRunUsage(
+  table: TaskTable,
+  taskId: string,
+  counted: { readonly beforeWindow?: TokenUsage; readonly usage: TokenUsage },
+): TaskTable {
   return updateTask(table, taskId, (record) =>
-    record.run === undefined ? record : { ...record, run: { ...record.run, usage } },
+    record.run === undefined
+      ? record
+      : {
+          ...record,
+          run: {
+            ...record.run,
+            usage: counted.usage,
+            ...(counted.beforeWindow !== undefined && { beforeWindow: counted.beforeWindow }),
+          },
+        },
   );
 }
 
@@ -520,7 +535,8 @@ function isTaskRun(value: unknown): value is TaskRun {
     isNonEmptyString(value.runId) &&
     isNonEmptyString(value.hookToken) &&
     typeof value.started === "boolean" &&
-    (value.usage === undefined || isObject(value.usage))
+    (value.usage === undefined || isObject(value.usage)) &&
+    (value.beforeWindow === undefined || isObject(value.beforeWindow))
   );
 }
 

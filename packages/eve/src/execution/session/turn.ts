@@ -48,7 +48,7 @@ import {
 } from "#harness/workflow-tool-runs.js";
 import { resolveRuntimeActionResultsForCallIds } from "#runtime/actions/results.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import type { RunUsage } from "#execution/agent-sessions/usage.js";
 import {
   startTaskToolCallsStep,
   traceTaskToolCallStep,
@@ -224,6 +224,9 @@ export class SessionExecution {
           output: result.output ?? "",
           usage: result.usage,
           usageDelta: result.usageDelta,
+          ...(result.usageBeforeWindow !== undefined && {
+            usageBeforeWindow: result.usageBeforeWindow,
+          }),
         };
       }
 
@@ -408,7 +411,7 @@ export class SessionExecution {
     let interrupted = false;
     const acceptedAtMsByCallId = new Map<string, number>();
     // By call id, so an outcome delivered twice counts once.
-    const delegatedUsageByCallId = new Map<string, TokenUsage>();
+    const delegatedUsageByCallId = new Map<string, RunUsage>();
     if (input.initialAcceptedAtMs !== undefined) {
       for (const result of results)
         acceptedAtMsByCallId.set(result.callId, input.initialAcceptedAtMs);
@@ -474,7 +477,12 @@ export class SessionExecution {
         if (result === undefined) continue;
         accept(result);
         if (next.message.kind === "outcome" && next.message.usage !== undefined) {
-          delegatedUsageByCallId.set(result.callId, next.message.usage);
+          delegatedUsageByCallId.set(result.callId, {
+            usage: next.message.usage,
+            ...(next.message.beforeWindow !== undefined && {
+              beforeWindow: next.message.beforeWindow,
+            }),
+          });
         }
       }
     } finally {

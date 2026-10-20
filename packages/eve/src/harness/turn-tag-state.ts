@@ -118,6 +118,27 @@ function getWindowStart(session: Pick<HarnessSession, "state">): TokenUsageTotal
 }
 
 /**
+ * Moves the window start forward by delegated usage that a child spent before
+ * its own window started. Every session in a tree starts a new window on the
+ * same approval, so that spend belongs before this session's window too.
+ */
+export function addUsageBeforeWindow<T extends Pick<HarnessSession, "state">>(
+  session: T,
+  usage: TokenUsageDelta,
+): T {
+  return {
+    ...session,
+    state: {
+      ...session.state,
+      [SESSION_USAGE_WINDOW_START_KEY]: addTokenUsage(
+        getWindowStart(session),
+        toTokenUsageDelta(usage),
+      ),
+    },
+  };
+}
+
+/**
  * Takes the session-usage delta accumulated since the previous take and
  * marks it reported.
  *
@@ -128,10 +149,14 @@ function getWindowStart(session: Pick<HarnessSession, "state">): TokenUsageTotal
  * input) between two settlements never lose usage — the delta always
  * measures everything since the last report, so the deltas of a
  * multi-turn persistent child sum exactly to its session totals.
+ *
+ * `beforeWindow` is the part of the delta spent before the current usage
+ * window started, so the caller keeps it out of its own window.
  */
 export function takeSessionUsageDelta<T extends Pick<HarnessSession, "state">>(
   session: T,
 ): {
+  readonly beforeWindow?: TokenUsage;
   readonly delta: TokenUsage;
   readonly session: T;
 } {
@@ -139,7 +164,9 @@ export function takeSessionUsageDelta<T extends Pick<HarnessSession, "state">>(
   const reported =
     (session.state?.[REPORTED_SESSION_USAGE_STATE_KEY] as TokenUsageTotals | undefined) ??
     ZERO_TOKEN_USAGE;
+  const beforeWindow = positivePart(subtractTokenUsage(getWindowStart(session), reported));
   return {
+    ...(beforeWindow !== undefined && { beforeWindow: toUsage(beforeWindow) }),
     delta: toUsage(subtractTokenUsage(totals, reported)),
     session: {
       ...session,
@@ -149,6 +176,24 @@ export function takeSessionUsageDelta<T extends Pick<HarnessSession, "state">>(
       },
     },
   };
+}
+
+function positivePart(usage: TokenUsageTotals): TokenUsageTotals | undefined {
+  const part: TokenUsageTotals = {
+    cacheReadTokens: Math.max(0, usage.cacheReadTokens),
+    cacheWriteTokens: Math.max(0, usage.cacheWriteTokens),
+    costUsd: Math.max(0, usage.costUsd),
+    inputTokens: Math.max(0, usage.inputTokens),
+    outputTokens: Math.max(0, usage.outputTokens),
+    sawCost: usage.sawCost,
+  };
+  const empty =
+    part.cacheReadTokens === 0 &&
+    part.cacheWriteTokens === 0 &&
+    part.costUsd === 0 &&
+    part.inputTokens === 0 &&
+    part.outputTokens === 0;
+  return empty ? undefined : part;
 }
 
 /** Writes per-turn token state onto a new copy of the session. */

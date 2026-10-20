@@ -31,6 +31,8 @@ export interface SettledTurnNotification {
   readonly isError?: boolean;
   /** Usage accumulated since the previous caller settlement, including yielded turns. */
   readonly usage?: TokenUsage;
+  /** The part of `usage` spent before the child's current usage window. */
+  readonly beforeWindow?: TokenUsage;
 }
 
 const ZERO_TOKEN_USAGE: TokenUsage = {
@@ -85,6 +87,7 @@ export async function notifyCancelledTaskCallerStep(input: {
   readonly caller: TurnCaller;
   readonly sessionId: string;
   readonly usage?: TokenUsage;
+  readonly beforeWindow?: TokenUsage;
 }): Promise<void> {
   "use step";
 
@@ -106,7 +109,11 @@ export async function notifyCancelledTaskCallerStep(input: {
     output: error,
     subagentName: input.caller.subagentName,
   };
-  const result = input.usage === undefined ? base : { ...base, usage: input.usage };
+  const result: RuntimeSubagentChildResult = {
+    ...base,
+    ...(input.usage !== undefined && { usage: input.usage }),
+    ...(input.beforeWindow !== undefined && { beforeWindow: input.beforeWindow }),
+  };
   if (input.caller.replyTo.kind === "callback") {
     await postSettledTurnCallback({
       result,
@@ -143,6 +150,7 @@ function createSettledTurnResult(input: {
       },
       output: error,
       subagentName: input.caller.subagentName,
+      ...(input.settled.beforeWindow !== undefined && { beforeWindow: input.settled.beforeWindow }),
     };
   }
 
@@ -158,6 +166,7 @@ function createSettledTurnResult(input: {
     },
     output,
     subagentName: input.caller.subagentName,
+    ...(input.settled.beforeWindow !== undefined && { beforeWindow: input.settled.beforeWindow }),
   };
   // Legacy per-result usage projection (usage spans); the run that opened the
   // child tallies `outcome.usageDelta`, never this field, when present.
@@ -257,6 +266,9 @@ async function postSettledTurnCallback(input: {
   if (input.result.isError === true) {
     await postCallbackPayload({
       payload: {
+        ...(input.result.beforeWindow !== undefined && {
+          beforeWindow: input.result.beforeWindow,
+        }),
         callId: input.result.callId,
         error: input.result.output,
         kind: "turn.failed",
@@ -271,6 +283,7 @@ async function postSettledTurnCallback(input: {
 
   await postCallbackPayload({
     payload: {
+      ...(input.result.beforeWindow !== undefined && { beforeWindow: input.result.beforeWindow }),
       callId: input.result.callId,
       kind: "turn.completed",
       outcome: input.result.outcome,

@@ -357,10 +357,12 @@ async function runSessionLoop(
         const { caller } = progress;
         const settled = await settleCancelledTurn(caller !== undefined);
         if (caller !== undefined) {
-          const notification = { caller, sessionId: boot.sessionId };
-          await notifyCancelledTaskCallerStep(
-            settled.usage === undefined ? notification : { ...notification, usage: settled.usage },
-          );
+          await notifyCancelledTaskCallerStep({
+            caller,
+            sessionId: boot.sessionId,
+            ...(settled.usage !== undefined && { usage: settled.usage }),
+            ...(settled.beforeWindow !== undefined && { beforeWindow: settled.beforeWindow }),
+          });
         }
       } else if (action.settled !== undefined) {
         if (progress.caller !== undefined) {
