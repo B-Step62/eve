@@ -5,7 +5,7 @@ import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
 import { workflowEntry } from "#execution/session/entry.js";
 import { createTestRuntime, type TestRuntime } from "#internal/testing/app-harness.js";
 import { captureTurnEvents } from "#internal/testing/events.js";
-import { startSessionOwner } from "#internal/testing/workflow-test-helpers.js";
+import { startSessionOwner, waitForHook } from "#internal/testing/workflow-test-helpers.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
 import { defineAgent } from "#public/definitions/agent.js";
 import { defineMemory, type MemoryProvider } from "#public/memory/index.js";
@@ -56,24 +56,6 @@ const checkSoilTool = {
   logicalPath: "tools/check_soil.ts",
 };
 
-/** Sends a follow-up to the parked session, retrying through the inbox claim window. */
-async function sendFollowUp(continuationToken: string, message: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (true) {
-    try {
-      await resumeHook(sessionInboxHookToken(continuationToken), {
-        auth: null,
-        kind: "send",
-        payload: { message },
-      });
-      return;
-    } catch (error) {
-      if (Date.now() > deadline) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-}
-
 /** Runs two turns on one session and returns each turn's event types, cancelling the parked session. */
 async function twoTurnEventTypes(runtime: TestRuntime, name: string): Promise<string[][]> {
   const continuationToken = `http:${name}`;
@@ -97,7 +79,9 @@ async function twoTurnEventTypes(runtime: TestRuntime, name: string): Promise<st
     try {
       turns.push((await stream.nextTurn()).map((event) => event.type));
       if (turns[0]?.at(-1) !== "session.waiting") return turns;
-      await sendFollowUp(continuationToken, "It's still drooping.");
+      const inboxToken = sessionInboxHookToken(continuationToken);
+      await waitForHook({ runId: run.runId }, { token: inboxToken });
+      await resumeHook(inboxToken, { kind: "send", payload: { message: "It's still drooping." } });
       turns.push((await stream.nextTurn()).map((event) => event.type));
       if (turns[1]?.at(-1) === "session.waiting") await run.cancel();
       return turns;
