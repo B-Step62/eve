@@ -21,15 +21,17 @@
  * the shared {@link TokenUsage} contract.
  */
 import type { HarnessSession, SessionStateMap } from "#harness/types.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import { FIRST_USAGE_WINDOW, type TokenUsage, type UsageByWindow } from "#shared/token-usage.js";
 
 const HARNESS_TURN_USAGE_STATE_KEY = "eve.harness.turnUsage";
 const REPORTED_SESSION_USAGE_STATE_KEY = "eve.harness.reportedSessionUsage";
 const SESSION_USAGE_WINDOW_START_KEY = "eve.harness.sessionUsageWindowStart";
 const SESSION_USAGE_WINDOW_INDEX_KEY = "eve.harness.sessionUsageWindowIndex";
 const SESSION_USAGE_RENEWALS_KEY = "eve.harness.sessionUsageRenewals";
-/** Usage not yet reported to the caller that was spent before the current window. */
-const UNREPORTED_BEFORE_WINDOW_KEY = "eve.harness.unreportedUsageBeforeWindow";
+/** Usage not yet reported to the caller that was spent outside the current window, by window. */
+const UNREPORTED_OFF_WINDOW_KEY = "eve.harness.unreportedUsageOffWindow";
+/** Delegated spend in windows of renewals the session hasn't applied yet. */
+const WINDOWS_AHEAD_KEY = "eve.harness.usageWindowsAhead";
 /** Renewal ids remembered for dedupe; one approval reaches a session by at most a few paths. */
 const MAX_REMEMBERED_RENEWALS = 16;
 
@@ -99,20 +101,11 @@ export function getSessionUsageWindow(session: Pick<HarnessSession, "state">): T
 }
 
 /**
- * Starts a new usage window at the session's current totals, after an approved
- * continuation. Whatever the caller hasn't been told yet was spent before it.
+ * The window the session spends in now: the renewal that started it, or
+ * {@link FIRST_USAGE_WINDOW} before any.
  */
-export function resetSessionUsageWindow<T extends Pick<HarnessSession, "state">>(session: T): T {
-  const totals = getSessionTokenUsage(session);
-  return {
-    ...session,
-    state: {
-      ...session.state,
-      [SESSION_USAGE_WINDOW_INDEX_KEY]: getSessionUsageWindowIndex(session) + 1,
-      [SESSION_USAGE_WINDOW_START_KEY]: totals,
-      [UNREPORTED_BEFORE_WINDOW_KEY]: subtractTokenUsage(totals, getReported(session)),
-    },
-  };
+export function getSessionUsageWindowId(session: Pick<HarnessSession, "state">): string {
+  return latestSessionUsageRenewal(session) ?? FIRST_USAGE_WINDOW;
 }
 
 /** How many usage windows the session has started before its current one. */
@@ -126,6 +119,9 @@ export function getSessionUsageWindowIndex(session: Pick<HarnessSession, "state"
  * than once, so the approved request id names the renewal and a repeat is a
  * no-op. `covers` names the session-limit prompts the renewal makes obsolete:
  * they count as applied, so answering one later renews nothing.
+ *
+ * The window starts at the session's current totals, less what descendants
+ * already reported spending in it: they can apply the renewal first.
  */
 export function renewSessionUsageWindow<T extends Pick<HarnessSession, "state">>(
   session: T,
@@ -134,15 +130,21 @@ export function renewSessionUsageWindow<T extends Pick<HarnessSession, "state">>
 ): { readonly renewed: boolean; readonly session: T } {
   const seen = getSessionUsageRenewals(session);
   if (seen.includes(renewalId)) return { renewed: false, session };
-  const reset = resetSessionUsageWindow(session);
+  const totals = getSessionTokenUsage(session);
+  const { [renewalId]: early = ZERO_TOKEN_USAGE, ...ahead } = getWindowsAhead(session);
+  const { [renewalId]: _now, ...off } = closeCurrentWindow(session);
   const applied = [...seen, ...covers.filter((id) => id !== renewalId), renewalId];
   return {
     renewed: true,
     session: {
-      ...reset,
+      ...session,
       state: {
-        ...reset.state,
+        ...session.state,
+        [SESSION_USAGE_WINDOW_INDEX_KEY]: getSessionUsageWindowIndex(session) + 1,
+        [SESSION_USAGE_WINDOW_START_KEY]: subtractTokenUsage(totals, early),
         [SESSION_USAGE_RENEWALS_KEY]: applied.slice(-MAX_REMEMBERED_RENEWALS),
+        [UNREPORTED_OFF_WINDOW_KEY]: off,
+        [WINDOWS_AHEAD_KEY]: ahead,
       },
     },
   };
@@ -174,30 +176,79 @@ function getReported(session: Pick<HarnessSession, "state">): TokenUsageTotals {
   );
 }
 
-function getUnreportedBeforeWindow(session: Pick<HarnessSession, "state">): TokenUsageTotals {
-  return (
-    (session.state?.[UNREPORTED_BEFORE_WINDOW_KEY] as TokenUsageTotals | undefined) ??
-    ZERO_TOKEN_USAGE
-  );
+type TotalsByWindow = Readonly<Record<string, TokenUsageTotals>>;
+
+function getOffWindow(session: Pick<HarnessSession, "state">): TotalsByWindow {
+  return (session.state?.[UNREPORTED_OFF_WINDOW_KEY] as TotalsByWindow | undefined) ?? {};
+}
+
+function getWindowsAhead(session: Pick<HarnessSession, "state">): TotalsByWindow {
+  return (session.state?.[WINDOWS_AHEAD_KEY] as TotalsByWindow | undefined) ?? {};
 }
 
 /**
- * Moves the window start forward by delegated usage that a child spent before
- * its own window started. Every session in a tree starts a new window on the
- * same approval, so that spend belongs before this session's window too, and
- * before its caller's.
+ * The session's unreported spend by window, its current window included:
+ * the spend not counted in another window was spent in the current one.
  */
-export function addUsageBeforeWindow<T extends Pick<HarnessSession, "state">>(
+function closeCurrentWindow(session: Pick<HarnessSession, "state">): TotalsByWindow {
+  const off = getOffWindow(session);
+  const unreported = subtractTokenUsage(getSessionTokenUsage(session), getReported(session));
+  const current = Object.values(off).reduce(subtractTokenUsage, unreported);
+  return addToWindow(off, getSessionUsageWindowId(session), current);
+}
+
+function addToWindow(
+  windows: TotalsByWindow,
+  windowId: string,
+  usage: TokenUsageTotals,
+): TotalsByWindow {
+  if (isZeroTokenUsage(usage)) return windows;
+  return { ...windows, [windowId]: addTokenUsage(windows[windowId] ?? ZERO_TOKEN_USAGE, usage) };
+}
+
+/**
+ * Counts delegated spend by the window each part was spent in. Spend in
+ * another window stays out of this session's: an earlier one ended here, and
+ * a later one, from a renewal a descendant applied first, counts once this
+ * session applies it too.
+ */
+export function countUsageByWindow<T extends { readonly state?: SessionStateMap }>(
   session: T,
-  usage: TokenUsageDelta,
+  windows: UsageByWindow,
 ): T {
-  const added = toTokenUsageDelta(usage);
+  let next = session;
+  for (const [windowId, usage] of Object.entries(windows)) {
+    next = countUsageInWindow(next, windowId, usage);
+  }
+  return next;
+}
+
+function countUsageInWindow<T extends { readonly state?: SessionStateMap }>(
+  session: T,
+  windowId: string,
+  spent: TokenUsage,
+): T {
+  const usage = toTokenUsageDelta(spent);
+  if (isZeroTokenUsage(usage)) return session;
+  const counted = setTurnUsageState(
+    session,
+    accumulateSessionUsage({ previous: getTurnUsageState(session.state), usage: spent }),
+  );
+  if (windowId === getSessionUsageWindowId(session)) return counted;
+  const later =
+    windowId !== FIRST_USAGE_WINDOW && !getSessionUsageRenewals(session).includes(windowId);
+  const ahead = getWindowsAhead(session);
   return {
-    ...session,
+    ...counted,
     state: {
-      ...session.state,
-      [SESSION_USAGE_WINDOW_START_KEY]: addTokenUsage(getWindowStart(session), added),
-      [UNREPORTED_BEFORE_WINDOW_KEY]: addTokenUsage(getUnreportedBeforeWindow(session), added),
+      ...counted.state,
+      [SESSION_USAGE_WINDOW_START_KEY]: addTokenUsage(getWindowStart(session), usage),
+      [UNREPORTED_OFF_WINDOW_KEY]: addToWindow(getOffWindow(session), windowId, usage),
+      ...(later && {
+        [WINDOWS_AHEAD_KEY]: Object.fromEntries(
+          Object.entries(addToWindow(ahead, windowId, usage)).slice(-MAX_REMEMBERED_RENEWALS),
+        ),
+      }),
     },
   };
 }
@@ -214,26 +265,27 @@ export function addUsageBeforeWindow<T extends Pick<HarnessSession, "state">>(
  * measures everything since the last report, so the deltas of a
  * multi-turn persistent child sum exactly to its session totals.
  *
- * `beforeWindow` is the part of the delta spent before the current usage
- * window started, so the caller keeps it out of its own window.
+ * `windows` splits the delta by the usage window it was spent in, so each
+ * caller counts it against the same window whenever the report arrives.
  */
 export function takeSessionUsageDelta<T extends Pick<HarnessSession, "state">>(
   session: T,
 ): {
-  readonly beforeWindow?: TokenUsage;
   readonly delta: TokenUsage;
   readonly session: T;
+  readonly windows: UsageByWindow;
 } {
   const totals = getSessionTokenUsage(session);
-  const beforeWindow = getUnreportedBeforeWindow(session);
-  const { [UNREPORTED_BEFORE_WINDOW_KEY]: _taken, ...state } = session.state ?? {};
+  const { [UNREPORTED_OFF_WINDOW_KEY]: _taken, ...state } = session.state ?? {};
   return {
-    ...(!isZeroTokenUsage(beforeWindow) && { beforeWindow: toUsage(beforeWindow) }),
     delta: toUsage(subtractTokenUsage(totals, getReported(session))),
     session: {
       ...session,
       state: { ...state, [REPORTED_SESSION_USAGE_STATE_KEY]: totals },
     },
+    windows: Object.fromEntries(
+      Object.entries(closeCurrentWindow(session)).map(([id, usage]) => [id, toUsage(usage)]),
+    ),
   };
 }
 

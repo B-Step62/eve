@@ -29,14 +29,24 @@ Each renewal carries the id of the approved request. A session keeps the last
 16 ids and ignores a repeat, so a renewal that reaches a session by two paths
 starts one window, not two.
 
-## Spend from before the window
+## Spend by window
 
-A child's spend reaches its parent only when the child replies. After a
-renewal, a reply that includes spend from the old window would count in the
-parent's new window and ask again. The child now reports that part as
-`beforeWindow` beside `usage`. The parent adds `usage` to its totals and moves
-its window start by `beforeWindow`, so totals stay exact and only new spend
-counts in the new window.
+A child's spend reaches its parent only when the child replies, and a renewal
+travels the other way, so a report and a renewal can cross. Every usage report
+therefore names the window each part was spent in, as `windows` beside `usage`:
+a map from the renewal id that started the window to the spend in it, with `""`
+for a session's first window. A run sums its sessions' reports per window, and
+a session that opened before a renewal reached it spends in the run's window at
+the time it opened.
+
+The receiving session adds all of it to its totals. The part spent in its
+current window counts there. The part spent in an earlier window moves its
+window start, so it stays out. The part spent in a window it hasn't started
+yet, from a renewal a descendant applied first, stays out too and counts once
+the session applies that renewal. Arrival order no longer matters.
+
+A task run that starts after a renewal the session already applied gets that
+renewal when it reports started, since renewals skip runs that haven't.
 
 ## Gaps
 
@@ -49,7 +59,7 @@ counts in the new window.
 
 ## Compatibility
 
-`beforeWindow` is a new optional field on subagent results, so the extension
+`windows` is a new optional field on subagent results, so the extension
 capabilities that see those results bump one epoch and keep the previous one.
-A reply from an older deployment has no `beforeWindow`, so the parent counts
-all of it in the current window, as before.
+A reply from an older deployment has no `windows`, so the parent counts all of
+it in the current window, as before.

@@ -1,5 +1,5 @@
 // Epoch 93 of the tool capability: the authoring contract of epoch 92 still compiles.
-// Epoch 94 adds an optional `beforeWindow` usage field to subagent results.
+// Epoch 94 adds an optional `windows` usage field to subagent results.
 import { defineTool } from "#public/tools/index.js";
 
 // Existing Connect auth providers still work without event support.

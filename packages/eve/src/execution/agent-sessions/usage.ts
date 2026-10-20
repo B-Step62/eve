@@ -1,14 +1,6 @@
-import {
-  accumulateSessionUsage,
-  addUsageBeforeWindow,
-  getTurnUsageState,
-  setTurnUsageState,
-  toUsage,
-  type TokenUsageDelta,
-  type TurnUsageState,
-} from "#harness/turn-tag-state.js";
+import { countUsageByWindow, getSessionUsageWindowId } from "#harness/turn-tag-state.js";
 import type { SessionStateMap } from "#harness/types.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import { addTokenUsage, type TokenUsage, type UsageByWindow } from "#shared/token-usage.js";
 
 // A delegated agent's spend counts against the session that delegated to it.
 // A run tallies what its `ctx.agent` sessions spend, and its replies and
@@ -17,18 +9,14 @@ import type { TokenUsage } from "#shared/token-usage.js";
 // a turn no reply will carry. A run's messages reach the session in the order
 // it sent them, so each total is at least the last one counted. A child's
 // usage already includes what its own children spent, so a chain of agents
-// adds up at every level. A turn's usage can carry the part spent before the
-// child's current usage window; the run tallies it apart, and the calling
-// session keeps it out of its own window. When a renewal reaches the run,
-// whatever it hasn't carried to the calling session yet was spent before the
-// new window too.
+// adds up at every level. Every total is split by the usage window it was
+// spent in, as the spending session saw it, so a renewal and a report that
+// cross in transit still count the spend against the right window.
 
 /** What a run's `ctx.agent` sessions have spent, turn by turn. */
 export interface RunUsageTally {
-  /** Adds one ended turn's usage, and the part of it spent before the child's window. */
-  record(turnUsage: TokenUsage, beforeWindow?: TokenUsage): void;
-  /** A renewal started a new window: everything not carried yet was spent before it. */
-  renew(): void;
+  /** Adds one ended turn's usage, split by the window each part was spent in. */
+  record(windows: UsageByWindow): void;
   /** Whether a turn ended since the last {@link carry}. */
   hasUncarried(): boolean;
   /** The running totals for a message to the calling session, now carried; `undefined` before any turn ended. */
@@ -37,49 +25,30 @@ export interface RunUsageTally {
 
 /** `onRecord` runs after each recorded turn, so the run can send a total no reply will carry. */
 export function createRunUsageTally(onRecord?: () => void): RunUsageTally {
-  // Carried totals, and what was spent since: all of it, and the part before the window.
-  let carried: TurnUsageState | undefined;
-  let carriedBeforeWindow: TurnUsageState | undefined;
-  let uncarried: TurnUsageState | undefined;
-  let uncarriedBeforeWindow: TurnUsageState | undefined;
+  let totals: RunUsage | undefined;
+  let uncarried = false;
   return {
-    record(turnUsage, beforeWindow) {
-      if (!isZeroUsage(turnUsage)) {
-        uncarried = accumulateSessionUsage({ previous: uncarried, usage: turnUsage });
-      }
-      if (beforeWindow !== undefined && !isZeroUsage(beforeWindow)) {
-        uncarriedBeforeWindow = accumulateSessionUsage({
-          previous: uncarriedBeforeWindow,
-          usage: beforeWindow,
-        });
+    record(windows) {
+      for (const [windowId, spent] of Object.entries(windows)) {
+        if (isZeroUsage(spent)) continue;
+        const previous = totals?.windows?.[windowId];
+        totals = {
+          usage: totals === undefined ? spent : addTokenUsage(totals.usage, spent),
+          windows: {
+            ...totals?.windows,
+            [windowId]: previous === undefined ? spent : addTokenUsage(previous, spent),
+          },
+        };
+        uncarried = true;
       }
       onRecord?.();
     },
-    renew() {
-      uncarriedBeforeWindow = uncarried;
-    },
     hasUncarried() {
-      return uncarried !== undefined;
+      return uncarried;
     },
     carry() {
-      if (uncarried !== undefined) {
-        carried = accumulateSessionUsage({ previous: carried, usage: toUsage(uncarried.session) });
-      }
-      if (uncarriedBeforeWindow !== undefined) {
-        carriedBeforeWindow = accumulateSessionUsage({
-          previous: carriedBeforeWindow,
-          usage: toUsage(uncarriedBeforeWindow.session),
-        });
-      }
-      uncarried = undefined;
-      uncarriedBeforeWindow = undefined;
-      if (carried === undefined) return undefined;
-      return {
-        usage: toUsage(carried.session),
-        ...(carriedBeforeWindow !== undefined && {
-          beforeWindow: toUsage(carriedBeforeWindow.session),
-        }),
-      };
+      uncarried = false;
+      return totals;
     },
   };
 }
@@ -94,34 +63,39 @@ function isZeroUsage(usage: TokenUsage): boolean {
   );
 }
 
-/** A run's running totals: all it spent, and the part spent before its children's windows. */
+/** A run's running totals: all it spent, and the same spend by the window it was spent in. */
 export interface RunUsage {
-  readonly beforeWindow?: TokenUsage;
   readonly usage: TokenUsage;
+  /** Absent from a run that predates windows: all of it was spent in the current one. */
+  readonly windows?: UsageByWindow;
 }
 
 /**
  * Adds a run's delegated spend to the session's totals: its running totals,
- * less the part `counted` earlier. Spend from before the children's windows
- * moves this session's window start too, so it stays out of the window.
+ * less the part `counted` earlier, each window's part against that window.
  */
 export function countRunUsage<T extends { readonly state?: SessionStateMap }>(
   session: T,
   run: RunUsage,
   counted?: RunUsage,
 ): T {
-  const totals = setTurnUsageState(
+  if (run.windows === undefined) {
+    return countUsageByWindow(session, {
+      [getSessionUsageWindowId(session)]: usageSince(run.usage, counted?.usage),
+    });
+  }
+  return countUsageByWindow(
     session,
-    accumulateSessionUsage({
-      previous: getTurnUsageState(session.state),
-      usage: usageSince(run.usage, counted?.usage),
-    }),
+    Object.fromEntries(
+      Object.entries(run.windows).map(([windowId, total]) => [
+        windowId,
+        usageSince(total, counted?.windows?.[windowId]),
+      ]),
+    ),
   );
-  if (run.beforeWindow === undefined) return totals;
-  return addUsageBeforeWindow(totals, usageSince(run.beforeWindow, counted?.beforeWindow));
 }
 
-function usageSince(total: TokenUsage, counted: TokenUsage | undefined): TokenUsageDelta {
+function usageSince(total: TokenUsage, counted: TokenUsage | undefined): TokenUsage {
   if (counted === undefined) return total;
   return {
     cacheReadTokens: total.cacheReadTokens - counted.cacheReadTokens,

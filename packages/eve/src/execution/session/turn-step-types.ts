@@ -6,7 +6,7 @@ import type { HarnessModelMessage } from "#harness/messages.js";
 import type { SettledTurn } from "#harness/types.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
 import type { RunUsage } from "#execution/agent-sessions/usage.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import type { TokenUsage, UsageByWindow } from "#shared/token-usage.js";
 
 /** Trusted runtime-action results collected by the session owner. */
 export interface RuntimeActionResultStepInput {
@@ -55,7 +55,7 @@ export type DurableStepResult = (
       readonly usage?: TokenUsage;
       readonly usageDelta?: TokenUsage;
       /** The part of `usageDelta` spent before the session's current usage window. */
-      readonly usageBeforeWindow?: TokenUsage;
+      readonly usageWindows?: UsageByWindow;
     }
   | { readonly action: "cancelled" | "steered" }
   /** The model ended the turn while tasks work; the turn waits for them. */
@@ -106,7 +106,7 @@ export type TurnOutcome = {
       readonly usage?: TokenUsage;
       readonly usageDelta?: TokenUsage;
       /** The part of `usageDelta` spent before the session's current usage window. */
-      readonly usageBeforeWindow?: TokenUsage;
+      readonly usageWindows?: UsageByWindow;
     }
   | {
       readonly cancelled?: true;

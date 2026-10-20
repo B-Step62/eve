@@ -32,6 +32,7 @@ import type {
 } from "#execution/tools/workflow/messages.js";
 import type { WorkflowToolRunInbox } from "#execution/tools/workflow/owner.js";
 import type { JsonValue } from "#shared/json.js";
+import { FIRST_USAGE_WINDOW } from "#shared/token-usage.js";
 import type { ToolContext } from "#tools/definition.js";
 import type {
   AgentSession,
@@ -345,7 +346,11 @@ export function startServeBody(input: WorkflowBodyInput): StartedWorkflowBody {
     },
     owner: input.owner,
   };
-  const agentSessions = createAgentSessions(run, calls.usage);
+  const agentSessions = createAgentSessions(
+    run,
+    calls.usage,
+    input.usageWindow ?? FIRST_USAGE_WINDOW,
+  );
   const ctx = createServeContext(input, calls, agentSessions.open);
   attachWorkflowToolRunContext(ctx, run);
   return {

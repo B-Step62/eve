@@ -1,5 +1,5 @@
 // Epoch 47 of the hook capability: the authoring contract of epoch 46 still compiles.
-// Epoch 48 adds an optional `beforeWindow` usage field to subagent results.
+// Epoch 48 adds an optional `windows` usage field to subagent results.
 import { defineHook } from "#public/hooks/index.js";
 
 // Hooks that read the failure code and message keep working.

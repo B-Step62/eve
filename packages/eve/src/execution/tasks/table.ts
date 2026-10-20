@@ -3,7 +3,7 @@ import type { WorkflowToolRunCall } from "#execution/tools/workflow/messages.js"
 import type { SessionStateMap } from "#harness/types.js";
 import { isNonEmptyString, isObject } from "#shared/guards.js";
 import type { JsonValue } from "#shared/json.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import type { TokenUsage, UsageByWindow } from "#shared/token-usage.js";
 import type { TaskCancelReason, TaskStartedStreamEvent } from "#protocol/message.js";
 import { UNREADABLE_TASK_ERROR } from "#execution/tasks/render.js";
 
@@ -37,7 +37,7 @@ export interface TaskRun extends TaskRunAddress {
   /** The run's delegated spend the session counted so far, which later totals count from. */
   readonly usage?: TokenUsage;
   /** The part of `usage` spent before the run's sessions started their current windows. */
-  readonly beforeWindow?: TokenUsage;
+  readonly windows?: UsageByWindow;
 }
 
 /** A call the task admitted and hasn't settled, with the turn that made it. */
@@ -347,7 +347,7 @@ export function settleRemainingTaskCalls(
 export function recordTaskRunUsage(
   table: TaskTable,
   taskId: string,
-  counted: { readonly beforeWindow?: TokenUsage; readonly usage: TokenUsage },
+  counted: { readonly windows?: UsageByWindow; readonly usage: TokenUsage },
 ): TaskTable {
   return updateTask(table, taskId, (record) =>
     record.run === undefined
@@ -357,7 +357,7 @@ export function recordTaskRunUsage(
           run: {
             ...record.run,
             usage: counted.usage,
-            ...(counted.beforeWindow !== undefined && { beforeWindow: counted.beforeWindow }),
+            ...(counted.windows !== undefined && { windows: counted.windows }),
           },
         },
   );
@@ -543,7 +543,7 @@ function isTaskRun(value: unknown): value is TaskRun {
     isNonEmptyString(value.hookToken) &&
     typeof value.started === "boolean" &&
     (value.usage === undefined || isObject(value.usage)) &&
-    (value.beforeWindow === undefined || isObject(value.beforeWindow))
+    (value.windows === undefined || isObject(value.windows))
   );
 }
 

@@ -361,7 +361,7 @@ async function runSessionLoop(
             caller,
             sessionId: boot.sessionId,
             ...(settled.usage !== undefined && { usage: settled.usage }),
-            ...(settled.beforeWindow !== undefined && { beforeWindow: settled.beforeWindow }),
+            ...(settled.windows !== undefined && { windows: settled.windows }),
           });
         }
       } else if (action.settled !== undefined) {

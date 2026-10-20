@@ -11,7 +11,7 @@ import { liveTaskRuns, readTaskTable } from "#execution/tasks/table.js";
 import type { TurnOutcome } from "#execution/session/turn-step-types.js";
 import { normalizeSerializableError } from "#execution/workflow-errors.js";
 import type { WorkflowEntryResult } from "#execution/session/entry-input.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import type { TokenUsage, UsageByWindow } from "#shared/token-usage.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { getSessionUsage, takeSessionUsageDelta } from "#harness/turn-tag-state.js";
 import {
@@ -89,7 +89,7 @@ export async function finalizeSession(
     const notification: SettledTurnNotification = {
       output: settled.output,
       usage: settled.turnUsage,
-      ...(settled.beforeWindow !== undefined && { beforeWindow: settled.beforeWindow }),
+      ...(settled.windows !== undefined && { windows: settled.windows }),
       ...(settled.isError && { isError: true }),
     };
     await notifyTurnCallerStep({
@@ -122,7 +122,7 @@ function settledResult(
   readonly output: unknown;
   readonly sessionUsage?: TokenUsage;
   readonly turnUsage?: TokenUsage;
-  readonly beforeWindow?: TokenUsage;
+  readonly windows?: UsageByWindow;
 } {
   const session = context.cursor.sessionState?.snapshot.session;
   const report =
@@ -135,7 +135,7 @@ function settledResult(
       : {
           sessionUsage: getSessionUsage(session),
           turnUsage: report.delta,
-          ...(report.beforeWindow !== undefined && { beforeWindow: report.beforeWindow }),
+          ...(report.windows !== undefined && { windows: report.windows }),
         };
   switch (outcome.kind) {
     case "done":
@@ -144,8 +144,8 @@ function settledResult(
         output: outcome.action.output,
         sessionUsage: outcome.action.usage,
         turnUsage: outcome.action.usageDelta,
-        ...(outcome.action.usageBeforeWindow !== undefined && {
-          beforeWindow: outcome.action.usageBeforeWindow,
+        ...(outcome.action.usageWindows !== undefined && {
+          windows: outcome.action.usageWindows,
         }),
       };
     case "expired":

@@ -1,5 +1,5 @@
 // Epoch 62 of the channel capability: the authoring contract of epoch 61 still compiles.
-// Epoch 63 adds an optional `beforeWindow` usage field to subagent results.
+// Epoch 63 adds an optional `windows` usage field to subagent results.
 import { defineChannel } from "#public/channels/index.js";
 
 // Channels that read the failure code and message keep working.

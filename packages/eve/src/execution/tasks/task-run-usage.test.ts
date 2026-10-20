@@ -15,7 +15,7 @@ import type { WorkflowToolRunRef } from "#execution/tools/workflow/messages.js";
 import {
   getSessionUsage,
   getSessionUsageWindow,
-  resetSessionUsageWindow,
+  renewSessionUsageWindow,
   setTurnUsageState,
 } from "#harness/turn-tag-state.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
@@ -60,9 +60,10 @@ function sessionWithTask(input: { readonly name: string; readonly ownInputTokens
     runId,
   });
   const snapshot = writeTaskTable(
-    resetSessionUsageWindow(
+    renewSessionUsageWindow(
       setTurnUsageState(base.snapshot.session, { ...own, session: own, turnId: "turn_1" }),
-    ),
+      "approval",
+    ).session,
     table,
   );
   const inbox = {
@@ -151,7 +152,7 @@ describe("delegated agent usage", () => {
     const { from } = alice;
     // The surveyor spent 45M before Alice approved its session-limit prompt, and 1M after.
     const reply = {
-      beforeWindow: usage(45_000_000),
+      windows: { "": usage(45_000_000), approval: usage(1_000_000) },
       callIds: [from.callId],
       from,
       kind: "reply" as const,
@@ -165,7 +166,7 @@ describe("delegated agent usage", () => {
     expect(getSessionUsageWindow(committed(alice.cursor))).toEqual(usage(1_000_000));
 
     await alice.execution.handleWorkflowMessage({
-      beforeWindow: usage(45_000_000),
+      windows: { "": usage(45_000_000), approval: usage(2_000_000) },
       from,
       kind: "outcome",
       result: { output: "Survey done.", status: "completed" },

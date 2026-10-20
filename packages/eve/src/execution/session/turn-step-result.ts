@@ -6,7 +6,7 @@ import { sessionView } from "#harness/session-machine/commit.js";
 import { ownOpenRequestIds } from "#harness/session-machine/transitions.js";
 import { getTurnUsageState, takeSessionUsageDelta, toUsage } from "#harness/turn-tag-state.js";
 import type { StepResult } from "#harness/types.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import type { TokenUsage, UsageByWindow } from "#shared/token-usage.js";
 
 export function resolveSessionStepResult(
   stepResult: StepResult,
@@ -58,7 +58,7 @@ export function resolveSessionStepResult(
     // Usage stays unreported until the turn settles, so the caller's result includes all of it.
     if (stepResult.settledTurn !== undefined) {
       const {
-        beforeWindow,
+        windows,
         delta,
         session: reportedSession,
       } = takeSessionUsageDelta(stepResult.session);
@@ -71,7 +71,7 @@ export function resolveSessionStepResult(
           output: stepResult.settledTurn.output,
           isError: stepResult.settledTurn.isError,
           usage: delta,
-          ...(beforeWindow !== undefined && { beforeWindow }),
+          ...(windows !== undefined && { windows }),
         },
       };
     }
@@ -82,12 +82,12 @@ export function resolveSessionStepResult(
   return { action: "continue", ...values };
 }
 
-function usageReport(report: { readonly beforeWindow?: TokenUsage; readonly delta: TokenUsage }): {
-  readonly usageBeforeWindow?: TokenUsage;
+function usageReport(report: { readonly windows?: UsageByWindow; readonly delta: TokenUsage }): {
+  readonly usageWindows?: UsageByWindow;
   readonly usageDelta: TokenUsage;
 } {
   return {
     usageDelta: report.delta,
-    ...(report.beforeWindow !== undefined && { usageBeforeWindow: report.beforeWindow }),
+    ...(report.windows !== undefined && { usageWindows: report.windows }),
   };
 }

@@ -6,7 +6,7 @@ import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
 import type { AgentSessionAddress } from "#execution/agent-sessions/steps.js";
 import type { InputRequest } from "#shared/input.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import type { TokenUsage, UsageByWindow } from "#shared/token-usage.js";
 import type {
   ToolInputRequest,
   ToolInputResponse,
@@ -93,7 +93,7 @@ export interface WorkflowToolRunOutcomeMessage {
   /** What the run's `ctx.agent` sessions spent in all, once any of their turns ended. */
   readonly usage?: TokenUsage;
   /** The part of `usage` its sessions spent before their current usage windows. */
-  readonly beforeWindow?: TokenUsage;
+  readonly windows?: UsageByWindow;
 }
 
 /**
@@ -131,7 +131,7 @@ export interface WorkflowToolRunReplyMessage {
    */
   readonly usage?: TokenUsage;
   /** The part of `usage` its sessions spent before their current usage windows. */
-  readonly beforeWindow?: TokenUsage;
+  readonly windows?: UsageByWindow;
 }
 
 /**
@@ -143,7 +143,7 @@ export interface WorkflowToolRunUsageMessage {
   readonly from: WorkflowToolRunRef;
   readonly usage: TokenUsage;
   /** The part of `usage` its sessions spent before their current usage windows. */
-  readonly beforeWindow?: TokenUsage;
+  readonly windows?: UsageByWindow;
 }
 
 /** A task's run can take commands: its control hook is registered. */

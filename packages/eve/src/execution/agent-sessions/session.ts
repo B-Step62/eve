@@ -17,7 +17,8 @@ import {
 import type { RunUsageTally } from "#execution/agent-sessions/usage.js";
 import { disposeHook } from "#execution/hook-ownership.js";
 import type { WorkflowToolRunContext } from "#execution/tools/workflow/ask.js";
-import type { RuntimeSubagentResult } from "#shared/action-types.js";
+import type { RuntimeSubagentChildResult, RuntimeSubagentResult } from "#shared/action-types.js";
+import { FIRST_USAGE_WINDOW, type UsageByWindow } from "#shared/token-usage.js";
 import { toErrorMessage } from "#shared/errors.js";
 import { normalizeRequestedOutputSchema } from "#subagents/invocation.js";
 import { serializeOutputSchema } from "#tools/schema-emission.js";
@@ -42,12 +43,14 @@ type AgentTurnEnd =
 export function createAgentSessions(
   run: WorkflowToolRunContext,
   usage: RunUsageTally,
+  usageWindow: string,
 ): {
   readonly close: () => Promise<void>;
   readonly open: (name: string) => AgentSession;
   readonly renew: (renewalId: string) => void;
 } {
   const sessions: OpenedAgentSession[] = [];
+  const window = new RunUsageWindow(usageWindow);
   let handles = 0;
   return {
     open: (name) => {
@@ -56,17 +59,44 @@ export function createAgentSessions(
       }
       const key = `${run.from.runId}:${String(handles)}`;
       handles += 1;
-      return new RunAgentSession({ key, name, run, sessions, usage });
+      return new RunAgentSession({ key, name, run, sessions, usage, window });
     },
     close: async () => {
       if (sessions.length === 0) return;
       await endAgentSessionsStep({ sessions });
     },
     renew: (renewalId) => {
-      if (sessions.length === 0) return;
+      if (!window.renew(renewalId) || sessions.length === 0) return;
       void renewAgentSessionsStep({ renewalId, sessions: [...sessions] });
     },
   };
+}
+
+/**
+ * The usage window the run's sessions spend in, as the run last heard from
+ * its calling session. A session that hasn't renewed since it opened spends in
+ * the window the run was in when it opened.
+ */
+class RunUsageWindow {
+  #current: string;
+  readonly #seen: Set<string>;
+
+  constructor(initial: string) {
+    this.#current = initial;
+    this.#seen = new Set([initial]);
+  }
+
+  get current(): string {
+    return this.#current;
+  }
+
+  /** Whether `renewalId` is new to the run. */
+  renew(renewalId: string): boolean {
+    if (this.#seen.has(renewalId)) return false;
+    this.#seen.add(renewalId);
+    this.#current = renewalId;
+    return true;
+  }
 }
 
 /**
@@ -87,6 +117,9 @@ class RunAgentSession implements AgentSession {
   readonly #sessions: OpenedAgentSession[];
   /** What the run's sessions spent, which the run reports to its calling session. */
   readonly #usage: RunUsageTally;
+  readonly #window: RunUsageWindow;
+  /** The run's window when the session opened: the session's first window. */
+  #openedIn: string | undefined;
   #opened: Promise<OpenedAgentSession> | undefined;
   /** Oldest first. */
   readonly #awaited: AwaitedReply[] = [];
@@ -97,12 +130,14 @@ class RunAgentSession implements AgentSession {
     readonly run: WorkflowToolRunContext;
     readonly sessions: OpenedAgentSession[];
     readonly usage: RunUsageTally;
+    readonly window: RunUsageWindow;
   }) {
     this.#key = input.key;
     this.#name = input.name;
     this.#run = input.run;
     this.#sessions = input.sessions;
     this.#usage = input.usage;
+    this.#window = input.window;
   }
 
   async send<TOutput = unknown>(
@@ -185,8 +220,7 @@ class RunAgentSession implements AgentSession {
           (candidate): candidate is RuntimeSubagentResult => candidate.kind === "subagent-result",
         );
         if (result !== undefined) {
-          if (result.origin === "child")
-            this.#usage.record(result.outcome.usageDelta, result.beforeWindow);
+          if (result.origin === "child") this.#usage.record(await this.#usageByWindow(result));
           return { kind: "ended", result: toAgentMessageResult(result, expectsData) };
         }
       }
@@ -214,6 +248,26 @@ class RunAgentSession implements AgentSession {
     }
   }
 
+  /**
+   * The turn's usage by the window it was spent in. A session's first window
+   * is the one the run was in when it opened it; a remote agent keeps its own
+   * windows, so all it spent counts in the run's current one.
+   */
+  async #usageByWindow(result: RuntimeSubagentChildResult): Promise<UsageByWindow> {
+    const delta = result.outcome.usageDelta;
+    const address = this.#opened === undefined ? undefined : (await this.#opened).address;
+    if (address?.kind === "remote" || result.windows === undefined) {
+      return { [this.#window.current]: delta };
+    }
+    const first = this.#openedIn ?? this.#window.current;
+    return Object.fromEntries(
+      Object.entries(result.windows).map(([windowId, usage]) => [
+        windowId === FIRST_USAGE_WINDOW ? first : windowId,
+        usage,
+      ]),
+    );
+  }
+
   async #deliver(message: AgentSessionMessage): Promise<void> {
     if (this.#opened === undefined) {
       this.#opened = this.#open(message);
@@ -231,6 +285,7 @@ class RunAgentSession implements AgentSession {
    */
   async #open(message: AgentSessionMessage): Promise<OpenedAgentSession> {
     const { agentContext: context, from } = this.#run;
+    const openedIn = this.#window.current;
     try {
       const address = await openAgentSessionStep({
         ...message,
@@ -239,7 +294,12 @@ class RunAgentSession implements AgentSession {
         name: this.#name,
       });
       const opened = { address, context, key: this.#key };
+      this.#openedIn = openedIn;
       this.#sessions.push(opened);
+      // A renewal that reached the run while the session opened missed it.
+      if (this.#window.current !== openedIn) {
+        void renewAgentSessionsStep({ renewalId: this.#window.current, sessions: [opened] });
+      }
       await this.#run.owner.send({ from, kind: "agent-started", session: address });
       return opened;
     } catch (error) {

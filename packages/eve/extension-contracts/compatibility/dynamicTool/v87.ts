@@ -1,5 +1,5 @@
 // Epoch 87 of the dynamicTool capability: the authoring contract of epoch 86 still compiles.
-// Epoch 88 adds an optional `beforeWindow` usage field to subagent results.
+// Epoch 88 adds an optional `windows` usage field to subagent results.
 import { defineDynamic, defineTool } from "#public/tools/index.js";
 
 export default defineDynamic({

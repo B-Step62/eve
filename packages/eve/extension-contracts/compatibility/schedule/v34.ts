@@ -1,5 +1,5 @@
 // Epoch 34 of the schedule capability: the authoring contract of epoch 33 still compiles.
-// Epoch 35 adds an optional `beforeWindow` usage field to subagent results.
+// Epoch 35 adds an optional `windows` usage field to subagent results.
 import { defineChannel } from "#public/channels/index.js";
 import { defineSchedule } from "#public/schedules/index.js";
 

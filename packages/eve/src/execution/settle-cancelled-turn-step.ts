@@ -16,7 +16,7 @@ import { currentProjection } from "#harness/session-machine/current.js";
 import { runtimeWait, storedProjection } from "#harness/session-machine/view.js";
 import { removeBlockingWorkflowToolRuns } from "#harness/workflow-tool-runs.js";
 import { getTurnUsageState, takeSessionUsageDelta } from "#harness/turn-tag-state.js";
-import type { TokenUsage } from "#shared/token-usage.js";
+import type { TokenUsage, UsageByWindow } from "#shared/token-usage.js";
 
 export interface CancelledTurnSettleResult {
   readonly serializedContext: Record<string, unknown>;
@@ -25,7 +25,7 @@ export interface CancelledTurnSettleResult {
   /** What the session spent since its caller's last report, when asked to report it. */
   readonly usage?: TokenUsage;
   /** The part of `usage` spent before the session's current usage window. */
-  readonly beforeWindow?: TokenUsage;
+  readonly windows?: UsageByWindow;
 }
 
 /** Takes the history because the steps the cancel stopped commit to it. */
@@ -79,7 +79,7 @@ export async function settleCancelledTurn(
       // caller counts each turn once whether it settled or was cancelled.
       const reported = takeSessionUsageDelta(cancelledSession);
       return {
-        result: { beforeWindow: reported.beforeWindow, usage: reported.delta },
+        result: { windows: reported.windows, usage: reported.delta },
         session: reported.session,
       };
     },
@@ -88,6 +88,6 @@ export async function settleCancelledTurn(
   return {
     ...published,
     usage: reportedUsage.usage,
-    ...(reportedUsage.beforeWindow !== undefined && { beforeWindow: reportedUsage.beforeWindow }),
+    ...(reportedUsage.windows !== undefined && { windows: reportedUsage.windows }),
   };
 }

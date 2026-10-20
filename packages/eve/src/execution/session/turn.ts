@@ -236,8 +236,8 @@ export class SessionExecution {
           output: result.output ?? "",
           usage: result.usage,
           usageDelta: result.usageDelta,
-          ...(result.usageBeforeWindow !== undefined && {
-            usageBeforeWindow: result.usageBeforeWindow,
+          ...(result.usageWindows !== undefined && {
+            usageWindows: result.usageWindows,
           }),
         };
       }
@@ -491,8 +491,8 @@ export class SessionExecution {
         if (next.message.kind === "outcome" && next.message.usage !== undefined) {
           delegatedUsageByCallId.set(result.callId, {
             usage: next.message.usage,
-            ...(next.message.beforeWindow !== undefined && {
-              beforeWindow: next.message.beforeWindow,
+            ...(next.message.windows !== undefined && {
+              windows: next.message.windows,
             }),
           });
         }

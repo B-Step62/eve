@@ -1,5 +1,5 @@
 // Epoch 51 of the connection capability: the authoring contract of epoch 50 still compiles.
-// Epoch 52 adds an optional `beforeWindow` usage field to subagent results.
+// Epoch 52 adds an optional `windows` usage field to subagent results.
 import { defineMcpClientConnection } from "#public/connections/index.js";
 
 export default defineMcpClientConnection({
