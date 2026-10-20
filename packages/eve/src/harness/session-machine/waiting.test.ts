@@ -97,6 +97,58 @@ describe("waiting", () => {
     expect(waiting(calledBack, turnId)).toBeUndefined();
   });
 
+  it("is undefined while a task cancel waits for the session, though the task asked someone", () => {
+    const taskId = "t_1";
+    const view = viewOf(
+      started,
+      [
+        callRequested,
+        {
+          data: { kind: "tool", name: "deploy", startedBy: { callId: "c_1" }, taskId },
+          scope: { taskId },
+          type: "task.started",
+        },
+        { data: { callId: "c_1", taskId }, scope: { taskId, turnId }, type: "call.started" },
+        modelSettled,
+      ],
+      [
+        {
+          data: {
+            interactionId: "i_task",
+            origin: {
+              call: { callId: "c_1", name: "deploy" },
+              interactionId: "i_task",
+              sessionId: "wrun_task",
+            },
+            request: { kind: "question", prompt: "Sign off?" },
+            subject: { callId: "c_1" },
+          },
+          scope: { taskId },
+          type: "interaction.opened",
+        },
+      ],
+      [{ data: { owner: { turnId }, runId: "run_1" }, scope: { turnId }, type: "model.requested" }],
+      [
+        {
+          data: {
+            callId: "c_cancel",
+            capability: { kind: "control", name: "eve__task_cancel" },
+            input: { taskId },
+            owner: { runId: "run_1" },
+          },
+          scope: { runId: "run_1", turnId },
+          type: "call.requested",
+        },
+        {
+          data: { outcome: "completed", runId: "run_1" },
+          scope: { runId: "run_1", turnId },
+          type: "model.settled",
+        },
+      ],
+    );
+    expect(waiting(view, turnId)).toBeUndefined();
+  });
+
   it("is undefined once a delivery the turn hasn't read joins it", () => {
     const view = viewOf(
       started,
