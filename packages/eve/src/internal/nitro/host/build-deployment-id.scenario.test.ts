@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +12,7 @@ afterEach(() => vi.unstubAllEnvs());
 describe("production deployment identity", () => {
   const scenarioApp = useScenarioApp();
 
-  it("reproduces unchanged builds, changes with instructions, and reaches the World on direct Node startup", async () => {
+  it("reaches the World on direct Node startup", async () => {
     vi.stubEnv("VERCEL", "");
     vi.stubEnv("VERCEL_DEPLOYMENT_ID", undefined);
     vi.stubEnv("WORKFLOW_DEPLOYMENT_ID", undefined);
@@ -47,17 +47,11 @@ describe("production deployment identity", () => {
       },
     });
     const profileOutputPath = join(app.appRoot, "build-profile.json");
-    const build = async () => {
-      await buildApplication(app.appRoot, { profileOutputPath, skipSandboxPrewarm: true });
-      return (JSON.parse(await readFile(profileOutputPath, "utf8")) as { deploymentId?: string })
-        .deploymentId;
+    await buildApplication(app.appRoot, { profileOutputPath, skipSandboxPrewarm: true });
+    const { deploymentId } = JSON.parse(await readFile(profileOutputPath, "utf8")) as {
+      deploymentId?: string;
     };
-    const firstId = await build();
-    expect(firstId).toMatch(/^eve_[a-f0-9]{32}$/);
-    expect(await build()).toBe(firstId);
-    await writeFile(join(app.appRoot, "agent/instructions.md"), "Help Bob organize his notes.\n");
-    const changedId = await build();
-    expect(changedId).not.toBe(firstId);
+    expect(deploymentId).toMatch(/^eve_[a-f0-9]{32}$/);
     const logPath = join(app.appRoot, "world-deployment.json");
     vi.stubEnv("EVE_TEST_DEPLOYMENT_LOG", logPath);
     // startProductionServer launches node .output/server/index.mjs, without a CLI bootstrap.
@@ -65,8 +59,8 @@ describe("production deployment identity", () => {
       const server = await startProductionServer(app.appRoot, { host: "127.0.0.1", port: 0 });
       try {
         expect(JSON.parse(await readFile(logPath, "utf8"))).toEqual({
-          constructed: changedId,
-          started: changedId,
+          constructed: deploymentId,
+          started: deploymentId,
         });
       } finally {
         await server.close();

@@ -862,11 +862,7 @@ export async function createProductionApplicationNitro(
     plugins: nitroPlugins,
     publicAssets: [],
     scanDirs: [resolvePackageSourceDirectoryPath("src/execution")],
-    rolldownConfig: {
-      ...bundler.nitroRolldownConfig,
-      // Region comments contain invocation-random scratch paths, not runtime inputs.
-      experimental: { attachDebugInfo: "none" },
-    },
+    rolldownConfig: bundler.nitroRolldownConfig,
     rollupConfig: bundler.nitroRollupConfig,
     rootDir: preparedHost.appRoot,
     serverAssets: skillServerAssets,

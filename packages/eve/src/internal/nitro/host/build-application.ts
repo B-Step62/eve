@@ -426,7 +426,10 @@ async function buildApplicationInWorkspace(
   const deploymentId =
     nitro.options.preset === "node-server"
       ? await measureBuildPhase(profiler, "id.compute", () =>
-          stageBuildDeploymentId(workspace.publication.output.stagedDir),
+          stageBuildDeploymentId({
+            agentName: preparedHost.compileResult.manifest.config.name,
+            outputDirectory: workspace.publication.output.stagedDir,
+          }),
         )
       : undefined;
 

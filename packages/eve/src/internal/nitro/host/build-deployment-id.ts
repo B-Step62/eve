@@ -1,51 +1,32 @@
 import { createHash } from "node:crypto";
 
 import { BUILD_DEPLOYMENT_ID_PATTERN } from "#execution/install-workflow-deployment-id.js";
+import { deriveEveWorkflowQueueNamespace } from "#internal/workflow/queue-namespace.js";
 
 export const BUILD_DEPLOYMENT_ID_PLACEHOLDER = "eve_BUILD_DEPLOYMENT_ID_PLACEHOLDER_";
-const READ_AHEAD = 16;
 
 export interface BuildDeploymentFile {
   readonly relativePath: string;
   readonly bytes: Uint8Array;
 }
 
-/** Hashes files in path order while holding at most `READ_AHEAD` files in memory. */
-export async function computeBuildDeploymentId(
-  relativePaths: readonly string[],
-  readBytes: (relativePath: string) => Promise<Uint8Array>,
-  extraInputs: readonly string[] = [],
-): Promise<string> {
+/**
+ * Names the builds that can replay each other's runs: one agent on one eve
+ * version, which pins the Workflow runtime and every framework step id. App
+ * changes under the same eve version keep the id, so operators drain only on
+ * eve upgrades and replace the fleet for every other deploy.
+ */
+export function computeBuildDeploymentId(input: {
+  readonly agentName: string;
+  readonly eveVersion: string;
+}): string {
   const hash = createHash("sha256");
-  const append = (bytes: Uint8Array) => {
-    hash.update(`${bytes.byteLength}:`);
-    hash.update(bytes);
-  };
-  hash.update("eve-build-v1\0");
-  // Nitro writes a build timestamp to the root nitro.json; nothing reads it at runtime.
-  const paths = relativePaths
-    .filter((path) => path !== "nitro.json")
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const reads: Promise<Uint8Array>[] = [];
-  const startRead = (index: number) => {
-    if (index >= paths.length) return;
-    const read = readBytes(paths[index]!);
-    // Reads ahead may reject after an earlier read already failed the hash.
-    read.catch(() => undefined);
-    reads[index] = read;
-  };
-  for (let index = 0; index < READ_AHEAD; index++) startRead(index);
-  for (let index = 0; index < paths.length; index++) {
-    const bytes = await reads[index]!;
-    delete reads[index];
-    startRead(index + READ_AHEAD);
-    hash.update("file\0");
-    append(Buffer.from(paths[index]!));
-    append(bytes);
-  }
-  for (const input of [...extraInputs].sort()) {
-    hash.update("input\0");
-    append(Buffer.from(input));
+  for (const part of [
+    "eve-deployment-v1",
+    input.eveVersion,
+    deriveEveWorkflowQueueNamespace(input.agentName),
+  ]) {
+    hash.update(`${Buffer.byteLength(part)}:`).update(part);
   }
   return `eve_${hash.digest("hex").slice(0, 32)}`;
 }

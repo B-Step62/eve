@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
@@ -62,19 +62,14 @@ export async function prepareSkillServerAssets(input: {
       // Hash and stage the bytes that were read, not a second read of the path.
       const bytes = await source.readFile(skill, path);
       const sha256 = createHash("sha256").update(bytes).digest("hex");
-      const assetPath = join(filesDirectory, skillFileStorageKey(sha256));
-      await writeFile(assetPath, bytes);
-      // Nitro embeds mtimes; generated assets are identified by their contents instead.
-      await utimes(assetPath, 0, 0);
+      await writeFile(join(filesDirectory, skillFileStorageKey(sha256)), bytes);
       files.push([path, bytes.byteLength, sha256]);
     }
     index.push([skill, files, await source.listDirectories(skill)]);
   }
 
   const skillFilesIndex: SkillFilesIndex = { version: 1, skills: index };
-  const indexPath = join(indexDirectory, SKILL_FILES_INDEX_KEY);
-  await writeFile(indexPath, JSON.stringify(skillFilesIndex));
-  await utimes(indexPath, 0, 0);
+  await writeFile(join(indexDirectory, SKILL_FILES_INDEX_KEY), JSON.stringify(skillFilesIndex));
   return [
     { baseName: SKILL_FILES_INDEX_SERVER_ASSET_BASE, dir: indexDirectory },
     { baseName: SKILL_FILES_SERVER_ASSET_BASE, dir: filesDirectory },
