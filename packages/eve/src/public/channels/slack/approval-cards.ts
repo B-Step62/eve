@@ -19,7 +19,10 @@ import {
   renderInteractionPostParts,
   type SlackInteractionPostPart,
 } from "#public/channels/slack/hitl.js";
-import { answeredBlocksFromActionBlock } from "#public/channels/slack/interaction-cards.js";
+import {
+  answeredBlocksFromActionBlock,
+  type SettledCard,
+} from "#public/channels/slack/interaction-cards.js";
 import {
   SLACK_MAX_BLOCKS_PER_MESSAGE,
   truncateMessageText,
@@ -145,7 +148,7 @@ function recordApprovalCards(
 async function settleApprovalCard(
   channel: SlackEventContext,
   requestId: string,
-  answer: { readonly announcement: string; readonly label: string; readonly userId?: string },
+  answer: SettledCard & { readonly announcement: string },
 ): Promise<void> {
   const cards = channel.state.pendingApprovalCards ?? {};
   const card = cards[requestId];
@@ -164,7 +167,7 @@ async function settleApprovalCard(
       answeredBlocksFromActionBlock({
         answerLabel: answer.label,
         block,
-        userId: answer.userId ?? "",
+        userId: answer.userId,
       }) ?? buildAnsweredBlocks({ answerLabel: answer.label, promptBlocks: [] })
     );
   });
@@ -176,7 +179,7 @@ async function settleApprovalCard(
   await settleRequest(channel, "chat.update", requestId, {
     blocks,
     channel: messageChannelId,
-    text: `Answered: ${answer.label}`,
+    text: answer.text,
     ts: card.messageTs,
   });
 
@@ -309,15 +312,18 @@ export async function settleApproval(
     await settleApprovalCard(channel, resolution.interactionId, {
       announcement: "This approval is no longer needed.",
       label: "No longer needed",
+      text: "No longer needed",
     });
     return;
   }
   const approved = resolution.outcome === "accepted";
   const userId = slackUserIdForPrincipal(channel.state, resolution.responder?.id);
   const by = userId === undefined ? "" : ` by <@${userId}>`;
+  const label = approved ? "Approve" : "Cancel";
   await settleApprovalCard(channel, resolution.interactionId, {
     announcement: `${approved ? "Approved" : "Cancelled"}${by}.`,
-    label: approved ? "Approve" : "Cancel",
+    label,
+    text: `Answered: ${label}`,
     userId,
   });
 }
