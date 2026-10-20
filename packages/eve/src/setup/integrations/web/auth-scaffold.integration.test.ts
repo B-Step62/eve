@@ -107,7 +107,8 @@ describe("Web Chat auth scaffold", () => {
         'requireEnvironmentVariable("BETTER_AUTH_SECRET")',
       );
       const document = JSON.parse(await readFile(input.packagePath, "utf8"));
-      expect(document.dependencies["better-auth"]).toBeDefined();
+      expect(document.dependencies["better-auth"]).toMatch(/^\d+\.\d+\.\d+/);
+      expect(document.dependencies["@vercel/oidc"]).toMatch(/^\d+\.\d+\.\d+/);
       expect(document.scripts["dev:all"]).toBe("vercel dev --local");
       expect(await readFile(layoutPath, "utf8")).toBe(layout);
       await (
