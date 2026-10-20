@@ -713,7 +713,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     preview: {
       surface: "slack",
       agent: "sre",
-      icon: "/templates/icons/sre.png",
+      icon: "/templates/icons/sre.svg",
       context: "incidents",
       messages: [
         { from: "user", text: "@sre checkout 5xx spiked at 14:02, what happened?" },
