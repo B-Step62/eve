@@ -160,9 +160,13 @@ function tree(spans: readonly ReadableSpan[]): string[] {
 }
 
 describe("a session's spans, from its committed lines", () => {
-  it.each([1, 2])(
-    "attributes the turn only when it consumed one delivery (%i consumed)",
-    async (count) => {
+  it.each([
+    [1, false],
+    [2, false],
+    [1, true],
+  ] as const)(
+    "attributes one message delivery (%i messages, answered: %s)",
+    async (count, answered) => {
       const { commit, spans } = session(undefined, {
         kind: "deliver",
         payloads: Array.from({ length: count }, () => ({ message: "Alice's report" })),
@@ -178,7 +182,33 @@ describe("a session's spans, from its committed lines", () => {
         const deliveryId = `d_${index}`;
         await commit(
           { type: "delivery.admitted", data: { deliveryId } },
-          { type: "delivery.consumed", data: { deliveryId, turnId: "turn_0", parts: [] } },
+          {
+            type: "delivery.consumed",
+            data: {
+              deliveryId,
+              turnId: "turn_0",
+              parts: [{ kind: "text", text: "Alice's report" }],
+            },
+          },
+        );
+      }
+      if (answered) {
+        await commit(requested("call_deploy", "deploy"), approval("call_deploy"));
+        await commit(
+          { type: "delivery.admitted", data: { deliveryId: "answer" } },
+          {
+            type: "response.submitted",
+            data: {
+              deliveryId: "answer",
+              responseId: "response",
+              interactionId: "i_call_deploy",
+              value: { optionId: "approve" },
+            },
+          },
+          {
+            type: "delivery.consumed",
+            data: { deliveryId: "answer", turnId: "turn_0", parts: [] },
+          },
         );
       }
       await commit(turnSettled({ outcome: "completed" }));
@@ -286,10 +316,7 @@ describe("a session's spans, from its committed lines", () => {
     expect(tree(await spans())).toEqual(["invoke_agent weather failed !", "  agent.step !"]);
   });
 
-  // Known gap: a failed session cancels its open turn first, so the turn's span ends cancelled
-  // before the session's end can fail it, and the failure reaches no span. Before v27 the span
-  // failed with the session's error. Remove `.fails` once the span carries the failure.
-  it.fails("fails the turn a failed session ends, with the session's error", async () => {
+  it("fails the turn a failed session ends, with the session's error", async () => {
     const { commit, spans } = session();
     await commit(...opening);
     await commit({
