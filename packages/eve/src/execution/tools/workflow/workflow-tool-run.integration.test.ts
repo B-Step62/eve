@@ -29,6 +29,7 @@ import {
 import type { InputRequestedStreamEvent, MessageStreamEvent } from "#protocol/message.js";
 import { defineChannel, POST } from "#public/channels/index.js";
 import { defineHook } from "#public/definitions/hook.js";
+import { defineDynamic } from "#public/tools/index.js";
 import { sessions } from "#public/server/index.js";
 import {
   buildWorkflowToolSerializedContext,
@@ -60,7 +61,9 @@ describe("workflow tools", () => {
     expect(output).toContain('"argument":"plan:api"');
     expect(output).toContain('"receiver":"api"');
   });
-  it("forks the conversation into a channel session only while the target is free", async () => {
+  it("forks a conversation into a channel session that continues apart from its source", async () => {
+    // What each session's model sees at each step, read through a public `step.started` resolver.
+    const modelInputs: { readonly sessionId: string; readonly text: string }[] = [];
     const runtime = await createWorkflowToolRuntime({
       agentName: "workflow-tool-channel-fork",
       execute: forkToDmWorkflow,
@@ -78,47 +81,80 @@ describe("workflow tools", () => {
             }),
           }),
         },
+        {
+          logicalPath: "tools/record-model-input.ts",
+          loadNamespace: async () => ({
+            default: defineDynamic({
+              events: {
+                "step.started": (_event, ctx) => {
+                  modelInputs.push({
+                    sessionId: ctx.session.id,
+                    text: JSON.stringify(ctx.messages),
+                  });
+                  return null;
+                },
+              },
+            }),
+          }),
+        },
       ],
       toolName: "deploy_service",
     });
+    const lastModelInput = (sessionId: string) =>
+      modelInputs.filter((input) => input.sessionId === sessionId).at(-1)?.text ?? "";
+    const send = async (sessionId: string, message: string) =>
+      await resumeSessionInbox(sessionCommandHookToken(sessionId), {
+        delivery: { channelKind: "http", channelName: "test", deliveryId: `delivery-${message}` },
+        kind: "send",
+        payload: { message },
+      });
 
-    const { output, received } = await runtime.run(async () => {
-      const run = await startSessionOwner(workflowEntry, [
+    await runtime.run(async () => {
+      const source = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
           input: { message: 'Run deploy_service with service "api"' },
           serializedContext: buildWorkflowToolSerializedContext({
-            continuationToken: "schedule:workflow-tool-channel-fork",
+            continuationToken: "http:workflow-tool-channel-fork",
           }),
         },
       ]);
-      const reply = String(await readFirstTurnReply(run));
-      const output = JSON.parse(reply.slice(reply.indexOf("{"))) as {
-        readonly first: { readonly created: boolean; readonly sessionId: string };
-        readonly second: { readonly created: boolean; readonly sessionId: string };
-      };
-      const received: MessageStreamEvent[] = [];
-      for await (const event of sessions.attach(output.first.sessionId).stream()) {
-        if (event.type === "history.imported" || event.type === "message.received") {
-          received.push(event);
-        }
-        if (event.type === "message.received") break;
-      }
-      return { output, received };
-    });
+      const sourceTurns = captureTurnEvents(source);
+      try {
+        const forked = await sourceTurns.nextTurn();
+        const reply = String(filterEventsByType(forked, "message.completed").at(-1)?.data.message);
+        const output = JSON.parse(reply.slice(reply.indexOf("{"))) as {
+          readonly first: { readonly created: boolean; readonly sessionId: string };
+          readonly second: { readonly created: boolean; readonly sessionId: string };
+        };
+        const dm = output.first.sessionId;
+        expect(output.first.created).toBe(true);
+        // The target already has a session, so the second create delivers nothing.
+        expect(output.second).toEqual({ created: false, sessionId: dm });
 
-    expect(output.first.created).toBe(true);
-    // The target already has a session, so the second create delivers nothing.
-    expect(output.second).toEqual({ created: false, sessionId: output.first.sessionId });
-    // The fork starts from the calling session's transcript, then runs its first turn.
-    expect(received).toMatchObject([
-      {
-        type: "history.imported",
-        data: { messages: [{ role: "user", text: 'Run deploy_service with service "api"' }] },
-      },
-      { type: "message.received", data: { message: "Continue this conversation here." } },
-    ]);
+        await waitForCompletedTurns(dm, 1);
+        // The fork's first turn sees the source conversation, then the fork's message.
+        expect(lastModelInput(dm)).toContain('Run deploy_service with service \\"api\\"');
+        expect(lastModelInput(dm)).toContain("Continue this conversation here.");
+
+        await send(source.runId, "Bob joined the thread.");
+        await sourceTurns.nextTurn();
+        await send(dm, "Alice prefers Friday.");
+        await waitForCompletedTurns(dm, 2);
+
+        // Each conversation keeps what happened before the fork and only its own later messages.
+        expect(lastModelInput(source.runId)).toContain("Bob joined the thread.");
+        expect(lastModelInput(source.runId)).not.toContain("Continue this conversation here.");
+        expect(lastModelInput(source.runId)).not.toContain("Alice prefers Friday.");
+        expect(lastModelInput(dm)).toContain('Run deploy_service with service \\"api\\"');
+        expect(lastModelInput(dm)).toContain("Alice prefers Friday.");
+        expect(lastModelInput(dm)).not.toContain("Bob joined the thread.");
+      } finally {
+        sourceTurns.dispose();
+        await source.cancel();
+      }
+    });
   }, 60_000);
 
   it("runs the framework sleep tool through the workflow tool path", async () => {
@@ -866,4 +902,11 @@ async function readStepInputs(runId: string): Promise<Map<string, string[]>> {
     inputs.set(name, [...(inputs.get(name) ?? []), JSON.stringify(input)]);
   }
   return inputs;
+}
+
+async function waitForCompletedTurns(sessionId: string, count: number): Promise<void> {
+  let completed = 0;
+  for await (const event of sessions.attach(sessionId).stream()) {
+    if (event.type === "turn.completed" && ++completed === count) return;
+  }
 }

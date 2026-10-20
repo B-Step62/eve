@@ -761,6 +761,9 @@ fails after `send` delivered retries the delivery, so the message can arrive twi
 An unknown channel name, or a channel without a `receive` hook, fails the step with an error that
 lists the channel names.
 
+See [Fork conversations into Slack DMs](/docs/patterns/fork-conversations-to-slack-dms) for a
+tool that copies the current conversation into a new session with `ctx.to`.
+
 ## Report progress: `yield`
 
 A workflow body may be an async generator whose yields report progress. After processing a yield,
@@ -892,66 +895,6 @@ async task({ service }, ctx) {
 One request stays on the channel the whole time. As a `task`, the call doesn't hold the
 conversation, and a steering message doesn't withdraw the request. `sleep` is the deadline,
 `pageOnCall` is a step, and returning withdraws the request.
-
-### Fork a conversation into Slack DMs
-
-This tool lets someone in a Slack thread say "move this to my DMs". It copies the conversation
-so far into a new session in the person's direct messages, where the agent continues:
-
-```ts title="agent/tools/fork_to_slack_dm.ts"
-import { transcriptReducer } from "eve/client";
-import { callSlackApi } from "eve/channels/slack";
-import { sessions } from "eve/server";
-import { defineWorkflowTool } from "eve/tools";
-import { z } from "zod";
-import type slack from "../channels/slack";
-
-export default defineWorkflowTool({
-  description: "Continue this conversation in the user's Slack direct messages.",
-  inputSchema: z.object({}),
-  async execute(_input, ctx) {
-    "use workflow";
-    const userId = ctx.session.auth.current?.attributes.user_id;
-    if (typeof userId !== "string")
-      return { forked: false, reason: "Only Slack users can fork to DMs." };
-
-    const channelId = await openDirectMessage(userId);
-    const history = await readTranscript(ctx.session.id);
-    const { sessionId } = await ctx.to<typeof slack>("slack", { channelId }).create({
-      auth: ctx.session.auth.current,
-      history,
-      message: "Continue this conversation here.",
-    });
-    return { forked: true, sessionId };
-  },
-});
-
-async function openDirectMessage(userId: string) {
-  "use step";
-  const response = await callSlackApi({
-    botToken: process.env.SLACK_BOT_TOKEN,
-    operation: "conversations.open",
-    body: { users: userId },
-  });
-  if (!response.ok) throw new Error(`conversations.open failed: ${String(response.error)}`);
-  return (response.channel as { id: string }).id;
-}
-
-async function readTranscript(sessionId: string) {
-  "use step";
-  const reducer = transcriptReducer();
-  let transcript = reducer.initial();
-  for await (const event of sessions.attach(sessionId).stream({ follow: false })) {
-    transcript = reducer.reduce(transcript, event);
-  }
-  return transcript.messages;
-}
-```
-
-`user_id` is set on the auth of calls that come from Slack. `conversations.open` needs the
-`im:write` scope. The transcript includes the message that asked for the fork, and leaves out tool
-calls and replies the agent hasn't finished. After the fork, the thread and the DM are separate
-sessions, so either one can continue without affecting the other.
 
 ### Wait for an external system to call back
 
