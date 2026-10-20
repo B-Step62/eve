@@ -54,6 +54,7 @@ export class ActiveTurn {
   private readonly routedToChildren = new Set<number>();
   private readonly mappedForHeldRequest = new Set<number>();
   private readonly runtimeResults: RuntimeEvent[] = [];
+  private readonly renewals: string[] = [];
   private readonly controller: AbortController;
   private readonly expectedTurnId: string;
   private readonly input: SessionExecutionInput;
@@ -286,6 +287,9 @@ export class ActiveTurn {
       case "cancel":
         if (this.cancelsThisTurn(value)) this.abort();
         return false;
+      case "renew-window":
+        this.renewals.push(admitted.renewalId);
+        return false;
       case "consumed":
         return value.kind === "authorization-callback";
     }
@@ -323,6 +327,11 @@ export class ActiveTurn {
       if (isSteeringMessage(routed.remainder, this.identity)) steered = true;
     }
     return steered;
+  }
+
+  /** Renewals admitted since the last take; the turn applies them before its next model step. */
+  takeRenewals(): string[] {
+    return this.renewals.splice(0, this.renewals.length);
   }
 
   /** Stops the turn, as `session.cancel()` does; a hook's `ctx.cancel()` uses it too. */

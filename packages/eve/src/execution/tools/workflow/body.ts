@@ -74,6 +74,8 @@ export interface StartedWorkflowBody {
   close(): Promise<void>;
   readonly control: WorkflowBodyControl;
   readonly outcome: Promise<WorkflowToolRunOutcome>;
+  /** Starts a new usage window in the body's `ctx.agent` sessions, after an approval. */
+  renew(renewalId: string): void;
   /** What the body's `ctx.agent` sessions spent, which the run's outcome carries. */
   readonly usage: RunUsageTally;
 }
@@ -164,6 +166,7 @@ export function startCallBody(input: WorkflowBodyInput): StartedWorkflowBody {
     close: agentSessions.close,
     control: signals,
     outcome: executeCallBody(input, ctx, signals, from),
+    renew: agentSessions.renew,
     usage,
   };
 }

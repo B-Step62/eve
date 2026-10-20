@@ -1,3 +1,4 @@
+import { resumeSessionInbox } from "#execution/session-inbox/resume.js";
 import { getStepMetadata, getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
 import { SessionStrandedError } from "#channel/session-stranded-error.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
@@ -195,6 +196,33 @@ export async function cancelAgentSessionTurnStep(input: OpenedAgentSession): Pro
       sessionId: address.sessionId,
     });
   }
+}
+
+/** Starts a new usage window in each local session a run opened, after an approval. */
+export async function renewAgentSessionsStep(input: {
+  readonly renewalId: string;
+  readonly sessions: readonly OpenedAgentSession[];
+}): Promise<void> {
+  "use step";
+
+  await Promise.all(
+    input.sessions.map(async (opened) => {
+      const { address } = opened;
+      // Remote agents keep their own windows.
+      if (address.kind === "remote") return;
+      try {
+        await resumeSessionInbox(address.continuationToken, {
+          kind: "renew-window",
+          renewalId: input.renewalId,
+        });
+      } catch (error) {
+        logError(log, "failed to renew an agent session's usage window", error, {
+          name: address.name,
+          sessionId: address.sessionId,
+        });
+      }
+    }),
+  );
 }
 
 /** Ends a run's sessions when the run finishes, cancelling any turn still running. */

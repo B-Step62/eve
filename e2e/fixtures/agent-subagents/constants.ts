@@ -31,5 +31,7 @@ export const SURVEY_WORKER_INPUT_TOKENS = 50_000_000;
 
 /** Starts the fan-out: the parent starts lease-worker-a and lease-worker-b in one step. */
 export const LEASE_DIRECTIVE = "LEASE-FANOUT";
-/** New input per lease-worker page: worker a's three pages cross the default 40M window, worker b's two do not. */
+/** New input per lease-worker page: three pages cross the default 40M window. */
 export const LEASE_STEP_INPUT_TOKENS = 15_000_000;
+/** How long worker b's second page takes: longer than worker a's prompt takes to reach the eval and be approved. */
+export const LEASE_SLOW_PAGE_MS = 10_000;

@@ -114,7 +114,7 @@ export function isSessionLimitContinuationRequestId(requestId: string): boolean 
 export function resolveSessionLimitContinuation(input: {
   readonly requests: readonly InputRequest[];
   readonly responses: readonly InputResponse[];
-}): { readonly granted: boolean } | undefined {
+}): { readonly granted: boolean; readonly requestId: string } | undefined {
   const request = input.requests.find(isSessionLimitContinuationRequest);
   if (request === undefined) {
     return undefined;
@@ -126,10 +126,10 @@ export function resolveSessionLimitContinuation(input: {
   }
 
   if (response.optionId === SESSION_LIMIT_CONTINUE_OPTION_ID) {
-    return { granted: true };
+    return { granted: true, requestId: request.requestId };
   }
   if (response.optionId === SESSION_LIMIT_STOP_OPTION_ID) {
-    return { granted: false };
+    return { granted: false, requestId: request.requestId };
   }
 
   return undefined;

@@ -3,9 +3,10 @@ import type { MockModelRequest, MockModelResponse } from "eve/evals";
 
 import { LEASE_DIRECTIVE, LEASE_STEP_INPUT_TOKENS } from "../../constants.js";
 
-// The parent starts two workers in one step. Worker a crosses its own 40M
-// window and asks; worker b stays under it. Once a's spend reaches the parent,
-// the parent is past 40M too, so without a tree-wide renewal it asks again.
+// The parent starts two workers in one step, and each reads three 15M pages.
+// Worker a crosses its 40M window first and asks. Worker b is still on its slow
+// second page when that prompt is approved. Without a tree-wide renewal, b
+// then asks on its own, and the parent asks once a's spend reaches it.
 
 const WORKERS = ["lease-worker-a", "lease-worker-b"] as const;
 

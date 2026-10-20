@@ -5,8 +5,9 @@ import { LEASE_DIRECTIVE } from "../constants";
 
 /**
  * One approval renews the whole tree. The parent starts two workers; worker a
- * crosses its 40M window and asks. After one Approve, a's earlier spend must not
- * count in the parent's new window, so the turn completes with no second ask.
+ * crosses its 40M window and asks while worker b is still reading. After one
+ * Approve, b starts a new window too, and neither worker's earlier spend counts
+ * in the parent's new window, so the turn completes with no second prompt.
  */
 export default defineEval({
   description: "One session-limit approval starts a new window in every session of the tree.",
@@ -42,7 +43,7 @@ export default defineEval({
       if (reply.includes("LEASE-REPLY")) break;
     }
     t.check(asks.length, equals(1));
-    t.check(reply, equals("LEASE-REPLY lease-worker-a read 3 pages | lease-worker-b read 2 pages"));
+    t.check(reply, equals("LEASE-REPLY lease-worker-a read 3 pages | lease-worker-b read 3 pages"));
   },
 });
 

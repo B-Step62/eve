@@ -1,3 +1,4 @@
+import { renewSessionUsageWindowStep } from "#execution/renew-window-step.js";
 import { sleep } from "#compiled/@workflow/core/index.js";
 
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
@@ -184,6 +185,10 @@ export class SessionExecution {
 
     while (true) {
       const { cursor } = this.input;
+      // A renewal admitted at the boundary or during a wait applies before the step's budget check.
+      for (const renewalId of turn.takeRenewals()) {
+        await cursor.advance((state) => renewSessionUsageWindowStep({ ...state, renewalId }));
+      }
       const caller = bindCaller;
       bindCaller = undefined;
       const result = await cursor.advanceWithHistory((state) =>

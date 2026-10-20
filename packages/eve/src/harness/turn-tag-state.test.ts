@@ -11,8 +11,10 @@ import {
   getSessionUsage,
   getSessionUsageWindow,
   getTurnUsageState,
+  addUsageBeforeWindow,
   resetSessionUsageWindow,
   setTurnUsageState,
+  takeSessionUsageDelta,
 } from "#harness/turn-tag-state.js";
 import type { HarnessSession } from "#harness/types.js";
 import type { SessionUsageLimit } from "#shared/agent-definition.js";
@@ -294,6 +296,38 @@ describe("session state round-trip", () => {
 });
 
 describe("session usage limit", () => {
+  describe("spend from before the window", () => {
+    const input = (inputTokens: number) => ({
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: undefined,
+      inputTokens,
+      outputTokens: 0,
+    });
+    const spend = (session: HarnessSession, inputTokens: number) =>
+      addTurnUsage(session, "turn_0", { inputTokens });
+
+    it("reports the unreported part spent before an approval as before the window", () => {
+      // 30M reported earlier, 15M more, then an approval, then 1M.
+      const reported = takeSessionUsageDelta(spend(makeSession(), 30_000_000)).session;
+      const approved = resetSessionUsageWindow(spend(reported, 15_000_000));
+      const report = takeSessionUsageDelta(spend(approved, 1_000_000));
+
+      expect(report.delta).toEqual(input(16_000_000));
+      expect(report.beforeWindow).toEqual(input(15_000_000));
+      // The next report has nothing from before the window left.
+      expect(takeSessionUsageDelta(spend(report.session, 2)).beforeWindow).toBeUndefined();
+    });
+
+    it("keeps a child's spend from before its window out of the caller's window", () => {
+      const caller = resetSessionUsageWindow(spend(makeSession(), 5));
+      const counted = addUsageBeforeWindow(spend(caller, 45_000_000), { inputTokens: 44_000_000 });
+
+      expect(getSessionUsageWindow(counted)).toEqual(input(1_000_000));
+      expect(getSessionUsage(counted)).toEqual(input(45_000_005));
+    });
+  });
+
   it("reads zero session usage before token state exists", () => {
     expect(getSessionTokenUsage(makeSession())).toEqual(ZERO_SESSION_USAGE);
     expect(getSessionUsageWindow(makeSession())).toEqual({

@@ -211,6 +211,13 @@ export function liveTaskRuns(table: TaskTable): readonly TaskRunAddress[] {
   );
 }
 
+/** Runs that can take commands now. */
+export function startedTaskRuns(table: TaskTable): readonly TaskRunAddress[] {
+  return table.tasks.flatMap((record) =>
+    record.run?.started === true ? [toRunAddress(record.run)] : [],
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Transitions
 // ---------------------------------------------------------------------------

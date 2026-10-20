@@ -262,13 +262,22 @@ export type WorkflowBodyCommand =
  * inbox. Only the session writes to it, so the run receives commands and
  * decisions in the order the session made them.
  */
-export type WorkflowToolRunControlMessage = WorkflowBodyCommand | WorkflowToolRunAskDecision;
+export type WorkflowToolRunControlMessage =
+  | WorkflowBodyCommand
+  | WorkflowToolRunAskDecision
+  | WorkflowToolRunRenewal;
+
+/** A session-limit approval started a new usage window; the run's sessions start one too. */
+export interface WorkflowToolRunRenewal {
+  readonly kind: "renew-window";
+  readonly renewalId: string;
+}
 
 export function isWorkflowToolRunControlMessage(
   value: unknown,
 ): value is WorkflowToolRunControlMessage {
   if (typeof value !== "object" || value === null) return false;
-  const { call, kind, reason, requestId, response } = value as Record<string, unknown>;
+  const { call, kind, reason, renewalId, requestId, response } = value as Record<string, unknown>;
   switch (kind) {
     case "interrupt":
       return true;
@@ -281,6 +290,8 @@ export function isWorkflowToolRunControlMessage(
       return typeof requestId === "string" && isWorkflowToolRunAnswer(response);
     case "withdrawn":
       return typeof requestId === "string";
+    case "renew-window":
+      return typeof renewalId === "string";
     default:
       return false;
   }

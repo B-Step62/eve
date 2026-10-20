@@ -8,6 +8,7 @@ import {
 import {
   cancelAgentSessionTurnStep,
   endAgentSessionsStep,
+  renewAgentSessionsStep,
   openAgentSessionStep,
   sendAgentSessionMessageStep,
   type AgentSessionMessage,
@@ -44,6 +45,7 @@ export function createAgentSessions(
 ): {
   readonly close: () => Promise<void>;
   readonly open: (name: string) => AgentSession;
+  readonly renew: (renewalId: string) => void;
 } {
   const sessions: OpenedAgentSession[] = [];
   let handles = 0;
@@ -59,6 +61,10 @@ export function createAgentSessions(
     close: async () => {
       if (sessions.length === 0) return;
       await endAgentSessionsStep({ sessions });
+    },
+    renew: (renewalId) => {
+      if (sessions.length === 0) return;
+      void renewAgentSessionsStep({ renewalId, sessions: [...sessions] });
     },
   };
 }

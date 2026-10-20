@@ -27,6 +27,9 @@ const HARNESS_TURN_USAGE_STATE_KEY = "eve.harness.turnUsage";
 const REPORTED_SESSION_USAGE_STATE_KEY = "eve.harness.reportedSessionUsage";
 const SESSION_USAGE_WINDOW_START_KEY = "eve.harness.sessionUsageWindowStart";
 const SESSION_USAGE_WINDOW_INDEX_KEY = "eve.harness.sessionUsageWindowIndex";
+const SESSION_USAGE_RENEWALS_KEY = "eve.harness.sessionUsageRenewals";
+/** Renewal ids remembered for dedupe; one approval reaches a session by at most a few paths. */
+const MAX_REMEMBERED_RENEWALS = 16;
 
 export interface TokenUsageTotals {
   readonly cacheReadTokens: number;
@@ -108,6 +111,36 @@ export function resetSessionUsageWindow<T extends Pick<HarnessSession, "state">>
 /** How many usage windows the session has started before its current one. */
 export function getSessionUsageWindowIndex(session: Pick<HarnessSession, "state">): number {
   return (session.state?.[SESSION_USAGE_WINDOW_INDEX_KEY] as number | undefined) ?? 0;
+}
+
+/**
+ * Starts a new usage window for an approval the session hasn't applied yet.
+ * One approval renews every session in the tree and can reach a session more
+ * than once, so the approved request id names the renewal and a repeat is a
+ * no-op.
+ */
+export function renewSessionUsageWindow<T extends Pick<HarnessSession, "state">>(
+  session: T,
+  renewalId: string,
+): { readonly renewed: boolean; readonly session: T } {
+  const seen = getSessionUsageRenewals(session);
+  if (seen.includes(renewalId)) return { renewed: false, session };
+  const reset = resetSessionUsageWindow(session);
+  return {
+    renewed: true,
+    session: {
+      ...reset,
+      state: {
+        ...reset.state,
+        [SESSION_USAGE_RENEWALS_KEY]: [...seen, renewalId].slice(-MAX_REMEMBERED_RENEWALS),
+      },
+    },
+  };
+}
+
+function getSessionUsageRenewals(session: Pick<HarnessSession, "state">): readonly string[] {
+  const stored = session.state?.[SESSION_USAGE_RENEWALS_KEY];
+  return Array.isArray(stored) ? (stored as readonly string[]) : [];
 }
 
 function getWindowStart(session: Pick<HarnessSession, "state">): TokenUsageTotals {

@@ -5,7 +5,7 @@ import { respondAsLeaseWorker } from "../../lib/lease.js";
 
 const workerModel = mockModel({
   modelId: "lease-worker-b",
-  respond: respondAsLeaseWorker("lease-worker-b", 2),
+  respond: respondAsLeaseWorker("lease-worker-b", 3),
 });
 
 export default defineAgent({

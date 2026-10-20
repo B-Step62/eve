@@ -377,6 +377,7 @@ export function startServeBody(input: WorkflowBodyInput): StartedWorkflowBody {
     close: agentSessions.close,
     control: calls,
     outcome: executeServeBody(input, calls, ctx),
+    renew: agentSessions.renew,
     usage: calls.usage,
   };
 }

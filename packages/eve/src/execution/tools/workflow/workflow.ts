@@ -175,6 +175,10 @@ function applyControlMessage(started: StartedWorkflowBody, message: unknown): vo
     started.asks.settle(message);
     return;
   }
+  if (message.kind === "renew-window") {
+    started.renew(message.renewalId);
+    return;
+  }
   started.control.apply(message);
 }
 
