@@ -270,6 +270,12 @@ export const defaultEvents: SlackChannelInternalEvents = {
     await showStatus(channel, "Thinking...", { force: true });
   },
 
+  // A code channel's session status never times out, so a cancelled turn must
+  // set it back to `active`. Slack's stop also expects this (the Chat SDK does the same).
+  async "turn.cancelled"(_event, channel, _ctx) {
+    await clearStatus(channel);
+  },
+
   // A reply clears the status, but a turn ended by an `endsTurn` tool posts
   // none, and Slack would otherwise show the status until it times out.
   async "turn.completed"(_event, channel, _ctx) {

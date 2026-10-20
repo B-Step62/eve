@@ -6466,4 +6466,22 @@ describe("slackChannel() code channels", () => {
       ),
     ).toEqual(["processing", "suspended", "active"]);
   });
+
+  it("sets the session back to active when a turn is cancelled", async () => {
+    useCodeChannels([]);
+    const adapter = withState(
+      getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
+      { ...THREAD_STATE, codeChannel: true, threadTs: "0" },
+    );
+    const ctx = buildAdapterContext(adapter, stubAccessor());
+
+    await callEvent(adapter, makeEvent("turn.started", { sequence: 0, turnId: "t1" }), ctx);
+    await callEvent(adapter, makeEvent("turn.cancelled", { sequence: 1, turnId: "t1" }), ctx);
+
+    expect(
+      slackCalls(fetchMock, "agents.sessions.setStatus").map(
+        ([, init]) => parseSlackRequestBody(init).status,
+      ),
+    ).toEqual(["processing", "active"]);
+  });
 });
