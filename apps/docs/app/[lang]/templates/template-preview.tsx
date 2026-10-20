@@ -10,7 +10,12 @@ import type {
 import { integrationIcons } from "./integration-icons";
 
 /** Slack's UI typeface. Loaded only for the Slack preview. */
-const lato = Lato({ subsets: ["latin"], weight: ["400", "700", "900"], display: "swap" });
+const lato = Lato({
+  subsets: ["latin"],
+  weight: ["400", "700", "900"],
+  display: "swap",
+  fallback: ["Helvetica Neue", "Helvetica", "Segoe UI", "Arial", "sans-serif"],
+});
 
 interface TemplatePreviewProps {
   integrations: TemplateIntegration[];
@@ -133,8 +138,9 @@ const AgentIcon = ({
 
 /**
  * Laid out at Slack's real desktop metrics (Lato 15/22, 36px avatars, 8px 20px
- * message gutters, 49px channel header) and zoomed down as a whole, so the
- * proportions match Slack at any card size.
+ * message gutters, 49px channel header) and Slack's own light and dark
+ * palette, then zoomed down as a whole so the proportions match Slack at any
+ * card size.
  */
 const Slack = ({
   agent,
@@ -147,11 +153,11 @@ const Slack = ({
   icon?: string;
   messages: TemplatePreviewMessage[];
 }) => (
-  <div className="absolute top-3 -right-3 -bottom-5 left-6 overflow-hidden rounded-lg border border-gray-alpha-400 bg-background-100 shadow-sm">
+  <div className="absolute top-3 -right-3 -bottom-5 left-6 overflow-hidden rounded-lg border border-gray-alpha-400 bg-white shadow-sm dark:bg-[#1a1d21]">
     <div
-      className={`${lato.className} text-[15px] leading-[1.46668] text-gray-1000 antialiased [zoom:0.72]`}
+      className={`${lato.className} text-[15px] leading-[1.46668] text-[#1d1c1d] antialiased [zoom:0.72] dark:text-[#d1d2d3]`}
     >
-      <div className="flex h-[49px] items-center border-b border-gray-alpha-400 px-5 font-black text-[18px] leading-none">
+      <div className="flex h-[49px] items-center border-b border-[rgba(29,28,29,0.13)] px-5 font-black text-[18px] leading-none dark:border-[#35373b] dark:text-[#f8f8f8]">
         <span className="mr-1 font-bold">#</span>
         {channel ?? "general"}
       </div>
@@ -173,16 +179,20 @@ const Slack = ({
                 </div>
               )}
               <div className="min-w-0 flex-1">
-                <div className="flex items-baseline">
-                  <span className="font-black">{isAgent ? agent : SLACK_USER}</span>
+                <div className="flex items-baseline gap-1">
+                  <span className="font-black dark:text-[#f8f8f8]">
+                    {isAgent ? agent : SLACK_USER}
+                  </span>
                   {isAgent ? (
-                    <span className="ml-1 self-center rounded-[2px] bg-gray-alpha-300 px-[3px] py-px font-bold text-[10px] text-gray-900 leading-[1.25]">
+                    <span className="ml-1 self-center rounded-[2px] bg-[rgba(29,28,29,0.13)] px-[3px] py-px font-bold text-[10px] text-[rgba(29,28,29,0.7)] leading-[14px] dark:bg-[rgba(232,232,232,0.13)] dark:text-[#ababad]">
                       APP
                     </span>
                   ) : null}
-                  <span className="ml-2 text-[12px] text-gray-900">{SLACK_TIMESTAMP}</span>
+                  <span className="ml-1 text-[#616061] text-[12px] dark:text-[#ababad]">
+                    {SLACK_TIMESTAMP}
+                  </span>
                 </div>
-                <p>
+                <p className="break-words">
                   <Mentions text={message.text} />
                 </p>
               </div>
@@ -199,7 +209,7 @@ const Mentions = ({ text }: { text: string }) =>
   text.split(/(@\w+)/).map((part, index) =>
     part.startsWith("@") ? (
       <span
-        className="rounded-[3px] bg-[#1d9bd1]/10 px-0.5 text-[#1264a3] dark:text-[#1d9bd1]"
+        className="rounded-[3px] bg-[rgba(29,155,209,0.1)] px-0.5 text-[#1264a3] dark:bg-[rgba(29,155,209,0.18)] dark:text-[#1d9bd1]"
         key={`${index}${part}`}
       >
         {part}
