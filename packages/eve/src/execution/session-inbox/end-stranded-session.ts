@@ -34,8 +34,8 @@ const log = createLogger("execution.session-inbox");
 export type StrandedSessionEndTrigger = "message" | "reset" | "timeout";
 
 /**
- * The `session.ended` cause naming what ended a stranded session: `stranded-reset`,
- * `stranded-message`, or `stranded-timeout`.
+ * The `session.ended` cause naming what ended a stranded session without a control delivery:
+ * `stranded-message` or `stranded-timeout`. A reset's cause names its control delivery instead.
  */
 export function strandedEndPolicy(trigger: StrandedSessionEndTrigger): string {
   return `stranded-${trigger}`;
