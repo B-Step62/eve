@@ -220,7 +220,7 @@ async execute(input, ctx) {
   const auth = ctx.session.auth.current; // channel_id, thread_ts, message_ts, user_id
   if (!isSlackMessage(auth)) return { status: "unavailable", reason: "..." };
   if (auth.attributes.thread_ts === "0") return { status: "unavailable", reason: "..." };
-  const history = await readTranscript(ctx.session.id); // step, last 40 messages
+  const history = await readTranscript(ctx.session.id); // step
   const { sessionId } = await ctx
     .to<SlackChannel>("slack", { channelId, codeChannel: { name, originTs: message_ts } })
     .send(input.message, { auth, history });
@@ -233,7 +233,7 @@ async execute(input, ctx) {
    channel session's auth has `thread_ts: "0"` from its first turn, so the tool refuses to open a
    code channel from inside one, as Slack asks.
 2. **Read the transcript.** Fold the calling session's stream with `transcriptReducer()`, as in
-   the fork pattern, keeping the last 40 messages. It keeps the current turn's user message and
+   the fork pattern. It keeps the current turn's user message and
    finished assistant text, and leaves out partial text and tool calls.
 3. **Start the session.** `ctx.to("slack", ...).send()` runs the Slack channel's `receive()` in a
    step, which opens the channel and starts its session.
