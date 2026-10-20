@@ -42,7 +42,6 @@ export async function executeOpenCodeChannel(
         codeChannel: {
           name: input.name,
           originTs,
-          ...(typeof originThreadTs === "string" && { originThreadTs }),
         },
       },
       auth,

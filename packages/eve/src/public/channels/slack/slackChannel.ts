@@ -369,10 +369,9 @@ export interface SlackReceiveTarget {
   /**
    * Opens a Slack code channel from a message in {@link channelId} and starts
    * the session there, as the code channel's one session. Slack links the
-   * channel back to `originTs`, and eve points to the channel in the origin
-   * thread. One requester gets one code channel per origin message, so a
-   * retried send reaches the same channel. Mutually exclusive with
-   * {@link threadTs} and {@link initialMessage}.
+   * channel and the origin message to each other. One requester gets one code
+   * channel per origin message, so a repeated send joins that channel's
+   * session. Mutually exclusive with {@link threadTs} and {@link initialMessage}.
    */
   readonly codeChannel?: SlackCodeChannelTarget;
 }
@@ -383,8 +382,6 @@ export interface SlackCodeChannelTarget {
   readonly name: string;
   /** ts of the message the code channel continues. */
   readonly originTs: string;
-  /** Thread of the origin message, where eve points to the new channel. Defaults to `originTs`. */
-  readonly originThreadTs?: string;
 }
 
 /**
@@ -1171,15 +1168,6 @@ async function receiveInNewCodeChannel(
   const existing = await deps.resolveSession(address);
   if (existing !== undefined) return existing;
   await setSlackCodeChannelStatus(request, codeChannelId, "processing");
-  try {
-    await request("chat.postMessage", {
-      channel: originChannelId,
-      text: `Continuing in <#${codeChannelId}>.`,
-      thread_ts: codeChannel.originThreadTs ?? codeChannel.originTs,
-    });
-  } catch (error) {
-    logError(log, "code channel pointer post failed", error, { channelId: originChannelId });
-  }
   const state: SlackChannelState = {
     channelId: codeChannelId,
     codeChannel: true,

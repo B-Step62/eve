@@ -332,11 +332,11 @@ import { openCodeChannel } from "eve/channels/slack/tools";
 export default openCodeChannel();
 ```
 
-The model calls the tool with a channel name and a first message for the new channel. The tool opens the code channel from the message that triggered the turn, posts `Continuing in #channel` in the origin thread, and starts the code channel's session with the conversation so far as history. The origin thread keeps its own session for quick follow-ups. The tool reaches the Slack channel at `agent/channels/slack.ts`.
+The model calls the tool with a channel name and a first message for the new channel. The tool opens the code channel from the message that triggered the turn, and starts the code channel's session with the conversation so far as history. Slack links the new channel in the origin thread and invites the person who wrote the origin message. The origin thread keeps its own session for quick follow-ups. The tool reaches the Slack channel at `agent/channels/slack.ts`.
 
 The tool returns `unavailable` outside Slack, inside a code channel, for conversations shared outside the workspace through Slack Connect, and when Slack refuses to create the channel, for example when code channels are disabled or a scope is missing. The model then continues in the thread.
 
-One person gets one code channel per message. A repeated call for the same message, or a retried step, reaches the same channel and joins its session without linking or seeding it again. If someone writes in the new channel before its session starts, that message starts the session without the thread's history.
+One person gets one code channel per message. A repeated call for the same message, or a retried step, reaches the same channel and joins its session without seeding it again. If someone writes in the new channel before its session starts, that message starts the session without the thread's history.
 
 ### Other Events API callbacks
 

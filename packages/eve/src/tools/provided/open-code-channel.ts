@@ -14,7 +14,7 @@ const OPEN_CODE_CHANNEL_DESCRIPTION = [
   "Usage:",
   "- Open one for multi-step work: code changes, builds, tests, pull requests, investigations, or long output.",
   "- Answer in place when one message answers the request.",
-  "- Call it once per request. eve links the new channel in this thread, so after it opens, reply here in one short sentence at most.",
+  "- Call it once per request. Slack links the new channel in this thread, so after it opens, reply here in one short sentence at most.",
   '- If the status is "unavailable", continue here and don\'t retry.',
 ].join("\n");
 
@@ -74,7 +74,7 @@ const OPEN_CODE_CHANNEL_OUTPUT_SCHEMA = defineJsonSchema<OpenCodeChannelOutput>(
 function toOpenCodeChannelModelOutput(output: OpenCodeChannelOutput): ToolModelOutput {
   return output.status === "opened"
     ? toolOutput.text(
-        "Opened the code channel and linked it in this thread. The work continues there with the conversation so far. Don't call open_code_channel again for this request.",
+        "Opened the code channel, and Slack linked it in this thread. The work continues there with the conversation so far. Don't call open_code_channel again for this request.",
       )
     : toolOutput.text(
         `No code channel opened: ${output.reason} Continue here, and don't retry open_code_channel.`,

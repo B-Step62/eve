@@ -287,14 +287,6 @@ describe("workflow tool channel handoffs", () => {
           origin_message_ts: "1700000000.000002",
         });
         expect(create?.body.session_id).toMatch(/^[0-9a-f]{32}$/u);
-        expect(slackCalls).toContainEqual({
-          body: expect.objectContaining({
-            channel: "C_ORIGIN",
-            text: "Continuing in <#C_CODE>.",
-            thread_ts: "1700000000.000001",
-          }),
-          method: "chat.postMessage",
-        });
         // The code channel's reply posts top-level.
         const codeReplies = slackCalls.filter(
           ({ body, method }) => method === "chat.postMessage" && body.channel === "C_CODE",
@@ -310,17 +302,33 @@ describe("workflow tool channel handoffs", () => {
         await waitForCompletedTurns(codeSession, 2);
         expect(lastModelInput(modelInputs, codeSession)).toContain("Alice prefers Friday.");
         expect(lastModelInput(modelInputs, source.runId)).not.toContain("Alice prefers Friday.");
+        // A reply in a thread inside the code channel reaches the same session and is
+        // answered in that thread.
+        const postsBefore = slackCalls.length;
+        await deliverSlackChannelMessage(slack, signingSecret, {
+          channel: "C_CODE",
+          text: "Alice adds detail in a thread.",
+          threadTs: "1700000100.000099",
+        });
+        await waitForCompletedTurns(codeSession, 3);
+        expect(lastModelInput(modelInputs, codeSession)).toContain(
+          "Alice adds detail in a thread.",
+        );
+        expect(
+          slackCalls
+            .slice(postsBefore)
+            .filter(
+              ({ body, method }) => method === "chat.postMessage" && body.channel === "C_CODE",
+            )
+            .map(({ body }) => body.thread_ts),
+        ).toEqual(["1700000100.000099"]);
         const codeSessionModelCalls = modelInputs.filter(
           ({ sessionId }) => sessionId === codeSession,
         ).length;
 
-        // A repeat call for the same message joins the same session without linking or
-        // seeding it again.
+        // A repeat call for the same message joins the same session without seeding it again.
         await sendToSession(source.runId, request);
         expect(forkedSessionId(await sourceTurns.nextTurn())).toBe(codeSession);
-        expect(
-          slackCalls.filter(({ body }) => body.text === "Continuing in <#C_CODE>."),
-        ).toHaveLength(1);
         expect(modelInputs.filter(({ sessionId }) => sessionId === codeSession)).toHaveLength(
           codeSessionModelCalls,
         );
@@ -525,9 +533,9 @@ async function deliverSlackDirectMessage(
 async function deliverSlackChannelMessage(
   slack: ReturnType<typeof slackChannel>,
   signingSecret: string,
-  message: { readonly channel: string; readonly text: string },
+  message: { readonly channel: string; readonly text: string; readonly threadTs?: string },
 ): Promise<void> {
-  const ts = "1700000999.000200";
+  const ts = message.threadTs === undefined ? "1700000999.000200" : "1700000999.000300";
   const body = JSON.stringify({
     authorizations: [{ is_bot: true, team_id: "T01", user_id: "U_EVE" }],
     event: {
@@ -535,11 +543,12 @@ async function deliverSlackChannelMessage(
       channel_type: "channel",
       event_ts: ts,
       text: message.text,
+      ...(message.threadTs !== undefined && { thread_ts: message.threadTs }),
       ts,
       type: "message",
       user: "U_ALICE",
     },
-    event_id: "Ev_code_channel_message",
+    event_id: `Ev_code_channel_message_${ts}`,
     team_id: "T01",
     type: "event_callback",
   });
