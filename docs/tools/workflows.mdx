@@ -743,7 +743,9 @@ the target to the channel's session address. When no session owns that address, 
 from `history` and runs the turn. When a session owns it, `send` adds `history` and the message to
 that session. It returns `{ sessionId }`.
 
-A step that fails after `send` delivered retries the delivery, so the message can arrive twice.
+A step that fails after `send` delivered retries the delivery, so the message can arrive twice. On
+a target the channel gives a new address each time, such as a Slack target with only a
+`channelId`, the retry starts a second session instead.
 
 `ctx.to` differs from `ctx.agent`:
 

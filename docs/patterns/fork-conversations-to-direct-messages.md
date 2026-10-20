@@ -133,8 +133,9 @@ how the channel keys direct conversations:
 - A Telegram private chat is one session per chat. While the person already has a session with the
   bot there, the transcript and the message join that conversation.
 
-A step that fails after `send` delivered retries the delivery, so the message can arrive twice. To
-stop the model from forking the same conversation twice, say so in the tool's `description`, or
+A step that fails after `send` delivered retries the delivery. On Slack the retry opens a second
+DM thread, and on Telegram the message arrives twice in the same chat. To stop the model from
+forking the same conversation twice, say so in the tool's `description`, or
 record each fork in your app and check for one before opening the direct conversation.
 
 ## Fork from an earlier point

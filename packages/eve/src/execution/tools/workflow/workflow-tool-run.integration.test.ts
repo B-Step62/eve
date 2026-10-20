@@ -20,17 +20,13 @@ import {
   confirmTwoStepsWorkflow,
   deployServiceWorkflow,
   failingDeployWorkflow,
-  forkToDmWorkflow,
   reportingDeployWorkflow,
   returnAskAnswerWorkflow,
   stepReferenceWorkflow,
   workflowContextMisuseWorkflow,
 } from "#internal/testing/workflow-tool-fixtures.js";
 import type { InputRequestedStreamEvent, MessageStreamEvent } from "#protocol/message.js";
-import { defineChannel, POST } from "#public/channels/index.js";
 import { defineHook } from "#public/definitions/hook.js";
-import { defineDynamic } from "#public/tools/index.js";
-import { sessions } from "#public/server/index.js";
 import {
   buildWorkflowToolSerializedContext,
   createWorkflowToolRuntime,
@@ -61,97 +57,6 @@ describe("workflow tools", () => {
     expect(output).toContain('"argument":"plan:api"');
     expect(output).toContain('"receiver":"api"');
   });
-  it("forks a conversation into a channel session that continues apart from its source", async () => {
-    // What each session's model sees at each step, read through a public `step.started` resolver.
-    const modelInputs: { readonly sessionId: string; readonly text: string }[] = [];
-    const runtime = await createWorkflowToolRuntime({
-      agentName: "workflow-tool-channel-fork",
-      execute: forkToDmWorkflow,
-      modules: [
-        {
-          logicalPath: "channels/dm.ts",
-          loadNamespace: async () => ({
-            default: defineChannel({
-              routes: [POST("/dm", async () => new Response("ok"))],
-              async receive(input, { from }) {
-                return await from(`dm:${String(input.target.userId)}`).send(input.message, {
-                  auth: input.auth,
-                });
-              },
-            }),
-          }),
-        },
-        {
-          logicalPath: "tools/record-model-input.ts",
-          loadNamespace: async () => ({
-            default: defineDynamic({
-              events: {
-                "step.started": (_event, ctx) => {
-                  modelInputs.push({
-                    sessionId: ctx.session.id,
-                    text: JSON.stringify(ctx.messages),
-                  });
-                  return null;
-                },
-              },
-            }),
-          }),
-        },
-      ],
-      toolName: "deploy_service",
-    });
-    const lastModelInput = (sessionId: string) =>
-      modelInputs.filter((input) => input.sessionId === sessionId).at(-1)?.text ?? "";
-    const send = async (sessionId: string, message: string) =>
-      await resumeSessionInbox(sessionCommandHookToken(sessionId), {
-        delivery: { channelKind: "http", channelName: "test", deliveryId: `delivery-${message}` },
-        kind: "send",
-        payload: { message },
-      });
-
-    await runtime.run(async () => {
-      const source = await startSessionOwner(workflowEntry, [
-        {
-          kind: "initial",
-          ownerDeploymentId: "dpl_inline",
-          input: { message: 'Run deploy_service with service "api"' },
-          serializedContext: buildWorkflowToolSerializedContext({
-            continuationToken: "http:workflow-tool-channel-fork",
-          }),
-        },
-      ]);
-      const sourceTurns = captureTurnEvents(source);
-      try {
-        const forked = await sourceTurns.nextTurn();
-        const reply = String(filterEventsByType(forked, "message.completed").at(-1)?.data.message);
-        const { sessionId: dm } = JSON.parse(reply.slice(reply.indexOf("{"))) as {
-          readonly sessionId: string;
-        };
-
-        await waitForCompletedTurns(dm, 1);
-        // The fork's first turn sees the source conversation, then the fork's message.
-        expect(lastModelInput(dm)).toContain('Run deploy_service with service \\"api\\"');
-        expect(lastModelInput(dm)).toContain("Continue this conversation here.");
-
-        await send(source.runId, "Bob joined the thread.");
-        await sourceTurns.nextTurn();
-        await send(dm, "Alice prefers Friday.");
-        await waitForCompletedTurns(dm, 2);
-
-        // Each conversation keeps what happened before the fork and only its own later messages.
-        expect(lastModelInput(source.runId)).toContain("Bob joined the thread.");
-        expect(lastModelInput(source.runId)).not.toContain("Continue this conversation here.");
-        expect(lastModelInput(source.runId)).not.toContain("Alice prefers Friday.");
-        expect(lastModelInput(dm)).toContain('Run deploy_service with service \\"api\\"');
-        expect(lastModelInput(dm)).toContain("Alice prefers Friday.");
-        expect(lastModelInput(dm)).not.toContain("Bob joined the thread.");
-      } finally {
-        sourceTurns.dispose();
-        await source.cancel();
-      }
-    });
-  }, 60_000);
-
   it("runs the framework sleep tool through the workflow tool path", async () => {
     const runtime = await createWorkflowToolRuntime({
       agentName: "workflow-tool-sleep",
@@ -897,11 +802,4 @@ async function readStepInputs(runId: string): Promise<Map<string, string[]>> {
     inputs.set(name, [...(inputs.get(name) ?? []), JSON.stringify(input)]);
   }
   return inputs;
-}
-
-async function waitForCompletedTurns(sessionId: string, count: number): Promise<void> {
-  let completed = 0;
-  for await (const event of sessions.attach(sessionId).stream()) {
-    if (event.type === "turn.completed" && ++completed === count) return;
-  }
 }

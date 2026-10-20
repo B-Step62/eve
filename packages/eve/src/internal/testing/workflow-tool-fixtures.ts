@@ -14,6 +14,7 @@ import {
 
 import type { WorkflowToolContext } from "#tools/workflow-definition.js";
 import { transcriptReducer } from "#client/transcript-reducer.js";
+import { callSlackApi } from "#public/channels/slack/index.js";
 import { sessions } from "#public/server/index.js";
 import {
   ConnectionAuthorizationFailedError,
@@ -285,14 +286,14 @@ export async function failingServeWorkflow(): Promise<never> {
 /** "Fork this to my DMs": copies the calling session's transcript into a session on the `dm` channel. */
 export async function forkToDmWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
   "use workflow";
-  const history = await readTranscriptStep(ctx.session.id);
+  const history = await readTranscript(ctx.session.id);
   return await ctx.to("dm", { userId: input.service }).send("Continue this conversation here.", {
     auth: ctx.session.auth.current,
     history,
   });
 }
 
-async function readTranscriptStep(sessionId: string) {
+async function readTranscript(sessionId: string) {
   "use step";
   const reducer = transcriptReducer();
   let transcript = reducer.initial();
@@ -300,4 +301,42 @@ async function readTranscriptStep(sessionId: string) {
     transcript = reducer.reduce(transcript, event);
   }
   return transcript.messages;
+}
+
+/** Sends once, then waits durably, so the body replays past the recorded send. */
+export async function sendThenSleepWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
+  "use workflow";
+  const delivered = await ctx
+    .to("dm", { userId: input.service })
+    .send("Here is the summary.", { auth: ctx.session.auth.current });
+  await workflowSleep(1);
+  return delivered;
+}
+
+/** The tool from docs/patterns/fork-conversations-to-direct-messages.md, with test import paths. */
+export async function forkToSlackDmWorkflow(
+  _input: Record<string, never>,
+  ctx: WorkflowToolContext,
+) {
+  "use workflow";
+  const userId = ctx.session.auth.current?.attributes.user_id;
+  if (typeof userId !== "string") return { forked: false, reason: "No platform user to message." };
+
+  const channelId = await openDirectMessage(userId);
+  const history = await readTranscript(ctx.session.id);
+  const { sessionId } = await ctx
+    .to("slack", { channelId })
+    .send("Continue this conversation here.", { auth: ctx.session.auth.current, history });
+  return { forked: true, sessionId };
+}
+
+async function openDirectMessage(userId: string) {
+  "use step";
+  const response = await callSlackApi({
+    botToken: process.env.SLACK_BOT_TOKEN,
+    operation: "conversations.open",
+    body: { users: userId },
+  });
+  if (!response.ok) throw new Error(`conversations.open failed: ${String(response.error)}`);
+  return (response.channel as { id: string }).id;
 }
