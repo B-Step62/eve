@@ -16,6 +16,7 @@ import {
 import { mockAgentRouteArgs } from "#internal/testing/mocks/mock-route-args.js";
 import {
   forkToSlackDmWorkflow,
+  forkToTeamsThreadWorkflow,
   sendThenSleepWorkflow,
 } from "#internal/testing/workflow-tool-fixtures.js";
 import {
@@ -26,6 +27,7 @@ import { startSessionOwner } from "#internal/testing/workflow-test-helpers.js";
 import type { ProgrammaticAgentModule } from "#compiler/source-graph.js";
 import { defineChannel, POST } from "#public/channels/index.js";
 import { slackChannel } from "#public/channels/slack/slackChannel.js";
+import { teamsChannel } from "#public/channels/teams/teamsChannel.js";
 import { sessions } from "#public/server/index.js";
 import { defineDynamic } from "#public/tools/index.js";
 import { toInputSchema } from "#tools/schema.js";
@@ -181,6 +183,91 @@ describe("workflow tool channel handoffs", () => {
       }
     });
   }, 90_000);
+
+  it("runs the fork pattern against a Teams channel, starting a new thread per fork", async () => {
+    const posts: { readonly body: string; readonly id: string; readonly url: string }[] = [];
+    const teams = teamsChannel({
+      api: {
+        fetch: async (input: string | URL | Request, init?: RequestInit) => {
+          const id = `ACTIVITY_${posts.length + 1}`;
+          posts.push({ body: String(init?.body ?? ""), id, url: String(input) });
+          return Response.json({ id });
+        },
+      },
+      credentials: { tokenProvider: () => "test-token", webhookVerifier: () => true },
+    });
+    const { modelInputs, recordModelInputs } = modelInputRecorder();
+    const runtime = await createWorkflowToolRuntime({
+      agentName: "workflow-tool-teams-fork",
+      execute: forkToTeamsThreadWorkflow,
+      inputSchema: toInputSchema({ additionalProperties: false, properties: {}, type: "object" }),
+      modules: [
+        { logicalPath: "channels/teams.ts", loadNamespace: async () => ({ default: teams }) },
+        recordModelInputs,
+      ],
+      toolName: "fork_thread",
+    });
+    const channelConversation = "19:general@thread.tacv2";
+    const threadRoots = () =>
+      posts.filter(({ body }) => body.includes("Continuing this conversation in a new thread."));
+
+    await runtime.run(async () => {
+      const source = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: "Run fork_thread" },
+          serializedContext: {
+            ...buildWorkflowToolSerializedContext({ continuationToken: "http:teams-fork-source" }),
+            "eve.auth": {
+              attributes: {
+                conversation_id: `${channelConversation};messageid=SOURCE_ROOT`,
+                scope: "channel",
+                service_url: "https://smba.example.test/teams",
+                tenant_id: "TENANT",
+                user_id: "ALICE",
+              },
+              authenticator: "teams-activity",
+              issuer: "teams:TENANT",
+              principalId: "teams:TENANT:ALICE",
+              principalType: "user",
+            },
+          },
+        },
+      ]);
+      const sourceTurns = captureTurnEvents(source);
+      try {
+        const first = forkedSessionId(await sourceTurns.nextTurn());
+        await waitForCompletedTurns(first, 1);
+        expect(lastModelInput(modelInputs, first)).toContain("Run fork_thread");
+
+        await sendToSession(source.runId, "Run fork_thread");
+        const second = forkedSessionId(await sourceTurns.nextTurn());
+        expect(second).not.toBe(first);
+        await waitForCompletedTurns(second, 1);
+
+        // Each fork posts its own root in the channel, outside the source thread.
+        const roots = threadRoots();
+        expect(roots.map(({ url }) => url)).toEqual([
+          `https://smba.example.test/teams/v3/conversations/${encodeURIComponent(channelConversation)}/activities`,
+          `https://smba.example.test/teams/v3/conversations/${encodeURIComponent(channelConversation)}/activities`,
+        ]);
+
+        // Alice replies in the first fork's thread; only that fork hears it.
+        await deliverTeamsChannelReply(teams, {
+          conversationId: `${channelConversation};messageid=${roots[0]!.id}`,
+          text: "Alice prefers Friday.",
+        });
+        await waitForCompletedTurns(first, 2);
+        expect(lastModelInput(modelInputs, first)).toContain("Alice prefers Friday.");
+        expect(lastModelInput(modelInputs, second)).not.toContain("Alice prefers Friday.");
+        expect(lastModelInput(modelInputs, source.runId)).not.toContain("Alice prefers Friday.");
+      } finally {
+        sourceTurns.dispose();
+        await source.cancel();
+      }
+    });
+  }, 90_000);
 });
 
 /** Records what each session's model sees at each step, through a public `step.started` resolver. */
@@ -245,23 +332,6 @@ async function deliverSlackDirectMessage(
   signingSecret: string,
   message: { readonly text: string; readonly threadTs: string },
 ): Promise<void> {
-  if (!isCompiledChannel(slack)) throw new Error("Expected a compiled Slack channel.");
-  const route = slack.routes.find((candidate) => candidate.method === "POST");
-  if (route === undefined || !isHttpRouteDefinition(route)) {
-    throw new Error("Expected the Slack events route.");
-  }
-  const bundle = await getCompiledRuntimeAgentBundle({
-    compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
-  });
-  const resolved = bundle.graph.root.channels.find((channel) => channel.name === "slack");
-  if (resolved?.adapter === undefined) throw new Error("Expected the resolved Slack channel.");
-  const operations = createChannelOperations<unknown>({
-    adapter: resolved.adapter,
-    channelName: "slack",
-    runtime: createWorkflowRuntime({
-      compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
-    }),
-  });
   const ts = "1700000999.000100";
   const body = JSON.stringify({
     event: {
@@ -282,8 +352,9 @@ async function deliverSlackDirectMessage(
   const signature = `v0=${createHmac("sha256", signingSecret)
     .update(`v0:${timestamp}:${body}`)
     .digest("hex")}`;
-  const pending: Promise<unknown>[] = [];
-  await route.handler(
+  await postToChannelRoute(
+    slack,
+    "slack",
     new Request("https://agent.example.com/eve/v1/slack", {
       body,
       headers: {
@@ -293,15 +364,74 @@ async function deliverSlackDirectMessage(
       },
       method: "POST",
     }),
-    {
-      ...mockAgentRouteArgs(),
-      ...operations,
-      attachSession: vi.fn() as never,
-      params: {},
-      requestIp: null,
-      to: vi.fn() as never,
-      waitUntil: (task) => void pending.push(task),
-    },
   );
+}
+
+/** Posts a channel message that mentions the bot, as Teams sends it for a reply in a thread. */
+async function deliverTeamsChannelReply(
+  teams: ReturnType<typeof teamsChannel>,
+  message: { readonly conversationId: string; readonly text: string },
+): Promise<void> {
+  await postToChannelRoute(
+    teams,
+    "teams",
+    new Request("https://agent.example.com/eve/v1/teams", {
+      body: JSON.stringify({
+        channelData: {
+          channel: { id: "19:general@thread.tacv2" },
+          team: { id: "TEAM" },
+          tenant: { id: "TENANT" },
+        },
+        conversation: { conversationType: "channel", id: message.conversationId },
+        entities: [
+          { mentioned: { id: "BOT", name: "eve" }, text: "<at>eve</at>", type: "mention" },
+        ],
+        from: { id: "ALICE", name: "Alice" },
+        id: "ALICE_REPLY",
+        recipient: { id: "BOT", name: "eve" },
+        serviceUrl: "https://smba.example.test/teams",
+        text: `<at>eve</at> ${message.text}`,
+        textFormat: "xml",
+        type: "message",
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    }),
+  );
+}
+
+async function postToChannelRoute(
+  channel: unknown,
+  channelName: string,
+  request: Request,
+): Promise<void> {
+  if (!isCompiledChannel(channel)) throw new Error(`Expected a compiled ${channelName} channel.`);
+  const route = channel.routes.find((candidate) => candidate.method === "POST");
+  if (route === undefined || !isHttpRouteDefinition(route)) {
+    throw new Error(`Expected the ${channelName} webhook route.`);
+  }
+  const bundle = await getCompiledRuntimeAgentBundle({
+    compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+  });
+  const resolved = bundle.graph.root.channels.find((candidate) => candidate.name === channelName);
+  if (resolved?.adapter === undefined)
+    throw new Error(`Expected the resolved ${channelName} channel.`);
+  const operations = createChannelOperations<unknown>({
+    adapter: resolved.adapter,
+    channelName,
+    runtime: createWorkflowRuntime({
+      compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+    }),
+  });
+  const pending: Promise<unknown>[] = [];
+  await route.handler(request, {
+    ...mockAgentRouteArgs(),
+    ...operations,
+    attachSession: vi.fn() as never,
+    params: {},
+    requestIp: null,
+    to: vi.fn() as never,
+    waitUntil: (task) => void pending.push(task),
+  });
   await Promise.all(pending);
 }

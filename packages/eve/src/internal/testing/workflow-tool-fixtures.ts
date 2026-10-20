@@ -303,20 +303,22 @@ export async function sendThenSleepWorkflow(input: DeployInput, ctx: WorkflowToo
   return delivered;
 }
 
-/** The tool from docs/patterns/fork-conversations-to-direct-messages.md, with test import paths. */
+/** The DM variant from docs/patterns/fork-conversations-into-new-threads.md, with test import paths. */
 export async function forkToSlackDmWorkflow(
   _input: Record<string, never>,
   ctx: WorkflowToolContext,
 ) {
   "use workflow";
-  const userId = ctx.session.auth.current?.attributes.user_id;
-  if (typeof userId !== "string") return { forked: false, reason: "No platform user to message." };
+  const auth = ctx.session.auth.current;
+  const userId = auth?.attributes.user_id;
+  if (auth?.authenticator !== "slack-webhook" || typeof userId !== "string")
+    return { forked: false, reason: "No Slack user to message." };
 
   const channelId = await openDirectMessage(userId);
   const history = await readTranscript(ctx.session.id);
   const { sessionId } = await ctx
     .to("slack", { channelId })
-    .send("Continue this conversation here.", { auth: ctx.session.auth.current, history });
+    .send("Continue this conversation here.", { auth, history });
   return { forked: true, sessionId };
 }
 
@@ -329,4 +331,33 @@ async function openDirectMessage(userId: string) {
   });
   if (!response.ok) throw new Error(`conversations.open failed: ${String(response.error)}`);
   return (response.channel as { id: string }).id;
+}
+
+/** The Teams tool from docs/patterns/fork-conversations-into-new-threads.md, with test import paths. */
+export async function forkToTeamsThreadWorkflow(
+  _input: Record<string, never>,
+  ctx: WorkflowToolContext,
+) {
+  "use workflow";
+  const auth = ctx.session.auth.current;
+  const { conversation_id, scope, service_url, tenant_id } = auth?.attributes ?? {};
+  if (
+    auth?.authenticator !== "teams-activity" ||
+    scope !== "channel" ||
+    typeof conversation_id !== "string" ||
+    typeof service_url !== "string"
+  )
+    return { forked: false, reason: "This conversation is not in a Teams channel." };
+
+  const history = await readTranscript(ctx.session.id);
+  const { sessionId } = await ctx
+    .to("teams", {
+      conversationId: conversation_id.split(";messageid=")[0],
+      conversationType: "channel",
+      initialMessage: "Continuing this conversation in a new thread.",
+      serviceUrl: service_url,
+      tenantId: typeof tenant_id === "string" ? tenant_id : undefined,
+    })
+    .send("Continue this conversation here.", { auth, history });
+  return { forked: true, sessionId };
 }
