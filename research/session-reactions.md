@@ -742,7 +742,8 @@ opened. Event-handler occurrences that already ran don't run again either.
   snapshots, which it stores per callback with no cap.
 - **Diagnostics go to logs, and later traces.** Each memo and once run reports the file, the key's
   digest (never the key, which can hold tenant or principal IDs), why it ran (a new key, a retry,
-  or a deployment change), how long it took, and whether the value changed. There's no public API for them at first.
+  or a deployment change), how long it took, and whether the value changed. There's no public API
+  for them at first.
 
 ## Examples from main's docs
 
