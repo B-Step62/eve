@@ -4,7 +4,6 @@
 
 import type { ErrorInfo } from "#protocol/session-events/envelope.js";
 import { displayTitle } from "#protocol/session-projection/display-name.js";
-import { TASK_CANCEL_TOOL_NAME } from "#protocol/task-tools.js";
 import {
   type Family,
   isOpen,
@@ -303,7 +302,13 @@ export function waiting(
   );
   if (pending.some((entry) => approved.has(entry.callId))) return undefined;
   // The session answers a task cancel itself, at once, even while the task asks someone.
-  if (pending.some((entry) => entry.capability.name === TASK_CANCEL_TOOL_NAME)) return undefined;
+  if (
+    pending.some(
+      (entry) =>
+        entry.capability.kind === "control" && entry.capability.name === "eve__task_cancel",
+    )
+  )
+    return undefined;
   if (pending.length > 0 && calls.length === 0) return undefined;
   // An interaction already answered, such as one of a batch still waiting for the rest or one
   // forwarded to the child that asked it, doesn't wait on a person. A request relayed from a
