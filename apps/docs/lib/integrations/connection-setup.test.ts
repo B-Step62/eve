@@ -92,10 +92,8 @@ describe("Shop connection setup", () => {
 
     expect(buildConnectionInstall(integration)).toContain("eve add connection/shop");
     expect(setup.variants["mcp:user"]).toContain('url: "https://mcp.shop.com"');
-    expect(setup.variants["mcp:user"]).toContain('auth: connect("shop")');
-    expect(integrationMarkdown(integration)).toContain(
-      "vercel connect create shop --name shop --connection-method mcp",
-    );
+    expect(setup.variants["mcp:user"]).toContain('auth: connect("shop/shop")');
+    expect(integrationMarkdown(integration)).toContain("vercel connect create shop --name shop");
     expect(integrationMarkdown(integration)).toContain("https://www.shopify.com/partners");
   });
 });

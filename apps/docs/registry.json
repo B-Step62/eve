@@ -1678,7 +1678,7 @@
       "name": "connection/shop",
       "type": "registry:item",
       "title": "Shop",
-      "description": "Find products, manage carts and orders, and approve purchases with a Shop account.",
+      "description": "Find products, manage carts, orders and delegated budgets, and approve purchases with saved cards.",
       "meta": {
         "eve": {
           "setup": {

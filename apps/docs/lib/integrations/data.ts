@@ -2267,8 +2267,9 @@ The MCP server can edit and publish content; use [tool filters and approval gate
   shop: {
     logo: "shop",
     docsHref: "https://shop.dev/docs",
-    keywords: ["mcp", "shopping", "checkout", "orders", "shop pay", "commerce", "oauth", "connect"],
+    keywords: ["mcp", "shopping", "checkout", "shop pay", "commerce", "oauth", "connect"],
     authModes: ["user"],
+    connectors: { user: { uid: "shop/shop", service: "shop", name: "shop" } },
     quickStart: `Create \`agent/connections/shop.ts\`:
 
 \`\`\`ts
@@ -2278,21 +2279,21 @@ import { defineMcpClientConnection } from "eve/connections";
 export default defineMcpClientConnection({
   url: "https://mcp.shop.com",
   description:
-    "Shop: find products, manage carts, checkouts, orders, and delegated budgets, and approve purchases.",
-  auth: connect("shop"),
+    "Shop: find products, manage carts, orders and delegated budgets, and approve purchases with saved cards.",
+  auth: connect("shop/shop"),
 });
 \`\`\`
 
-Each authenticated user signs in to their Shop account in the browser before the first tool call. See the [Shop skill](https://mcp.shop.com/skill.md) for guidance on using its tools.`,
-    configure: `Shop does not register OAuth clients automatically. Get a client ID and secret from [Shopify Partners](https://www.shopify.com/partners), then link your project, create the connector, and pull OIDC locally:
+Shop access is user-authorized, so actions follow the identity and permissions of the person using your agent. Each user signs in to Shop in the browser before the first tool call. [Read the Shop developer docs](https://shop.dev/docs).`,
+    configure: `Run these commands from the project that will use the connection:
 
 \`\`\`bash
 vercel link
-vercel connect create shop --name shop --connection-method mcp
+vercel connect create shop --name shop
 vercel env pull
 \`\`\`
 
-\`vercel connect create\` prompts for the client ID and secret. In non-interactive shells, pass them with \`--data '{"clientId":"...","clientSecret":"..."}'\`. Copy the returned connector UID into \`connect()\`.
+You can also create the connector from the [Vercel Dashboard](https://vercel.com/connect/shop). When prompted, enter the client ID and secret from [Shopify Partners](https://www.shopify.com/partners). Copy the returned connector UID, for example \`shop/shop\`, into \`connect()\`.
 
 Shop can complete checkouts and approve spend requests; use [tool filters and approval gates](/docs/connections/mcp#tool-filters) to control these actions.`,
   },
