@@ -18,7 +18,8 @@ import { DEFAULT_UPLOAD_POLICY } from "#public/channels/upload-policy.js";
  * it. The channel rebuilds the download with the adapter's
  * `rehydrateAttachment`. A file over 25 MB, or one that fails to download,
  * reaches the agent as a short note. An attachment with only a URL is passed as
- * that URL. Attachments with neither are skipped.
+ * that URL. An attachment with neither also becomes a note, so a file the
+ * platform gave no way to download is never dropped silently.
  */
 export function messageContentOf(message: Message): MessageContent {
   const attachments = message.attachments ?? [];
@@ -33,16 +34,20 @@ export function messageContentOf(message: Message): MessageContent {
   // Chat SDK thread ids start with the name of the adapter that owns them.
   const adapter = message.threadId.split(":")[0]!;
   for (const attachment of attachments) {
-    const part = attachmentToPart(adapter, attachment);
-    if (part !== null) parts.push(part);
+    parts.push(attachmentToPart(adapter, attachment));
   }
-  return parts.length > 0 ? parts : message.text;
+  return parts;
 }
 
-function attachmentToPart(adapter: string, attachment: Attachment): MessagePart | null {
+function attachmentToPart(adapter: string, attachment: Attachment): MessagePart {
   const mediaType = attachment.mimeType ?? "application/octet-stream";
   if (attachment.fetchData === undefined) {
-    if (!attachment.url) return null;
+    if (!attachment.url) {
+      return {
+        text: `Attachment ${attachment.name ?? "file"} was not retrieved: the platform did not provide a download for it.`,
+        type: "text",
+      };
+    }
     return { data: new URL(attachment.url), filename: attachment.name, mediaType, type: "file" };
   }
   if (attachment.size !== undefined && attachment.size > DEFAULT_UPLOAD_POLICY.maxBytes) {

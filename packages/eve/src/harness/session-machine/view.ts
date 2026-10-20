@@ -25,7 +25,13 @@ import {
 // publishes; execution comes from `TurnState`. Workflow bodies import this module, so it stays
 // free of runtime dependencies; a step reads the live projection through `current.ts`.
 
-export type { ApprovalAsk, StepCoordinates, SuspendedStep, TurnState } from "./state.js";
+export type {
+  ApprovalAsk,
+  ApprovedCall,
+  StepCoordinates,
+  SuspendedStep,
+  TurnState,
+} from "./state.js";
 
 export const SESSION_PROJECTION_STATE_KEY = "eve.harness.sessionProjection";
 
