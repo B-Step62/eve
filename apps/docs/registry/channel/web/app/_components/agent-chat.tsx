@@ -2,7 +2,7 @@
 
 import { interaction } from "eve/events";
 
-import type { MessagePart } from "eve/client";
+import { ClientError, type MessagePart } from "eve/client";
 import { activity, failure, type Activity } from "eve/events";
 import { useEveAgent } from "eve/react";
 import { AlertCircleIcon, BrainIcon, PlusIcon, SquareIcon } from "lucide-react";
@@ -92,9 +92,13 @@ export function AgentChat({
   const hasConversationContent = sessionless || !isEmpty || errorMessage !== undefined;
   const showConversationLayout = isResuming || hasConversationContent;
   const activeSessionId = sessionId ?? agent.session?.sessionId;
+  // A session that ended outside eve never settles its requests, so they stay open, yet it
+  // accepts no answer. Once the server says so, stop offering them.
+  const sessionEnded =
+    agent.error instanceof ClientError && agent.error.code === "session_not_active";
   // Answers are accepted while work runs; the server's settlement closes each request.
   const canRespond = (interactionId: string) =>
-    !isResuming && agent.view.interactions[interactionId]?.status === "open";
+    !isResuming && !sessionEnded && agent.view.interactions[interactionId]?.status === "open";
   // A tool call can ask several questions at once, and its message part holds only the latest.
   const questionsFor = (callId: string) =>
     Object.keys(agent.view.interactions)
