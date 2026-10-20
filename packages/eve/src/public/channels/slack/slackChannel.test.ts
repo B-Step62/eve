@@ -10,6 +10,7 @@ import {
   type CompiledChannel,
 } from "#channel/compiled-channel.js";
 import type { ChannelFrom, ChannelSource } from "#channel/channel-operations.js";
+import { SessionStrandedError } from "#channel/session-stranded-error.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import { isHttpRouteDefinition } from "#channel/routes.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
@@ -2665,6 +2666,46 @@ describe("slackChannel() inbound mention pipeline", () => {
     expect(await response.text()).toBe("abc123");
   });
 
+  // #5012: Slack only shows a threaded ephemeral once the thread has a reply.
+  it("omits thread_ts from postEphemeral for a top-level mention", async () => {
+    const channel = slackChannel({
+      credentials: { botToken: "xoxb-test" },
+      async onAppMention(ctx) {
+        await ctx.thread.postEphemeral("U01", "text");
+        return null;
+      },
+    });
+    const mention = buildMentionBody();
+
+    await firePost(channel, buildSignedRequest({ body: mention.body }));
+
+    const ephemeral = slackCalls(fetchMock, "chat.postEphemeral");
+    expect(ephemeral).toHaveLength(1);
+    const requestBody = parseSlackRequestBody(ephemeral[0]![1]);
+    expect(requestBody).toMatchObject({ channel: "C01", markdown_text: "text", user: "U01" });
+    expect(requestBody.thread_ts).toBeUndefined();
+  });
+
+  it("keeps thread_ts from postEphemeral for a threaded mention", async () => {
+    const channel = slackChannel({
+      credentials: { botToken: "xoxb-test" },
+      async onAppMention(ctx) {
+        await ctx.thread.postEphemeral("U01", "text");
+        return null;
+      },
+    });
+    const rootTs = "1700000000.100000";
+    const mention = buildMentionBody({ ts: "1700000000.100001", threadTs: rootTs });
+
+    await firePost(channel, buildSignedRequest({ body: mention.body }));
+
+    const ephemeral = slackCalls(fetchMock, "chat.postEphemeral");
+    expect(ephemeral).toHaveLength(1);
+    const requestBody = parseSlackRequestBody(ephemeral[0]![1]);
+    expect(requestBody).toMatchObject({ channel: "C01", markdown_text: "text", user: "U01" });
+    expect(requestBody.thread_ts).toBe(rootTs);
+  });
+
   it("dispatches when onAppMention returns an auth result", async () => {
     const channel = slackChannel({
       credentials: { botToken: "xoxb-test" },
@@ -5035,8 +5076,30 @@ describe("slackChannel() HITL interaction pipeline", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(slackOperations(fetchMock)).toEqual([]);
     expect(logs.records).toContainEqual(
-      expect.objectContaining({ level: "error", message: "HITL interaction delivery failed" }),
+      expect.objectContaining({ level: "error", message: "input response delivery failed" }),
     );
+  });
+
+  it("retires a HITL card and tells the presser when its session is stranded", async () => {
+    const send = vi.fn().mockRejectedValue(new SessionStrandedError({}));
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+
+    await firePost(channel, buildHitlButtonRequest(), { send });
+
+    expect(slackOperations(fetchMock)).toEqual(["chat.update", "chat.postEphemeral"]);
+    const update = parseSlackRequestBody(slackCalls(fetchMock, "chat.update")[0]?.[1]);
+    expect(update).toMatchObject({ text: "No longer active", ts: "1700000000.000010" });
+    // Nobody's answer was taken, so the retired card credits nobody.
+    const shown = JSON.stringify(update.blocks);
+    expect(shown).toContain("No longer active");
+    expect(shown).not.toContain("U_APPROVER");
+    expect(
+      parseSlackRequestBody(slackCalls(fetchMock, "chat.postEphemeral")[0]?.[1]),
+    ).toMatchObject({
+      markdown_text: "This request is no longer active. Send a new message to start again.",
+      thread_ts: "1700000000.000001",
+      user: "U_APPROVER",
+    });
   });
 
   it("waits for approval settlement before updating a tool-approval card", async () => {
