@@ -2270,32 +2270,8 @@ The MCP server can edit and publish content; use [tool filters and approval gate
     keywords: ["mcp", "shopping", "checkout", "shop pay", "commerce", "oauth", "connect"],
     authModes: ["user"],
     connectors: { user: { uid: "shop/shop", service: "shop", name: "shop" } },
-    quickStart: `Create \`agent/connections/shop.ts\`:
-
-\`\`\`ts
-import { connect } from "@vercel/connect/eve";
-import { defineMcpClientConnection } from "eve/connections";
-
-export default defineMcpClientConnection({
-  url: "https://mcp.shop.com",
-  description:
-    "Shop: find products, manage carts, orders and delegated budgets, and approve purchases with saved cards.",
-  auth: connect("shop/shop"),
-});
-\`\`\`
-
-Your agent can search for products without the user signing in. When it needs the user's Shop account, for example to see their orders, eve [asks them to sign in](/docs/connections/mcp#when-eve-asks-for-sign-in) and then finishes the request. [Read the Shop developer docs](https://shop.dev/docs).`,
-    configure: `Run these commands from the project that will use the connection:
-
-\`\`\`bash
-vercel link
-vercel connect create shop --name shop
-vercel env pull
-\`\`\`
-
-You can also create the connector from the [Vercel Dashboard](https://vercel.com/connect/shop). When prompted, enter the client ID and secret from [Shopify Partners](https://www.shopify.com/partners). Copy the returned connector UID, for example \`shop/shop\`, into \`connect()\`.
-
-Shop can complete checkouts and approve spend requests; use [tool filters and approval gates](/docs/connections/mcp#tool-filters) to control these actions.`,
+    configureNote:
+      "When prompted, enter your client ID and secret from [Shopify Partners](https://www.shopify.com/partners). Shop can make purchases, so add an approval gate before checkout.",
   },
   shopify: {
     logo: "shopify",
