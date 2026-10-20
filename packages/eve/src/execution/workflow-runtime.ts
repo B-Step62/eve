@@ -156,6 +156,15 @@ export function createWorkflowRuntime(config: {
         }),
       };
     }
+    // A losing candidate forwards this command to the winner instead of starting, so it is the
+    // same delivery and must carry the same identity.
+    const conflictCommand = input.continuationConflictCommand;
+    if (conflictCommand !== undefined && conflictCommand.delivery === undefined) {
+      input = {
+        ...input,
+        continuationConflictCommand: { ...conflictCommand, delivery: input.delivery },
+      };
+    }
     const bundle = await getCompiledRuntimeAgentBundle({
       compiledArtifactsSource: config.compiledArtifactsSource,
       nodeId: config.nodeId,
