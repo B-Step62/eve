@@ -17,7 +17,11 @@ import { isRunnableTool } from "#harness/tools.js";
 import type { HandleEventFn, HarnessToolLookup } from "#harness/types.js";
 import { SEARCH_TOOL_NAME } from "#protocol/catalog-tools.js";
 import { callSettledFrom } from "#harness/call-facts.js";
-import type { ApprovalAsk } from "#harness/session-machine/view.js";
+import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
+import type { ApprovedCall } from "#harness/session-machine/state.js";
+import { callSignInsSettled } from "#harness/session-machine/transitions.js";
+import type { SessionView } from "#harness/session-machine/view.js";
+import { toErrorMessage } from "#shared/errors.js";
 
 export { APPROVED_CALL_INTERRUPTED_MESSAGE } from "#harness/call-executor.js";
 
@@ -27,7 +31,7 @@ export { APPROVED_CALL_INTERRUPTED_MESSAGE } from "#harness/call-executor.js";
  * results in the steps that made the calls.
  */
 export async function runApprovedCalls(input: {
-  readonly approvals: readonly ApprovalAsk[];
+  readonly approvals: readonly ApprovedCall[];
   /** The entries of the step that asked, which the approved calls run. */
   readonly tools: HarnessToolLookup;
   readonly approvedTools?: ReadonlySet<string>;
@@ -43,11 +47,33 @@ export async function runApprovedCalls(input: {
   /** The step attempt's telemetry, which hears each execution as the AI SDK reports it. */
   readonly telemetry?: TelemetryOptions;
   /** Who approved each call, which it reads as `ctx.approval`; it still runs as the requester. */
-  readonly responderOf?: (approval: ApprovalAsk) => SessionAuthContext | undefined;
+  readonly responderOf?: (approval: ApprovedCall) => SessionAuthContext | undefined;
+  /** The session as of the latest publish, which says whether a call's sign-ins are still open. */
+  readonly view: () => Pick<SessionView, "projection">;
 }): Promise<{
   readonly settled: readonly CallResult[];
   readonly signIns: readonly ToolSignIn[];
 }> {
+  /**
+   * The sign-ins a call waited on end with the call, once `completeAuthorization` has run in it:
+   * accepted if it returned, failed with the reason it didn't. Reported before the call's result.
+   */
+  const reportSignIns = async (call: ApprovedCall, failure?: Error | string): Promise<void> => {
+    if ((call.signIns?.length ?? 0) === 0) return;
+    const refused = isConnectionAuthorizationFailedError(failure) ? failure : undefined;
+    const events = callSignInsSettled(
+      input.view(),
+      call,
+      failure === undefined
+        ? undefined
+        : {
+            reason:
+              refused === undefined ? toErrorMessage(failure) : (refused.reason ?? refused.message),
+            ...(refused !== undefined && { retryable: refused.retryable }),
+          },
+    );
+    if (events.length > 0) await input.publish(events);
+  };
   const executed = await Promise.allSettled(
     input.approvals.map(async (approval): Promise<CallOutcome> => {
       const { call, interactionId } = approval;
@@ -59,20 +85,20 @@ export async function runApprovedCalls(input: {
           call,
           {
             ...input,
-            clearedBy: { interactionId },
+            // A call only a sign-in stopped was never cleared by a person.
+            ...(interactionId !== undefined && { clearedBy: { interactionId } }),
             definition,
             ...(responder !== undefined && { responder }),
+            beforeResult: (failure) => reportSignIns(approval, failure),
           },
           "recheck",
         );
       }
       // A connection or dynamic tool can go away while its call waits for approval.
       const searchable = input.tools.get(SEARCH_TOOL_NAME) !== undefined;
-      const failed = failedCall({
-        callId,
-        message: unavailableToolMessage(toolName, searchable),
-        toolName,
-      });
+      const message = unavailableToolMessage(toolName, searchable);
+      const failed = failedCall({ callId, message, toolName });
+      await reportSignIns(approval, message);
       await input.publish(callSettledFrom(failed.result));
       return { settled: [{ part: failed.part }], toolResults: [] };
     }),
@@ -94,7 +120,7 @@ export type ApprovedCallResult = CallResult;
 
 /** Records an approved call refused by its final request-policy check. */
 export async function rejectApprovedCall(input: {
-  readonly approval: ApprovalAsk;
+  readonly approval: ApprovedCall;
   readonly reason?: string;
   readonly position: {
     readonly sequence: number;

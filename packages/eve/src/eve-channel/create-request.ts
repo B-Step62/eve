@@ -1,6 +1,7 @@
 import type { MessageContent } from "#shared/message-content.js";
 
 import type { SessionCallback, SessionCapabilities } from "#channel/types.js";
+import type { ClientContextValue } from "#eve-channel/types.js";
 import type { JsonObject } from "#shared/json.js";
 import type { ToolStub } from "#tool-stubs/types.js";
 
@@ -9,7 +10,7 @@ export interface ParsedCreateBody {
   callback?: SessionCallback;
   capabilities?: SessionCapabilities;
   message?: MessageContent;
-  context?: readonly string[];
+  context?: ClientContextValue;
   operationId?: string;
   outputSchema?: JsonObject;
   /** Remote agent protocol of a delegating caller; set only with {@link callback}. */

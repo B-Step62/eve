@@ -1,4 +1,4 @@
-import { AgentSpanIdGenerator } from "#compiled/@eve/tracing/index.js";
+import { AgentSpanIdGenerator } from "#compiled/@vercel/agent-runs/index.js";
 import { describe, expect, it } from "vitest";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { ChannelInstrumentationKey } from "#context/keys.js";
