@@ -1,4 +1,4 @@
-import { AgentSpanIdGenerator } from "#compiled/@eve/tracing/index.js";
+import { AgentSpanIdGenerator } from "#compiled/@vercel/agent-runs/index.js";
 import { context as otelContext, trace } from "#compiled/@opentelemetry/api/index.js";
 import {
   type FilePart,
@@ -54,9 +54,12 @@ import {
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
 import { requireSignIn } from "#harness/hitl/approvals.js";
 import { createAuthorizationRequiredEvent } from "#protocol/message.js";
-import { runtimeWait, storedProjection } from "#harness/session-machine/view.js";
+import { readHitlState } from "#harness/hitl/requests.js";
+import { requestAuthorization } from "#harness/authorization.js";
+import { answeredCallIds, runtimeWait, storedProjection } from "#harness/session-machine/view.js";
 import {
   foldingHandler,
+  parkedSteps,
   positionOf,
   withOpenTurn,
   withPublished,
@@ -643,6 +646,63 @@ function parkedOnApproval(input: {
     messages: input.responseMessages,
     requests: input.requests,
     responseAuthRequiredRequestIds: input.responseAuthRequiredRequestIds,
+  });
+}
+
+/** A step parked on `call-1`'s approval, beside a sibling call that already ran. */
+function createPendingProtectedActionApprovalSessionWithSiblingCall(): HarnessSession {
+  return parkedOnApproval({
+    requests: [
+      {
+        action: {
+          callId: "call-1",
+          input: { action: "run" },
+          kind: "tool-call",
+          toolName: "protected_action",
+        },
+        allowFreeform: false,
+        display: "confirmation",
+        kind: "tool-approval",
+        options: [
+          { id: "approve", label: "Approve" },
+          { id: "cancel", label: "Cancel" },
+        ],
+        prompt: "Approve tool call: protected_action",
+        requestId: "approval-1",
+      },
+    ],
+    responseMessages: [
+      {
+        content: [
+          {
+            input: { action: "run" },
+            toolCallId: "call-1",
+            toolName: "protected_action",
+            type: "tool-call",
+          },
+          {
+            input: { action: "sibling" },
+            toolCallId: "call-2",
+            toolName: "protected_action",
+            type: "tool-call",
+          },
+        ],
+        role: "assistant",
+      },
+      // The ungated sibling ran in the step that parked.
+      {
+        content: [
+          {
+            output: { type: "text", value: "sibling completed" },
+            toolCallId: "call-2",
+            toolName: "protected_action",
+            type: "tool-result",
+          },
+        ],
+        role: "tool",
+      },
+    ],
+    session: createTestSession(),
   });
 }
 
@@ -4747,6 +4807,148 @@ describe("createToolLoopHarness", () => {
     ]);
   });
 
+  describe("authorization signal detection", () => {
+    function createAuthSignal() {
+      return requestAuthorization([
+        {
+          attemptId: "attempt-protected-action",
+          name: "protected_action",
+          challenge: {
+            url: "https://idp.example/auth",
+            instructions: "Sign in to continue",
+            userCode: "GFI-QLM",
+          },
+          hookUrl: "https://app.example/callback",
+          principal: { type: "app" },
+          resume: { nonce: "n1" },
+        },
+      ]);
+    }
+
+    it("emits a sibling sign-in without approval while preserving the parked workflow call", async () => {
+      const full = createAuthSignal();
+      const delegateCall = {
+        input: { message: "probe" },
+        toolCallId: "delegate-1",
+        toolName: "delegate",
+        type: "tool-call" as const,
+      };
+      const signInCall = {
+        input: {},
+        toolCallId: "sign-in-1",
+        toolName: "add",
+        type: "tool-call" as const,
+      };
+      setupMockAgent({
+        finishReason: "tool-calls",
+        response: {
+          messages: [{ content: [delegateCall, signInCall], role: "assistant" }],
+        },
+        text: "",
+        toolCalls: [delegateCall, signInCall],
+        toolResults: [],
+      });
+      const tools = new Map([
+        ...createDelegationToolMap(),
+        [
+          "add",
+          {
+            description: "Adds numbers",
+            execute: vi.fn().mockResolvedValue(full),
+            inputSchema: jsonSchema({ type: "object" }),
+            name: "add",
+          },
+        ],
+      ]);
+      const { emit, events } = createEventCollector();
+      const runStep = createToolLoopHarness(createTestConfig(emit, { tools }));
+
+      const result = await runStep(createTestSession(), { message: "Delegate and check access." });
+
+      expect(result.next).toBeNull();
+      expect(result.settledTurn).toBeUndefined();
+      expect(readHitlState(result.session.state).signIns).toEqual(full.challenges);
+      expect(events.filter((event) => event.type === "authorization.required")).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            attemptId: "attempt-protected-action",
+            authorization: full.challenges[0]!.challenge,
+            name: "protected_action",
+            webhookUrl: "https://app.example/callback",
+          }),
+        }),
+      ]);
+      expect(events.filter((event) => event.type === "input.requested")).toHaveLength(0);
+      expect(events.filter((event) => event.type === "action.result")).toHaveLength(0);
+      expect(runtimeWait(result.session.state)?.tasks).toEqual([
+        expect.objectContaining({ callId: delegateCall.toolCallId, kind: "workflow-task" }),
+      ]);
+      const parked = parkedSteps(result.session);
+      expect(parked).toHaveLength(1);
+      expect(parked[0]?.requests).toEqual([]);
+      // The call the sign-in stopped waits in the step, unanswered, to run once it completes.
+      expect(parked[0]?.messages).toEqual([
+        { content: [delegateCall, signInCall], role: "assistant" },
+      ]);
+      expect(parked[0]?.approved?.map((call) => call.action.callId)).toEqual([
+        signInCall.toolCallId,
+      ]);
+      expect(ToolLoopAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it("emits authorization.required and parks when an approved tool returns an auth signal", async () => {
+      const full = createAuthSignal();
+      const execute = vi.fn().mockResolvedValue(full);
+      const { emit, events } = createEventCollector();
+      const runStep = createToolLoopHarness(
+        createTestConfig(emit, {
+          tools: new Map([
+            [
+              "protected_action",
+              {
+                description: "Run a protected action",
+                execute,
+                inputSchema: jsonSchema({ type: "object" }),
+                name: "protected_action",
+              },
+            ],
+          ]),
+        }),
+      );
+
+      const result = await runStep(createPendingProtectedActionApprovalSessionWithSiblingCall(), {
+        inputResponses: [{ optionId: "approve", requestId: "approval-1" }],
+      });
+
+      expect(execute).toHaveBeenCalledOnce();
+      expect(result.next).toBeNull();
+      expect(result.settledTurn).toBeUndefined();
+      expect(readHitlState(result.session.state).signIns).toEqual(full.challenges);
+
+      const authRequired = events.filter((event) => event.type === "authorization.required");
+      expect(authRequired).toHaveLength(1);
+      expect(authRequired[0]?.data).toMatchObject({
+        authorization: {
+          url: "https://idp.example/auth",
+          instructions: "Sign in to continue",
+          userCode: "GFI-QLM",
+        },
+        name: "protected_action",
+        webhookUrl: "https://app.example/callback",
+      });
+
+      // A sign-in interrupt is not a tool result on the v26 stream.
+      const actionResults = events.filter((event) => event.type === "action.result");
+      expect(actionResults).toHaveLength(0);
+      // The step waits whole: the sign-in's call has no result, so nothing reaches history yet.
+      const [parked] = parkedSteps(result.session);
+      expect(parked?.approved?.map((call) => call.action.callId)).toEqual(["call-1"]);
+      expect(answeredCallIds(parked?.messages ?? [])).toEqual(new Set(["call-2"]));
+      expect(JSON.stringify(result.session.history)).not.toContain("call-");
+      expect(ToolLoopAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("dispatches model selection with the active turn ID when a continuation has no turn input", async () => {
     setupMockAgent({
       finishReason: "stop",
@@ -7629,6 +7831,46 @@ describe("createToolLoopHarness", () => {
           scope: expect.objectContaining({ attemptIndex: 0 }),
           type: "step.attempt.completed",
         }),
+        expect.anything(),
+      );
+    });
+
+    it("completes rather than fails the attempt when the turn is cancelled mid-call", async () => {
+      const abortController = new AbortController();
+      vi.mocked(ToolLoopAgent).mockImplementation(function (this: ToolLoopAgent) {
+        this.stream = vi.fn().mockImplementation(async () => {
+          // A cancellation can reach the step without its reason, so the stream
+          // rejects with the platform's plain AbortError.
+          abortController.abort();
+          throw abortController.signal.reason;
+        });
+        return this;
+      } as MockAgentConstructor);
+      const attemptCompleted = vi.fn();
+      const attemptFailed = vi.fn();
+      const hooks = createInstrumentationHooks([
+        {
+          events: {
+            "step.attempt.completed": attemptCompleted,
+            "step.attempt.failed": attemptFailed,
+          },
+          name: "attempt",
+        },
+      ]);
+      const runStep = createToolLoopHarness(
+        createTestConfig(undefined, {
+          abortSignal: abortController.signal,
+          instrumentation: bindHookInstrumentation(hooks),
+        }),
+      );
+
+      await expect(runStep(createTestSession(), { message: "hi" })).rejects.toBeInstanceOf(
+        TurnCancelledError,
+      );
+
+      expect(attemptFailed).not.toHaveBeenCalled();
+      expect(attemptCompleted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ type: "step.attempt.completed" }),
         expect.anything(),
       );
     });
