@@ -282,21 +282,14 @@ export async function failingServeWorkflow(): Promise<never> {
   throw new Error("Live serve workflow must not execute.");
 }
 
-/**
- * "Fork this to my DMs": copies the calling session's transcript into a new
- * session on the `dm` channel, then tries again at the same target.
- */
+/** "Fork this to my DMs": copies the calling session's transcript into a session on the `dm` channel. */
 export async function forkToDmWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
   "use workflow";
   const history = await readTranscriptStep(ctx.session.id);
-  const dm = ctx.to("dm", { userId: input.service });
-  const first = await dm.create({
+  return await ctx.to("dm", { userId: input.service }).send("Continue this conversation here.", {
     auth: ctx.session.auth.current,
     history,
-    message: "Continue this conversation here.",
   });
-  const second = await dm.create({ auth: ctx.session.auth.current, message: "Start over." });
-  return { first, second };
 }
 
 async function readTranscriptStep(sessionId: string) {

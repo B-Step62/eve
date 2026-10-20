@@ -1,6 +1,6 @@
 import { defineChannel, POST } from "#public/channels/index.js";
 
-// Epoch 64 handoffs had no `create()` or receive `history`; epoch 65 adds them, which is additive.
+// Epoch 64 handoffs had no `history`; epoch 65 adds it, which is additive.
 export default defineChannel({
   routes: [
     POST("/handoff", async (_req, ctx) => {

@@ -108,20 +108,10 @@ export interface WorkflowChannelSendOptions {
   readonly history?: readonly SessionHistoryMessage[];
 }
 
-/** Options for {@link WorkflowChannelTarget.create}. */
-export interface WorkflowChannelCreateOptions {
-  /** Who the session runs as. Pass `ctx.session.auth.current` to act as the caller. */
-  readonly auth: SessionAuthContext | null;
-  /** Prior conversation the session starts with. */
-  readonly history?: readonly SessionHistoryMessage[];
-  /** First message, which runs the first turn only when this call starts the session. */
-  readonly message?: string;
-}
-
 /**
- * A channel target selected with `ctx.to()`. Each operation runs as a step
- * through the channel's `receive()` hook. The session belongs to the channel:
- * it has no parent and outlives the workflow run.
+ * A channel target selected with `ctx.to()`. Delivery runs as a step through
+ * the channel's `receive()` hook. The session belongs to the channel: it has
+ * no parent and outlives the workflow run.
  */
 export interface WorkflowChannelTarget {
   /**
@@ -132,13 +122,6 @@ export interface WorkflowChannelTarget {
     message: string,
     options: WorkflowChannelSendOptions,
   ): Promise<{ readonly sessionId: string }>;
-  /**
-   * Starts a session at the target only when no session owns it; otherwise
-   * returns the owner with `created: false` and delivers nothing. Safe to retry.
-   */
-  create(
-    options: WorkflowChannelCreateOptions,
-  ): Promise<{ readonly created: boolean; readonly sessionId: string }>;
 }
 
 /** Members the context of every workflow tool entry point shares. */

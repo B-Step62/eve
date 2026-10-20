@@ -21,9 +21,9 @@ tool runs three steps:
    only platform-specific step.
 2. **Read the current conversation.** Fold the session's stream with `transcriptReducer()`.
 3. **Start the forked session.** Call
-   [`ctx.to(channel, target).create(...)`](../tools/workflows#start-channel-sessions-ctxto) with
-   the transcript as `history` and a first `message`. The channel's `receive` hook maps the target
-   to its session, and `message` runs the fork's first turn.
+   [`ctx.to(channel, target).send(...)`](../tools/workflows#start-channel-sessions-ctxto) with a
+   first message and the transcript as `history`. The channel's `receive` hook maps the target to
+   its session, and the message runs the fork's first turn.
 
 ## Define the tool
 
@@ -48,12 +48,9 @@ export default defineWorkflowTool({
 
     const channelId = await openDirectMessage(userId);
     const history = await readTranscript(ctx.session.id);
-    const { created, sessionId } = await ctx.to<typeof slack>("slack", { channelId }).create({
-      auth: ctx.session.auth.current,
-      history,
-      message: "Continue this conversation here.",
-    });
-    if (!created) return { forked: false, reason: "A conversation is already open there." };
+    const { sessionId } = await ctx
+      .to<typeof slack>("slack", { channelId })
+      .send("Continue this conversation here.", { auth: ctx.session.auth.current, history });
     return { forked: true, sessionId };
   },
 });
@@ -109,7 +106,7 @@ see [Slack proactive sessions](../channels/slack#proactive-sessions) and
 ## What the new session sees
 
 The fork's first model call sees the transcript as earlier user and assistant turns, followed by
-`message`. The transcript keeps user messages and finished assistant replies, including the message
+the message. The transcript keeps user messages and finished assistant replies, including the message
 that asked for the fork. It leaves out tool calls, files, reasoning, and replies the agent hasn't
 finished. See [Start from prior history](../channels/eve#start-from-prior-history) for how history
 joins a session.
@@ -126,17 +123,18 @@ the DM becomes a thread root and replies in that thread continue the fork, while
 starts a separate session. The built-in Slack DM handler answers without a mention, and needs the
 `message.im` event and the `im:history` scope; see [Message hooks](../channels/slack#message-hooks).
 
-## Calling the tool again
+## When the target already has a session
 
-`create` starts a session only when no session owns the target. Otherwise it returns
-`created: false`, sends nothing, and the tool reports that it didn't fork. Whether a target is
-already owned depends on how the channel keys direct conversations:
+`send` starts a session only when no session owns the target. When one does, `send` adds the
+transcript and the message to it instead of forking. Whether a target is already owned depends on
+how the channel keys direct conversations:
 
 - A Slack target with only a `channelId` starts a new thread, so each call starts a new fork.
 - A Telegram private chat is one session per chat. While the person already has a session with the
-  bot there, the fork can't start.
+  bot there, the transcript and the message join that conversation.
 
-To stop the model from forking the same conversation twice, say so in the tool's `description`, or
+A step that fails after `send` delivered retries the delivery, so the message can arrive twice. To
+stop the model from forking the same conversation twice, say so in the tool's `description`, or
 record each fork in your app and check for one before opening the direct conversation.
 
 ## Fork from an earlier point

@@ -719,12 +719,13 @@ export default defineWorkflowTool({
   async task({ title, summary }, ctx) {
     "use workflow";
     const channelId = await openChannel(title);
-    const { created, sessionId } = await ctx.to<typeof slack>("slack", { channelId }).create({
-      auth: ctx.session.auth.current,
-      history: [{ role: "user", text: summary }],
-      message: "Continue the investigation in this channel.",
-    });
-    return { channelId, created, sessionId };
+    const { sessionId } = await ctx
+      .to<typeof slack>("slack", { channelId })
+      .send("Continue the investigation in this channel.", {
+        auth: ctx.session.auth.current,
+        history: [{ role: "user", text: summary }],
+      });
+    return { channelId, sessionId };
   },
 });
 
@@ -737,18 +738,12 @@ async function openChannel(title: string) {
 The workflow body can't import the channel module, because the body runs in the workflow
 sandbox. The `import type` above only types the target.
 
-The handle has two operations. Each one runs as a step through the channel's `receive` hook, which
-maps the target to the channel's session address:
+`send(message, { auth, history? })` runs as a step through the channel's `receive` hook, which maps
+the target to the channel's session address. When no session owns that address, `send` starts one
+from `history` and runs the turn. When a session owns it, `send` adds `history` and the message to
+that session. It returns `{ sessionId }`.
 
-| Operation                              | When no session owns the target                                       | When a session owns the target                             |
-| -------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `create({ auth, history?, message? })` | Starts a session from `history`. With `message`, runs its first turn. | Returns `{ created: false, sessionId }` and sends nothing. |
-| `send(message, { auth, history? })`    | Starts a session from `history` and runs the turn.                    | Adds `history` and the message to that session.            |
-
-Use `create` to start new work. A retried step finds the session the first attempt started and
-returns `created: false`, so the message is never sent twice. Use `send` to hand work to a
-conversation that may already exist, such as posting a result into a user's thread. A step that
-fails after `send` delivered retries the delivery, so the message can arrive twice.
+A step that fails after `send` delivered retries the delivery, so the message can arrive twice.
 
 `ctx.to` differs from `ctx.agent`:
 

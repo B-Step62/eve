@@ -404,16 +404,6 @@ The client then resumes that session by id, for example with `useEveAgent({ init
 
 When the session at the address is [stranded](../concepts/execution-model-and-durability#stranded-sessions), `create()` throws `SessionStrandedError` instead of replacing it, because that session may hold the conversation you meant to import. Call `reset()` on the address, then `create()` again.
 
-Pass `message` to `create()` to run the session's first turn as soon as it starts. The message is sent only when this call starts the session. When `created` is `false`, nothing is sent, so a retried request never sends the message twice:
-
-```ts
-const { created, session } = await from(`conversation:${conversation.id}`).create({
-  auth,
-  history,
-  message: "Pick up where we left off.",
-});
-```
-
 `create()` returns once the new session claims its address, so a `send()` right after it reaches that session. It throws if no session claims the address within 15 seconds.
 
 `send()` accepts the same `history` option. The entries are added right before that message and its `context`, whether the send creates the session or continues it. The eve channel's `onMessage` can return `history` the same way. It applies to every message it is returned for, so return it only when the message should carry those turns.

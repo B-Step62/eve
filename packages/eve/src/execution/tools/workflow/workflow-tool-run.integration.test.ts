@@ -124,14 +124,9 @@ describe("workflow tools", () => {
       try {
         const forked = await sourceTurns.nextTurn();
         const reply = String(filterEventsByType(forked, "message.completed").at(-1)?.data.message);
-        const output = JSON.parse(reply.slice(reply.indexOf("{"))) as {
-          readonly first: { readonly created: boolean; readonly sessionId: string };
-          readonly second: { readonly created: boolean; readonly sessionId: string };
+        const { sessionId: dm } = JSON.parse(reply.slice(reply.indexOf("{"))) as {
+          readonly sessionId: string;
         };
-        const dm = output.first.sessionId;
-        expect(output.first.created).toBe(true);
-        // The target already has a session, so the second create delivers nothing.
-        expect(output.second).toEqual({ created: false, sessionId: dm });
 
         await waitForCompletedTurns(dm, 1);
         // The fork's first turn sees the source conversation, then the fork's message.

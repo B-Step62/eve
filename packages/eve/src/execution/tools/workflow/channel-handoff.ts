@@ -1,11 +1,8 @@
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
-import {
-  createAtChannelStep,
-  sendToChannelStep,
-} from "#execution/tools/workflow/channel-handoff-steps.js";
+import { sendToChannelStep } from "#execution/tools/workflow/channel-handoff-steps.js";
 import type { WorkflowChannelTarget } from "#tools/workflow-definition.js";
 
-/** `ctx.to()` for a workflow body: each operation is one step against the root agent's channels. */
+/** `ctx.to()` for a workflow body: each send is one step against the root agent's channels. */
 export function createWorkflowChannelTarget(
   context: AgentSessionContext,
   channel: string,
@@ -27,13 +24,6 @@ export function createWorkflowChannelTarget(
         auth: options.auth,
         history: options.history,
         message,
-      }),
-    create: async (options) =>
-      await createAtChannelStep({
-        ...base,
-        auth: options.auth,
-        history: options.history,
-        message: options.message,
       }),
   };
 }

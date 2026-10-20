@@ -2,9 +2,7 @@ import type { UserContent } from "ai";
 
 import type { ChannelAdapter } from "#channel/adapter.js";
 import {
-  type ChannelCreateResult,
   type ChannelReceiveContext,
-  type ChannelSendOptions,
   createChannelOperations,
 } from "#channel/channel-operations.js";
 import {
@@ -28,24 +26,10 @@ export interface CrossChannelSendOptions {
   readonly turnPolicy?: TurnPolicy;
 }
 
-/** Options for creating a session at a channel selected with `ctx.to(...)`. */
-export interface CrossChannelCreateOptions {
-  readonly auth: SessionAuthContext | null;
-  /** Prior conversation the session starts with. */
-  readonly history?: readonly SessionHistoryMessage[];
-  /** First message, which runs the first turn only when this call starts the session. */
-  readonly message?: string | UserContent;
-}
-
-/** Delivery bound to one channel-specific proactive target. */
+/** Message delivery bound to one channel-specific proactive target. */
 export interface CrossChannelTargetHandle {
   /** Starts a session at the target, or continues the one that owns it. */
   send(message: string | UserContent, options: CrossChannelSendOptions): Promise<Session>;
-  /**
-   * Starts a session at the target only when no session owns it. Otherwise
-   * returns the owner with `created: false` and delivers nothing.
-   */
-  create(options: CrossChannelCreateOptions): Promise<ChannelCreateResult>;
 }
 
 /** Selects another authored channel and one of its proactive targets. */
@@ -129,40 +113,19 @@ function createCrossChannelTargetHandle(
   channel: CrossChannelTarget,
   target: unknown,
 ): CrossChannelTargetHandle {
-  const receiveTarget = target as Readonly<Record<string, unknown>>;
   return {
     async send(message, options) {
       return await invokeChannelReceive({
         runtime,
         target: channel,
-        input: { auth: options.auth, history: options.history, message, target: receiveTarget },
-        turnPolicy: options.turnPolicy,
-      });
-    },
-    async create(options) {
-      let result: ChannelCreateResult | undefined;
-      const session = await invokeChannelReceive({
-        runtime,
-        target: channel,
         input: {
           auth: options.auth,
           history: options.history,
-          message: options.message ?? "",
-          target: receiveTarget,
+          message,
+          target: target as Readonly<Record<string, unknown>>,
         },
-        create: {
-          message: options.message,
-          onCreate: (created) => {
-            result = created;
-          },
-        },
+        turnPolicy: options.turnPolicy,
       });
-      if (result === undefined) {
-        throw new Error(
-          `ctx.to().create(): channel "${channel.name}" receive() returned a session without delivering through from().send(), so eve cannot tell whether it created one.`,
-        );
-      }
-      return { created: result.created, session };
     },
   };
 }
@@ -177,11 +140,6 @@ interface InvokeChannelReceiveInput {
     readonly target: Readonly<Record<string, unknown>>;
   };
   readonly turnPolicy?: TurnPolicy;
-  /** Present for `create()`: the channel's `send()` becomes a create at the same address. */
-  readonly create?: {
-    readonly message: string | UserContent | undefined;
-    readonly onCreate: (result: ChannelCreateResult) => void;
-  };
 }
 
 /**
@@ -207,20 +165,16 @@ async function invokeChannelReceive(args: InvokeChannelReceiveInput): Promise<Se
   });
   return await args.target.receive(
     args.input,
-    withHandoffDelivery(channelOperations, name, args.input.history, args.create),
+    withHandoffHistory(channelOperations, args.input.history),
   );
 }
 
-/**
- * The channel's `receive()` decides the address and state; the handoff decides the verb.
- * Its `history` joins the channel's `send()` unless the channel passed its own.
- */
-function withHandoffDelivery(
+/** The handoff's `history` joins the channel's `send()` unless the channel passed its own. */
+function withHandoffHistory(
   operations: ChannelReceiveContext,
-  channelName: string,
   history: readonly SessionHistoryMessage[] | undefined,
-  create: InvokeChannelReceiveInput["create"],
 ): ChannelReceiveContext {
+  if (history === undefined) return operations;
   return {
     ...operations,
     from(address) {
@@ -228,35 +182,11 @@ function withHandoffDelivery(
       return {
         ...source,
         async send(message, options) {
-          const withHistory = { ...options, history: options.history ?? history };
-          if (create === undefined) return await source.send(message, withHistory);
-          const result = await source.create(toCreateOptions(withHistory, channelName, create));
-          create.onCreate(result);
-          return result.session;
+          return await source.send(message, { ...options, history: options.history ?? history });
         },
       };
     },
   };
-}
-
-function toCreateOptions(
-  options: ChannelSendOptions,
-  channelName: string,
-  create: NonNullable<InvokeChannelReceiveInput["create"]>,
-) {
-  const { callback, context, outputSchema, turnPolicy, ...createOptions } =
-    options as ChannelSendOptions & { readonly state?: unknown };
-  const unsupported = Object.entries({ callback, context, outputSchema, turnPolicy })
-    .filter(([, value]) => value !== undefined)
-    .map(([key]) => key);
-  if (unsupported.length > 0) {
-    throw new Error(
-      `ctx.to().create(): channel "${channelName}" receive() passed ${unsupported.join(", ")} to from().send(), which create() does not support.`,
-    );
-  }
-  return { ...createOptions, message: create.message } as Parameters<
-    ReturnType<ChannelReceiveContext["from"]>["create"]
-  >[0];
 }
 
 function resolveTargetByReference(

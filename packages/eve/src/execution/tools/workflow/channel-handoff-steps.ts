@@ -30,17 +30,6 @@ export async function sendToChannelStep(
   return { sessionId: session.id };
 }
 
-export async function createAtChannelStep(
-  input: ChannelHandoffInput & { readonly message?: string },
-): Promise<{ readonly created: boolean; readonly sessionId: string }> {
-  "use step";
-
-  const { created, session } = await withChannelTarget(input, (handle) =>
-    handle.create({ auth: input.auth, history: input.history, message: input.message }),
-  );
-  return { created, sessionId: session.id };
-}
-
 /**
  * Channels belong to the root agent, so the session starts as a root session
  * whatever node the tool runs on, outside the calling session's context.

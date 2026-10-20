@@ -196,7 +196,7 @@ describe("createChannelAddress", () => {
 
   it("reports whether create() started the session that owns the address", async () => {
     const history = [{ text: "Earlier", role: "user" as const }];
-    const create = async (owners: readonly (string | undefined)[], message?: string) => {
+    const create = async (owners: readonly (string | undefined)[]) => {
       const runtime = createRuntime();
       vi.mocked(runtime.createSession).mockResolvedValue({
         events: new ReadableStream(),
@@ -213,7 +213,7 @@ describe("createChannelAddress", () => {
         continuationToken: "conversation:1",
         runtime,
       });
-      const result = await address.create({ auth: null, history, message });
+      const result = await address.create({ auth: null, history });
       return { created: result.created, runtime, sessionId: result.session.id };
     };
 
@@ -223,19 +223,13 @@ describe("createChannelAddress", () => {
       expect.objectContaining({ continuationToken: "app:conversation:1", input: { history } }),
     );
 
-    // A first message starts the session together with the history.
-    const started = await create([undefined, "sess_started"], "Continue.");
-    expect(started.runtime.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ input: { history, message: "Continue." } }),
-    );
-
     // A concurrent send() or create() claimed the address first; this run's history never landed.
     await expect(create([undefined, "sess_other"])).resolves.toMatchObject({
       created: false,
       sessionId: "sess_other",
     });
 
-    const owned = await create(["sess_owner"], "Continue.");
+    const owned = await create(["sess_owner"]);
     expect(owned).toMatchObject({ created: false, sessionId: "sess_owner" });
     expect(owned.runtime.createSession).not.toHaveBeenCalled();
   });

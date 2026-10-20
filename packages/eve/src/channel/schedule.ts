@@ -202,11 +202,6 @@ export class ScheduleDispatcher {
               sessions.push(session);
               return session;
             },
-            async create(options) {
-              const result = await destination.create(options);
-              if (result.created) sessions.push(result.session);
-              return result;
-            },
           };
         },
         waitUntil(task) {
