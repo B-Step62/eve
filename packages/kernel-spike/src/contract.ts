@@ -88,14 +88,24 @@ export type Command = { type: "cancel"; key: string };
 
 export type KernelEvent = { type: string; [field: string]: unknown };
 
+/** One record of the session log. Every host stores the same records. */
+export interface Entry {
+  seq: number;
+  input: Input;
+}
+
 export interface Output {
   effects: EffectRequest[];
   commands: Command[];
   events: KernelEvent[];
+  /** The inputs this call consumed, numbered: what the host appends to its log. */
+  entries: Entry[];
 }
 
 export interface KernelState {
   v: number;
+  /** The `seq` of the last log entry folded into this state. */
+  seq: number;
   history: Message[];
   turn: unknown;
   queued: unknown[];

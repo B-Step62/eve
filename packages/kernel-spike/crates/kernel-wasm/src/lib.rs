@@ -51,3 +51,10 @@ pub unsafe extern "C" fn kernel_advance(
 ) -> u64 {
     give(kernel::json::advance(read(sptr, slen), read(iptr, ilen)))
 }
+
+/// # Safety
+/// The arguments must describe a buffer written by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn kernel_resume(ptr: *const u8, len: usize) -> u64 {
+    give(kernel::json::resume(read(ptr, len)))
+}

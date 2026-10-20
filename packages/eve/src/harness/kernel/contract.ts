@@ -104,21 +104,36 @@ export interface KernelEvent {
 }
 
 export interface KernelState {
+  /** The `seq` of the last log entry folded into this state. */
+  readonly seq: number;
   readonly turn: unknown;
   readonly queued: readonly unknown[];
   readonly [field: string]: unknown;
 }
 
-export interface KernelAdvanced {
-  readonly state: KernelState;
+/** One record of the kernel's session log. */
+export interface KernelEntry {
+  readonly seq: number;
+  readonly input: KernelInput;
+}
+
+export interface KernelOutput {
   readonly effects: readonly KernelEffectRequest[];
+  readonly commands: readonly { readonly type: "cancel"; readonly key: string }[];
   readonly events: readonly KernelEvent[];
+  readonly entries: readonly KernelEntry[];
+}
+
+export interface KernelAdvanced extends KernelOutput {
+  readonly state: KernelState;
 }
 
 /** Either build of the kernel: JSON in, JSON out. */
 export interface KernelBinding {
   open(config: KernelSessionConfig): KernelState;
   advance(state: KernelState, inputs: readonly KernelInput[]): KernelAdvanced;
+  /** The effects open in `state`, rebuilt from the state alone. */
+  resume(state: KernelState): KernelOutput;
 }
 
 export type KernelMode = "native" | "wasm";

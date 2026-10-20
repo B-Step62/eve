@@ -1,10 +1,11 @@
 // Host C: the kernel as a durable-harness `Harness` (the durable libfx case).
 //
-// Every kernel input is an `in:<n>` effect whose output is the input itself,
-// so the log holds the exact input sequence. A new process rebuilds the
-// kernel by replaying those inputs (nothing runs again), then continues
-// live. Model and tool calls are their own effects with the kernel's replay
-// rule, so a crashed `never` call comes back as interrupted.
+// The durable-harness world is the store, and it holds the kernel's own log:
+// each entry is an `in:<seq>` effect, and every SNAPSHOT_EVERY entries a
+// `snap:<seq>` effect holds the kernel state. A new process loads the last
+// snapshot, folds the entries after it, and asks the kernel which effects are
+// open (`resume`). Model and tool calls are their own effects, so one that
+// finished before the crash returns its recorded outcome.
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,11 +13,11 @@ import { join } from "node:path";
 import { type DriveContext, EffectFailure, type Harness } from "durable-harness";
 
 import type {
-  Command,
   EffectRequest,
   EffectResult,
+  Entry,
   Input,
-  KernelEvent,
+  KernelState,
   Output,
   SessionConfig,
 } from "../../src/contract.ts";
@@ -24,6 +25,9 @@ import { Kernel } from "../../src/native.ts";
 import type { ScenarioHost } from "../../src/scenario.ts";
 
 export const RESULT_FILE = ".c-result.json";
+
+/** Small, so the test scenarios cross a snapshot. */
+const SNAPSHOT_EVERY = 4;
 
 type Submission = ReturnType<DriveContext["pending"]>[number];
 
@@ -42,18 +46,25 @@ export function kernelHarness(opts: {
   return {
     name: "kernel-spike",
     async drive(ctx) {
-      const kernel = new Kernel(opts.config);
-      const commands: Command[] = [];
-      const events: KernelEvent[] = [];
+      let n = 0;
+      for (let k = SNAPSHOT_EVERY; ctx.isMemoized(`snap:${k}`); k += SNAPSHOT_EVERY) n = k;
+      const snapshot =
+        n === 0
+          ? undefined
+          : await ctx.effect<KernelState>(
+              `snap:${n}`,
+              { name: "kernel.snapshot", replay: "safe", input: null },
+              async () => {
+                throw new Error(`snap:${n} is not recorded`);
+              },
+            );
+      const kernel = new Kernel(opts.config, snapshot);
       const open = new Map<string, EffectRequest>();
       const running = new Map<string, { cancelled: boolean }>();
       const finished = new Map<string, EffectResult>();
       let stop: unknown;
-      let n = 0;
 
       const apply = (out: Output) => {
-        commands.push(...out.commands);
-        events.push(...out.events);
         for (const e of out.effects) open.set(e.key, e);
         for (const c of out.commands) {
           const r = running.get(c.key);
@@ -64,18 +75,26 @@ export function kernelHarness(opts: {
       };
 
       const feed = async (candidate: Input | undefined, placed: string[]) => {
-        const recorded = await ctx.effect(
-          `in:${n}`,
-          { name: "kernel.input", replay: "safe", input: candidate ?? null, placed },
-          async () => candidate,
+        const seq = n + 1;
+        const entry = await ctx.effect<Entry | undefined>(
+          `in:${seq}`,
+          { name: "kernel.entry", replay: "safe", input: candidate ?? null, placed },
+          async () => (candidate === undefined ? undefined : { seq, input: candidate }),
         );
-        n++;
-        if (!recorded) throw new Error(`in:${n - 1} has no recorded input`);
-        if (recorded.type === "effect_result") {
-          open.delete(recorded.key);
-          finished.delete(recorded.key);
+        if (!entry) throw new Error(`in:${seq} has no recorded entry`);
+        n = seq;
+        if (entry.input.type === "effect_result") {
+          open.delete(entry.input.key);
+          finished.delete(entry.input.key);
         }
-        apply(kernel.advance([recorded]));
+        apply(kernel.replay([entry]));
+        if (n % SNAPSHOT_EVERY === 0) {
+          await ctx.effect(
+            `snap:${n}`,
+            { name: "kernel.snapshot", replay: "safe", input: null },
+            async () => kernel.snapshot(),
+          );
+        }
       };
 
       const start = (req: EffectRequest) => {
@@ -107,8 +126,11 @@ export function kernelHarness(opts: {
           );
       };
 
-      // Replay: rebuild the kernel from the recorded inputs.
-      while (ctx.isMemoized(`in:${n}`)) await feed(undefined, []);
+      // Fold the logged entries after the snapshot, then open what the kernel says is open.
+      while (ctx.isMemoized(`in:${n + 1}`)) await feed(undefined, []);
+      open.clear();
+      finished.clear();
+      apply(kernel.resume());
 
       for (;;) {
         if (stop) throw stop;
@@ -131,9 +153,28 @@ export function kernelHarness(opts: {
         await new Promise((r) => setTimeout(r, 20));
       }
 
+      // A drive that started from a snapshot saw only the later events, so the
+      // report folds the whole log from the start, as any reader of it can.
+      const log: Entry[] = [];
+      for (let seq = 1; seq <= n; seq++) {
+        log.push(
+          await ctx.effect<Entry>(
+            `in:${seq}`,
+            { name: "kernel.entry", replay: "safe", input: null },
+            async () => {
+              throw new Error(`in:${seq} is not recorded`);
+            },
+          ),
+        );
+      }
+      const whole = new Kernel(opts.config).replay(log);
       writeFileSync(
         join(opts.host.ws, RESULT_FILE),
-        JSON.stringify({ state: kernel.snapshot(), commands, events }),
+        JSON.stringify({
+          state: kernel.snapshot(),
+          commands: whole.commands,
+          events: whole.events,
+        }),
       );
       ctx.live({ type: "idle" });
     },

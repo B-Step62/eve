@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const STATE_VERSION: u32 = 2;
+pub const STATE_VERSION: u32 = 3;
 
 /// Hosts may run any effect again after a crash (eve's rule). The field stays
 /// so hosts can read it; every effect is `safe`.
@@ -352,4 +352,17 @@ pub struct Output {
     pub effects: Vec<EffectRequest>,
     pub commands: Vec<Command>,
     pub events: Vec<Event>,
+    /// The inputs this call consumed, numbered: what the host appends to the session log.
+    #[serde(default)]
+    pub entries: Vec<Entry>,
+}
+
+/// One record of the session log. Every host stores the same records: the
+/// state is the fold of the entries, so a snapshot (a `State`, which carries
+/// its `seq`) plus the entries after it restores a session on any host.
+/// Effects and commands are not logged; `resume` rebuilds them from the state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Entry {
+    pub seq: u64,
+    pub input: Input,
 }

@@ -10,6 +10,7 @@ interface Exports {
   dealloc(ptr: number, len: number): void;
   kernel_open(ptr: number, len: number): bigint;
   kernel_advance(sptr: number, slen: number, iptr: number, ilen: number): bigint;
+  kernel_resume(ptr: number, len: number): bigint;
 }
 
 /** The synchronous WebAssembly API. eve's TypeScript lib has no DOM types. */
@@ -33,6 +34,7 @@ export function wasmKernel(): KernelBinding {
     dealloc: ex.dealloc as Exports["dealloc"],
     kernel_open: ex.kernel_open as Exports["kernel_open"],
     kernel_advance: ex.kernel_advance as Exports["kernel_advance"],
+    kernel_resume: ex.kernel_resume as Exports["kernel_resume"],
   };
   const put = (s: string): [number, number] => {
     const data = utf8Encode(s);
@@ -61,6 +63,12 @@ export function wasmKernel(): KernelBinding {
       const out = take(x.kernel_advance(sp, sl, ip, il));
       x.dealloc(sp, sl);
       x.dealloc(ip, il);
+      return JSON.parse(out);
+    },
+    resume(state) {
+      const [p, l] = put(JSON.stringify(state));
+      const out = take(x.kernel_resume(p, l));
+      x.dealloc(p, l);
       return JSON.parse(out);
     },
   };

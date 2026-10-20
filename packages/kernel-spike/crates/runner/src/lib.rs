@@ -2,7 +2,9 @@
 //! libfx cases. It calls `kernel::advance`, runs effects on threads, obeys
 //! `cancel` commands, and writes to an optional session store.
 //!
-//! Crash rule (eve's): on load, an effect that was open runs again.
+//! The store holds only the kernel's log entries and snapshots. On load the
+//! runner folds the entries after the last snapshot and asks the kernel which
+//! effects are open (`kernel::resume`). Those run again (eve's crash rule).
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -13,30 +15,24 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 use kernel::{
-    Command, EffectRequest, EffectResult, Event, Input, InterruptReason, SessionConfig, State,
+    Command, EffectRequest, EffectResult, Entry, Event, Input, InterruptReason, Output,
+    SessionConfig, State,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// A line of the local session log: the kernel's entries, and now and then a
+/// snapshot so loading does not fold the whole log.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Record {
-    Input {
-        input: Input,
-    },
-    State {
-        state: State,
-        open: Vec<EffectRequest>,
-    },
-    Intent {
-        key: String,
-    },
-    Outcome {
-        key: String,
-        result: EffectResult,
-    },
+    Entry { entry: Entry },
+    Snapshot { state: State },
 }
+
+/// A snapshot after this many entries, and at the end of every turn.
+pub const SNAPSHOT_EVERY: u64 = 32;
 
 pub trait Store: Send {
     fn load(&mut self) -> io::Result<Vec<Record>>;
@@ -209,73 +205,54 @@ impl<S: Store> Runner<S> {
     }
 
     fn restore(&mut self, records: Vec<Record>) -> io::Result<()> {
-        let last_state = records
+        let last = records
             .iter()
-            .rposition(|r| matches!(r, Record::State { .. }));
-        let mut pending_inputs = Vec::new();
-        let mut intents = Vec::new();
-        let mut outcomes = BTreeMap::new();
-        let tail = match last_state {
+            .rposition(|r| matches!(r, Record::Snapshot { .. }));
+        let tail = match last {
             Some(i) => {
-                let Record::State { state, open } = &records[i] else {
+                let Record::Snapshot { state } = &records[i] else {
                     unreachable!()
                 };
                 self.state =
                     kernel::migrate(serde_json::to_value(state)?).map_err(io::Error::other)?;
-                for request in open {
-                    self.open.insert(
-                        request.key.clone(),
-                        OpenEffect {
-                            request: request.clone(),
-                            started: false,
-                            cancel: Arc::default(),
-                        },
-                    );
-                }
                 &records[i + 1..]
             }
             None => &records[..],
         };
-        for r in tail {
-            match r {
-                Record::Input { input } => pending_inputs.push(input.clone()),
-                Record::Intent { key } => intents.push(key.clone()),
-                Record::Outcome { key, result } => {
-                    outcomes.insert(key.clone(), result.clone());
-                }
-                Record::State { .. } => unreachable!(),
-            }
-        }
-        // Results that landed after the last state, then inputs that were never applied.
-        let mut inputs = Vec::new();
-        for (key, result) in outcomes {
-            if self.open.remove(&key).is_some() {
-                inputs.push(Input::EffectResult { key, result });
-            }
-        }
-        inputs.extend(pending_inputs);
-        if !inputs.is_empty() {
-            self.advance(inputs, false)?;
-        }
-        // Effects that were open when the last process stopped run again (eve's rule).
-        let _ = intents;
-        Ok(())
+        let entries: Vec<Entry> = tail
+            .iter()
+            .filter_map(|r| match r {
+                Record::Entry { entry } => Some(entry.clone()),
+                Record::Snapshot { .. } => None,
+            })
+            .collect();
+        kernel::replay(&mut self.state, entries).map_err(io::Error::other)?;
+        let resumed = kernel::resume(&self.state);
+        self.handle(resumed)
     }
 
-    fn advance(&mut self, inputs: Vec<Input>, record_inputs: bool) -> io::Result<()> {
-        if record_inputs {
-            for input in &inputs {
-                if !matches!(input, Input::EffectResult { .. }) {
-                    self.store.append(
-                        &Record::Input {
-                            input: input.clone(),
-                        },
-                        false,
-                    )?;
-                }
-            }
-        }
+    fn advance(&mut self, inputs: Vec<Input>) -> io::Result<()> {
         let out = kernel::advance(&mut self.state, inputs);
+        for entry in &out.entries {
+            self.store.append(
+                &Record::Entry {
+                    entry: entry.clone(),
+                },
+                false,
+            )?;
+        }
+        if self.state.is_idle() || self.state.seq % SNAPSHOT_EVERY == 0 {
+            self.store.append(
+                &Record::Snapshot {
+                    state: self.state.clone(),
+                },
+                false,
+            )?;
+        }
+        self.handle(out)
+    }
+
+    fn handle(&mut self, out: Output) -> io::Result<()> {
         for request in out.effects {
             self.open.insert(
                 request.key.clone(),
@@ -286,14 +263,6 @@ impl<S: Store> Runner<S> {
                 },
             );
         }
-        let open: Vec<EffectRequest> = self.open.values().map(|e| e.request.clone()).collect();
-        self.store.append(
-            &Record::State {
-                state: self.state.clone(),
-                open,
-            },
-            false,
-        )?;
         for command in &out.commands {
             (self.on_command)(command);
             let Command::Cancel { key } = command;
@@ -327,8 +296,6 @@ impl<S: Store> Runner<S> {
         for key in ready {
             let effect = self.open.get_mut(&key).expect("open");
             effect.started = true;
-            self.store
-                .append(&Record::Intent { key: key.clone() }, false)?;
             let request = effect.request.clone();
             let ctx = HostCtx {
                 cancel: effect.cancel.clone(),
@@ -347,7 +314,7 @@ impl<S: Store> Runner<S> {
     /// Applies `inputs` and runs until the session is idle.
     pub fn run(&mut self, inputs: Vec<Input>) -> io::Result<()> {
         if !inputs.is_empty() {
-            self.advance(inputs, true)?;
+            self.advance(inputs)?;
         }
         loop {
             self.start_ready()?;
@@ -355,19 +322,12 @@ impl<S: Store> Runner<S> {
                 return Ok(());
             }
             match self.rx.recv().expect("the runner holds a sender") {
-                Msg::Input(input) => self.advance(vec![input], true)?,
+                Msg::Input(input) => self.advance(vec![input])?,
                 Msg::Done(key, result) => {
                     if self.open.remove(&key).is_none() {
                         continue;
                     }
-                    self.store.append(
-                        &Record::Outcome {
-                            key: key.clone(),
-                            result: result.clone(),
-                        },
-                        false,
-                    )?;
-                    self.advance(vec![Input::EffectResult { key, result }], false)?;
+                    self.advance(vec![Input::EffectResult { key, result }])?;
                 }
             }
         }

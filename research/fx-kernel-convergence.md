@@ -847,21 +847,20 @@ is eve's own code. The README of `packages/kernel-spike` has the full tables.
 - **eve-wasm:** the kernel (WebAssembly) runs in eve's session workflow code.
   Each `turnStep` runs one batch of effects.
 
-Kernel version 2 (approval and compaction), median of 5 runs. These
-sessions do not ask for approval or compact, so version 2 adds only its
-checks for each call.
+Kernel version 2 with the unified log (13.4), median of 5 runs. These
+sessions do not ask for approval or compact.
 
 | One turn (2 model calls, 3 tool calls) | Time   | Steps | Bytes written |
 | -------------------------------------- | ------ | ----- | ------------- |
-| eve                                    | 355 ms | 4     | 51 KB         |
-| eve-native                             | 345 ms | 4     | 59 KB         |
-| eve-wasm                               | 495 ms | 7     | 101 KB        |
+| eve                                    | 380 ms | 4     | 51 KB         |
+| eve-native                             | 342 ms | 4     | 55 KB         |
+| eve-wasm                               | 499 ms | 7     | 101 KB        |
 
 | 20 turns, each with a 5 KB tool result | Time    | Bytes written |
 | -------------------------------------- | ------- | ------------- |
-| eve                                    | 3653 ms | 1066 KB       |
-| eve-native                             | 3289 ms | 1385 KB       |
-| eve-wasm                               | 8775 ms | 1689 KB       |
+| eve                                    | 4055 ms | 1067 KB       |
+| eve-native                             | 3208 ms | 1169 KB       |
+| eve-wasm                               | 9438 ms | 1686 KB       |
 
 Version 1 gave 350, 337, and 539 ms for one turn, and 3418, 3210, and
 8988 ms for 20 turns. The order of the modes did not change.
@@ -872,16 +871,17 @@ These results change the proposal:
    that exists today (`turnStep`). It is as fast as eve. Do not use option B
    for eve. eve-wasm needs more steps, and each eve step carries eve's session
    values. Workflow also replays the workflow code, so each WebAssembly call
-   to the kernel runs again on each replay. eve-wasm is 1.4 times slower than
-   eve on one turn and 2.4 times slower at 20 turns.
+   to the kernel runs again on each replay. eve-wasm is 1.3 times slower than
+   eve on one turn and 2.3 times slower at 20 turns.
 2. **R2 (withdrawn in version 2).** eve-native keeps eve's step size: one model call and all of its
    tools in one step. If a crash occurs during a tool, the step runs again.
    To obey R2, the step must record an intent before each `never` tool, and
    give `interrupted` when it runs again. The step boundary does not do this.
-3. **Bytes in eve-native.** eve-native writes 16–30% more bytes than eve.
-   The kernel state keeps a copy of the history in eve's session state. eve's
-   session machine also keeps the user messages. We must keep only one
-   history.
+3. **Bytes in eve-native.** eve-native writes 8–12% more bytes than eve.
+   Before the unified log it wrote 16–30% more. The cause was not eve's
+   history. Each save in a turn also stored the open model call, and that
+   call holds a full copy of the history. The kernel now rebuilds open
+   effects from its state (`resume`), so they are not stored.
 4. **Where the time goes.** In all three modes, most of the time is the cost
    of each Workflow step. The kernel uses less CPU than eve's harness. At
    1 MB of history, one model step takes 0.86 ms in the kernel and 10 ms in
@@ -984,3 +984,28 @@ These results change the proposal:
 8. **One difference stays in the prompt.** After an approval, eve keeps a
    `[Pending approvals]` message in the model history. The kernel does not
    add it. The protocol events are the same, but the prompts are not.
+
+### 13.4 One log format
+
+All hosts now store the same kernel records. The kernel gives the records to
+the host. The host decides only where they go.
+
+- An **entry** is one input with its number in the log (`seq`). `advance`
+  gives the entries that it used.
+- A **snapshot** is the kernel state. It contains the `seq` of its last entry.
+- `replay` adds entries to a state. It ignores an entry that the state already
+  has, so a host can write or replay an entry two times. A missing entry is an
+  error.
+- `resume` gives the open effects and the cancels that they must get. It uses
+  only the state. Hosts do not store effects or commands. Each kernel test
+  makes sure that `resume` gives the same effects that `advance` gave.
+
+A durable host does not keep a second log. Its own commit holds the kernel
+records:
+
+- eve-native: a snapshot in the eve session state, in the same `turnStep`
+  result;
+- durable-harness: `in:<seq>` and `snap:<seq>` effects.
+
+A local host has no log below it, so the JSONL file is the format and the
+store. All hosts pass all tests with this change, including the crash tests.

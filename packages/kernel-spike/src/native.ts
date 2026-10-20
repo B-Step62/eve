@@ -3,11 +3,13 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Advanced, Input, KernelState, Output, SessionConfig } from "./contract.ts";
+import type { Advanced, Entry, Input, KernelState, Output, SessionConfig } from "./contract.ts";
 
 interface Binding {
   open(config: string): string;
   advance(state: string, inputs: string): string;
+  replay(state: string, entries: string): string;
+  resume(state: string): string;
   Kernel: {
     new (config: string): NativeKernel;
     fromState(state: string): NativeKernel;
@@ -16,6 +18,8 @@ interface Binding {
 
 interface NativeKernel {
   advance(inputs: string): string;
+  replay(entries: string): string;
+  resume(): string;
   snapshot(): string;
   isIdle(): boolean;
 }
@@ -40,12 +44,31 @@ export function advance(state: KernelState, inputs: Input[]): Advanced {
   return JSON.parse(native().advance(JSON.stringify(state), JSON.stringify(inputs))) as Advanced;
 }
 
+export function replay(state: KernelState, entries: Entry[]): Advanced {
+  return JSON.parse(native().replay(JSON.stringify(state), JSON.stringify(entries))) as Advanced;
+}
+
+export function resume(state: KernelState): Output {
+  return JSON.parse(native().resume(JSON.stringify(state))) as Output;
+}
+
 /** The kernel with its state kept in Rust between calls. */
 export class Kernel {
   #inner: NativeKernel;
 
-  constructor(config: SessionConfig) {
-    this.#inner = new (native().Kernel)(JSON.stringify(config));
+  constructor(config: SessionConfig, snapshot?: KernelState) {
+    this.#inner =
+      snapshot === undefined
+        ? new (native().Kernel)(JSON.stringify(config))
+        : native().Kernel.fromState(JSON.stringify(snapshot));
+  }
+
+  replay(entries: Entry[]): Output {
+    return JSON.parse(this.#inner.replay(JSON.stringify(entries))) as Output;
+  }
+
+  resume(): Output {
+    return JSON.parse(this.#inner.resume()) as Output;
   }
 
   advance(inputs: Input[]): Output {

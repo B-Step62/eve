@@ -2,6 +2,19 @@ use serde_json::json;
 
 use super::*;
 
+/// `advance`, checked: each effect it emits and leaves open is exactly what
+/// `resume` rebuilds from the state, and the state round-trips through its log.
+fn advance(s: &mut State, inputs: Vec<Input>) -> Output {
+    let out = super::advance(s, inputs);
+    let resumed = resume(s);
+    for e in &out.effects {
+        if let Some(r) = resumed.effects.iter().find(|r| r.key == e.key) {
+            assert_eq!(r, e, "resume rebuilt a different effect for {}", e.key);
+        }
+    }
+    out
+}
+
 fn tool(name: &str, approval: Approval) -> ToolDescriptor {
     ToolDescriptor {
         name: name.into(),
@@ -593,4 +606,82 @@ fn a_host_tool_asks_the_host_policy_and_default_asks_a_person() {
         vec![done("t1.tool.c.policy", json!({ "decision": "default" }))],
     );
     assert_eq!(kinds(&out), vec![("t1.tool.c.ask".into(), "ask")]);
+}
+
+/// Runs a session and returns its log: every entry `advance` handed back.
+fn logged_session() -> (State, Vec<Entry>) {
+    let mut s = open(config());
+    let mut log = Vec::new();
+    let mut step = |s: &mut State, inputs: Vec<Input>| log.extend(advance(s, inputs).entries);
+    step(&mut s, vec![prompt("go")]);
+    step(
+        &mut s,
+        vec![done("t1.s0.a0.model", calls_one("send_email"))],
+    );
+    step(
+        &mut s,
+        vec![done("t1.tool.c.ask", json!({ "approved": true }))],
+    );
+    step(&mut s, vec![done("t1.tool.c", json!("sent"))]);
+    step(
+        &mut s,
+        vec![done("t1.s1.a0.model", json!({ "text": "Sent." }))],
+    );
+    step(&mut s, vec![prompt("again")]);
+    (s, log)
+}
+
+#[test]
+fn the_log_rebuilds_the_state_from_scratch_or_from_a_snapshot() {
+    let (live, log) = logged_session();
+    assert_eq!(
+        log.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        (1..=6).collect::<Vec<_>>()
+    );
+
+    let mut fresh = open(config());
+    replay(&mut fresh, log.clone()).unwrap();
+    assert_eq!(fresh, live);
+
+    // A snapshot after entry 3, then the entries after it.
+    let mut snap = open(config());
+    replay(&mut snap, log[..3].to_vec()).unwrap();
+    let snapshot: State = migrate(serde_json::to_value(&snap).unwrap()).unwrap();
+    let mut restored = snapshot;
+    replay(&mut restored, log[3..].to_vec()).unwrap();
+    assert_eq!(restored, live);
+}
+
+#[test]
+fn replaying_an_entry_twice_is_a_no_op_and_a_gap_is_an_error() {
+    let (live, log) = logged_session();
+    let mut again = live.clone();
+    let out = replay(&mut again, log.clone()).unwrap();
+    assert!(out.entries.is_empty() && out.effects.is_empty());
+    assert_eq!(again, live);
+
+    let mut gap = open(config());
+    assert!(replay(&mut gap, log[1..].to_vec())
+        .unwrap_err()
+        .contains("log gap"));
+}
+
+#[test]
+fn resume_returns_the_open_effects_and_owed_cancels() {
+    let (live, _) = logged_session();
+    let keys: Vec<_> = resume(&live).effects.into_iter().map(|e| e.key).collect();
+    assert_eq!(keys, vec!["t2.s0.a0.model"]);
+
+    let mut s = open(config());
+    advance(&mut s, vec![prompt("go")]);
+    advance(&mut s, vec![done("t1.s0.a0.model", calls_one("read_file"))]);
+    advance(&mut s, vec![Input::Cancel { id: "x".into() }]);
+    let out = resume(&s);
+    assert_eq!(
+        out.commands,
+        vec![Command::Cancel {
+            key: "t1.tool.c".into()
+        }]
+    );
+    assert_eq!(resume(&open(config())).effects, vec![]);
 }

@@ -15,7 +15,7 @@ prefix.
 | Path                                       | What                                                                                                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `crates/kernel`                            | The kernel. `advance(state, inputs) → effects, commands, events`. No I/O. Version 2 decides tool approval (`approval.rs`) and compaction (`compaction.rs`) after eve. |
-| `crates/runner`                            | The in-process runner (R29): threads for effects, `cancel` commands, and an optional store (none, memory, or a JSONL session log).                                    |
+| `crates/runner`                            | The in-process runner (R29): threads for effects, `cancel` commands, and an optional store (none, memory, or a JSONL log of kernel entries and snapshots).            |
 | `crates/fx-mini`                           | Host A. An fx-shaped binary on the runner: a scripted model, file tools, and a real `abort()` for crash scenarios.                                                    |
 | `crates/kernel-napi`, `crates/kernel-wasm` | The Node-API and WebAssembly builds of the kernel.                                                                                                                    |
 | `hosts/workflow`                           | Host B. The kernel on Workflow SDK workflows (the eve case). The kernel runs either in step code (Node-API) or in workflow code (WASM).                               |
@@ -50,11 +50,11 @@ pnpm spike:baseline   # eve vs eve + native kernel vs eve + WASM kernel
 
 How each host crashes:
 
-| Host | Crash                                                                                                        | Recovery                                                                        |
-| ---- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| A    | `abort()` in the real process.                                                                               | A second process with `--resume` reads the JSONL session log.                   |
-| B    | The step throws. This test is in one process, so Workflow retries the step, as it does when a process stops. | Workflow runs the step again.                                                   |
-| C    | `SIGKILL` of the child process.                                                                              | A second process with `recoverActiveRuns` replays the session from world-local. |
+| Host | Crash                                                                                                        | Recovery                                                                                                                                           |
+| ---- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A    | `abort()` in the real process.                                                                               | A second process with `--resume` loads the last snapshot, folds the entries after it, and runs what `resume` says is open.                         |
+| B    | The step throws. This test is in one process, so Workflow retries the step, as it does when a process stops. | Workflow runs the step again.                                                                                                                      |
+| C    | `SIGKILL` of the child process.                                                                              | A second process with `recoverActiveRuns` loads the last `snap:<seq>`, folds the `in:<seq>` entries after it, and runs what `resume` says is open. |
 
 ## Results
 
@@ -172,29 +172,29 @@ wrote, and the final reply in the event stream.
 
 ### One `plain` turn (2 model calls, 3 tool calls)
 
-Times are the median of 5 runs after a warm-up, with kernel version 2. These
-sessions do not ask for approval or compact.
+Times are the median of 5 runs after a warm-up, with kernel version 2 and the
+unified log (see "One log format"). These sessions do not ask for approval or
+compact.
 
 | Mode       | Time   | Steps | Events | Written |
 | ---------- | ------ | ----- | ------ | ------- |
-| eve        | 355 ms | 4     | 19     | 51 KB   |
-| eve-native | 345 ms | 4     | 17     | 59 KB   |
-| eve-wasm   | 495 ms | 7     | 26     | 101 KB  |
+| eve        | 380 ms | 4     | 19     | 51 KB   |
+| eve-native | 342 ms | 4     | 17     | 55 KB   |
+| eve-wasm   | 499 ms | 7     | 26     | 101 KB  |
 
 ### `growth`: N turns, each a 5 KB tool result and a reply
 
 | Turns | eve              | eve-native       | eve-wasm         |
 | ----- | ---------------- | ---------------- | ---------------- |
-| 1     | 220 ms, 49 KB    | 185 ms, 57 KB    | 342 ms, 96 KB    |
-| 5     | 939 ms, 231 KB   | 817 ms, 290 KB   | 1458 ms, 411 KB  |
-| 10    | 1988 ms, 487 KB  | 1624 ms, 622 KB  | 3137 ms, 820 KB  |
-| 20    | 3653 ms, 1066 KB | 3289 ms, 1385 KB | 8775 ms, 1689 KB |
+| 1     | 231 ms, 48 KB    | 188 ms, 53 KB    | 343 ms, 96 KB    |
+| 5     | 1051 ms, 231 KB  | 830 ms, 260 KB   | 1464 ms, 411 KB  |
+| 10    | 1911 ms, 486 KB  | 1622 ms, 543 KB  | 3470 ms, 821 KB  |
+| 20    | 4055 ms, 1067 KB | 3208 ms, 1169 KB | 9438 ms, 1686 KB |
 
-Version 1 (before approval and compaction): one turn 350 / 337 / 539 ms;
-20 turns 3418 / 3210 / 8988 ms. eve-native is still as fast as eve or
-faster, and eve-wasm is still 1.4–2.4× slower. eve-native's state grew a
-little (approval and compaction fields), so it now writes 16–30% more than
-eve.
+eve-native is as fast as eve or faster, and eve-wasm is 1.3–2.3× slower, as
+in version 1. eve-native writes 8–12% more than eve. It wrote 16–30% more
+before the unified log, because each mid-turn save also stored the open model
+call, which holds a full copy of the history.
 
 ### What this shows
 
@@ -377,6 +377,35 @@ With this patch, steps-20 goes from 318 ms to 48 ms.
 - **The fix in fx is to wake the watcher when the request ends,** not to
   poll faster. Against a real model each call takes seconds, so this costs
   about 10 ms on each call, not a large part of a turn.
+
+## One log format
+
+Every host stores the same kernel records. The kernel gives them to the host;
+the host only decides where they go.
+
+- **Entry** `{ seq, input }`: an input the kernel consumed, numbered. `advance`
+  returns the entries it consumed.
+- **Snapshot**: the kernel state, which carries the `seq` of its last entry.
+- `replay(state, entries)` folds entries. An entry at or below the state's
+  `seq` is skipped, so a host may write or replay an entry twice. A gap is an
+  error.
+- `resume(state)` returns the open effects and the cancels they are owed,
+  built from the state alone. Effects and commands are never stored. Every
+  kernel test checks that `resume` rebuilds exactly the effects `advance`
+  emitted.
+
+| Host                     | Where the records go                                                        |
+| ------------------------ | --------------------------------------------------------------------------- |
+| eve-native               | A snapshot in eve's session state, committed in the same `turnStep` result. |
+| Host B (Workflow, steps) | The snapshot and entries are the result of each kernel step.                |
+| eve-wasm, Host B (wasm)  | Entries are rebuilt by Workflow replay; the state lives in workflow memory. |
+| Host A (in-process)      | JSONL: `entry` lines, and a `snapshot` line every 32 entries and at idle.   |
+| Host C (durable-harness) | `in:<seq>` effects, and a `snap:<seq>` effect every 4 entries.              |
+| fx with the kernel       | Memory only (`fx ask`); fx's own session save is unchanged.                 |
+
+A durable host keeps no second log: its own commit (a Workflow step result, a
+durable-harness effect) holds the kernel records. A local host has no log
+under it, so the JSONL file is both the format and the store.
 
 ## What this prototype does not test
 

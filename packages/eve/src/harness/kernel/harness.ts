@@ -53,9 +53,14 @@ import { createHistoryViewPreparer } from "#shared/history-view.js";
 
 const KERNEL_STATE = "eve.kernel";
 
+/**
+ * The kernel snapshot this step commits with eve's session, inside the same
+ * Workflow step result. Open effects are not stored: `resume` rebuilds them
+ * from the state, so the history is not stored a second time inside an open
+ * model call.
+ */
 interface StoredKernel {
   readonly state: KernelState;
-  readonly open: readonly KernelEffectRequest[];
   /** Open `user_ask` effect keys, and the eve input request each one parked on. */
   readonly asked?: Readonly<Record<string, string>>;
 }
@@ -155,7 +160,7 @@ async function runNative(step: Step, prompt: string | undefined): Promise<StepRe
   const kernel: KernelBinding = nativeKernel();
   const stored = step.session.state?.[KERNEL_STATE] as StoredKernel | undefined;
   let state = stored?.state ?? kernel.open(kernelConfig(step));
-  let open = [...(stored?.open ?? [])];
+  let open = stored === undefined ? [] : [...kernel.resume(state).effects];
   const asked = new Map(Object.entries(stored?.asked ?? {}));
   let ended: string | undefined;
   const feed = async (inputs: KernelInput[]) => {
@@ -172,7 +177,7 @@ async function runNative(step: Step, prompt: string | undefined): Promise<StepRe
       ...step.session,
       state: {
         ...step.session.state,
-        [KERNEL_STATE]: { state, open, asked: Object.fromEntries(asked) } satisfies StoredKernel,
+        [KERNEL_STATE]: { state, asked: Object.fromEntries(asked) } satisfies StoredKernel,
       },
     };
   };

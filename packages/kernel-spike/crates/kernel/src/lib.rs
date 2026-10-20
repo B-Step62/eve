@@ -33,6 +33,8 @@ const RETRY_BASE_MS: u64 = 500;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct State {
     pub v: u32,
+    /// The `seq` of the last log entry folded into this state.
+    pub seq: u64,
     pub config: SessionConfig,
     pub history: Vec<Message>,
     pub turn: Option<Turn>,
@@ -86,6 +88,10 @@ pub enum Phase {
     },
     Waiting {
         key: String,
+        #[serde(default)]
+        ms: u64,
+        #[serde(default)]
+        reason: String,
     },
 }
 
@@ -103,7 +109,7 @@ pub struct PendingCall {
 pub enum Stage {
     Policy { key: String },
     Review { key: String },
-    Ask { key: String },
+    Ask { key: String, reason: String },
     Run { key: String },
     Done { content: String, is_error: bool },
 }
@@ -113,7 +119,7 @@ impl Stage {
         match self {
             Stage::Policy { key }
             | Stage::Review { key }
-            | Stage::Ask { key }
+            | Stage::Ask { key, .. }
             | Stage::Run { key } => Some(key),
             Stage::Done { .. } => None,
         }
@@ -123,6 +129,7 @@ impl Stage {
 pub fn open(config: SessionConfig) -> State {
     State {
         v: STATE_VERSION,
+        seq: 0,
         config,
         history: Vec::new(),
         turn: None,
@@ -144,14 +151,65 @@ pub fn migrate(state: Value) -> Result<State, String> {
     serde_json::from_value(state).map_err(|e| e.to_string())
 }
 
-pub fn advance(state: &mut State, inputs: Vec<Input>) -> Output {
-    let mut out = Output {
+fn output() -> Output {
+    Output {
         effects: Vec::new(),
         commands: Vec::new(),
         events: Vec::new(),
-    };
+        entries: Vec::new(),
+    }
+}
+
+/// Applies new inputs. Each gets the next `seq`; `entries` are what to log.
+pub fn advance(state: &mut State, inputs: Vec<Input>) -> Output {
+    let mut out = output();
     for input in inputs {
+        state.seq += 1;
+        out.entries.push(Entry {
+            seq: state.seq,
+            input: input.clone(),
+        });
         state.apply(input, &mut out);
+    }
+    out
+}
+
+/// Folds logged entries into `state`. An entry at or below `state.seq` is
+/// already in the state and is skipped, so a host may append or replay the
+/// same entry twice. A gap is an error.
+pub fn replay(state: &mut State, entries: Vec<Entry>) -> Result<Output, String> {
+    let mut out = output();
+    for entry in entries {
+        if entry.seq <= state.seq {
+            continue;
+        }
+        if entry.seq != state.seq + 1 {
+            return Err(format!(
+                "log gap: state is at {}, next entry is {}",
+                state.seq, entry.seq
+            ));
+        }
+        state.seq = entry.seq;
+        out.entries.push(entry.clone());
+        state.apply(entry.input, &mut out);
+    }
+    Ok(out)
+}
+
+/// The effects that are open in `state`, and the cancels it still owes them.
+/// A host calls this after it loads a snapshot, instead of storing effects.
+pub fn resume(state: &State) -> Output {
+    let mut out = output();
+    let Some(turn) = state.turn.as_ref() else {
+        return out;
+    };
+    out.effects = state.phase_effects(turn);
+    if turn.cancelling {
+        out.commands = out
+            .effects
+            .iter()
+            .map(|e| Command::Cancel { key: e.key.clone() })
+            .collect();
     }
     out
 }
@@ -166,6 +224,115 @@ fn effect(key: String, effect: Effect) -> EffectRequest {
 }
 
 impl State {
+    /// The open effects of `turn`'s phase. Emission and `resume` both build
+    /// effects here, so a resumed effect is the effect that was emitted.
+    fn phase_effects(&self, turn: &Turn) -> Vec<EffectRequest> {
+        match &turn.phase {
+            Phase::Model { key, .. } => vec![self.model_effect(key)],
+            Phase::Waiting { key, .. } if key.is_empty() => Vec::new(),
+            Phase::Waiting { key, ms, reason } => {
+                vec![effect(
+                    key.clone(),
+                    Effect::Wait {
+                        ms: *ms,
+                        reason: reason.clone(),
+                    },
+                )]
+            }
+            Phase::Compacting {
+                key,
+                record,
+                keep_from,
+                summary,
+            } => {
+                let mut effects = Vec::new();
+                if summary.is_none() {
+                    effects.push(effect(
+                        key.clone(),
+                        Effect::ModelCall {
+                            purpose: ModelPurpose::Compaction,
+                            model: None,
+                            request: compaction::request(&self.history[..*keep_from]),
+                        },
+                    ));
+                }
+                if let Some(record) = record {
+                    let content =
+                        serde_json::to_string(&self.history[..*keep_from]).unwrap_or_default();
+                    let name = format!("compaction-{}.json", self.compactions + 1);
+                    effects.push(effect(record.clone(), Effect::BlobPut { name, content }));
+                }
+                effects
+            }
+            Phase::Tools { calls } => calls
+                .iter()
+                .filter_map(|c| self.call_effect(c, &c.stage))
+                .collect(),
+        }
+    }
+
+    fn model_effect(&self, key: &str) -> EffectRequest {
+        let request = ModelRequest {
+            system: self.config.system.clone(),
+            messages: self.history.clone(),
+            tools: self.tool_specs(),
+        };
+        effect(
+            key.to_string(),
+            Effect::ModelCall {
+                purpose: ModelPurpose::Agent,
+                model: None,
+                request,
+            },
+        )
+    }
+
+    fn call_effect(&self, call: &PendingCall, stage: &Stage) -> Option<EffectRequest> {
+        let (key, e) = match stage {
+            Stage::Policy { key } => (
+                key,
+                Effect::PolicyDecide {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                },
+            ),
+            Stage::Review { key } => (
+                key,
+                Effect::ModelCall {
+                    purpose: ModelPurpose::PermissionReview,
+                    model: self.config.review.model.clone(),
+                    request: approval::review_request(
+                        &call.name,
+                        &call.input,
+                        self.config.review.instructions.as_deref(),
+                    ),
+                },
+            ),
+            Stage::Ask { key, reason } => (
+                key,
+                Effect::UserAsk {
+                    request: AskRequest::Approval {
+                        call_id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        input: call.input.clone(),
+                        reason: reason.clone(),
+                    },
+                },
+            ),
+            Stage::Run { key } => (
+                key,
+                Effect::ToolCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                },
+            ),
+            Stage::Done { .. } => return None,
+        };
+        Some(effect(key.clone(), e))
+    }
+
     pub fn is_idle(&self) -> bool {
         self.turn.is_none() && self.queued.is_empty()
     }
@@ -237,7 +404,11 @@ impl State {
             n: self.turns,
             step: 0,
             attempt: 0,
-            phase: Phase::Waiting { key: String::new() },
+            phase: Phase::Waiting {
+                key: String::new(),
+                ms: 0,
+                reason: String::new(),
+            },
             steers: Vec::new(),
             cancelling: false,
             compacted: false,
@@ -266,26 +437,13 @@ impl State {
                 return;
             }
         }
-        let tools = self.tool_specs();
         let turn = self.turn.as_mut().expect("a turn");
         let key = format!("t{}.s{}.a{}.model", turn.n, turn.step, turn.attempt);
         turn.phase = Phase::Model {
             key: key.clone(),
             steered: false,
         };
-        let request = ModelRequest {
-            system: self.config.system.clone(),
-            messages: self.history.clone(),
-            tools,
-        };
-        out.effects.push(effect(
-            key,
-            Effect::ModelCall {
-                purpose: ModelPurpose::Agent,
-                model: None,
-                request,
-            },
-        ));
+        out.effects.push(self.model_effect(&key));
     }
 
     fn steer(&mut self, id: String, text: String, out: &mut Output) {
@@ -331,7 +489,9 @@ impl State {
             out.events.push(Event::SteersReturned { ids });
         }
         match &turn.phase {
-            Phase::Model { key, .. } | Phase::Waiting { key } | Phase::Compacting { key, .. } => {
+            Phase::Model { key, .. }
+            | Phase::Waiting { key, .. }
+            | Phase::Compacting { key, .. } => {
                 out.commands.push(Command::Cancel { key: key.clone() })
             }
             Phase::Tools { calls } => {
@@ -362,7 +522,7 @@ impl State {
             Phase::Compacting {
                 record: Some(open), ..
             } if *open == key => self.record_result(out),
-            Phase::Waiting { key: open } if *open == key => self.wait_result(out),
+            Phase::Waiting { key: open, .. } if *open == key => self.wait_result(out),
             Phase::Tools { calls } if calls.iter().any(|c| c.stage.open_key() == Some(&key)) => {
                 self.call_result(key, result, out)
             }
@@ -438,7 +598,11 @@ impl State {
                 }
                 let delay_ms = RETRY_BASE_MS << turn.attempt;
                 let key = format!("t{}.s{}.a{}.wait", turn.n, turn.step, turn.attempt);
-                turn.phase = Phase::Waiting { key: key.clone() };
+                turn.phase = Phase::Waiting {
+                    key: key.clone(),
+                    ms: delay_ms,
+                    reason: error.clone(),
+                };
                 out.events.push(Event::Retrying {
                     attempt: turn.attempt + 1,
                     delay_ms,
@@ -466,15 +630,13 @@ impl State {
     // ---- compaction ----------------------------------------------------
 
     fn start_compaction(&mut self, keep_from: usize, out: &mut Output) {
-        let request = compaction::request(&self.history[..keep_from]);
         let records = self.config.compaction.records;
-        let n = self.compactions + 1;
         let turn = self.turn.as_mut().expect("a turn");
         let key = format!("t{}.s{}.compaction", turn.n, turn.step);
         let record = records.then(|| format!("{key}.record"));
         turn.phase = Phase::Compacting {
-            key: key.clone(),
-            record: record.clone(),
+            key,
+            record,
             keep_from,
             summary: None,
         };
@@ -484,24 +646,8 @@ impl State {
             messages: keep_from,
             estimated_tokens,
         });
-        out.effects.push(effect(
-            key,
-            Effect::ModelCall {
-                purpose: ModelPurpose::Compaction,
-                model: None,
-                request,
-            },
-        ));
-        if let Some(record) = record {
-            let content = serde_json::to_string(&self.history[..keep_from]).unwrap_or_default();
-            out.effects.push(effect(
-                record,
-                Effect::BlobPut {
-                    name: format!("compaction-{n}.json"),
-                    content,
-                },
-            ));
-        }
+        let turn = self.turn.as_ref().expect("a turn");
+        out.effects.extend(self.phase_effects(turn));
     }
 
     fn compaction_result(&mut self, result: EffectResult, out: &mut Output) {
@@ -593,17 +739,20 @@ impl State {
         self.maybe_finish_tools(out);
     }
 
+    /// Moves `call` to `stage` and emits the stage's effect.
+    fn enter(&self, call: &PendingCall, stage: Stage, out: &mut Output) -> Stage {
+        out.effects.extend(self.call_effect(call, &stage));
+        stage
+    }
+
     fn policy(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
-        let key = format!("t{n}.tool.{}.policy", call.call_id);
-        out.effects.push(effect(
-            key.clone(),
-            Effect::PolicyDecide {
-                call_id: call.call_id.clone(),
-                name: call.name.clone(),
-                input: call.input.clone(),
+        self.enter(
+            call,
+            Stage::Policy {
+                key: format!("t{n}.tool.{}.policy", call.call_id),
             },
-        ));
-        Stage::Policy { key }
+            out,
+        )
     }
 
     /// The stage a call goes to under its tool's own policy.
@@ -624,58 +773,39 @@ impl State {
     }
 
     fn run(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
-        let key = format!("t{n}.tool.{}", call.call_id);
-        out.effects.push(effect(
-            key.clone(),
-            Effect::ToolCall {
-                call_id: call.call_id.clone(),
-                name: call.name.clone(),
-                input: call.input.clone(),
+        self.enter(
+            call,
+            Stage::Run {
+                key: format!("t{n}.tool.{}", call.call_id),
             },
-        ));
-        Stage::Run { key }
+            out,
+        )
     }
 
     fn ask(&self, n: u64, call: &PendingCall, reason: &str, out: &mut Output) -> Stage {
-        let key = format!("t{n}.tool.{}.ask", call.call_id);
         out.events.push(Event::ApprovalRequested {
             call_id: call.call_id.clone(),
             name: call.name.clone(),
             reason: reason.to_string(),
         });
-        out.effects.push(effect(
-            key.clone(),
-            Effect::UserAsk {
-                request: AskRequest::Approval {
-                    call_id: call.call_id.clone(),
-                    name: call.name.clone(),
-                    input: call.input.clone(),
-                    reason: reason.to_string(),
-                },
-            },
-        ));
-        Stage::Ask { key }
+        let stage = Stage::Ask {
+            key: format!("t{n}.tool.{}.ask", call.call_id),
+            reason: reason.to_string(),
+        };
+        self.enter(call, stage, out)
     }
 
     fn review(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
         if approval::too_large_to_review(&call.input) {
             return self.cautioned(n, call, out);
         }
-        let key = format!("t{n}.tool.{}.review", call.call_id);
-        let request = approval::review_request(
-            &call.name,
-            &call.input,
-            self.config.review.instructions.as_deref(),
-        );
-        out.effects.push(effect(
-            key.clone(),
-            Effect::ModelCall {
-                purpose: ModelPurpose::PermissionReview,
-                model: self.config.review.model.clone(),
-                request,
+        self.enter(
+            call,
+            Stage::Review {
+                key: format!("t{n}.tool.{}.review", call.call_id),
             },
-        ));
-        Stage::Review { key }
+            out,
+        )
     }
 
     fn cautioned(&self, n: u64, call: &PendingCall, out: &mut Output) -> Stage {
@@ -966,10 +1096,9 @@ pub mod json {
         output: Output,
     }
 
-    /// `{ state, effects, commands, events }`.
+    /// `{ state, effects, commands, events, entries }`.
     pub fn advance(state: &str, inputs: &str) -> Result<String, String> {
-        let value: Value = serde_json::from_str(state).map_err(|e| e.to_string())?;
-        let mut state = migrate(value)?;
+        let mut state = load(state)?;
         let inputs: Vec<Input> = serde_json::from_str(inputs).map_err(|e| e.to_string())?;
         let output = super::advance(&mut state, inputs);
         serde_json::to_string(&Advanced {
@@ -977,6 +1106,27 @@ pub mod json {
             output,
         })
         .map_err(|e| e.to_string())
+    }
+
+    /// `{ state, effects, commands, events, entries }`, after folding logged `entries`.
+    pub fn replay(state: &str, entries: &str) -> Result<String, String> {
+        let mut state = load(state)?;
+        let entries: Vec<Entry> = serde_json::from_str(entries).map_err(|e| e.to_string())?;
+        let output = super::replay(&mut state, entries)?;
+        serde_json::to_string(&Advanced {
+            state: &state,
+            output,
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    /// `{ effects, commands, events, entries }`: what is open in `state`.
+    pub fn resume(state: &str) -> Result<String, String> {
+        serde_json::to_string(&super::resume(&load(state)?)).map_err(|e| e.to_string())
+    }
+
+    fn load(state: &str) -> Result<State, String> {
+        migrate(serde_json::from_str(state).map_err(|e| e.to_string())?)
     }
 }
 

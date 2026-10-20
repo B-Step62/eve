@@ -7,6 +7,7 @@ import type { KernelBinding } from "#harness/kernel/contract.js";
 interface NativeAddon {
   open(config: string): string;
   advance(state: string, inputs: string): string;
+  resume(state: string): string;
 }
 
 let addon: NativeAddon | undefined;
@@ -25,5 +26,6 @@ export function nativeKernel(): KernelBinding {
     open: (config) => JSON.parse(a.open(JSON.stringify(config))),
     advance: (state, inputs) =>
       JSON.parse(a.advance(JSON.stringify(state), JSON.stringify(inputs))),
+    resume: (state) => JSON.parse(a.resume(JSON.stringify(state))),
   };
 }
