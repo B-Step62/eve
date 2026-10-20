@@ -552,8 +552,8 @@ if (!offer) return null;
 ```
 
 Reading `ctx.messages()` outside a memo works before a model call and fails when eve later reaches
-the child, with an error naming the file and suggesting the memo. In development, eve restores each
-new binding as soon as the child opens, so the error appears on the first run.
+the child, with an error naming the file and suggesting the memo. eve builds a new child's
+credentials from its binding before opening it, so the error appears on the first run.
 
 <details>
 <summary>How the binding is carried</summary>
@@ -619,11 +619,13 @@ This is the contract authors can rely on, rather than an incidental order of int
 - **Compaction changes what comes next.** The next model call sees the compacted conversation, so
   code over messages can change its answer: the image router switches back to text once a summary
   replaces the image.
-- **A tool call runs only as it was offered.** A call that waits for approval keeps a digest of its
-  tool's declaration and of the memo results it was built from. If they differ when the call runs,
-  for example because the caller's role or tenant changed during the wait, the call fails with a
-  tool error saying the tool changed since it was offered, and the model can request it again.
-  Authorization is still checked when the call runs.
+- **A tool call runs only as it was offered.** A call that waits for an approval or a sign-in
+  keeps a version of the dynamic entry it calls: a dynamic tool, a dynamic connection's tool, or a
+  dynamic subagent. The version covers what the model was offered, a connection's target, or a
+  subagent's selection, plus the memo results its definition was built from. If the version differs
+  when the call runs, for example because the caller's role or tenant changed during the wait, the
+  call fails with a tool error saying the tool changed since it was offered, and the model can
+  request it again. Authorization is still checked when the call runs.
 
 Evaluating a definition and installing its result in a model request are separate, which leaves
 room to keep a provider's tool list stable where prompt caching benefits from it.
@@ -671,9 +673,9 @@ text that joined the conversation and a child that was opened. Event-handler occ
   records are re-sent and saved again on each step. `main` has the same cost for its closure
   snapshots, which it stores per callback with no cap.
 - **Diagnostics go to logs, and later traces.** Each memo run reports the file, the key's
-  digest (never the key, which can hold tenant or principal IDs), why it ran (a new key, a retry,
-  or a deployment change), how long it took, and whether the value changed. There's no public API
-  for them at first.
+  digest (never the key, which can hold tenant or principal IDs), why it ran (a new key or a
+  deployment change), and how long it took. Each evaluation reports whether the value changed.
+  There's no public API for them at first.
 
 ## Examples from main's docs
 
