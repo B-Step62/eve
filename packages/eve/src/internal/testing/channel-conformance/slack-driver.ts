@@ -130,7 +130,6 @@ export function slackDriver(
         method,
         response: {
           channel: {
-            creator: PERSON,
             id: CHANNEL,
             is_private: false,
             properties: { record_channel: { record_type: "agent_channel" } },
@@ -174,7 +173,7 @@ export function slackDriver(
       slackChannel({
         api: { fetch: recordingFetch(record, decode) },
         credentials: { botToken: "xoxb-conformance", signingSecret: SIGNING_SECRET },
-        ...(codeChannel && { codeChannels: { participants: "all" } }),
+        ...(codeChannel && { codeChannels: true }),
       }),
     message: (text, person, files = []) => {
       const ts = threadStarted ? nextTs() : threadTs;

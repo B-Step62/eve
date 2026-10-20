@@ -6294,7 +6294,7 @@ describe("slackChannel() code channels", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   // Each test uses its own channel ids: eve caches code channel detection per process.
-  function useCodeChannels(codeChannelIds: readonly string[], creator = "U_OWNER"): void {
+  function useCodeChannels(codeChannelIds: readonly string[]): void {
     fetchMock = vi.fn(async (request: string | URL | Request, init?: RequestInit) => {
       if (!String(request).includes("conversations.info")) {
         return Response.json({ ok: true, ts: "1700000001.000001" });
@@ -6304,7 +6304,6 @@ describe("slackChannel() code channels", () => {
         ok: true,
         channel: codeChannelIds.includes(String(channel))
           ? {
-              creator,
               is_private: false,
               properties: { record_channel: { record_type: "agent_channel" } },
             }
@@ -6350,7 +6349,7 @@ describe("slackChannel() code channels", () => {
       channel: "C_CODE_MENTION",
       threadTs: "1700000000.000100",
       ts: "1700000000.000200",
-      user: "U_OWNER",
+      user: "U_ALICE",
     });
 
     const { send } = await firePost(channel, buildSignedRequest({ body: mention.body }));
@@ -6370,61 +6369,48 @@ describe("slackChannel() code channels", () => {
     ).toEqual([{ channel_id: "C_CODE_MENTION", status: "processing" }]);
   });
 
-  it("answers the owner's un-mentioned messages when codeChannels is set", async () => {
-    useCodeChannels(["C_CODE_OWNER"]);
+  it("answers un-mentioned messages from any member when codeChannels is set", async () => {
+    useCodeChannels(["C_CODE_UNMENTIONED"]);
     const channel = slackChannel({
-      codeChannels: {},
+      codeChannels: true,
       credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
     });
 
-    const owner = await firePost(
+    const threaded = await firePost(
       channel,
       buildSignedRequest({
         body: channelMessage({
-          channel: "C_CODE_OWNER",
+          channel: "C_CODE_UNMENTIONED",
           threadTs: "1700000000.000100",
-          user: "U_OWNER",
+          user: "U_ALICE",
         }),
       }),
     );
-    const member = await firePost(
+    const topLevel = await firePost(
       channel,
-      buildSignedRequest({ body: channelMessage({ channel: "C_CODE_OWNER", user: "U_MEMBER" }) }),
+      buildSignedRequest({
+        body: channelMessage({ channel: "C_CODE_UNMENTIONED", user: "U_BOB" }),
+      }),
     );
     const originContext = await firePost(
       channel,
       buildSignedRequest({
         body: channelMessage({
           blocks: [{ block_id: "agent_channel_origin_context", type: "context" }],
-          channel: "C_CODE_OWNER",
-          user: "U_OWNER",
+          channel: "C_CODE_UNMENTIONED",
+          user: "U_ALICE",
         }),
       }),
     );
     const ordinary = await firePost(
       channel,
-      buildSignedRequest({ body: channelMessage({ channel: "C_ORDINARY", user: "U_OWNER" }) }),
+      buildSignedRequest({ body: channelMessage({ channel: "C_ORDINARY", user: "U_ALICE" }) }),
     );
 
-    expect(owner.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_OWNER:0"]);
-    expect(member.send).not.toHaveBeenCalled();
+    expect(threaded.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:0"]);
+    expect(topLevel.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:0"]);
     expect(originContext.send).not.toHaveBeenCalled();
     expect(ordinary.send).not.toHaveBeenCalled();
-  });
-
-  it("admits every member when participants is all", async () => {
-    useCodeChannels(["C_CODE_ALL"]);
-    const channel = slackChannel({
-      codeChannels: { participants: "all" },
-      credentials: { botToken: "xoxb-test", signingSecret: SIGNING_SECRET },
-    });
-
-    const { send } = await firePost(
-      channel,
-      buildSignedRequest({ body: channelMessage({ channel: "C_CODE_ALL", user: "U_MEMBER" }) }),
-    );
-
-    expect(send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_ALL:0"]);
   });
 
   it("cancels the session's turn when Slack stops the code channel session", async () => {

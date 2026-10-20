@@ -9,9 +9,11 @@ last_updated: "2026-10-20"
 > **AI status:** Written entirely by AI; human review pending.
 
 > **Implementation status:** Phase 1 is partly in. Shipped: detection, `C123:0` keying, top-level
-> replies, session status, stop, the manifest option, and `participants: "owner" | "all"` (default
-> `"owner"`). Not yet: `"confirm"`, replies in the user's thread inside a code channel, the
-> membership check, and phases 2 and 3.
+> replies, session status, stop, and `codeChannels: true` for un-mentioned messages and the manifest.
+> Every member can start turns; the `participants` policy (`"owner"`, `"confirm"`) is deferred,
+> since eve can't read a forked channel's owner before dispatch. Not yet: replies in the user's
+> thread inside a code channel, the membership check, and phases 2 and 3. Phase 2 ships with
+> at-least-once delivery, without `to().create()`.
 
 ## Summary
 

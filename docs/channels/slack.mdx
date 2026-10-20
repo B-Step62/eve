@@ -314,11 +314,11 @@ import { slackChannel } from "eve/channels/slack";
 
 export default slackChannel({
   credentials: connectSlackCredentials("slack/my-agent"),
-  codeChannels: { participants: "owner" },
+  codeChannels: true,
 });
 ```
 
-`participants` decides who can start turns. The default, `"owner"`, admits only the person who opened the code channel and ignores other members' messages. `"all"` admits every member, with auth derived from each message's author. The policy applies to mentions too, including when `codeChannels` is omitted.
+Every member of a code channel can start turns, with auth derived from each message's author, the same as in an ordinary thread. Without `codeChannels`, eve still serves mentions in a code channel as the channel's one session.
 
 eve detects a code channel with Slack's `conversations.info` API, so the app needs `channels:read` (and `groups:read` for private code channels). With `codeChannels` set, the generated app manifest enables the code channels feature, adds the `code_channels:manage`, `channels:history`, `channels:read`, `groups:history`, and `groups:read` bot scopes, and subscribes to the `message.session` and `agent_session_stopped` events. For Vercel Connect, add the same scopes and events under **Advanced** when you create the connector. In message hooks, `ctx.isCodeChannel()` returns whether the message was posted in a code channel.
 
