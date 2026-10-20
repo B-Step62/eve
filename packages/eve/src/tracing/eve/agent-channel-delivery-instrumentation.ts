@@ -1,5 +1,5 @@
 import type { InstrumentationProviderDefinition } from "#instrumentation/lifecycle.js";
-import { contentAttribute } from "#compiled/@eve/tracing/otel.js";
+import { contentAttribute } from "#compiled/@vercel/agent-runs/otel.js";
 import type { AgentTraceStateStore } from "#tracing/eve/agent-trace-state.js";
 import { isSampledTrace } from "#shared/trace-policy.js";
 

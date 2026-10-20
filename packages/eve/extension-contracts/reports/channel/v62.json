@@ -2,7 +2,7 @@
   "kind": "eve-extension-capability-contract",
   "capability": "channel",
   "epoch": 62,
-  "sha256": "ad9b7dcee70febdf295325b8cf54e2b9666f5240c16fea83600a6263f505d66b",
+  "sha256": "f8b2fe832a1108829343d687b1a39311fc458485c3f0c9545e38fcaf400e9e9b",
   "exports": [
     "DELETE",
     "GET",
@@ -13,7 +13,6 @@
     "PUT",
     "SessionStrandedError",
     "WS",
-    "answerFromText",
     "attachmentError",
     "createWebSocketUpgradeServer",
     "defineChannel",

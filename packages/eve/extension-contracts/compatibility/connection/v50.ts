@@ -1,6 +1,7 @@
+// Epoch 50 of the connection capability: the authoring contract of epoch 49 still compiles.
 import { defineMcpClientConnection } from "#public/connections/index.js";
 
-// Epoch 50 Connect providers carry connector metadata without an events bridge.
+// Epoch 49 Connect providers carry connector metadata without an events bridge.
 export default defineMcpClientConnection({
   description: "Read issues from the tracker.",
   url: "https://tracker.example.com/mcp",

@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 
+import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { SessionStateMap, HarnessStepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
@@ -27,7 +28,25 @@ export interface ApprovalAsk {
 }
 
 /**
- * A model step whose calls can't all settle yet: some await an approval, others the runtime.
+ * A call cleared to run: a person approved it, or nothing asked them to. One a sign-in stopped
+ * waits in its step until the sign-ins it lists call back, then runs as the call that asked.
+ */
+export interface ApprovedCall {
+  readonly call: ApprovalAsk["call"];
+  /** The approval that cleared the call; absent for a call only sign-ins stopped. */
+  readonly interactionId?: string;
+  /** The sign-ins the call stopped on: its outcome settles them. */
+  readonly signIns?: readonly AuthorizationChallenge[];
+  /**
+   * Who approved it, when a response policy allowed their answer. The call reads it when it
+   * runs, after the answer, and the responder's record with it, has settled.
+   */
+  readonly responder?: SessionAuthContext;
+}
+
+/**
+ * A model step whose calls can't all settle yet: some await an approval or a sign-in, others the
+ * runtime.
  * Its response stays out of history until every call it made has a result there, so a call
  * never reaches the model without its result.
  */
@@ -40,6 +59,11 @@ export interface SuspendedStep {
    * interaction and response tables'; this only remembers what was asked.
    */
   readonly requests: readonly ApprovalAsk[];
+  /**
+   * Calls a sign-in stopped. Each stays open, without a result, until the sign-ins it lists have
+   * called back, then runs as the call that asked, rather than the model deciding again.
+   */
+  readonly approved?: readonly ApprovedCall[];
   /** Workflow and agent calls the runtime runs for the step. */
   readonly tasks: readonly RuntimeWorkflowTaskRequest[];
   readonly responseAuthRequiredRequestIds?: readonly string[];
