@@ -71,31 +71,31 @@ function cacheLookup(channelId: string, value: boolean | { readonly failedAtMs: 
   codeChannelCache.set(channelId, value);
 }
 
-// Errors from Slack's docs that won't change on retry; anything else is retried by the calling step.
-const PERMANENT_CREATE_ERRORS: ReadonlySet<string> = new Set([
-  "access_denied",
-  "channel_not_viewable",
-  "feature_disabled",
-  "invalid_agent",
-  "invalid_arguments",
-  "invalid_origin_link",
-  "missing_scope",
-  "no_permission",
-  "no_shared_workspace",
-  "not_allowed_token_type",
-  "origin_channel_externally_shared",
-  "origin_channel_is_file_channel",
-  "restricted_action",
-  "team_access_not_granted",
-  "user_not_enabled",
+// Slack errors worth retrying; any other refusal won't change on retry.
+const TRANSIENT_SLACK_ERRORS: ReadonlySet<string> = new Set([
+  "channel_creation_failed",
+  "fatal_error",
+  "internal_error",
+  "invite_failed",
+  "open_failed",
+  "ratelimited",
+  "request_timeout",
+  "service_unavailable",
 ]);
+
+/** Slack shows the name as the channel's title; longer ones are cut. */
+const MAX_CODE_CHANNEL_NAME_LENGTH = 80;
 
 /**
  * Opens a code channel from an origin message. Slack invites the origin
- * message's author, matches the origin's privacy, and refuses Slack Connect
- * origins. `session_id` makes the call idempotent, so a retry with the same
- * origin and requester returns the same channel. Throws an error marked
+ * message's author, links the channel in the origin thread, and refuses Slack
+ * Connect origins. `session_id` makes the call idempotent, so a retry with the
+ * same origin and requester returns the same channel. Throws an error marked
  * `fatal` when Slack refuses permanently, so the calling step doesn't retry.
+ *
+ * Slack gives the channel the origin's privacy. eve confirms it before the
+ * caller copies the conversation in: a public channel opened from a private
+ * conversation throws.
  */
 export async function createSlackCodeChannel(input: {
   readonly name: string;
@@ -109,8 +109,10 @@ export async function createSlackCodeChannel(input: {
     .update(`${input.originChannelId}:${input.originTs}:${input.requester}`)
     .digest("hex")
     .slice(0, 32);
+  const name = input.name.replace(/\s+/gu, " ").trim().slice(0, MAX_CODE_CHANNEL_NAME_LENGTH);
   const response = await input.request("agents.conversations.create", {
-    name: input.name,
+    // Without a name, Slack names the channel from the origin message.
+    ...(name.length > 0 && { name }),
     origin_channel_id: input.originChannelId,
     origin_message_ts: input.originTs,
     session_id: sessionId,
@@ -121,13 +123,37 @@ export async function createSlackCodeChannel(input: {
     throw new Error("Slack did not return a channel id for the new code channel.");
   }
   cacheLookup(channelId, true);
+  const [origin, created] = await Promise.all([
+    readConversation(input.request, input.originChannelId),
+    readConversation(input.request, channelId),
+  ]);
+  if (isPrivateConversation(origin) && !isPrivateConversation(created)) {
+    throw fatalError(
+      `Slack opened code channel ${channelId} as public from a private conversation, so eve didn't copy the conversation into it.`,
+    );
+  }
   return channelId;
+}
+
+async function readConversation(
+  request: SlackRequest,
+  channelId: string,
+): Promise<Record<string, unknown>> {
+  const response = await request("conversations.info", { channel: channelId });
+  if (response.ok !== true) throw slackFailure("conversations.info", response.error);
+  return (response.channel ?? {}) as Record<string, unknown>;
+}
+
+function isPrivateConversation(conversation: Record<string, unknown>): boolean {
+  return (
+    conversation.is_private === true || conversation.is_im === true || conversation.is_mpim === true
+  );
 }
 
 function slackFailure(method: string, error: unknown): Error {
   const code = typeof error === "string" ? error : "unknown_error";
   const message = `Slack ${method} failed: ${code}`;
-  return PERMANENT_CREATE_ERRORS.has(code) ? fatalError(message) : new Error(message);
+  return TRANSIENT_SLACK_ERRORS.has(code) ? new Error(message) : fatalError(message);
 }
 
 // The Workflow SDK doesn't retry a step error marked `fatal`; channels stay free of its imports.

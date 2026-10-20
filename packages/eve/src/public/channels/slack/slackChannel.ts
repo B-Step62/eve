@@ -51,7 +51,6 @@ import {
   createSlackCodeChannel,
   isSlackCodeChannel,
   isSlackCodeChannelOriginContext,
-  setSlackCodeChannelStatus,
 } from "#public/channels/slack/code-channel.js";
 import {
   defaultEvents,
@@ -1163,11 +1162,6 @@ async function receiveInNewCodeChannel(
     request,
   });
   const address = slackContinuationToken(codeChannelId, CODE_CHANNEL_THREAD_TS);
-  // The same requester and origin message reach the same channel; a repeated
-  // call joins its session instead of linking and seeding it again.
-  const existing = await deps.resolveSession(address);
-  if (existing !== undefined) return existing;
-  await setSlackCodeChannelStatus(request, codeChannelId, "processing");
   const state: SlackChannelState = {
     channelId: codeChannelId,
     codeChannel: true,
@@ -1176,9 +1170,27 @@ async function receiveInNewCodeChannel(
     threadTs: CODE_CHANNEL_THREAD_TS,
     triggeringUserId: deps.triggeringUserId ?? slackUserIdFromAuthContext(input.auth) ?? null,
   };
-  return await deps
-    .from(address)
-    .send(input.message, { auth: input.auth, history: input.history, state, title: input.title });
+  // A session someone already started in the channel gets the history too, so
+  // a repeated call delivers it twice rather than an early message losing it.
+  return await deps.from(address).send(input.message, {
+    auth: codeChannelAuth(input.auth, codeChannelId),
+    history: input.history,
+    state,
+    title: input.title,
+  });
+}
+
+/** The origin's Slack auth, moved to the code channel, so the session knows where it runs. */
+function codeChannelAuth(
+  auth: SessionAuthContext | null,
+  codeChannelId: string,
+): SessionAuthContext | null {
+  if (auth?.authenticator !== "slack-webhook") return auth;
+  const { message_ts: _originTs, ...attributes } = auth.attributes;
+  return {
+    ...auth,
+    attributes: { ...attributes, channel_id: codeChannelId, thread_ts: CODE_CHANNEL_THREAD_TS },
+  };
 }
 
 function shouldDropSlackHttpTimeoutRetry(headers: Headers): boolean {

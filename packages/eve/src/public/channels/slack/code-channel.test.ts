@@ -3,8 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import type { SlackApiResponse } from "#public/channels/slack/api.js";
 import { createSlackCodeChannel } from "#public/channels/slack/code-channel.js";
 
-function slackApi(response: SlackApiResponse = { ok: true, channel_id: "C_CODE" }) {
-  return vi.fn(async (_operation: string, _body: unknown): Promise<SlackApiResponse> => response);
+function slackApi(input?: {
+  readonly create?: SlackApiResponse;
+  readonly privacy?: { readonly origin: boolean; readonly created: boolean };
+}) {
+  const privacy = input?.privacy ?? { created: false, origin: false };
+  return vi.fn(async (operation: string, body: unknown): Promise<SlackApiResponse> => {
+    if (operation === "conversations.info") {
+      const { channel } = body as { channel: string };
+      return {
+        ok: true,
+        channel: { is_private: channel === "C_ORIGIN" ? privacy.origin : privacy.created },
+      };
+    }
+    return input?.create ?? { ok: true, channel_id: "C_CODE" };
+  });
 }
 
 const ORIGIN = {
@@ -14,6 +27,12 @@ const ORIGIN = {
   requester: "slack:T1:U1",
 };
 
+function createCalls(request: ReturnType<typeof slackApi>): Record<string, string>[] {
+  return (request.mock.calls as [string, Record<string, string>][])
+    .filter(([operation]) => operation === "agents.conversations.create")
+    .map(([, body]) => body);
+}
+
 describe("createSlackCodeChannel", () => {
   it("opens a channel linked to the origin message, keyed by origin and requester", async () => {
     const request = slackApi();
@@ -21,28 +40,53 @@ describe("createSlackCodeChannel", () => {
     await expect(createSlackCodeChannel({ ...ORIGIN, request })).resolves.toBe("C_CODE");
     await createSlackCodeChannel({ ...ORIGIN, request });
 
-    const calls = request.mock.calls as [string, Record<string, string>][];
-    const [operation, first] = calls[0]!;
-    const second = calls[1]![1];
-    expect(operation).toBe("agents.conversations.create");
+    const [first, second] = createCalls(request);
     expect(first).toEqual({
       name: "Fix it",
       origin_channel_id: "C_ORIGIN",
       origin_message_ts: "1.2",
       session_id: expect.stringMatching(/^[0-9a-f]{32}$/u),
     });
-    expect(second.session_id).toBe(first.session_id);
+    expect(second!.session_id).toBe(first!.session_id);
   });
 
-  it("stops retries for permanent Slack errors, not transient ones", async () => {
-    const permanent = slackApi({ ok: false, error: "origin_channel_externally_shared" });
-    const transient = slackApi({ ok: false, error: "ratelimited" });
+  it("tidies the model's channel name and lets Slack name an empty one", async () => {
+    const request = slackApi();
 
-    await expect(createSlackCodeChannel({ ...ORIGIN, request: permanent })).rejects.toMatchObject({
-      fatal: true,
-    });
-    const error = await createSlackCodeChannel({ ...ORIGIN, request: transient }).catch((e) => e);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toHaveProperty("fatal");
+    await createSlackCodeChannel({ ...ORIGIN, name: `  Fix\n  the ${"x".repeat(100)}`, request });
+    await createSlackCodeChannel({ ...ORIGIN, name: "  \n", request });
+
+    const [long, empty] = createCalls(request);
+    expect(long!.name).toBe(`Fix the ${"x".repeat(72)}`);
+    expect(empty).not.toHaveProperty("name");
+  });
+
+  it("retries only transient Slack errors", async () => {
+    for (const error of ["origin_channel_externally_shared", "token_revoked", "unknown_method"]) {
+      await expect(
+        createSlackCodeChannel({ ...ORIGIN, request: slackApi({ create: { ok: false, error } }) }),
+      ).rejects.toMatchObject({ fatal: true });
+    }
+    const transient = await createSlackCodeChannel({
+      ...ORIGIN,
+      request: slackApi({ create: { ok: false, error: "ratelimited" } }),
+    }).catch((e: unknown) => e);
+    expect(transient).toBeInstanceOf(Error);
+    expect(transient).not.toHaveProperty("fatal");
+  });
+
+  it("refuses a public channel opened from a private conversation", async () => {
+    await expect(
+      createSlackCodeChannel({
+        ...ORIGIN,
+        request: slackApi({ privacy: { created: false, origin: true } }),
+      }),
+    ).rejects.toMatchObject({ fatal: true, message: expect.stringContaining("public") });
+    await expect(
+      createSlackCodeChannel({
+        ...ORIGIN,
+        request: slackApi({ privacy: { created: true, origin: true } }),
+      }),
+    ).resolves.toBe("C_CODE");
   });
 });

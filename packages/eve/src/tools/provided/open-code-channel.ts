@@ -15,7 +15,7 @@ const OPEN_CODE_CHANNEL_DESCRIPTION = [
   "- Open one for multi-step work: code changes, builds, tests, pull requests, investigations, or long output.",
   "- Answer in place when one message answers the request.",
   "- Call it once per request. Slack links the new channel in this thread, so after it opens, reply here in one short sentence at most.",
-  '- If the status is "unavailable", continue here and don\'t retry.',
+  '- If the status is "unavailable" or Slack refuses, continue here and tell the person why; don\'t retry.',
 ].join("\n");
 
 export interface OpenCodeChannelInput {

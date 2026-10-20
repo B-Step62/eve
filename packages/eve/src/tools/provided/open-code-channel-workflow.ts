@@ -29,31 +29,27 @@ export async function executeOpenCodeChannel(
   ) {
     return { reason: "This conversation is not a Slack message.", status: "unavailable" };
   }
-  // A code channel session's thread is the `"0"` placeholder.
+  // A code channel session's thread is the `"0"` placeholder, from its first turn on.
   if (originThreadTs === "0") {
     return { reason: "This conversation is already a code channel.", status: "unavailable" };
   }
 
+  // The issuer names the workspace whose installation received the message.
+  const installationTeamId = auth.issuer?.startsWith("slack:")
+    ? auth.issuer.slice("slack:".length)
+    : undefined;
   const history = await readSessionTranscript(ctx.session.id);
-  try {
-    const { sessionId } = await ctx.sendToChannel("slack", input.message, {
-      target: {
-        channelId,
-        codeChannel: {
-          name: input.name,
-          originTs,
-        },
-      },
-      auth,
-      history,
-    });
-    return { sessionId, status: "opened" };
-  } catch (error) {
-    return {
-      reason: error instanceof Error ? error.message : String(error),
-      status: "unavailable",
-    };
-  }
+  // Slack refusals fail the call with Slack's error, which the model can relay.
+  const { sessionId } = await ctx.sendToChannel("slack", input.message, {
+    target: {
+      channelId,
+      codeChannel: { name: input.name, originTs },
+      ...(installationTeamId !== undefined && { installationTeamId }),
+    },
+    auth,
+    history,
+  });
+  return { sessionId, status: "opened" };
 }
 
 async function readSessionTranscript(sessionId: string) {

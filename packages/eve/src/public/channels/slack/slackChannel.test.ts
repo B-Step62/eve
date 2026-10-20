@@ -39,6 +39,7 @@ import {
   SLACK_SECTION_TEXT_MAX_LENGTH,
 } from "#public/channels/slack/limits.js";
 import { defaultSlackAuth, postCompletedSlackReply } from "#public/channels/slack/index.js";
+import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
 import {
   composeSlackRenderers,
   type SlackRenderChain,
@@ -5877,7 +5878,7 @@ describe("slackChannel().receive", () => {
     expect(input.auth.principalId).toBe("p");
   });
 
-  it("opens a code channel and starts its session at the channel's one address", async () => {
+  it("opens a code channel and starts its session there with auth moved to the channel", async () => {
     fetchMock.mockImplementation(async (url: string | URL) =>
       String(url).endsWith("/agents.conversations.create")
         ? Response.json({ ok: true, channel_id: "C_CODE_RECEIVE" })
@@ -5892,7 +5893,13 @@ describe("slackChannel().receive", () => {
           channelId: "C_ORIGIN",
           codeChannel: { name: "Fix it", originTs: "1700000000.000002" },
         },
-        auth: null,
+        auth: buildSlackAuthContext({
+          channelId: "C_ORIGIN",
+          messageTs: "1700000000.000002",
+          teamId: "T01",
+          threadTs: "1700000000.000001",
+          userId: "U_ALICE",
+        }),
       },
       mockChannelContext(send),
     );
@@ -5904,35 +5911,15 @@ describe("slackChannel().receive", () => {
       codeChannel: true,
       threadTs: "0",
     });
-  });
-
-  it("joins the code channel's session when a repeated call reaches the same channel", async () => {
-    fetchMock.mockImplementation(async (url: string | URL) =>
-      String(url).endsWith("/agents.conversations.create")
-        ? Response.json({ ok: true, channel_id: "C_CODE_REPEAT" })
-        : Response.json({ ok: true, channel: { is_private: false }, ts: "1700000001.000001" }),
-    );
-    const send = vi.fn();
-    const context = mockChannelContext(send);
-    const resolveSession = vi.fn(async (address: string) =>
-      address === "C_CODE_REPEAT:0" ? ({ id: "session_code" } as never) : undefined,
-    );
-
-    const session = await buildReceive()(
-      {
-        message: "Start by reproducing it.",
-        target: {
-          channelId: "C_ORIGIN",
-          codeChannel: { name: "Fix it", originTs: "1700000000.000002" },
-        },
-        auth: null,
-      },
-      { ...context, resolveSession },
-    );
-
-    expect(session).toEqual({ id: "session_code" });
-    expect(send).not.toHaveBeenCalled();
-    expect(slackCalls(fetchMock, "chat.postMessage")).toHaveLength(0);
+    // The first turn already sees it runs in a code channel.
+    expect(input.auth.attributes).toEqual({
+      author_type: "user",
+      channel_id: "C_CODE_RECEIVE",
+      team_id: "T01",
+      thread_ts: "0",
+      user_id: "U_ALICE",
+    });
+    expect(input.auth.principalId).toBe("slack:T01:U_ALICE");
   });
 
   it("rejects a code channel target combined with a thread", async () => {

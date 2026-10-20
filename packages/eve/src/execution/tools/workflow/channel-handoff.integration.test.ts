@@ -199,6 +199,7 @@ describe("workflow tool channel handoffs", () => {
 
   it("opens a Slack code channel from a thread and continues the work there", async () => {
     const signingSecret = "code-channel-signing-secret";
+    let createError: string | undefined;
     const slackCalls: { readonly body: Record<string, string>; readonly method: string }[] = [];
     let nextTs = 1;
     const realFetch = globalThis.fetch;
@@ -219,7 +220,11 @@ describe("workflow tool channel handoffs", () => {
       }
       // Slack returns the same channel for a repeated session_id.
       if (method === "agents.conversations.create") {
-        return Response.json({ ok: true, channel_id: "C_CODE" });
+        return Response.json(
+          createError === undefined
+            ? { ok: true, channel_id: "C_CODE" }
+            : { ok: false, error: createError },
+        );
       }
       const ts = `1700000100.${String(nextTs++).padStart(6, "0")}`;
       return Response.json({ ok: true, channel: body.channel, message: { ts }, ts });
@@ -326,12 +331,28 @@ describe("workflow tool channel handoffs", () => {
           ({ sessionId }) => sessionId === codeSession,
         ).length;
 
-        // A repeat call for the same message joins the same session without seeding it again.
+        // A repeat call reaches the same session and delivers again, so a session someone
+        // started in the channel first still gets the thread.
         await sendToSession(source.runId, request);
         expect(forkedSessionId(await sourceTurns.nextTurn())).toBe(codeSession);
-        expect(modelInputs.filter(({ sessionId }) => sessionId === codeSession)).toHaveLength(
-          codeSessionModelCalls,
-        );
+        await waitForCompletedTurns(codeSession, 4);
+        expect(
+          modelInputs.filter(({ sessionId }) => sessionId === codeSession).length,
+        ).toBeGreaterThan(codeSessionModelCalls);
+
+        // A permanent Slack refusal fails the call with Slack's error for the model to relay.
+        createError = "feature_disabled";
+        await sendToSession(source.runId, request);
+        expect(filterEventsByType(await sourceTurns.nextTurn(), "action.result")).toEqual([
+          expect.objectContaining({
+            data: expect.objectContaining({
+              result: expect.objectContaining({
+                isError: true,
+                output: "Slack agents.conversations.create failed: feature_disabled",
+              }),
+            }),
+          }),
+        ]);
       } finally {
         sourceTurns.dispose();
         await source.cancel();
