@@ -32,7 +32,11 @@ export type TemplatePreviewSurface = "imessage" | "slack" | "web";
 export interface TemplatePreviewMessage {
   from: "agent" | "user";
   text: string;
-  /** Tool or skill names shown as completed calls. Each must match a path in `files`. */
+  /**
+   * Tool or skill names shown as completed calls. Each must match a path in
+   * `files`. Only the `web` surface renders them; Slack and iMessage do not
+   * show tool calls.
+   */
   tools?: string[];
 }
 
@@ -254,7 +258,6 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@brain how many orders did we have, and what did they total?" },
         {
           from: "agent",
-          tools: ["get_model", "query_sql"],
           text: "99 orders from Jan 1 to Apr 9, 2018, with AUD 1,672 in recorded payments.",
         },
       ],

@@ -182,11 +182,6 @@ const Slack = ({
                   ) : null}
                   <span className="ml-2 text-[12px] text-gray-900">{SLACK_TIMESTAMP}</span>
                 </div>
-                {message.tools && message.tools.length > 0 ? (
-                  <div className="mt-0.5 mb-1">
-                    <SlackToolCalls tools={message.tools} />
-                  </div>
-                ) : null}
                 <p>
                   <Mentions text={message.text} />
                 </p>
@@ -196,21 +191,6 @@ const Slack = ({
         })}
       </div>
     </div>
-  </div>
-);
-
-/** Completed tool calls as Slack-sized pills: 12px monospace on a 20px row. */
-const SlackToolCalls = ({ tools }: { tools: string[] }) => (
-  <div className="flex flex-wrap gap-1.5">
-    {tools.map((tool) => (
-      <span
-        className="inline-flex h-5 items-center gap-1 rounded-full border border-gray-alpha-400 bg-gray-alpha-100 px-2 font-mono text-[12px] text-gray-900"
-        key={tool}
-      >
-        <span className="text-green-700">✓</span>
-        {tool}
-      </span>
-    ))}
   </div>
 );
 
