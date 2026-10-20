@@ -9,7 +9,8 @@
       },
       {
         "name": "write_file",
-        "description": "Append to a file."
+        "description": "Append to a file.",
+        "replay": "never"
       }
     ]
   },

@@ -15,7 +15,7 @@ for (const mode of ["steps", "wasm"] as const) {
       const ws = mkdtempSync(join(tmpdir(), `kernel-spike-b-${mode}-${name}-`));
       const run = await start(kernelSession, [name, ws, mode]);
       const result = (await run.returnValue) as Omit<RunResult, "ws">;
-      check(name, { ws, ...result }, { parallelReads: true });
+      check(name, { ws, ...result }, { parallelReads: true, replayNever: false });
     });
   });
 }

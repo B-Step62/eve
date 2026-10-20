@@ -23,6 +23,8 @@ use compaction::UsageMark;
 pub use types::*;
 
 const CANCELLED_TOOL: &str = "Cancelled by the user.";
+/// fx's result for a `never` tool that was running when the process stopped.
+const CRASHED_TOOL: &str = "The process stopped while this tool ran. It may or may not have taken effect. Check before you try it again.";
 const STEP_LIMIT_NOTICE: &str =
     "Agent step limit reached; continue with a follow-up prompt if needed.";
 /// eve's `MODEL_CALL_MAX_ATTEMPTS`.
@@ -320,14 +322,24 @@ impl State {
                     },
                 },
             ),
-            Stage::Run { key } => (
-                key,
-                Effect::ToolCall {
+            Stage::Run { key } => {
+                let replay = self
+                    .config
+                    .tools
+                    .iter()
+                    .find(|t| t.name == call.name)
+                    .map(|t| t.replay)
+                    .unwrap_or_default();
+                let e = Effect::ToolCall {
                     call_id: call.call_id.clone(),
                     name: call.name.clone(),
                     input: call.input.clone(),
-                },
-            ),
+                };
+                return Some(EffectRequest {
+                    replay,
+                    ..effect(key.clone(), e)
+                });
+            }
             Stage::Done { .. } => return None,
         };
         Some(effect(key.clone(), e))
@@ -857,6 +869,10 @@ impl State {
                     let (content, is_error) = match result {
                         EffectResult::Completed { output } => (value_text(output), false),
                         EffectResult::Failed { error, .. } => (format!("Error: {error}"), true),
+                        EffectResult::Interrupted {
+                            reason: InterruptReason::Crashed,
+                            ..
+                        } => (CRASHED_TOOL.into(), true),
                         EffectResult::Interrupted { .. } => (CANCELLED_TOOL.into(), true),
                     };
                     out.events.push(Event::ToolFinished {

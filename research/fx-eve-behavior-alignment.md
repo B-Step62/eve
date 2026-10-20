@@ -47,15 +47,15 @@ eve is the reference. fx changes to eve's behavior, with two exceptions:
 
 ### Tools and effects
 
-| Capability               | eve                                                                                      | fx                                                                                  | Class             | Kernel behavior                                                                                                          |
-| ------------------------ | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Parallel calls           | All calls of a response run together                                                     | Read-only groups run together. A write stops the group.                             | **eve** (decided) | All calls of a response run together. No write fence.                                                                    |
-| Crash during a tool      | The step runs again, with the model call and all tools                                   | A `never` tool is not run again. The model gets "may or may not have taken effect". | **eve** (decided) | The host runs an interrupted effect again. R2 is withdrawn.                                                              |
-| Large tool results       | Each tool cuts its own output                                                            | Result store, handle, preview, and `read_tool_result`                               | **eve** (decided) | Each tool cuts its own output. The kernel does not store results.                                                        |
-| Tool media               | Staged in the sandbox. History keeps a reference.                                        | Images inline, with limits                                                          | **Extension**     | `blob.put` effect. eve stages in the sandbox. fx keeps inline bytes.                                                     |
-| Deferred tools           | `eve__search`, `eve__tool`, `eve__skill`, a listing that never changes the prompt prefix | `capability_search`, `mcp_select_tool`, a schema budget                             | **eve**           | eve's catalog tools and cache rules. fx's search ranking can be the search implementation.                               |
-| Dynamic tools            | `defineDynamic` at session, turn, or step start                                          | Fixed set, plus MCP                                                                 | **eve**           | `tools.resolve` effect at those events. fx answers it with its fixed set and MCP.                                        |
-| Workflow tools and tasks | `execute`, `task`, `serve`; `eve__task_wait`, `eve__task_cancel`                         | Managed shell processes                                                             | **Extension**     | One "long effect" contract: start, observe, cancel. eve backs it with workflow runs. fx backs it with managed processes. |
+| Capability               | eve                                                                                      | fx                                                                                  | Class                   | Kernel behavior                                                                                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Parallel calls           | All calls of a response run together                                                     | Read-only groups run together. A write stops the group.                             | **eve** (decided)       | All calls of a response run together. No write fence.                                                                                                |
+| Crash during a tool      | The step runs again, with the model call and all tools                                   | A `never` tool is not run again. The model gets "may or may not have taken effect". | **Extension** (decided) | Tool descriptors declare `replay`. Local hosts (fx, libfx, durable-harness) obey `never` (R2). Workflow hosts run the step again, as eve does today. |
+| Large tool results       | Each tool cuts its own output                                                            | Result store, handle, preview, and `read_tool_result`                               | **eve** (decided)       | Each tool cuts its own output. The kernel does not store results.                                                                                    |
+| Tool media               | Staged in the sandbox. History keeps a reference.                                        | Images inline, with limits                                                          | **Extension**           | `blob.put` effect. eve stages in the sandbox. fx keeps inline bytes.                                                                                 |
+| Deferred tools           | `eve__search`, `eve__tool`, `eve__skill`, a listing that never changes the prompt prefix | `capability_search`, `mcp_select_tool`, a schema budget                             | **eve**                 | eve's catalog tools and cache rules. fx's search ranking can be the search implementation.                                                           |
+| Dynamic tools            | `defineDynamic` at session, turn, or step start                                          | Fixed set, plus MCP                                                                 | **eve**                 | `tools.resolve` effect at those events. fx answers it with its fixed set and MCP.                                                                    |
+| Workflow tools and tasks | `execute`, `task`, `serve`; `eve__task_wait`, `eve__task_cancel`                         | Managed shell processes                                                             | **Extension**           | One "long effect" contract: start, observe, cancel. eve backs it with workflow runs. fx backs it with managed processes.                             |
 
 ### Approval and permission
 
@@ -121,15 +121,15 @@ the kernel stays free of I/O.
 
 ## Decisions
 
-| Item                                 | Decision | Effect                                                  |
-| ------------------------------------ | -------- | ------------------------------------------------------- |
-| A steer stops generation             | fx       | eve changes.                                            |
-| Hooks that act                       | fx       | eve's `defineHook` gets `PreToolUse` and `Stop`.        |
-| Never run a tool again after a crash | eve      | fx loses R2. The kernel has no `never` replay rule.     |
-| Write fence                          | eve      | All calls of a response run together.                   |
-| Patient retry                        | eve      | 3 attempts, then the turn fails.                        |
-| Large result handles                 | eve      | Each tool cuts its own output.                          |
-| No person to approve                 | both     | The turn fails. The model does not get an error result. |
+| Item                                 | Decision | Effect                                                                  |
+| ------------------------------------ | -------- | ----------------------------------------------------------------------- |
+| A steer stops generation             | fx       | eve changes.                                                            |
+| Hooks that act                       | fx       | eve's `defineHook` gets `PreToolUse` and `Stop`.                        |
+| Never run a tool again after a crash | host     | fx keeps R2. Local hosts obey `never`; eve runs the step again for now. |
+| Write fence                          | eve      | All calls of a response run together.                                   |
+| Patient retry                        | eve      | 3 attempts, then the turn fails.                                        |
+| Large result handles                 | eve      | Each tool cuts its own output.                                          |
+| No person to approve                 | both     | The turn fails. The model does not get an error result.                 |
 
 ## Kernel version 2
 

@@ -20,6 +20,7 @@ fn tool(name: &str, approval: Approval) -> ToolDescriptor {
         name: name.into(),
         description: String::new(),
         approval,
+        replay: Replay::Safe,
     }
 }
 
@@ -684,4 +685,25 @@ fn resume_returns_the_open_effects_and_owed_cancels() {
         }]
     );
     assert_eq!(resume(&open(config())).effects, vec![]);
+}
+
+#[test]
+fn a_never_tool_is_marked_and_a_crash_tells_the_model_it_may_have_run() {
+    let mut cfg = config();
+    cfg.tools[1].replay = Replay::Never;
+    let mut s = open(cfg);
+    let out = calling(&mut s, "write_file");
+    assert_eq!(out.effects[0].replay, Replay::Never);
+    advance(
+        &mut s,
+        vec![Input::EffectResult {
+            key: "t1.tool.c".into(),
+            result: EffectResult::Interrupted {
+                reason: InterruptReason::Crashed,
+                partial: Value::Null,
+            },
+        }],
+    );
+    let (content, is_error) = last_tool(&s);
+    assert!(is_error && content.contains("may or may not have taken effect"));
 }

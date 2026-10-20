@@ -18,6 +18,8 @@ export interface RunResult {
 }
 
 export interface HostTraits {
+  /** The host obeys `replay: never` after a crash (fx, libfx, durable-harness), or runs the effect again (Workflow, eve). */
+  replayNever: boolean;
   /** The host runs read-only calls at the same time. */
   parallelReads: boolean;
 }
@@ -79,11 +81,20 @@ export function check(name: ScenarioName, r: RunResult, traits: HostTraits): voi
     }
     case "crash_in_write": {
       expect(turnEnd(r.events)).toBe("completed");
-      // eve's rule: the interrupted write runs again, so its side effect happens twice.
-      expect(file(r.ws, "report.txt")).toBe("report\nreport\n");
-      expect(t.filter((l) => l.kind === "side_effect")).toHaveLength(2);
       const result = h.find((m) => m.role === "tool");
-      expect(result?.role === "tool" && result.content).toBe("ok");
+      if (traits.replayNever) {
+        // R2: the write ran once, and the model was told it may have run.
+        expect(file(r.ws, "report.txt")).toBe("report\n");
+        expect(t.filter((l) => l.kind === "side_effect")).toHaveLength(1);
+        expect(result?.role === "tool" && result.content).toContain(
+          "may or may not have taken effect",
+        );
+      } else {
+        // A Workflow host runs the interrupted step again, so the side effect happens twice.
+        expect(file(r.ws, "report.txt")).toBe("report\nreport\n");
+        expect(t.filter((l) => l.kind === "side_effect")).toHaveLength(2);
+        expect(result?.role === "tool" && result.content).toBe("ok");
+      }
       expect(lastAssistant(h)).toBe("The write may not have finished, so I did not retry it.");
       break;
     }

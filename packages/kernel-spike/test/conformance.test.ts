@@ -17,7 +17,7 @@ const workspace = (label: string) => mkdtempSync(join(tmpdir(), `kernel-spike-${
 
 describe("host A: in-process runner (fx-mini)", () => {
   it.each(SCENARIOS)("%s", (name) => {
-    check(name, runHostA(name, workspace(`a-${name}`)), { parallelReads: true });
+    check(name, runHostA(name, workspace(`a-${name}`)), { parallelReads: true, replayNever: true });
   });
 });
 
@@ -25,7 +25,10 @@ describe("host C: durable-harness", () => {
   it.each(SCENARIOS)(
     "%s",
     async (name) => {
-      check(name, await runHostC(name, workspace(`c-${name}`)), { parallelReads: true });
+      check(name, await runHostC(name, workspace(`c-${name}`)), {
+        parallelReads: true,
+        replayNever: true,
+      });
     },
     90_000,
   );

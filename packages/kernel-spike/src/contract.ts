@@ -1,7 +1,7 @@
 // TypeScript view of the kernel contract in crates/kernel/src/types.rs.
 
-/** Every effect may run again after a crash (eve's rule). */
-export type Replay = "safe";
+/** `never`: a local host does not run the effect again after a crash (R2). */
+export type Replay = "safe" | "never";
 
 /** eve's tool approval policies. */
 export type Approval = "never" | "always" | "once" | "auto";
@@ -10,6 +10,7 @@ export interface ToolDescriptor {
   name: string;
   description: string;
   approval?: Approval;
+  replay?: Replay;
 }
 
 export interface SessionConfig {

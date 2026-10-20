@@ -4,9 +4,11 @@
 //!
 //! The store holds only the kernel's log entries and snapshots. On load the
 //! runner folds the entries after the last snapshot and asks the kernel which
-//! effects are open (`kernel::resume`). Those run again (eve's crash rule).
+//! effects are open (`kernel::resume`). An open `replay: safe` effect runs
+//! again. An open `replay: never` effect with a recorded intent may have run,
+//! so it is not run again: the kernel gets `interrupted { crashed }` (R2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -15,7 +17,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 use kernel::{
-    Command, EffectRequest, EffectResult, Entry, Event, Input, InterruptReason, Output,
+    Command, EffectRequest, EffectResult, Entry, Event, Input, InterruptReason, Output, Replay,
     SessionConfig, State,
 };
 use serde::{Deserialize, Serialize};
@@ -27,8 +29,16 @@ use serde_json::Value;
 #[serde(tag = "record", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Record {
-    Entry { entry: Entry },
-    Snapshot { state: State },
+    Entry {
+        entry: Entry,
+    },
+    Snapshot {
+        state: State,
+    },
+    /// Written, with fsync, before a `replay: never` effect starts.
+    Intent {
+        key: String,
+    },
 }
 
 /// A snapshot after this many entries, and at the end of every turn.
@@ -223,12 +233,38 @@ impl<S: Store> Runner<S> {
             .iter()
             .filter_map(|r| match r {
                 Record::Entry { entry } => Some(entry.clone()),
-                Record::Snapshot { .. } => None,
+                _ => None,
+            })
+            .collect();
+        let intents: BTreeSet<&str> = records
+            .iter()
+            .filter_map(|r| match r {
+                Record::Intent { key } => Some(key.as_str()),
+                _ => None,
             })
             .collect();
         kernel::replay(&mut self.state, entries).map_err(io::Error::other)?;
-        let resumed = kernel::resume(&self.state);
-        self.handle(resumed)
+        let mut resumed = kernel::resume(&self.state);
+        let (crashed, open): (Vec<_>, Vec<_>) = resumed
+            .effects
+            .into_iter()
+            .partition(|e| e.replay == Replay::Never && intents.contains(e.key.as_str()));
+        resumed.effects = open;
+        self.handle(resumed)?;
+        if crashed.is_empty() {
+            return Ok(());
+        }
+        let results = crashed
+            .into_iter()
+            .map(|e| Input::EffectResult {
+                key: e.key,
+                result: EffectResult::Interrupted {
+                    reason: InterruptReason::Crashed,
+                    partial: Value::Null,
+                },
+            })
+            .collect();
+        self.advance(results)
     }
 
     fn advance(&mut self, inputs: Vec<Input>) -> io::Result<()> {
@@ -296,6 +332,10 @@ impl<S: Store> Runner<S> {
         for key in ready {
             let effect = self.open.get_mut(&key).expect("open");
             effect.started = true;
+            if effect.request.replay == Replay::Never {
+                self.store
+                    .append(&Record::Intent { key: key.clone() }, true)?;
+            }
             let request = effect.request.clone();
             let ctx = HostCtx {
                 cancel: effect.cancel.clone(),

@@ -40,13 +40,13 @@ pnpm spike:baseline   # eve vs eve + native kernel vs eve + WASM kernel
 
 ## Scenarios
 
-| Scenario         | What happens                                                                 | What every host must show                                                                                               |
-| ---------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `plain`          | The model reads two files and writes one, then answers.                      | All three calls run together (eve's rule, no write fence). The model gets the results in call order.                    |
-| `crash_in_write` | The process stops after the write's side effect, before its result is saved. | The write runs again (eve's rule), so its side effect happens twice. The turn finishes.                                 |
-| `crash_in_model` | The process stops during the second model call.                              | The second call runs again. The first call is not requested again. One tool call in total.                              |
-| `steer`          | The user steers after the second chunk of a streamed reply.                  | The kernel returns `cancel` for the model call. The partial reply stays in history, then the steer, then the new reply. |
-| `cancel`         | The user cancels during a slow tool call.                                    | The kernel returns `cancel` for the tool. The tool result says it was cancelled. The turn ends `cancelled`.             |
+| Scenario         | What happens                                                                 | What every host must show                                                                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plain`          | The model reads two files and writes one, then answers.                      | All three calls run together (eve's rule, no write fence). The model gets the results in call order.                                                                       |
+| `crash_in_write` | The process stops after the write's side effect, before its result is saved. | Hosts A and C: the `never` write does not run again, and the model is told it may have run (R2). Host B (Workflow): the step runs again, so the side effect happens twice. |
+| `crash_in_model` | The process stops during the second model call.                              | The second call runs again. The first call is not requested again. One tool call in total.                                                                                 |
+| `steer`          | The user steers after the second chunk of a streamed reply.                  | The kernel returns `cancel` for the model call. The partial reply stays in history, then the steer, then the new reply.                                                    |
+| `cancel`         | The user cancels during a slow tool call.                                    | The kernel returns `cancel` for the tool. The tool result says it was cancelled. The turn ends `cancelled`.                                                                |
 
 How each host crashes:
 
@@ -62,10 +62,11 @@ All 20 host runs pass, plus 23 kernel tests: hosts A and C, and host B in both
 of its modes.
 
 The sections below up to "Kernel version 2" are the version 1 results. Version 2
-removed the `never` replay rule, the write fence, and the port of fx's
-recovery policy (`recovery.rs`), as decided in
-[`fx-eve-behavior-alignment.md`](../../research/fx-eve-behavior-alignment.md).
-The version 1 measurements stay here as a record.
+removed the write fence and the port of fx's recovery policy (`recovery.rs`),
+and made `replay` a host choice, as decided in
+[`fx-eve-behavior-alignment.md`](../../research/fx-eve-behavior-alignment.md):
+the in-process runner and durable-harness obey `never`; Workflow hosts run the
+step again. The version 1 measurements stay here as a record.
 
 ### The contract held
 
@@ -394,14 +395,14 @@ the host only decides where they go.
   kernel test checks that `resume` rebuilds exactly the effects `advance`
   emitted.
 
-| Host                     | Where the records go                                                        |
-| ------------------------ | --------------------------------------------------------------------------- |
-| eve-native               | A snapshot in eve's session state, committed in the same `turnStep` result. |
-| Host B (Workflow, steps) | The snapshot and entries are the result of each kernel step.                |
-| eve-wasm, Host B (wasm)  | Entries are rebuilt by Workflow replay; the state lives in workflow memory. |
-| Host A (in-process)      | JSONL: `entry` lines, and a `snapshot` line every 32 entries and at idle.   |
-| Host C (durable-harness) | `in:<seq>` effects, and a `snap:<seq>` effect every 4 entries.              |
-| fx with the kernel       | Memory only (`fx ask`); fx's own session save is unchanged.                 |
+| Host                     | Where the records go                                                                                                                   |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| eve-native               | A snapshot in eve's session state, committed in the same `turnStep` result.                                                            |
+| Host B (Workflow, steps) | The snapshot and entries are the result of each kernel step.                                                                           |
+| eve-wasm, Host B (wasm)  | Entries are rebuilt by Workflow replay; the state lives in workflow memory.                                                            |
+| Host A (in-process)      | JSONL: `entry` lines, an fsynced `intent` line before each `replay: never` effect, and a `snapshot` line every 32 entries and at idle. |
+| Host C (durable-harness) | `in:<seq>` effects, and a `snap:<seq>` effect every 4 entries.                                                                         |
+| fx with the kernel       | Memory only (`fx ask`); fx's own session save is unchanged.                                                                            |
 
 A durable host keeps no second log: its own commit (a Workflow step result, a
 durable-harness effect) holds the kernel records. A local host has no log

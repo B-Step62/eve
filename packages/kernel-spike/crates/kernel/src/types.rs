@@ -5,12 +5,18 @@ use serde_json::Value;
 
 pub const STATE_VERSION: u32 = 3;
 
-/// Hosts may run any effect again after a crash (eve's rule). The field stays
-/// so hosts can read it; every effect is `safe`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// What a host may do with an effect that was open when its process stopped.
+/// A host choice: local hosts (fx, libfx, durable-harness) obey `never`;
+/// Workflow hosts run the step again, as eve does today.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Replay {
+    /// Run it again.
+    #[default]
     Safe,
+    /// Do not run it again. Record an intent before it starts; after a crash,
+    /// report `interrupted { crashed }`, and the model is told it may have run.
+    Never,
 }
 
 /// eve's tool approval policies.
@@ -36,6 +42,9 @@ pub struct ToolDescriptor {
     pub description: String,
     #[serde(default)]
     pub approval: Approval,
+    /// `never` for a tool with side effects that must not happen twice.
+    #[serde(default)]
+    pub replay: Replay,
 }
 
 /// What a review's `caution` does.
