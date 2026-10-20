@@ -20,7 +20,9 @@ export interface ScriptStep {
 export interface Scenario {
   prompt: string;
   files: Record<string, string>;
-  script: ScriptStep[];
+  script?: ScriptStep[];
+  /** For multi-turn runs: model step `i` is `repeat[i % repeat.length]`, with call ids made unique. */
+  repeat?: ScriptStep[];
   crash?: { at: "tool"; name: string } | { at: "model"; index: number };
   steer?: { after_chunks: number; text: string };
   cancel?: { after_tool_start: string };
@@ -103,7 +105,7 @@ export class ScenarioHost {
       ).length;
       if (calls === 1) await hooks.crash();
     }
-    const step = this.scenario.script[index] ?? { text: "" };
+    const step = scriptStep(this.scenario, index);
     const text = step.text ?? "";
     const chunks = Math.max(1, step.chunks ?? 1);
     const chars = [...text];
@@ -156,6 +158,20 @@ export class ScenarioHost {
     this.trace({ kind: "tool_end", id: callId, name });
     return result;
   }
+}
+
+/** Model step `index` of a scenario: from `script`, or cycled from `repeat`. */
+export function scriptStep(scenario: Scenario, index: number): ScriptStep {
+  if (scenario.repeat) {
+    const step = scenario.repeat[index % scenario.repeat.length]!;
+    return {
+      ...step,
+      ...(step.tool_calls
+        ? { tool_calls: step.tool_calls.map((c) => ({ ...c, id: `${c.id}${index}` })) }
+        : {}),
+    };
+  }
+  return scenario.script?.[index] ?? { text: "" };
 }
 
 async function sleepOrCancel(ms: number, hooks: HostHooks): Promise<boolean> {

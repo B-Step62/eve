@@ -23,6 +23,7 @@ prefix.
 | `scenarios/scenarios.json`                 | The five scenarios every host runs.                                                                                                                                        |
 | `src/scenario.ts`, `test/assertions.ts`    | The TypeScript scenario host (the same script and tools as fx-mini) and one set of checks for every host.                                                                  |
 | `bench/napi.ts`                            | The cost of crossing the kernel boundary as the session grows.                                                                                                             |
+| `baseline/`, `bench/kernel-turn.ts`        | Today's eve on the same work, for comparison (see [Baseline](#baseline-todays-eve)).                                                                                       |
 
 ## Run it
 
@@ -34,6 +35,7 @@ pnpm install
 pnpm spike:build   # kernel.node, kernel.wasm, fx-mini
 pnpm spike:test    # cargo test, hosts A and C, host B
 pnpm spike:bench
+pnpm spike:baseline   # today's eve on the same work (builds eve's JS first)
 ```
 
 ## Scenarios
@@ -141,6 +143,94 @@ make it a little longer. The proposal's estimate assumed 0.5–0.7× across the
 whole kernel. That is only plausible for Zig code that is heavy with
 allocation and I/O, so the kernel estimate should move up until a module of
 that kind is ported and measured.
+
+## Baseline: today's eve
+
+`pnpm spike:baseline` runs today's eve on the same work and prints the
+comparison. It builds eve's JS first, because the eve half runs inside eve's
+own integration tier.
+
+- **Baseline 1** (`baseline/test/eve.integration.test.ts`) is a real eve
+  session on world-local: `workflowEntry`, `turnStep`, and the AI SDK
+  `ToolLoopAgent`. It uses a scripted `mockModel`, the same two tools, and
+  no default tools. Host B runs the same work in
+  `hosts/workflow/test/baseline.test.ts`. Both are measured with the World
+  API (`src/metrics.ts`).
+- **Baseline 2** (`baseline/test/harness.integration.test.ts`) times one eve
+  model step against history size. It drives eve's harness directly, with no
+  Workflow. `bench/kernel-turn.ts` times the same turn through the kernel.
+
+The baseline files use eve's `#` imports, so they typecheck only inside eve's
+test tier. They are not in this package's `tsconfig.json`.
+
+### One `plain` turn on world-local
+
+The turn has 2 model calls and 3 tool calls. Times are the median of 5 runs
+after a warm-up.
+
+| Host                 | Time   | Steps | Events | Written |
+| -------------------- | ------ | ----- | ------ | ------- |
+| eve                  | 349 ms | 4     | 19     | 51 KB   |
+| Host B, kernel steps | 776 ms | 13    | 42     | 131 KB  |
+| Host B, WASM         | 485 ms | 6     | 21     | 40 KB   |
+
+- **eve's step is coarser.** eve has 2 `turnStep`s, one for each model call,
+  and runs the tools inside those steps. Host B makes each model call and
+  each tool call its own step.
+  - So a crash during an eve tool reruns that step's model call and all of
+    its tools. That is the rerun rule that R2 changes.
+  - eve also ran the write at the same time as the two reads, so it has no
+    write fence (R9).
+- **Running the kernel in steps costs too much.** It is about 2.2 times
+  eve's time and 2.6 times eve's bytes, because the kernel state goes into
+  and out of every kernel step.
+- **WASM in workflow code is close to eve.** Time is about 1.4 times eve's
+  on one turn. It writes fewer bytes, with 2 more steps that give finer
+  durability.
+
+### `growth`: N turns, each a 5 KB tool result and a reply
+
+| Turns | eve              | Host B, kernel steps | Host B, WASM    |
+| ----- | ---------------- | -------------------- | --------------- |
+| 1     | 197 ms, 48 KB    | 455 ms, 90 KB        | 252 ms, 26 KB   |
+| 5     | 848 ms, 231 KB   | 1720 ms, 411 KB      | 802 ms, 107 KB  |
+| 10    | 1651 ms, 487 KB  | 3333 ms, 898 KB      | 1577 ms, 220 KB |
+| 20    | 3298 ms, 1067 KB | 6767 ms, 2155 KB     | 3354 ms, 486 KB |
+
+Bytes written for each turn, between 10 and 20 turns:
+
+| Host                 | Per turn |
+| -------------------- | -------- |
+| eve                  | 58 KB    |
+| Host B, kernel steps | 126 KB   |
+| Host B, WASM         | 27 KB    |
+
+- **WASM keeps up with eve and writes half as much.** At 20 turns the times
+  are the same, and WASM writes less than half of eve's bytes.
+- **Both grow with history.** In eve, each `turnStep` writes the session
+  snapshot. In the kernel, each model-call step input carries the history.
+
+### One model step against history size, no Workflow
+
+The step is one prompt, one model call, and one text reply.
+
+| History | eve harness | Kernel, state in Rust | Kernel, JSON state | Kernel, WASM |
+| ------- | ----------- | --------------------- | ------------------ | ------------ |
+| 10 KB   | 1.0 ms      | 0.01 ms               | 0.06 ms            | 0.4 ms       |
+| 100 KB  | 1.4 ms      | 0.09 ms               | 0.46 ms            | 2.8 ms       |
+| 1 MB    | 7–10 ms     | 0.8 ms                | 4.3 ms             | 34 ms        |
+| 10 MB   | 63 ms       | 9.5 ms                | 45 ms              | 923 ms       |
+
+- **The kernel with its state in Rust is 7 to 70 times faster than eve's
+  harness** for the same turn. But the toy kernel does much less: eve also
+  runs hooks, emits events, estimates tokens, adds prompt-cache markers, and
+  converts messages for the AI SDK. Read this as a ceiling on the boundary
+  cost, not as an expected speedup.
+- **Passing JSON state on every call takes away most of that lead** at
+  1 MB and above.
+- **WASM is the slowest.** It is too slow for long sessions until its UTF-8
+  code is replaced. That matters, because WASM is the case that wins on
+  steps and bytes above.
 
 ## What this prototype does not test
 

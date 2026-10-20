@@ -30,7 +30,8 @@ import {
 
 type Next = { kind: "input"; input: Input } | { kind: "effect"; key: string; result: EffectResult };
 
-export async function kernelSession(name: string, ws: string, mode: "steps" | "wasm") {
+/** `turns` > 1 sends `Turn <n>` prompts one after another, for the growth scenario. */
+export async function kernelSession(name: string, ws: string, mode: "steps" | "wasm", turns = 1) {
   "use workflow";
 
   const { config, scenario } = await loadScenarioStep(name, ws);
@@ -48,6 +49,7 @@ export async function kernelSession(name: string, ws: string, mode: "steps" | "w
   const open = new Map<string, EffectRequest>();
   const running = new Map<string, Promise<Next>>();
   let queue: Input[] = [{ type: "prompt", id: "prompt-1", text: scenario.prompt }];
+  let sent = 1;
 
   for (;;) {
     if (queue.length > 0) {
@@ -76,7 +78,12 @@ export async function kernelSession(name: string, ws: string, mode: "steps" | "w
         runEffectStep(name, ws, req).then((result): Next => ({ kind: "effect", key, result })),
       );
     }
-    if (open.size === 0 && state.turn === null && state.queued.length === 0) break;
+    if (open.size === 0 && state.turn === null && state.queued.length === 0) {
+      if (sent >= turns) break;
+      sent += 1;
+      queue.push({ type: "prompt", id: `prompt-${sent}`, text: `Turn ${sent}: read big.txt.` });
+      continue;
+    }
     const next = await Promise.race([
       ...running.values(),
       nextInput.then((r): Next => ({ kind: "input", input: r.value as Input })),

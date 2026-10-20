@@ -833,3 +833,43 @@ These results change the proposal:
    measure a module with much I/O and memory allocation.
 9. **fx CLI budget.** The `fx-mini` binary is 883 KB. It starts in
    approximately 0.5 ms more than the time to start a process.
+
+### 13.1 Comparison with eve
+
+The prototype also runs the same work on eve as it is today. The README of
+`packages/kernel-spike` has the full tables. All runs use world-local and a
+scripted model.
+
+| One turn (2 model calls, 3 tool calls) | Time   | Steps | Bytes written |
+| -------------------------------------- | ------ | ----- | ------------- |
+| eve today                              | 349 ms | 4     | 51 KB         |
+| Kernel in step code (Node-API)         | 776 ms | 13    | 131 KB        |
+| Kernel in workflow code (WebAssembly)  | 485 ms | 6     | 40 KB         |
+
+| 20 turns, each with a 5 KB tool result | Time    | Bytes written |
+| -------------------------------------- | ------- | ------------- |
+| eve today                              | 3298 ms | 1067 KB       |
+| Kernel in step code (Node-API)         | 6767 ms | 2155 KB       |
+| Kernel in workflow code (WebAssembly)  | 3354 ms | 486 KB        |
+
+These results change the proposal:
+
+1. **Open item 2.** Option A costs too much. If the kernel runs in step code,
+   the kernel state goes into and out of each kernel step. The time is
+   approximately 2 times the eve time, and the bytes are approximately 2
+   times the eve bytes. Option B has the same time as eve and writes less
+   than half of the eve bytes. We recommend option B.
+2. **R2 and step size.** eve runs all tools of a model call in one step. If
+   a crash occurs during a tool, eve runs the model call and all of its tools
+   again. In option B, each model call and each tool call is one step. This
+   is necessary for R2, and it adds 2 steps to the turn above.
+3. **R9.** eve ran the write at the same time as the two reads. eve has no
+   write fence today.
+4. **WebAssembly speed.** One model step in WebAssembly is slow when the
+   history is large. It takes 34 ms at 1 MB and 923 ms at 10 MB. The cause is
+   the UTF-8 code in JavaScript that the Workflow VM needs. We must make this
+   faster before we use option B for long sessions.
+5. **Kernel speed.** If the kernel state stays in Rust, one model step takes
+   0.8 ms at 1 MB. eve's harness takes 7–10 ms at 1 MB. The toy kernel does
+   less work than eve's harness, so this is the cost of the boundary only. It
+   is not the expected speed of a full kernel.

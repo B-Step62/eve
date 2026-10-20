@@ -6,8 +6,9 @@
   "type": "module",
   "scripts": {
     "spike:build": "node scripts/build.mjs",
-    "spike:test": "cargo test --manifest-path Cargo.toml && vitest run --config vitest.config.ts && vitest run --config hosts/workflow/vitest.config.ts",
-    "spike:bench": "node bench/napi.ts"
+    "spike:test": "cargo test --manifest-path Cargo.toml && vitest run --config vitest.config.ts && vitest run --config hosts/workflow/vitest.config.ts hosts/workflow/test/workflow.test.ts",
+    "spike:bench": "node bench/napi.ts",
+    "spike:baseline": "node scripts/baseline.mjs"
   },
   "devDependencies": {
     "@types/node": "24.13.3",
