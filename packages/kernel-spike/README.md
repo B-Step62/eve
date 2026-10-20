@@ -290,17 +290,13 @@ but I did not measure how much that would save.
 | steps-10                 | 181 ms | 162 ms             | 11          |
 | steps-20                 | 315 ms | 295 ms             | 21          |
 
-- **Read this as a lower bound for a kernel path, not a speedup.** The
-  kernel path saves about 16 ms on each run. The cost of each additional
-  model step is the same on both, about 13 ms. The 16 ms is work that fx's
-  loop does and the toy kernel path skips:
-  - building the stable prompt prefix: the skill catalog, project context,
-    and the runtime overlay;
-  - observer hooks and admission;
-  - presentation and step bookkeeping.
-    The requests show this: they are 7–13% smaller on the kernel path.
-- **The kernel itself takes no measurable time.** Each step costs the same
-  on both. The time goes to the model round trip, the tools, and the process.
+- **Most of this time is a wait in fx, not work.** See "Where the time goes"
+  below: about 10 ms of each model call is fx's gateway cancel watcher.
+  The 13 ms that each extra model step costs on both binaries is mostly
+  that wait.
+- **The version 1 kernel path was about 16 ms faster because it skipped
+  work:** the stable prompt prefix, observer hooks, admission, and
+  presentation. Its requests were 7–13% smaller.
 - **With `FX_KERNEL` unset, the kernel binary is fx.** Its times match the
   baseline.
 
@@ -336,25 +332,44 @@ is read back into the kernel. `auto()` and policy functions stay in eve
 both fx's review and the kernel's review, because both use the
 `permission_decision` tool.
 
-| Session                       | fx                              | fx with the kernel             |
-| ----------------------------- | ------------------------------- | ------------------------------ |
-| plain (full access)           | 49 ms, 2 calls                  | 47 ms, 2 calls                 |
-| review-clear (auto, `.zshrc`) | 48 ms, 3 calls                  | 65 ms, 3 calls                 |
-| review-caution                | 48 ms, 3 calls                  | 66 ms, 3 calls                 |
-| ask-no-person (ask mode)      | 37 ms, 1 call, exit 1           | 36 ms, 1 call, exit 1          |
-| compaction (20 reads, 16k)    | 340 ms, 23 calls, 2 compactions | 321 ms, 22 calls, 1 compaction |
-| steps-20                      | 318 ms                          | 305 ms                         |
+| Session                       | fx                              | fx with the kernel             | fx, 1 ms poll | fx with the kernel, 1 ms poll |
+| ----------------------------- | ------------------------------- | ------------------------------ | ------------- | ----------------------------- |
+| plain (full access)           | 49 ms, 2 calls                  | 47 ms, 2 calls                 | 16 ms         | 17 ms                         |
+| review-clear (auto, `.zshrc`) | 48 ms, 3 calls                  | 65 ms, 3 calls                 | 15 ms         | 15 ms                         |
+| review-caution                | 48 ms, 3 calls                  | 66 ms, 3 calls                 | 14 ms         | 15 ms                         |
+| ask-no-person (ask mode)      | 37 ms, 1 call, exit 1           | 36 ms, 1 call, exit 1          | 12 ms         | 11 ms                         |
+| compaction (20 reads, 16k)    | 340 ms, 23 calls, 2 compactions | 321 ms, 22 calls, 1 compaction | 51 ms         | 49 ms                         |
+| steps-5                       | 111 ms                          | 104 ms                         | 23 ms         | 22 ms                         |
+| steps-10                      | 181 ms                          | 169 ms                         | 30 ms         | 31 ms                         |
+| steps-20                      | 318 ms                          | 305 ms                         | 48 ms         | 50 ms                         |
 
-Median of 5 runs. Binary: 12,524,592 B (+573 KB over fx; +36 KB over the
-version 1 kernel).
+Median of 5 runs. Model calls are the same in the 1 ms columns. Binary:
+12,524,592 B (+573 KB over fx; +36 KB over the version 1 kernel).
 
-- The `plain` gap went from 17 ms to 2 ms, because the kernel path now runs
-  fx's admission for each call (`policy_decide`).
-- The review sessions are 17 ms slower: the kernel's review goes through
-  fx's agent stream client, which costs about 13 ms more for each call here
-  than fx's own reviewer transport.
-- fx compacts at 80% with its own notes; the kernel at 90% with eve's
-  checkpoint, as decided.
+- **With the 1 ms poll, fx and fx with the kernel take the same time in every
+  session.** The differences are within 1–2 ms, which is noise here.
+- **fx compacts at 80% with its own notes; the kernel at 90% with eve's
+  checkpoint**, as decided.
+
+### Where the time goes
+
+Each streamed gateway request in fx starts a cancel watcher thread
+(`GatewayCancelWatcher.run` in `src/gateway/client.zig`). The thread checks
+for cancel, suspend, and timeouts, then sleeps 10 ms. When the request ends,
+fx sets `done` and joins the thread, so it waits for the rest of that sleep.
+That is up to 10 ms on each model call.
+
+`fx/gateway-poll-1ms.patch` changes the sleep to 1 ms, and nothing else.
+`fx/build.sh` builds it as `fx-kernel-1ms`; with `FX_KERNEL` unset it is fx.
+With this patch, steps-20 goes from 318 ms to 48 ms.
+
+- **The wait explains the slow kernel review.** fx's own reviewer uses its
+  own transport, which has no watcher. The kernel's review goes through fx's
+  agent stream client, which has one, so it waited one more time. With the
+  1 ms poll the two paths are equal.
+- **The fix in fx is to wake the watcher when the request ends,** not to
+  poll faster. Against a real model each call takes seconds, so this costs
+  about 10 ms on each call, not a large part of a turn.
 
 ## What this prototype does not test
 

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/client.zig b/src/gateway/client.zig
+index 0ee15bf5..080861b0 100644
+--- a/src/gateway/client.zig
++++ b/src/gateway/client.zig
+@@ -2106,7 +2106,7 @@ const GatewayCancelWatcher = struct {
+                 if (watch.phase.load(.seq_cst) == .completed) return;
+             }
+             previous = current;
+-            io_mod.sleep(10 * std.time.ns_per_ms);
++            io_mod.sleep(1 * std.time.ns_per_ms);
+         }
+     }
+ };
