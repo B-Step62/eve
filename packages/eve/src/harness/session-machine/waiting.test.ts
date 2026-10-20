@@ -63,6 +63,40 @@ describe("waiting", () => {
     expect(waiting(view, turnId)).toMatchObject({ calls: [{ callId: "c_1" }], on: "work" });
   });
 
+  it("waits on the person signing in for a call their sign-in stopped, until it calls back", () => {
+    const signIn: SessionEvent = {
+      data: {
+        interactionId: "i_github",
+        request: { kind: "sign-in", prompt: "Sign in to GitHub", signIn: { name: "github" } },
+        subject: { turnId },
+      },
+      scope: { turnId },
+      type: "interaction.opened",
+    };
+    const stopped = [
+      callRequested,
+      { data: { callId: "c_1" }, scope: { turnId }, type: "call.started" },
+      modelSettled,
+    ] as SessionEvent[];
+    expect(waiting(viewOf(started, [...stopped, signIn]), turnId)).toMatchObject({
+      interactions: [{ interactionId: "i_github" }],
+      on: "person",
+    });
+    const calledBack = viewOf(
+      started,
+      stopped,
+      [signIn],
+      [
+        {
+          data: { interactionId: "i_github", outcome: "accepted" },
+          scope: { turnId },
+          type: "interaction.settled",
+        },
+      ],
+    );
+    expect(waiting(calledBack, turnId)).toBeUndefined();
+  });
+
   it("is undefined once a delivery the turn hasn't read joins it", () => {
     const view = viewOf(
       started,

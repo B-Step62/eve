@@ -282,9 +282,20 @@ export function waiting(
   // A running call stays in flight while someone is asked about it, as a child's relayed
   // question is; only a requested call can wait on its approval.
   const calls = turnCalls.filter((entry) => entry.status === "running");
+  const answered = answeredInteractionIds(view);
+  // A sign-in the turn waits on holds the calls it stopped: they stay open, and run once it
+  // calls back.
+  const signInHolds = interactions.some(
+    (row) =>
+      row.status === "open" &&
+      row.request.kind === "sign-in" &&
+      "turnId" in row.subject &&
+      row.subject.turnId === turnId &&
+      !answered.has(row.interactionId),
+  );
   // A running call no task serves runs in the session itself, which commits again once it ends,
   // unless it asked someone: then it waits on that person, as a blocking run's question does.
-  if (calls.some((entry) => entry.taskId === undefined && !asked.has(entry.callId)))
+  if (!signInHolds && calls.some((entry) => entry.taskId === undefined && !asked.has(entry.callId)))
     return undefined;
   const pending = turnCalls.filter(
     (entry) => entry.status === "requested" && !asked.has(entry.callId),
@@ -294,7 +305,6 @@ export function waiting(
   // An interaction already answered, such as one of a batch still waiting for the rest or one
   // forwarded to the child that asked it, doesn't wait on a person. A request relayed from a
   // task this turn's call started belongs to the task, but the turn still waits on its person.
-  const answered = answeredInteractionIds(view);
   // A question about a call that already ended, such as a cancelled stretch's before its run
   // withdraws it, holds nothing.
   const people = openInteractions(view).filter(
