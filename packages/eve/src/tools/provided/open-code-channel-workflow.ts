@@ -26,7 +26,8 @@ export async function executeOpenCodeChannel(
   if (
     auth?.authenticator !== "slack-webhook" ||
     typeof channelId !== "string" ||
-    typeof originTs !== "string"
+    typeof originTs !== "string" ||
+    typeof originThreadTs !== "string"
   ) {
     return { reason: "This conversation is not a Slack message.", status: "unavailable" };
   }
@@ -44,7 +45,13 @@ export async function executeOpenCodeChannel(
   const { sessionId } = await ctx.sendToChannel<SlackChannel>("slack", input.message, {
     target: {
       channelId,
-      codeChannel: { name: input.name, originTs },
+      // The channel checks this session is the origin thread's before creating anything.
+      codeChannel: {
+        name: input.name,
+        originThreadTs,
+        originTs,
+        sourceSessionId: ctx.session.id,
+      },
       ...(installationTeamId !== undefined && { installationTeamId }),
     },
     auth,

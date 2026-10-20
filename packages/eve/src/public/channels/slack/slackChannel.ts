@@ -381,6 +381,14 @@ export interface SlackCodeChannelTarget {
   readonly name: string;
   /** ts of the message the code channel continues. */
   readonly originTs: string;
+  /** Thread of the origin message: its own ts when top-level. */
+  readonly originThreadTs: string;
+  /**
+   * The session whose conversation moves into the code channel. It must be
+   * the session at the origin thread, so a session can't open a channel from
+   * a message in another conversation and copy its own transcript there.
+   */
+  readonly sourceSessionId: string;
 }
 
 /**
@@ -1011,7 +1019,13 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
     ],
 
     receive(input, { from, resolveSession }) {
-      return receiveOnSlack(input, { from, resolveSession, api, credentials: config.credentials });
+      return receiveOnSlack(input, {
+        from,
+        resolveSession,
+        api,
+        codeChannels: config.codeChannels === true,
+        credentials: config.credentials,
+      });
     },
 
     events,
@@ -1048,6 +1062,8 @@ async function receiveOnSlack(
     readonly from: ChannelFrom<SlackChannelState>;
     readonly resolveSession: ChannelResolveSession;
     readonly api: SlackTransportOptions | undefined;
+    /** Whether `slackChannel({ codeChannels: true })` enabled code channels. */
+    readonly codeChannels: boolean;
     readonly credentials: SlackChannelCredentials | undefined;
     /** Installation workspace inherited from an inbound trigger. */
     readonly installationTeamId?: string;
@@ -1075,6 +1091,11 @@ async function receiveOnSlack(
     );
   }
   if (receiveTarget.codeChannel !== undefined) {
+    if (!deps.codeChannels) {
+      throw new Error(
+        "slackChannel().receive: set `codeChannels: true` on slackChannel() to open code channels.",
+      );
+    }
     if (initialMessage || requestedThreadTs.length > 0) {
       throw new Error(
         "slackChannel().receive: `codeChannel` can't be combined with `threadTs` or `initialMessage`.",
@@ -1148,6 +1169,17 @@ async function receiveInNewCodeChannel(
   },
 ): Promise<Session> {
   const { codeChannel, installationTeamId, originChannelId } = target;
+  const origin = await deps.resolveSession(
+    slackContinuationToken(originChannelId, codeChannel.originThreadTs),
+  );
+  if (origin?.id !== codeChannel.sourceSessionId) {
+    throw Object.assign(
+      new Error(
+        "This session isn't the conversation of the Slack message it names, so eve won't open a code channel from that message.",
+      ),
+      { fatal: true },
+    );
+  }
   const { request } = buildSlackWorkspaceHandle({
     api: deps.api,
     botToken: deps.credentials?.botToken,
@@ -1360,6 +1392,7 @@ async function handleEventPost(input: {
         from: input.from,
         resolveSession: input.resolveSession,
         credentials: config.credentials,
+        codeChannels: config.codeChannels === true,
         envelope,
         handler: onEvent,
         installationTeamId,
@@ -1577,6 +1610,7 @@ async function dispatchSlackEvent(input: {
   readonly resolveSession: ChannelResolveSession;
   readonly credentials: SlackChannelCredentials | undefined;
   readonly envelope: SlackEventEnvelope;
+  readonly codeChannels: boolean;
   readonly handler: NonNullable<SlackChannelConfig["onEvent"]>;
   readonly installationTeamId: string | undefined;
 }): Promise<void> {
@@ -1613,6 +1647,7 @@ async function dispatchSlackEvent(input: {
           from: input.from,
           resolveSession: input.resolveSession,
           api: input.api,
+          codeChannels: input.codeChannels,
           credentials: input.credentials,
           installationTeamId: input.installationTeamId,
           teamId,

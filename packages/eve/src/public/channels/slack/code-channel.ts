@@ -93,9 +93,10 @@ const MAX_CODE_CHANNEL_NAME_LENGTH = 80;
  * same origin and requester returns the same channel. Throws an error marked
  * `fatal` when Slack refuses permanently, so the calling step doesn't retry.
  *
- * Slack gives the channel the origin's privacy. eve confirms it before the
- * caller copies the conversation in: a public channel opened from a private
- * conversation throws.
+ * eve reads the origin before creating anything and asks for a private
+ * channel when the origin is private. Slack always honors an explicit
+ * `is_private`, so the check after creation is a backstop: on a mismatch eve
+ * archives the channel and throws.
  */
 export async function createSlackCodeChannel(input: {
   readonly name: string;
@@ -110,9 +111,14 @@ export async function createSlackCodeChannel(input: {
     .digest("hex")
     .slice(0, 32);
   const name = input.name.replace(/\s+/gu, " ").trim().slice(0, MAX_CODE_CHANNEL_NAME_LENGTH);
+  const originIsPrivate = isPrivateConversation(
+    await readConversation(input.request, input.originChannelId),
+  );
   const response = await input.request("agents.conversations.create", {
     // Without a name, Slack names the channel from the origin message.
     ...(name.length > 0 && { name }),
+    // Omitted for a public origin, so Slack keeps its default of letting origin members join.
+    ...(originIsPrivate && { is_private: true }),
     origin_channel_id: input.originChannelId,
     origin_message_ts: input.originTs,
     session_id: sessionId,
@@ -123,13 +129,10 @@ export async function createSlackCodeChannel(input: {
     throw new Error("Slack did not return a channel id for the new code channel.");
   }
   cacheLookup(channelId, true);
-  const [origin, created] = await Promise.all([
-    readConversation(input.request, input.originChannelId),
-    readConversation(input.request, channelId),
-  ]);
-  if (isPrivateConversation(origin) && !isPrivateConversation(created)) {
+  if (originIsPrivate && !isPrivateConversation(await readConversation(input.request, channelId))) {
+    const archived = await input.request("agents.conversations.archive", { channel_id: channelId });
     throw fatalError(
-      `Slack opened code channel ${channelId} as public from a private conversation, so eve didn't copy the conversation into it.`,
+      `Slack opened code channel ${channelId} as public from a private conversation, so eve ${archived.ok === true ? "archived it" : "couldn't archive it"} and didn't copy the conversation into it.`,
     );
   }
   return channelId;

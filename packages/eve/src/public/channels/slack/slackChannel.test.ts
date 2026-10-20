@@ -5847,11 +5847,27 @@ describe("slackChannel().receive", () => {
 
   function buildReceive(
     botToken: string | ((context: { readonly teamId?: string }) => string) = "xoxb-test",
+    options: { readonly codeChannels?: boolean } = {},
   ) {
-    const channel = slackChannel({ credentials: { botToken } });
+    const channel = slackChannel({ credentials: { botToken }, ...options });
     const compiled = asCompiled(channel);
     if (!compiled.receive) throw new Error("expected compiled.receive");
     return compiled.receive;
+  }
+
+  const CODE_CHANNEL_TARGET = {
+    name: "Fix it",
+    originThreadTs: "1700000000.000001",
+    originTs: "1700000000.000002",
+    sourceSessionId: "session_source",
+  };
+
+  function withSourceSession<T extends object>(context: T): T {
+    return {
+      ...context,
+      resolveSession: async (address: string) =>
+        address === "C_ORIGIN:1700000000.000001" ? ({ id: "session_source" } as never) : undefined,
+    };
   }
 
   it("sends with an explicit continuation token built from channelId + threadTs", async () => {
@@ -5886,13 +5902,10 @@ describe("slackChannel().receive", () => {
     );
     const send = vi.fn().mockResolvedValue({ id: "s" });
 
-    await buildReceive()(
+    await buildReceive("xoxb-test", { codeChannels: true })(
       {
         message: "Start by reproducing it.",
-        target: {
-          channelId: "C_ORIGIN",
-          codeChannel: { name: "Fix it", originTs: "1700000000.000002" },
-        },
+        target: { channelId: "C_ORIGIN", codeChannel: CODE_CHANNEL_TARGET },
         auth: buildSlackAuthContext({
           channelId: "C_ORIGIN",
           messageTs: "1700000000.000002",
@@ -5901,7 +5914,7 @@ describe("slackChannel().receive", () => {
           userId: "U_ALICE",
         }),
       },
-      mockChannelContext(send),
+      withSourceSession(mockChannelContext(send)),
     );
 
     const [continuationToken, input] = send.mock.calls[0]!;
@@ -5922,15 +5935,48 @@ describe("slackChannel().receive", () => {
     expect(input.auth.principalId).toBe("slack:T01:U_ALICE");
   });
 
-  it("rejects a code channel target combined with a thread", async () => {
+  it("refuses a code channel from a session that isn't the origin thread's", async () => {
     const send = vi.fn();
     await expect(
-      buildReceive()(
+      buildReceive("xoxb-test", { codeChannels: true })(
         {
           message: "hi",
           target: {
             channelId: "C_ORIGIN",
-            codeChannel: { name: "Fix it", originTs: "1" },
+            codeChannel: { ...CODE_CHANNEL_TARGET, sourceSessionId: "session_dm" },
+          },
+          auth: null,
+        },
+        withSourceSession(mockChannelContext(send)),
+      ),
+    ).rejects.toMatchObject({ fatal: true });
+    expect(slackCalls(fetchMock, "agents.conversations.create")).toHaveLength(0);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("refuses a code channel target without codeChannels", async () => {
+    await expect(
+      buildReceive()(
+        {
+          message: "hi",
+          target: { channelId: "C_ORIGIN", codeChannel: CODE_CHANNEL_TARGET },
+          auth: null,
+        },
+        withSourceSession(mockChannelContext(vi.fn())),
+      ),
+    ).rejects.toThrow("set `codeChannels: true`");
+    expect(slackCalls(fetchMock, "agents.conversations.create")).toHaveLength(0);
+  });
+
+  it("rejects a code channel target combined with a thread", async () => {
+    const send = vi.fn();
+    await expect(
+      buildReceive("xoxb-test", { codeChannels: true })(
+        {
+          message: "hi",
+          target: {
+            channelId: "C_ORIGIN",
+            codeChannel: CODE_CHANNEL_TARGET,
             threadTs: "1",
           },
           auth: null,

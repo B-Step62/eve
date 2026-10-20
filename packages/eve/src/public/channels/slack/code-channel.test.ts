@@ -75,18 +75,35 @@ describe("createSlackCodeChannel", () => {
     expect(transient).not.toHaveProperty("fatal");
   });
 
-  it("refuses a public channel opened from a private conversation", async () => {
-    await expect(
-      createSlackCodeChannel({
-        ...ORIGIN,
-        request: slackApi({ privacy: { created: false, origin: true } }),
-      }),
-    ).rejects.toMatchObject({ fatal: true, message: expect.stringContaining("public") });
-    await expect(
-      createSlackCodeChannel({
-        ...ORIGIN,
-        request: slackApi({ privacy: { created: true, origin: true } }),
-      }),
-    ).resolves.toBe("C_CODE");
+  it("asks for a private channel from a private origin, before creating anything", async () => {
+    const request = slackApi({ privacy: { created: true, origin: true } });
+
+    await expect(createSlackCodeChannel({ ...ORIGIN, request })).resolves.toBe("C_CODE");
+
+    expect(request.mock.calls[0]![0]).toBe("conversations.info");
+    expect(createCalls(request)[0]).toMatchObject({ is_private: true });
+  });
+
+  it("archives a public channel Slack opened from a private origin", async () => {
+    const request = slackApi({ privacy: { created: false, origin: true } });
+
+    await expect(createSlackCodeChannel({ ...ORIGIN, request })).rejects.toMatchObject({
+      fatal: true,
+      message: expect.stringContaining("archived it"),
+    });
+    expect(request).toHaveBeenCalledWith("agents.conversations.archive", { channel_id: "C_CODE" });
+  });
+
+  it("creates nothing when the origin can't be read", async () => {
+    const request = vi.fn(async (operation: string): Promise<SlackApiResponse> =>
+      operation === "conversations.info"
+        ? { ok: false, error: "missing_scope" }
+        : { ok: true, channel_id: "C_CODE" },
+    );
+
+    await expect(createSlackCodeChannel({ ...ORIGIN, request })).rejects.toMatchObject({
+      fatal: true,
+    });
+    expect(createCalls(request)).toHaveLength(0);
   });
 });
