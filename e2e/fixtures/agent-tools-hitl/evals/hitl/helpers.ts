@@ -67,7 +67,9 @@ export function expectNoModelCallWhileOpen(on: EveEvalAssertions, interactionId:
 }
 
 /**
- * No `model.started` falls between the sign-in `attemptId` opening and settling.
+ * The model says nothing between the sign-in `attemptId` opening and settling. A model run may
+ * start in that window: its step runs the call the sign-in was for, and the sign-in settles with
+ * that call, before the run's provider call.
  * `before` carries the events streamed before `on` started, such as the ask.
  */
 export function expectNoModelCallDuringAuthorization(
@@ -75,25 +77,47 @@ export function expectNoModelCallDuringAuthorization(
   attemptId: string,
   before: EveEvalTurn["events"] = [],
 ) {
-  on.eventsSatisfy(`no model run starts while sign-in ${attemptId} is open`, (observed) =>
-    noModelCallBetween([...before, ...observed], attemptId),
-  );
+  on.eventsSatisfy(`the model says nothing while sign-in ${attemptId} is open`, (observed) => {
+    const events = [...before, ...observed];
+    const open = eventsWhileOpen(events, attemptId);
+    return open !== undefined && !open.some((event) => MODEL_OUTPUT_EVENTS.has(event.type));
+  });
 }
+
+/** What the model streams: content, and the calls it makes. */
+const MODEL_OUTPUT_EVENTS = new Set<string>([
+  "call.input",
+  "call.requested",
+  "content.completed",
+  "content.delta",
+  "model.settled",
+]);
 
 /** Whether no model run starts while the interaction `interactionId` is open in `events`. */
 function noModelCallBetween(events: EveEvalTurn["events"], interactionId: string): boolean {
+  const open = eventsWhileOpen(events, interactionId);
+  return open !== undefined && !open.some((event) => event.type === "model.started");
+}
+
+/**
+ * The events between the interaction `interactionId` opening and settling (or the end of the
+ * stream, while it is still open); `undefined` when it never opened.
+ */
+function eventsWhileOpen(
+  events: EveEvalTurn["events"],
+  interactionId: string,
+): EveEvalTurn["events"] | undefined {
   const asked = events.findIndex(
     (event) => event.type === "interaction.opened" && event.data.interactionId === interactionId,
   );
-  if (asked < 0) return false;
+  if (asked < 0) return undefined;
   const settled = events.findIndex(
     (event, index) =>
       index > asked &&
       event.type === "interaction.settled" &&
       event.data.interactionId === interactionId,
   );
-  const open = events.slice(asked + 1, settled < 0 ? events.length : settled);
-  return !open.some((event) => event.type === "model.started");
+  return events.slice(asked + 1, settled < 0 ? events.length : settled);
 }
 
 /** The latest sign-in `turn` asked for: its interaction and its fixture callback URL. */

@@ -6,15 +6,17 @@ import {
   onVendoredDependencyLog,
 } from "#internal/bundler/vendored-dependency-log.js";
 
-type RolldownOutputChunk = {
+export type RolldownOutputChunk = {
   readonly type: "chunk";
   readonly code: string;
   readonly fileName: string;
   readonly imports: readonly string[];
   readonly dynamicImports: readonly string[];
+  readonly isEntry: boolean;
+  readonly name: string;
 };
 
-type RolldownOutputAsset = {
+export type RolldownOutputAsset = {
   readonly type: "asset";
   readonly fileName: string;
   readonly source: string | Uint8Array;

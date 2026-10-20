@@ -68,6 +68,8 @@ type CallApproval =
 /** A call that stopped for a sign-in: the tool returned the challenge instead of a result. */
 export interface ToolSignIn {
   readonly callId: string;
+  readonly input: unknown;
+  readonly toolName: string;
   readonly signal: AuthorizationSignal;
 }
 
@@ -116,6 +118,11 @@ export async function executeToolCall(
     readonly clearedBy?: ClearedBy;
     /** Who approved the call, which it reads as `ctx.approval`; it still runs as the requester. */
     readonly responder?: SessionAuthContext;
+    /**
+     * Runs once the call settles, just before its result is reported: with why it didn't succeed,
+     * if it didn't. Not when it stops for a sign-in or the turn's cancellation cuts it short.
+     */
+    readonly beforeResult?: (failure?: Error | string) => Promise<void>;
   },
   approval: CallApproval,
 ): Promise<CallOutcome> {
@@ -138,6 +145,7 @@ export async function executeToolCall(
         : undefined;
     if (validation?.success === false) {
       const message = `The approved input is no longer valid for tool "${toolName}". Request a new tool call and approval.`;
+      await input.beforeResult?.(message);
       await input.publish(
         callSettledFrom(
           createRuntimeToolResultFromValue({ callId, isError: true, output: message, toolName }),
@@ -178,6 +186,7 @@ export async function executeToolCall(
           });
     if (decision.awaitsPerson === true) return { awaitsApproval: true, settled, toolResults };
     if (decision.denied) {
+      await input.beforeResult?.(decision.reason ?? TOOL_EXECUTION_DENIED_MESSAGE);
       const denial = await publishDenial(
         { callId, input: args, toolName },
         { approval, position: at, publish: input.publish, reason: decision.reason },
@@ -265,7 +274,7 @@ export async function executeToolCall(
       );
     }
     if (!failed && isAuthorizationSignal(output)) {
-      return { settled, signIn: { callId, signal: output }, toolResults };
+      return { settled, signIn: { callId, input: args, signal: output, toolName }, toolResults };
     }
     toolResults.push({
       input: args,
@@ -285,6 +294,7 @@ export async function executeToolCall(
       },
     };
     settled.push(completed);
+    await input.beforeResult?.(failed ? thrown : undefined);
     await input.publish(
       callSettledFrom(
         createRuntimeToolResultFromValue({
@@ -311,6 +321,7 @@ export async function executeToolCall(
     const failure = toError(error);
     const message = failure.message;
     logError(log, "tool call failed", error, { toolName, toolCallId: callId });
+    await input.beforeResult?.(toError(error));
     await input.publish(
       callSettledFrom(
         createRuntimeToolResultFromValue({ callId, isError: true, output: failure, toolName }),
