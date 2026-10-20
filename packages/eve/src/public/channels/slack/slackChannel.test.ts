@@ -6347,7 +6347,6 @@ describe("slackChannel() code channels", () => {
     });
     const mention = buildMentionBody({
       channel: "C_CODE_MENTION",
-      threadTs: "1700000000.000100",
       ts: "1700000000.000200",
       user: "U_ALICE",
     });
@@ -6409,6 +6408,12 @@ describe("slackChannel() code channels", () => {
 
     expect(threaded.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:0"]);
     expect(topLevel.send.mock.calls.map(([address]) => address)).toEqual(["C_CODE_UNMENTIONED:0"]);
+    // Replies follow the thread the person wrote in.
+    expect(threaded.send.mock.calls[0]![1].state).toMatchObject({
+      replyThreadTs: "1700000000.000100",
+      threadTs: "0",
+    });
+    expect(topLevel.send.mock.calls[0]![1].state).toMatchObject({ replyThreadTs: null });
     expect(originContext.send).not.toHaveBeenCalled();
     expect(ordinary.send).not.toHaveBeenCalled();
   });
@@ -6451,6 +6456,36 @@ describe("slackChannel() code channels", () => {
         ([, init]) => parseSlackRequestBody(init).status,
       ),
     ).toEqual(["processing", "suspended", "active"]);
+  });
+
+  it("replies in the thread the turn answers and keeps the status on the channel", async () => {
+    useCodeChannels([]);
+    const adapter = withState(
+      getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
+      { ...THREAD_STATE, codeChannel: true, replyThreadTs: "1700000000.000100", threadTs: "0" },
+    );
+    const ctx = buildAdapterContext(adapter, stubAccessor());
+
+    await callEvent(adapter, makeEvent("turn.started", { sequence: 0, turnId: "t1" }), ctx);
+    await callEvent(
+      adapter,
+      makeEvent("message.completed", {
+        finishReason: "stop",
+        message: "Here's what I found.",
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "t1",
+      }),
+      ctx,
+    );
+
+    const [post] = slackCalls(fetchMock, "chat.postMessage");
+    expect(parseSlackRequestBody(post![1])).toMatchObject({
+      markdown_text: "Here's what I found.",
+      thread_ts: "1700000000.000100",
+    });
+    const [status] = slackCalls(fetchMock, "agents.sessions.setStatus");
+    expect(parseSlackRequestBody(status![1])).toEqual({ channel_id: "C01", status: "processing" });
   });
 
   it("sets the session back to active when a turn is cancelled", async () => {

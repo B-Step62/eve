@@ -304,7 +304,7 @@ Reset returns `{ status: "reset", previousSessionId }` when the thread had a ses
 
 #### Serve Slack code channels
 
-A [Slack code channel](https://docs.slack.dev/ai/slack-code) is a channel dedicated to one agent task. eve serves the whole code channel as one session: every message in it, top-level or threaded, reaches the same session, and replies post top-level. While a turn runs, eve sets the Slack session status to `processing` in place of the thread status line, `suspended` while the turn waits on a person, and `active` when the turn ends or is cancelled. When someone stops the session in Slack, eve cancels the active turn.
+A [Slack code channel](https://docs.slack.dev/ai/slack-code) is a channel dedicated to one agent task. eve serves the whole code channel as one session: every message in it, top-level or threaded, reaches the same session. Replies post top-level, or in the thread when someone writes in one. The session status stays on the channel either way. While a turn runs, eve sets the Slack session status to `processing` in place of the thread status line, `suspended` while the turn waits on a person, and `active` when the turn ends or is cancelled. When someone stops the session in Slack, eve cancels the active turn.
 
 Set `codeChannels` to answer messages in a code channel without a mention:
 

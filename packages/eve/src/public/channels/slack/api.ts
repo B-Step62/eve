@@ -451,6 +451,8 @@ export function buildSlackBinding(input: {
   readonly botUserId?: string;
   readonly channelId: string;
   readonly threadTs: string;
+  /** In a code channel (`threadTs` is `"0"`), the thread replies post in instead of top-level. */
+  readonly replyThreadTs?: () => string | undefined;
   /**
    * Whether `threadTs` already has replies; Slack hides threaded
    * ephemerals until it does. Defaults to true when `threadTs` is set.
@@ -486,6 +488,13 @@ export function buildSlackBinding(input: {
   let threadHasReplies = input.threadHasReplies ?? currentThreadTs !== "";
   let refreshInFlight: Promise<void> | undefined;
 
+  // A code channel session posts top-level, or in the thread its current turn answers.
+  function postThreadTs(): string {
+    const replyThreadTs =
+      currentThreadTs === CODE_CHANNEL_THREAD_TS ? input.replyThreadTs?.() : undefined;
+    return replyThreadTs || currentThreadTs;
+  }
+
   function handleMessageTs(ts: string): void {
     if (currentThreadTs || ts === currentThreadTs) return;
     currentThreadTs = ts;
@@ -497,7 +506,7 @@ export function buildSlackBinding(input: {
     options?: SlackUploadFilesOptions,
   ): Promise<SlackUploadFilesResult> {
     const channelId = options?.channelId ?? input.channelId;
-    const threadTs = options?.threadTs ?? currentThreadTs;
+    const threadTs = options?.threadTs ?? postThreadTs();
     const uploads = files.map((file) => toSlackFileUpload(file, options?.snippetType));
     const result = await uploadSlackFiles(uploads, {
       ...apiOptions,
@@ -615,9 +624,9 @@ export function buildSlackBinding(input: {
         return { id, raw: result.raw };
       }
 
-      const replyTo = currentThreadTs;
+      const replyTo = postThreadTs();
       const response = await postSlackMessage(
-        buildPostMessageOptions(message, input.channelId, replyTo, apiOptions),
+        buildPostMessageOptions(message, input.channelId, postThreadTs(), apiOptions),
       );
       const id = response.id;
       if (replyTo) input.onPosted?.();
@@ -637,7 +646,7 @@ export function buildSlackBinding(input: {
     },
     async postEphemeral(userId, rawMessage) {
       const message = normalizePostInput(rawMessage);
-      const threadTs = threadHasReplies ? currentThreadTs : "";
+      const threadTs = threadHasReplies ? postThreadTs() : "";
       const response = await postSlackEphemeral({
         ...buildPostMessageOptions(message, input.channelId, threadTs, apiOptions),
         user: userId,

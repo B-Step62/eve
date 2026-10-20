@@ -229,6 +229,11 @@ export interface SlackChannelState {
   threadTs: string | null;
   /** Whether this session serves a Slack code channel. */
   codeChannel?: boolean;
+  /**
+   * In a code channel, the thread of the message the current turn answers.
+   * Replies post there; `null` posts them top-level.
+   */
+  replyThreadTs?: string | null;
   /** Slack team id, when the inbound event carried one. */
   teamId: string | null;
   /** Slack message ts that triggered the active turn. */
@@ -829,6 +834,8 @@ function rebuildSlackContext(
     botToken: credentials?.botToken,
     channelId: state.channelId ?? "",
     threadTs: state.threadTs ?? "",
+    // Read at post time: `deliver` may move replies to a new thread after the context is built.
+    replyThreadTs: () => state.replyThreadTs ?? undefined,
     installationTeamId: state.installationTeamId ?? undefined,
     teamId: state.teamId ?? undefined,
     onThreadTsChanged(ts) {
@@ -940,6 +947,7 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
     // is the caller of this delivery.
     deliver(payload, channel: SlackChannelContext & { readonly session: SessionHandle }) {
       recordSlackPrincipal(channel.state, channel.session.auth.current, payload);
+      followReplyThread(channel.state, payload);
       return defaultDeliverResult(withUndeliveredReplyNote(channel.state, payload));
     },
 
@@ -1316,6 +1324,8 @@ async function dispatchSlackMessage(input: {
   if (!codeChannel && input.codeChannelOnly) return;
   // A code channel is one session: every message in it, threaded or not, shares its address.
   const threadTs = codeChannel ? CODE_CHANNEL_THREAD_TS : input.message.threadTs;
+  const isThreadReply = input.message.threadTs !== input.message.ts;
+  const replyThreadTs = codeChannel && isThreadReply ? input.message.threadTs : null;
   const continuationToken = slackContinuationToken(input.message.channelId, threadTs);
   const { thread, slack } = buildSlackBinding({
     api: input.api,
@@ -1324,7 +1334,8 @@ async function dispatchSlackMessage(input: {
     botUserId: input.botUserId,
     channelId: input.message.channelId,
     threadTs,
-    threadHasReplies: input.message.threadTs !== input.message.ts,
+    replyThreadTs: () => replyThreadTs ?? undefined,
+    threadHasReplies: isThreadReply,
     installationTeamId: input.installationTeamId,
     teamId: input.message.teamId,
   });
@@ -1335,7 +1346,7 @@ async function dispatchSlackMessage(input: {
     threadTs,
     triggeringMessageTs: input.message.ts,
     triggeringUserId: author?.userId ?? null,
-    ...(codeChannel && { codeChannel: true }),
+    ...(codeChannel && { codeChannel: true, replyThreadTs }),
   };
   const sessionOperations = bindSlackSessionOperations({
     address: continuationToken,
@@ -1609,6 +1620,15 @@ async function deliverSlackMessage(input: {
 function slackTypedText(text: string, botUserId: string | undefined): string {
   if (botUserId === undefined) return text;
   return text.replace(new RegExp(`<@${botUserId}(?:\\|[^>]*)?>`, "gu"), "").trim();
+}
+
+/** In a code channel, replies follow the thread of the latest message delivered. */
+function followReplyThread(state: SlackChannelState, payload: DeliverPayload): void {
+  if (payload.message === undefined || state.codeChannel !== true) return;
+  const stamped = payload.state as Partial<SlackChannelState> | undefined;
+  if (stamped !== undefined && "replyThreadTs" in stamped) {
+    state.replyThreadTs = stamped.replyThreadTs ?? null;
+  }
 }
 
 /**

@@ -394,7 +394,8 @@ async function writeTaskCard(
   if (current === undefined) return;
   const audience = normalizeChannelAudience(channel.state.audience);
   const view = taskCardView(turnId, current.turn, { audience });
-  const { channelId, threadTs } = channel.state;
+  const { channelId } = channel.state;
+  const threadTs = channel.state.replyThreadTs ?? channel.state.threadTs;
   const scheduled = contextStorage.getStore()?.get(ScheduleIdKey) !== undefined;
   const thread = channelId && threadTs && !scheduled ? { channelId, threadTs } : undefined;
   const card = thread === undefined ? null : renderCard(taskCard, view);
