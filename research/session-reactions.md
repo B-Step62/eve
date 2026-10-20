@@ -1338,6 +1338,8 @@ The first change, on the v27 view:
 - `auto()`, memory tools, and schedule tools rebuilt on the new runner. Memory recall and capture
   stay internal kinds.
 - The function form of a remote agent's `url` is replaced by a dynamic file.
+- `defineDynamic` takes only a function. The `build` option on dynamic subagents goes; packaging
+  configuration such as `build.externalDependencies` is declared on the root agent.
 
 Moving #4616 to this API changes its definitions and hook kind: the runner keeps records per key
 rather than one record per definition, select-form hooks go, hook commands become methods
