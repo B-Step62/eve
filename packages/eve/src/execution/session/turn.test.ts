@@ -41,7 +41,10 @@ vi.mock("#compiled/@workflow/core/index.js", async (importOriginal) => ({
   ...(await importOriginal()),
   getWorkflowMetadata: () => ({ url: "https://parent.example" }),
 }));
-vi.mock("#execution/coordination-dispatch-step.js", () => ({ dispatchCoordinationStep: vi.fn() }));
+vi.mock("#execution/coordination-dispatch-step.js", () => ({
+  dispatchCoordinationStep: vi.fn(),
+  publishDispatchedCallsStep: vi.fn(),
+}));
 
 // A task run's late spend publishes a fact; this suite's sessions carry no bundle to publish with.
 const committed = vi.hoisted((): unknown[] => []);
@@ -125,10 +128,17 @@ type TurnStepWorkResult = DurableStepResult extends infer R
     : never
   : never;
 const turnStepWork = stepWork<TurnStepInput, TurnStepWorkResult>;
-const dispatchWork = stepWork<
-  Parameters<typeof dispatchCoordinationStep>[0],
-  CoordinationDispatchResult
->;
+/** These dispatches leave nothing to publish, so their work omits `pending`. */
+function dispatchWork(
+  work: (
+    input: Parameters<typeof dispatchCoordinationStep>[0],
+  ) => Promise<Omit<CoordinationDispatchResult, "pending">>,
+) {
+  return stepWork(async (input: Parameters<typeof dispatchCoordinationStep>[0]) => ({
+    ...(await work(input)),
+    pending: { executing: [], refused: [], started: [] },
+  }));
+}
 const routeWork = stepWork<Parameters<typeof routeDeliverToChildren>[0], RoutedDeliverResult>;
 
 describe("SessionExecution checkpoints", () => {

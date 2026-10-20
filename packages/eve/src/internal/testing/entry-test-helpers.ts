@@ -75,6 +75,7 @@ const CONDITIONAL_STEP_NAMES = new Set([
   "cancelDescendantTurnsStep",
   "dispatchCoordinationStep",
   "notifyCancelledTaskCallerStep",
+  "publishDispatchedCallsStep",
   "terminateChildSessionsStep",
 ]);
 
