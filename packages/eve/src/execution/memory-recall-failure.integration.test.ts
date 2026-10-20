@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { mockModel } from "#evals/mock-model.js";
+import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
 import { workflowEntry } from "#execution/session/entry.js";
 import { createTestRuntime, type TestRuntime } from "#internal/testing/app-harness.js";
 import { captureTurnEvents } from "#internal/testing/events.js";
 import { startSessionOwner } from "#internal/testing/workflow-test-helpers.js";
+import { resumeHook } from "#internal/workflow/runtime.js";
 import { defineAgent } from "#public/definitions/agent.js";
 import { defineMemory, type MemoryProvider } from "#public/memory/index.js";
 import { createBundledRuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
@@ -54,8 +56,27 @@ const checkSoilTool = {
   logicalPath: "tools/check_soil.ts",
 };
 
-/** Runs the session's first turn and returns its event types, cancelling the parked session. */
-async function firstTurnEventTypes(runtime: TestRuntime, name: string): Promise<string[]> {
+/** Sends a follow-up to the parked session, retrying through the inbox claim window. */
+async function sendFollowUp(continuationToken: string, message: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (true) {
+    try {
+      await resumeHook(sessionInboxHookToken(continuationToken), {
+        auth: null,
+        kind: "send",
+        payload: { message },
+      });
+      return;
+    } catch (error) {
+      if (Date.now() > deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
+
+/** Runs two turns on one session and returns each turn's event types, cancelling the parked session. */
+async function twoTurnEventTypes(runtime: TestRuntime, name: string): Promise<string[][]> {
+  const continuationToken = `http:${name}`;
   return await runtime.run(async () => {
     const run = await startSessionOwner(workflowEntry, [
       {
@@ -66,20 +87,38 @@ async function firstTurnEventTypes(runtime: TestRuntime, name: string): Promise<
           "eve.auth": null,
           "eve.bundle": { source: createBundledRuntimeCompiledArtifactsSource() },
           "eve.channel": { kind: "http", state: {} },
-          "eve.continuationToken": `http:${name}`,
+          "eve.continuationToken": continuationToken,
           "eve.stateLayout": 1,
         },
       },
     ]);
     const stream = captureTurnEvents(run);
-    const events = await stream.nextTurn().finally(() => stream.dispose());
-    const types = events.map((event) => event.type);
-    if (types.at(-1) === "session.waiting") await run.cancel();
-    return types;
+    const turns: string[][] = [];
+    try {
+      turns.push((await stream.nextTurn()).map((event) => event.type));
+      if (turns[0]?.at(-1) !== "session.waiting") return turns;
+      await sendFollowUp(continuationToken, "It's still drooping.");
+      turns.push((await stream.nextTurn()).map((event) => event.type));
+      if (turns[1]?.at(-1) === "session.waiting") await run.cancel();
+      return turns;
+    } finally {
+      stream.dispose();
+    }
   });
 }
 
-// #4896: a recall error fails the turn once instead of escaping `turnStep` into step retries.
+function expectFailedThenRecovered(turns: string[][]): void {
+  expect(turns).toHaveLength(2);
+  const [first = [], second = []] = turns;
+  expect(first.slice(-2)).toEqual(["turn.failed", "session.waiting"]);
+  expect(first.filter((type) => type === "turn.failed")).toHaveLength(1);
+  expect(second).not.toContain("turn.failed");
+  expect(second.slice(-2)).toEqual(["turn.completed", "session.waiting"]);
+  expect(turns.flat()).not.toContain("session.failed");
+}
+
+// #4896: a recall error fails the turn once instead of escaping `turnStep` into step retries,
+// and the session answers the next message once the provider recovers.
 describe("memory recall failures", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -93,16 +132,17 @@ describe("memory recall failures", () => {
         memoryModule({
           "turn.started": async () => {
             recalls += 1;
-            throw new Error("plant store is down");
+            if (recalls === 1) throw new Error("plant store is down");
+            return null;
           },
         }),
       ],
     });
 
-    const types = await firstTurnEventTypes(runtime, "turn-started-recall-failure");
+    const turns = await twoTurnEventTypes(runtime, "turn-started-recall-failure");
 
-    expect(types.slice(-2)).toEqual(["turn.failed", "session.waiting"]);
-    expect(recalls).toBe(1);
+    expectFailedThenRecovered(turns);
+    expect(recalls).toBe(2);
   });
 
   it("fails the turn once and keeps the session when compaction.completed recall throws", async () => {
@@ -122,17 +162,18 @@ describe("memory recall failures", () => {
           "turn.started": async () => null,
           "compaction.completed": async () => {
             recalls += 1;
-            throw new Error("plant store is down");
+            if (recalls === 1) throw new Error("plant store is down");
+            return null;
           },
         }),
         checkSoilTool,
       ],
     });
 
-    const types = await firstTurnEventTypes(runtime, "compaction-recall-failure");
+    const turns = await twoTurnEventTypes(runtime, "compaction-recall-failure");
 
-    expect(types.slice(-2)).toEqual(["turn.failed", "session.waiting"]);
-    expect({ recalls, summaries }).toEqual({ recalls: 1, summaries: 1 });
+    expectFailedThenRecovered(turns);
+    expect({ recalls, summaries }).toEqual({ recalls: 2, summaries: 2 });
   });
 
   it("fails the turn once and keeps the session when compaction.requested capture throws", async () => {
@@ -152,7 +193,7 @@ describe("memory recall failures", () => {
           {
             "compaction.requested": async () => {
               captures += 1;
-              throw new Error("plant store is down");
+              if (captures === 1) throw new Error("plant store is down");
             },
           },
         ),
@@ -160,9 +201,9 @@ describe("memory recall failures", () => {
       ],
     });
 
-    const types = await firstTurnEventTypes(runtime, "compaction-capture-failure");
+    const turns = await twoTurnEventTypes(runtime, "compaction-capture-failure");
 
-    expect(types.slice(-2)).toEqual(["turn.failed", "session.waiting"]);
-    expect({ captures, summaries }).toEqual({ captures: 1, summaries: 0 });
+    expectFailedThenRecovered(turns);
+    expect({ captures, summaries }).toEqual({ captures: 2, summaries: 1 });
   });
 });
