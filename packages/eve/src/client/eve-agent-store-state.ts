@@ -66,13 +66,12 @@ export interface EveAgentStoreInit {
    */
   readonly followAgents?: boolean;
   /**
-   * Keep the session stream open while the session is idle, so the store sees events that arrive
-   * between turns from schedules, channels, or other clients. When false, the store closes the
-   * stream once no turn, task, or sign-in is pending, and reopens it from the session cursor on
-   * the next send, answer, or resume.
-   *
-   * @default true
+   * Keep following while this predicate accepts the last committed view. Local POSTs, unsettled
+   * receipts, and resume catch-up keep the stream open regardless. Evaluated only at complete
+   * line boundaries; a closed stream reopens on any command, resume, or follow, from the
+   * store's committed position. If it closes during machine work, the snapshot remains busy
+   * until reopened. Defaults to always following, including between turns.
    */
-  readonly followIdle?: boolean;
+  readonly followWhile?: (view: SessionView) => boolean;
   readonly session?: ClientSession;
 }
