@@ -4,6 +4,8 @@ import { jsonSchema } from "ai";
 import { defaultDeliverResult } from "#channel/adapter.js";
 import type { DeliverHookPayload } from "#channel/types.js";
 import { contextStorage } from "#context/container.js";
+import { AuthKey, SessionIdKey, SessionKey } from "#context/keys.js";
+import { sessionProvider } from "#context/providers/session.js";
 import { ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { createApprovalContext } from "#internal/testing/approval-resume.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
@@ -255,6 +257,7 @@ describe("a history-owning engine on the shared session and approval path", () =
     async (outcome) => {
       vi.stubEnv("EVE_CHECK_SESSION_EVENTS", "1");
       const input = inbox();
+      const auth = createApprovalContext().require(AuthKey);
       const chunks: string[] = [];
       const writable = new WritableStream<Uint8Array>({
         write(bytes) {
@@ -265,7 +268,7 @@ describe("a history-owning engine on the shared session and approval path", () =
         history: [],
         inbox: input.reader,
         sessionWritable: writable,
-        serializedContext: {},
+        serializedContext: { [AuthKey.name]: auth },
         sessionState: createTestSessionState({ sessionId: "opaque-session" }),
       });
       let frozen = false;
@@ -318,8 +321,10 @@ describe("a history-owning engine on the shared session and approval path", () =
             history: state.history,
           };
           const ctx = createApprovalContext();
+          ctx.set(SessionIdKey, session.sessionId);
           ctx.set(ChannelKey, { kind: "http" });
           enterSessionProjection(ctx, session.state);
+          ctx.set(SessionKey, sessionProvider.create(ctx, session).value);
           const publisher = openSessionEventPublisher({
             ctx,
             origin: "own",
@@ -367,7 +372,7 @@ describe("a history-owning engine on the shared session and approval path", () =
                 announce: announcesWaiting(decideStep(readStepState(result.session))),
               });
               checkpoints.push(JSON.parse(JSON.stringify(result.session)));
-              return resolveSessionStepResult(result, {});
+              return resolveSessionStepResult(result, { [AuthKey.name]: ctx.require(AuthKey) });
             });
           } finally {
             publisher.writer.release();
@@ -381,7 +386,7 @@ describe("a history-owning engine on the shared session and approval path", () =
         ownerRunId: "opaque-owner",
         admittedDeliveryKeys: [],
         capabilities: { requestInput: true },
-        start: { kind: "turn", input: delivery("Help Alice deploy her release.") },
+        start: { kind: "turn", input: { ...delivery("Help Alice deploy her release."), auth } },
       });
       const running = loop.run();
       await Promise.race([
@@ -400,6 +405,7 @@ describe("a history-owning engine on the shared session and approval path", () =
       const request = openInteractions(held)[0]!;
       input.push({
         kind: "deliver",
+        auth,
         payloads: [
           {
             answers: [
