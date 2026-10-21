@@ -264,6 +264,8 @@ export type WorkflowToolRunControlMessage =
 /** A session-limit Continue above raised the run's caller's allowance; its sessions raise theirs. */
 export interface WorkflowToolRunUsageContinued {
   readonly kind: "usage-continued";
+  /** The prompt the Continue answered; the session that raised it was answered directly. */
+  readonly requestId?: string;
 }
 
 export function isWorkflowToolRunControlMessage(
@@ -273,8 +275,9 @@ export function isWorkflowToolRunControlMessage(
   const { call, kind, reason, requestId, response } = value as Record<string, unknown>;
   switch (kind) {
     case "interrupt":
-    case "usage-continued":
       return true;
+    case "usage-continued":
+      return requestId === undefined || typeof requestId === "string";
     case "cancel":
     case "end":
       return typeof reason === "string";

@@ -250,11 +250,14 @@ describe("session usage continuation pushed from above", () => {
   };
   const bob: SessionAuthContext = { ...alice, principalId: "bob" };
 
-  async function pushContinuation(continuationToken: string): Promise<void> {
+  async function pushContinuation(continuationToken: string, requestId?: string): Promise<void> {
     const deadline = Date.now() + 15_000;
     while (true) {
       try {
-        await resumeHook(sessionInboxHookToken(continuationToken), { kind: "usage-continued" });
+        await resumeHook(sessionInboxHookToken(continuationToken), {
+          kind: "usage-continued",
+          requestId,
+        });
         return;
       } catch (error) {
         if (Date.now() > deadline) throw error;
@@ -354,6 +357,30 @@ describe("session usage continuation pushed from above", () => {
         ["message.received", "alice"],
         ["turn.completed", "alice"],
       ]);
+    });
+  }, 60_000);
+
+  it("ignores a late push for a prompt it already answered itself", async () => {
+    await withAliceSession("limit-push-late", async ({ continuationToken, stream }) => {
+      await deliver(continuationToken, { message: "keep going please" }, undefined, alice);
+      const first = requestIdFromPromptTurn(await stream.nextTurn());
+      const answer = (optionId: string, requestId: string) =>
+        deliver(continuationToken, { inputResponses: [{ optionId, requestId }] }, undefined, alice);
+      await answer("continue", first);
+      expectNoFailureEvents(await stream.nextTurn());
+      await deliver(continuationToken, { message: "and more" }, undefined, alice);
+      const second = requestIdFromPromptTurn(await stream.nextTurn());
+      expect(second).not.toBe(first);
+
+      await pushContinuation(continuationToken, first);
+      await answer("stop", second);
+      const stopped = await stream.nextTurn();
+
+      expect(
+        filterEventsByType(stopped, "input.resolved").flatMap((event) =>
+          event.data.resolutions.map((resolution) => resolution.response?.optionId),
+        ),
+      ).toEqual(["stop"]);
     });
   }, 60_000);
 

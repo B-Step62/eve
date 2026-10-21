@@ -177,8 +177,18 @@ describe("routeDeliverPayload", () => {
       {
         childContinuationToken: "child-a",
         payload: { inputResponses: [{ optionId: "stop", requestId: "req-limit" }] },
-        // The child closes its own prompt: a Continue elsewhere may have settled it first.
-        resolved: { event: REQUEST_EVENT, resolutions: [] },
+        // Stop cancels this turn at once, so this session closes the prompt itself.
+        resolved: {
+          event: REQUEST_EVENT,
+          resolutions: [
+            {
+              kind: "session-limit",
+              outcome: "answered",
+              requestId: "req-limit",
+              response: { optionId: "stop", requestId: "req-limit" },
+            },
+          ],
+        },
       },
     ]);
     expect(routed.parentAction).toEqual({ kind: "cancel-turn" });

@@ -94,7 +94,7 @@ async function routeProxiedDeliver(
   const parentPayloads = new Map<number, DeliverPayload>();
   const children = new Map<string, ChildBucket>();
   let parentAction: { readonly kind: "cancel-turn" } | undefined;
-  let continued = false;
+  let continued: string | undefined;
   // A typed answer joins the open turn, so only the turn's own principal may
   // send one, as only they steer it. Anyone else's text waits for the turn to
   // end; their button answers still settle a request as its responder.
@@ -122,7 +122,7 @@ async function routeProxiedDeliver(
       state: durableSession.state,
     });
     parentAction ??= routed.parentAction;
-    continued ||= routed.continued !== undefined;
+    continued ??= routed.continued;
     if (routed.forSelf !== undefined) parentPayloads.set(sourcePayloadIndex, routed.forSelf);
 
     for (const [childIndex, forChild] of routed.forChildren.entries()) {
@@ -251,9 +251,9 @@ async function routeProxiedDeliver(
   );
   const retired = new Set(answered.flatMap((child) => child.resolutions.map((r) => r.requestId)));
   // A Continue passing through raises this session's allowance, before the prompts it credits close.
-  if (continued && !published.cancelled) {
+  if (continued !== undefined && !published.cancelled) {
     const session = continueSessionUsage(readDurableSession(published.sessionState));
-    await pushSessionUsageContinuation(session);
+    await pushSessionUsageContinuation(session, continued);
     published = {
       ...published,
       sessionState: replaceDurableSessionSnapshot({ session, state: published.sessionState }),

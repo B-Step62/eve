@@ -29,7 +29,21 @@ import { openInputs } from "#protocol/session-projection.js";
 
 const log = createLogger("eve:session-usage");
 
-const USAGE_CONTINUED: WorkflowToolRunControlMessage = { kind: "usage-continued" };
+const USAGE_FIELDS = [
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "costUsd",
+  "inputTokens",
+  "outputTokens",
+] as const;
+type UsageCredit = Record<(typeof USAGE_FIELDS)[number], number>;
+const NO_USAGE: UsageCredit = {
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  costUsd: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+};
 
 /**
  * Starts a new usage window at the session's totals plus what its open relayed
@@ -42,30 +56,43 @@ const USAGE_CONTINUED: WorkflowToolRunControlMessage = { kind: "usage-continued"
 export function continueSessionUsage(session: DurableSession): DurableSession {
   const relays = readHitlState(session.state).relays;
   const tasks = readTaskTable(session.state).tasks;
-  const unreported = { cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 0, outputTokens: 0 };
+  const byRun = new Map<string, UsageCredit>();
   for (const { request } of openInputs(storedProjection(session.state))) {
     const relay = relays.get(request.requestId);
-    if (request.kind !== "session-limit" || relay === undefined) continue;
-    const total = request.action.input["total"] as TokenUsageDelta | undefined;
+    if (request.kind !== "session-limit" || relay?.runId === undefined) continue;
     const run = tasks.find((task) => task.run?.runId === relay.runId)?.run;
     if (run === undefined) continue;
-    const counted = run.usage;
-    for (const field of Object.keys(unreported) as (keyof typeof unreported)[]) {
-      unreported[field] += Math.max(0, (total?.[field] ?? 0) - (counted?.[field] ?? 0));
+    const total = request.action.input["total"] as TokenUsageDelta | undefined;
+    // Prompts relayed through one run can share spend, so the run's credit is
+    // its largest prompt, not their sum.
+    const credit = byRun.get(relay.runId) ?? { ...NO_USAGE };
+    for (const field of USAGE_FIELDS) {
+      const left = Math.max(0, (total?.[field] ?? 0) - (run.usage?.[field] ?? 0));
+      credit[field] = Math.max(credit[field], left);
     }
+    byRun.set(relay.runId, credit);
   }
-  return resetSessionUsageWindow(session, unreported);
+  const unreported = { ...NO_USAGE };
+  for (const credit of byRun.values()) {
+    for (const field of USAGE_FIELDS) unreported[field] += credit[field];
+  }
+  const { costUsd, ...tokens } = unreported;
+  return resetSessionUsageWindow(session, costUsd > 0 ? unreported : tokens);
 }
 
 /** Tells the session's started task runs and blocking workflow tool runs. */
-export async function pushSessionUsageContinuation(session: DurableSession): Promise<void> {
+export async function pushSessionUsageContinuation(
+  session: DurableSession,
+  requestId?: string,
+): Promise<void> {
+  const message: WorkflowToolRunControlMessage = { kind: "usage-continued", requestId };
   const runs = [
     ...readTaskTable(session.state).tasks.flatMap((task) => (task.run?.started ? [task.run] : [])),
     ...getBlockingWorkflowToolRuns(session.state).map((run) => run.address),
   ];
   await Promise.all(
     runs.map((run) =>
-      ignoreGoneTarget(resumeHook(run.hookToken, USAGE_CONTINUED)).catch((error: unknown) => {
+      ignoreGoneTarget(resumeHook(run.hookToken, message)).catch((error: unknown) => {
         logError(log, "usage continuation not delivered", error, { runId: run.runId });
       }),
     ),
@@ -78,12 +105,18 @@ export async function pushSessionUsageContinuation(session: DurableSession): Pro
  * starts at the session's totals, so they no longer hold.
  */
 export async function applySessionUsageContinuationStep(
-  input: SessionStepState,
+  input: SessionStepState & { readonly requestId: string | undefined },
 ): Promise<SessionStateTransition & { readonly approved: readonly string[] }> {
   "use step";
   return await withSessionStateDelta(input, async (state) => {
-    const session = continueSessionUsage(readDurableSession(state.sessionState));
-    await pushSessionUsageContinuation(session);
+    const current = readDurableSession(state.sessionState);
+    // The session that raised the prompt takes its answer directly; a push
+    // that reaches it later would grant that Continue twice.
+    if (input.requestId?.startsWith(`${current.sessionId}:`)) {
+      return { approved: [], sessionState: state.sessionState };
+    }
+    const session = continueSessionUsage(current);
+    await pushSessionUsageContinuation(session, input.requestId);
     const relays = readHitlState(session.state).relays;
     return {
       approved: openInputs(storedProjection(session.state))

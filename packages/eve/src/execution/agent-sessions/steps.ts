@@ -254,6 +254,7 @@ export async function cancelAgentSessionTurnStep(input: OpenedAgentSession): Pro
  * itself. Remote agents keep their own limits.
  */
 export async function continueAgentSessionsUsageStep(input: {
+  readonly requestId: string | undefined;
   readonly sessions: readonly OpenedAgentSession[];
 }): Promise<void> {
   "use step";
@@ -261,7 +262,10 @@ export async function continueAgentSessionsUsageStep(input: {
     input.sessions.map(async ({ address }) => {
       if (address.kind === "remote") return;
       await ignoreGoneTarget(
-        resumeSessionInbox(address.continuationToken, { kind: "usage-continued" }),
+        resumeSessionInbox(address.continuationToken, {
+          kind: "usage-continued",
+          requestId: input.requestId,
+        }),
       ).catch((error: unknown) => {
         logError(log, "usage continuation not delivered", error, {
           name: address.name,

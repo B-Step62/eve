@@ -106,6 +106,7 @@ export function routeDeliverPayload(input: {
   const unroutedResponses: InputResponse[] = [];
   let parentAction: RoutedDeliverPayload["parentAction"];
   let continued: string | undefined;
+  const stopped = new Set<string>();
 
   const bucketFor = (route: ProxyInputRequest): ChildResponseBucket => {
     const bucketKey = JSON.stringify([
@@ -149,8 +150,10 @@ export function routeDeliverPayload(input: {
 
     if (route.kind === "session-limit") {
       const granted = sessionLimitDecision(response);
-      if (granted === false) parentAction = { kind: "cancel-turn" };
-      else if (granted === true) continued ??= response.requestId;
+      if (granted === false) {
+        parentAction = { kind: "cancel-turn" };
+        stopped.add(response.requestId);
+      } else if (granted === true) continued ??= response.requestId;
     }
 
     const bucket = bucketFor(route);
@@ -173,7 +176,7 @@ export function routeDeliverPayload(input: {
       const responseIds = new Set(parentRequestIds);
       const decided = (requestId: string) => {
         const kind = entries.get(requestId)?.kind;
-        return kind === undefined || !resolvedByChild(kind);
+        return kind === undefined || !resolvedByChild(kind) || stopped.has(requestId);
       };
       const retireRequestIds = new Set([...responseIds].filter(decided));
 
