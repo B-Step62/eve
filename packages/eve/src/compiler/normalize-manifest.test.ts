@@ -396,7 +396,7 @@ describe("compileAgentManifest source graph", () => {
 
   it("materializes schedule factories once per compile", async () => {
     const staticFactory = vi.fn(() =>
-      defineSchedule({ cron: "0 9 * * *", markdown: "Run the report." }),
+      defineSchedule({ cron: "0 9 * * *", content: "Run the report." }),
     );
     const sourceRegistry = registry([
       {
@@ -497,7 +497,7 @@ describe("compileAgentManifest source graph", () => {
       {
         logicalPath: "skills/static.ts",
         loadNamespace: async () => ({
-          default: defineSkill({ description: "Static skill.", markdown: "# Static\n" }),
+          default: defineSkill({ description: "Static skill.", content: "# Static\n" }),
         }),
       },
       {
@@ -506,7 +506,7 @@ describe("compileAgentManifest source graph", () => {
           default: defineDynamic({
             events: {
               beforeSession: () =>
-                defineSkill({ description: "Dynamic skill.", markdown: "# Dynamic\n" }),
+                defineSkill({ description: "Dynamic skill.", content: "# Dynamic\n" }),
             },
           }),
         }),
@@ -514,7 +514,7 @@ describe("compileAgentManifest source graph", () => {
       {
         logicalPath: "schedules/prompt.ts",
         loadNamespace: async () => ({
-          default: defineSchedule({ cron: "0 9 * * *", markdown: "Run the prompt." }),
+          default: defineSchedule({ cron: "0 9 * * *", content: "Run the prompt." }),
         }),
       },
       {
@@ -848,7 +848,7 @@ describe("compileAgentManifest source graph", () => {
     const authoredSkill = (name: string) => ({
       logicalPath: `skills/${name}.ts`,
       loadNamespace: async () => ({
-        default: defineSkill({ description: name, markdown: `# ${name}\n` }),
+        default: defineSkill({ description: name, content: `# ${name}\n` }),
       }),
     });
     const compile = (sources: Parameters<typeof registry>[0]) =>
@@ -1429,7 +1429,7 @@ it("rejects subagent event connections whose receiver cannot resolve their scope
                 },
               },
             },
-            experimental_events: { onEvent() {} },
+            experimental: { events: { onEvent() {} } },
           }),
         }),
       },
