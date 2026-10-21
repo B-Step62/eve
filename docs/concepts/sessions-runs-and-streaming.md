@@ -160,7 +160,7 @@ not derived from stream position. An answer's response also stops on its own `de
 A stranded reset records its control's admission and settlement before ending the session, with
 `session.ended.data.cause.deliveryId` naming the reset.
 
-### Turns and people
+### Turns and interactions
 
 A turn doesn't end while it waits on an interaction; it pauses. `turn.paused.data.awaiting` names the interactions it waits on, as `{ interactionId }`. Nothing announces the turn resuming: the next fact under it, such as its next `model.requested`, shows it's running again, and only `turn.settled` ends it. A turn waiting on its own work, such as its tasks, stays running without pausing.
 
