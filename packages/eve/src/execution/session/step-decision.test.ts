@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { awaitsModel, readStepState } from "#execution/session/step-reading.js";
+import { readStepState } from "#execution/session/step-reading.js";
 import type { ModelMessage } from "ai";
 import { decideStep, type StepDecision, type StepState } from "#execution/session/step-decision.js";
-import type { HarnessModelMessage } from "#harness/messages.js";
 import { withParkedStep, withPublished } from "#internal/testing/session-machine.js";
 import type { HarnessSession } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
@@ -221,38 +220,6 @@ describe("readStepState", () => {
       { data: { callId: "deploy-call" }, scope: { runId, turnId: "turn_0" }, type: "call.started" },
     ]);
     expect(readStepState(started).calls).toMatchObject({ dispatch: false });
-  });
-});
-
-describe("awaitsModel", () => {
-  const text = (value: string) => ({ text: value, type: "text" as const });
-  const providerResult = {
-    output: { type: "text" as const, value: "results" },
-    toolCallId: "search",
-    toolName: "web_search",
-    type: "tool-result" as const,
-  };
-
-  it.each([
-    ["a person's message", { content: "Hi", role: "user" as const }, true],
-    [
-      "a tool's result",
-      { content: [{ ...providerResult, toolName: "lookup" }], role: "tool" as const },
-      true,
-    ],
-    ["the model's reply", { content: [text("Done.")], role: "assistant" as const }, false],
-    [
-      "a provider's result after the model's text",
-      { content: [text("Searching."), providerResult], role: "assistant" as const },
-      true,
-    ],
-    [
-      "the model's text after a provider's result",
-      { content: [providerResult, text("Found it.")], role: "assistant" as const },
-      false,
-    ],
-  ])("reads a history ending on %s", (_name, last, expected) => {
-    expect(awaitsModel([last as HarnessModelMessage])).toBe(expected);
   });
 });
 

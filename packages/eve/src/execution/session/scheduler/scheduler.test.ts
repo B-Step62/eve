@@ -123,6 +123,48 @@ describe("delivery idempotency", () => {
   });
 });
 
+it("takes another person's answer with channel state without queueing a second delivery", () => {
+  const alice = {
+    attributes: {},
+    authenticator: "test",
+    issuer: "test",
+    principalId: "alice",
+    principalType: "user" as const,
+  };
+  const session = reading();
+  const started = next(
+    initialScheduler({
+      kind: "turn",
+      input: { kind: "deliver", auth: alice, payloads: [{ message: "Alice asks to deploy." }] },
+    }),
+    session,
+  );
+  const step = next(started.state, session);
+  const answer: DeliverHookPayload = {
+    kind: "deliver",
+    auth: { ...alice, principalId: "bob" },
+    payloads: [
+      {
+        answers: [{ interactionId: "approval", optionId: "approve" }],
+        state: { callback: "approve" },
+      },
+    ],
+  };
+  const paused = on(step.state, {
+    kind: "stepped",
+    result: { action: "paused", on: "interaction", attemptIds: [], requestIds: ["approval"] },
+    arrivals: [{ kind: "delivery", delivery: answer }],
+  });
+  const routed = next(paused, session);
+  expect(routed.asks.kind).toBe("route");
+  const taken = next(
+    on(routed.state, { kind: "routed", routed: { kind: "remainder", delivery: answer } }),
+    session,
+  );
+  expect(taken.asks).toEqual({ kind: "step", input: { delivery: answer } });
+  expect(taken.state.held.entries).toEqual([]);
+});
+
 describe("task-wait deadlines", () => {
   it("keeps each call's absolute deadline and waits on the earliest unresolved one", () => {
     const session = { ...reading({ workingTasks: true }), now: 2000 };

@@ -369,7 +369,9 @@ describe("a history-owning engine on the shared session and approval path", () =
                 engine,
               )(session, received);
               await publisher.finish({
-                announce: announcesWaiting(decideStep(readStepState(result.session))),
+                announce: announcesWaiting(
+                  decideStep(readStepState(result.session, result.engineReading)),
+                ),
               });
               checkpoints.push(JSON.parse(JSON.stringify(result.session)));
               return resolveSessionStepResult(result, { [AuthKey.name]: ctx.require(AuthKey) });
@@ -449,10 +451,7 @@ describe("a history-owning engine on the shared session and approval path", () =
       expect(view.calls["opaque-deploy"]?.outcome).toBe(successful ? "completed" : "rejected");
       expect(openInteractions(view)).toEqual([]);
       expect(advance).toHaveBeenCalledTimes(successful ? 3 : 2);
-      expect(
-        readStepState({ ...readDurableSession(cursor.sessionState), history: cursor.history })
-          .unreadInput,
-      ).toBe(false);
+      expect(readStepState(readDurableSession(cursor.sessionState)).unreadInput).toBe(false);
       expect(checkpoints.at(-1)?.state).toBeDefined();
     },
   );

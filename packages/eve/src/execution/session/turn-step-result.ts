@@ -12,7 +12,7 @@ export function resolveSessionStepResult(
   result: StepResult,
   serializedContext: Record<string, unknown>,
 ): DurableStepResult {
-  const decision = decideStep(readStepState(result.session));
+  const decision = decideStep(readStepState(result.session, result.engineReading));
   const ended = typeof result.next === "object" && result.next !== null ? result.next : undefined;
   if (ended !== undefined && decision.kind !== "end")
     throw new Error("A turn step returned the session's end without ending the session.");

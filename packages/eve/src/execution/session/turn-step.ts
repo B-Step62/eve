@@ -582,7 +582,9 @@ async function runSessionStepBody(
             const harnessResult = await runHarnessStep(schemaSession, stepInput, completions);
             // Only the step knows whether it stopped for an interaction; the tables say which.
             await publisher.finish({
-              announce: announcesWaiting(decideStep(readStepState(harnessResult.session))),
+              announce: announcesWaiting(
+                decideStep(readStepState(harnessResult.session, harnessResult.engineReading)),
+              ),
             });
             return harnessResult;
           });

@@ -88,8 +88,9 @@ function takenAnswers(
     payload.answers === undefined ? [] : [{ index, payload: { answers: payload.answers } }],
   );
   const rest = delivery.payloads.flatMap((payload, index) => {
+    if (payload.message === undefined) return [];
     const { answers: _answers, ...other } = payload;
-    return Object.keys(other).length === 0 ? [] : [{ index, payload: other }];
+    return [{ index, payload: other }];
   });
   if (rest.length === 0) return { answers: delivery };
   // A payload whose answers go now and whose message waits is two deliveries on the stream:

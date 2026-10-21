@@ -40,10 +40,13 @@ export interface TurnEngine {
 export const nativeTurnEngine: TurnEngine = {
   compact: compactHistory,
   prepareInput: prepareTurnInput,
-  run: (step, { generation, turn }) =>
-    runModelStep(step, {
+  async run(step, { generation, turn }) {
+    const result = await runModelStep(step, {
       generation,
       onResponse: (response) => handleStepResult(step, response),
       turn,
-    }),
+    });
+    // History shape cannot distinguish an endsTurn result from input needing another generation.
+    return { ...result, engineReading: { unreadInput: typeof result.next === "function" } };
+  },
 };

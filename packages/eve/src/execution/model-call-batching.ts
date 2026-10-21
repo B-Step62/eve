@@ -46,5 +46,5 @@ function shouldRunAnotherModelCall(input: {
   readonly result: StepResult;
 }): boolean {
   if (input.completedModelCalls >= input.modelCallsPerStep) return false;
-  return decideStep(readStepState(input.result.session)).kind === "run";
+  return decideStep(readStepState(input.result.session, input.result.engineReading)).kind === "run";
 }

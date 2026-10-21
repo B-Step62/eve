@@ -214,6 +214,8 @@ export interface SettledTurn {
  * Result returned by one harness step invocation.
  */
 export interface StepResult {
+  /** The engine's progress, sampled without interpreting its conversation representation. */
+  readonly engineReading?: { readonly unreadInput: boolean };
   readonly steered?: true;
   readonly next: StepNext;
   readonly session: HarnessSession;
