@@ -151,7 +151,7 @@ Everything that reaches a session arrives as a delivery: a message, an answer, a
 | `handled`        | The turn that consumed it settled.                                                                  |
 | `awaiting-input` | The turn paused on an interaction. The delivery's answer is the pause; the answer resumes the turn. |
 | `applied`        | A control or answer took effect.                                                                    |
-| `ignored`        | It had nothing to act on, such as a cancel with no active turn.                                     |
+| `ignored`        | It had nothing to act on, or a cancel or clear ended its turn before the turn read it.              |
 | `refused`        | Its sender may not do what it asked; `reason` says why.                                             |
 | `failed`         | It couldn't be handled, such as when the session ended first.                                       |
 
@@ -184,6 +184,10 @@ A failed model run, turn, or session carries `error: { code, message, id?, hint?
 session that fails ends the turn it held `cancelled`, since the session failed, not the turn: the
 error is on `session.ended`, and `failure(view, turnId)` reads it for that turn. Built-in channels
 post one notice for it.
+
+Input queued inside a turn but not yet read settles `ignored` when cancellation or clear ends
+that turn. It does not carry into the next turn. Messages still held by the session for a
+later turn are not part of that turn's unread input.
 
 A cancelled turn is not a failure: it settles with `outcome: "cancelled"` and `cause` naming the cancel delivery, and the session accepts the next message normally. Whatever the turn streamed before cancellation stays on the stream. Durable history keeps the accepted user input and previously settled work, and discards incomplete assistant output. Tool calls the cancellation stopped stay in history, each answered as cancelled, so the model sees that the work started and stopped instead of a request left unanswered. When a model call fails transiently before it published anything, the run records `model.retried` and tries again; once it has published output, its run settles `abandoned`, with its unfinished calls, and a new run tries again.
 
