@@ -34,11 +34,11 @@ export interface EveAgentStoreSnapshot extends ConversationState {
  * do not alter execution; `prepareSend` may replace the outbound turn payload.
  */
 export interface EveAgentStoreCallbacks {
-  /** Reports live failures; restoring history updates `error` without replaying this callback. */
+  /** Reports live failures and transport errors; recorded historical failures only update `error`. */
   readonly onError?: (error: Error) => void;
   /** Observes newly read events, including catch-up events. */
   readonly onEvent?: (event: SessionStreamEvent) => void;
-  /** Fires once a live turn settles, after its complete commit; history does not replay it. */
+  /** Fires once per live settled turn after its complete commit, never for catch-up (even for a local receipt). */
   readonly onFinish?: (snapshot: EveAgentStoreSnapshot) => void;
   readonly onSessionChange?: (session: ClientSessionState | undefined) => void;
   readonly prepareSend?: PrepareSend;
@@ -66,13 +66,12 @@ export interface EveAgentStoreInit {
    */
   readonly followAgents?: boolean;
   /**
-   * Keep the session stream open while the session is idle, so the store sees events that arrive
-   * between turns from schedules, channels, or other clients. When false, the store closes the
-   * stream once no turn, task, or sign-in is pending, and reopens it from the session cursor on
-   * the next send, answer, or resume.
-   *
-   * @default true
+   * Keep following while this predicate accepts the last committed view. Local POSTs, unsettled
+   * receipts, and resume catch-up keep the stream open regardless. Evaluated only at complete
+   * line boundaries; a closed stream reopens on any command, resume, or follow, from the
+   * store's committed position. If it closes during machine work, the snapshot remains busy
+   * until reopened. Defaults to always following, including between turns.
    */
-  readonly followIdle?: boolean;
+  readonly followWhile?: (view: SessionView) => boolean;
   readonly session?: ClientSession;
 }

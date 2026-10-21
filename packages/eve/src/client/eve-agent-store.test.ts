@@ -1,5 +1,6 @@
 import {
   activeTurn,
+  idle,
   delivery,
   openInteractions,
   turn,
@@ -7,6 +8,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  attachEveAgentStore,
   detachEveAgentStore,
   EveAgentStore,
   type EveAgentStoreInit,
@@ -137,7 +139,7 @@ describe("EveAgentStore acceptance and observation", () => {
       await vi.waitFor(() => expect(current.snapshot.status).toBe("idle"));
       expect(texts(current)).toEqual(["user: sunny.", "assistant: Sunny."]);
       expect(current.snapshot.messages[0]!.id).toBe(echoId);
-      expect(finished).toHaveBeenCalledOnce();
+      expect(finished).toHaveBeenCalledTimes(early ? 0 : 1);
       expect(server.reads).toHaveLength(1);
       current.newSession();
       await expect((await sent).result()).resolves.toMatchObject({
@@ -148,6 +150,35 @@ describe("EveAgentStore acceptance and observation", () => {
       expect(server.reads).toHaveLength(2);
     },
   );
+
+  it("records a reply that beat its POST without replaying a historical failure callback", async () => {
+    const server = agent(() =>
+      server.append(
+        testTurnFacts(0, "Earlier.", ["d_0"]).map((event): SessionEvent =>
+          event.type === "turn.settled"
+            ? {
+                ...event,
+                data: {
+                  ...event.data,
+                  outcome: "failed",
+                  error: { code: "EARLIER", message: "Earlier failure" },
+                },
+              }
+            : event,
+        ),
+      ),
+    );
+    const current = store();
+    const onError = vi.fn();
+    const onFinish = vi.fn();
+    current.setCallbacks({ onError, onFinish });
+    const receipt = await current.send({ message: "sunny." });
+    await vi.waitFor(() => expect(turn(current.snapshot.view, "turn_0")?.status).toBe("settled"));
+    expect(current.snapshot.error?.message).toBe("Earlier failure");
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFinish).not.toHaveBeenCalled();
+    await expect(receipt.result()).resolves.toMatchObject({ status: "failed" });
+  });
 
   it("does not publish another reader's cursor ahead of its own committed events", async () => {
     const server = agent();
@@ -211,11 +242,18 @@ describe("EveAgentStore acceptance and observation", () => {
     const current = store();
     const one = current.send({ message: "sunny." });
     const two = current.send({ message: "instead", turnPolicy: "steer" });
+    let attachmentError: unknown;
+    try {
+      attachEveAgentStore(current);
+    } catch (error) {
+      attachmentError = error;
+    }
     created.resolve();
     expect(await one).toEqual({ deliveryId: "d_0", sessionId: "session_1" });
     expect(await two).toEqual({ deliveryId: "d_1", sessionId: "session_1" });
     expect(server.posts).toEqual(["/eve/v1/session", "/eve/v1/session/session_1"]);
     expect(server.reads).toHaveLength(1);
+    expect(attachmentError).toBeUndefined();
   });
 
   it("does not replay historical errors into a new pending send", async () => {
@@ -259,7 +297,7 @@ describe("EveAgentStore acceptance and observation", () => {
   it("publishes committed work while an unrelated message waits for its receipt", async () => {
     const receipt = Promise.withResolvers<void>();
     const server = agent((id) => (id === "d_1" ? receipt.promise : undefined));
-    const current = store({ initialSession });
+    const current = store({ initialSession, followWhile: () => false });
     await current.send({ message: "First task." });
     const echo = current.snapshot.messages[0]!.id;
     const sending = current.send({ message: "Queued task.", turnPolicy: "queue" });
@@ -270,6 +308,7 @@ describe("EveAgentStore acceptance and observation", () => {
       expect(users).toHaveLength(2);
       expect(users[0]?.id).toBe(echo);
       expect(texts(current)).toContain("assistant: First done.");
+      expect(server.reads[0]?.signal?.aborted).toBe(false);
     } finally {
       receipt.resolve();
       await sending;
@@ -348,7 +387,7 @@ describe("EveAgentStore acceptance and observation", () => {
   it("aborts a caller's preparation without aborting a shared prewarm", async () => {
     const created = Promise.withResolvers<void>();
     agent(() => created.promise);
-    const current = store({ followIdle: false });
+    const current = store({ followWhile: () => false });
     const warm = current.prewarm();
     const controller = new AbortController();
     const sent = current.send({ message: "sunny.", signal: controller.signal });
@@ -655,10 +694,10 @@ describe("EveAgentStore committed snapshots", () => {
   });
 });
 
-describe("EveAgentStore with followIdle disabled", () => {
+describe("EveAgentStore with a follow predicate", () => {
   it("reopens the stream from the folded line cursor on the next send", async () => {
     const server = agent();
-    const current = store({ followIdle: false });
+    const current = store({ followWhile: () => false });
     await current.send({ message: "sunny." });
     server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
     await vi.waitFor(() => expect(server.reads[0]?.signal?.aborted).toBe(true));
@@ -707,7 +746,7 @@ describe("EveAgentStore with followIdle disabled", () => {
       ],
       true,
     );
-    const current = store({ followIdle: false, initialSession });
+    const current = store({ followWhile: (view) => !idle(view), initialSession });
     await current.resume();
     expect(server.reads[0]?.signal?.aborted).toBe(false);
     server.append(
@@ -728,7 +767,7 @@ describe("EveAgentStore with followIdle disabled", () => {
     const release = Promise.withResolvers<void>();
     const server = agent(() => release.promise);
     server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
-    const current = store({ followIdle: false, initialSession });
+    const current = store({ followWhile: () => false, initialSession });
     const pending = current.compact();
     try {
       await current.resume();
@@ -759,7 +798,7 @@ describe("EveAgentStore with followIdle disabled", () => {
   it("closes after resuming a settled session", async () => {
     const server = agent();
     server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
-    const current = store({ followIdle: false, initialSession });
+    const current = store({ followWhile: () => false, initialSession });
     await current.resume();
     expect(current.snapshot.status).toBe("idle");
     expect(server.reads[0]?.signal?.aborted).toBe(true);
@@ -771,7 +810,7 @@ describe("EveAgentStore with followIdle disabled", () => {
       streamIndex: 0,
     });
     server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
-    const current = store({ followIdle: false, session });
+    const current = store({ followWhile: () => false, session });
     await current.resume();
     server.append(testTurnFacts(1, "Arrived while closed.", ["d_1"]));
     for await (const _event of session.stream({ follow: false, startIndex: 0 })) {
@@ -818,7 +857,10 @@ describe("EveAgentStore with followIdle disabled", () => {
       ],
       true,
     );
-    const current = store({ followIdle: false, initialSession });
+    const current = store({
+      followWhile: (view) => !idle(view) || activeTurn(view) !== undefined,
+      initialSession,
+    });
     await current.resume();
     server.append(
       [
@@ -832,5 +874,267 @@ describe("EveAgentStore with followIdle disabled", () => {
     );
     expect(current.snapshot.status).toBe("busy");
     expect(server.reads[0]?.signal?.aborted).toBe(false);
+  });
+
+  it("follows another store's receipt across an idle pre-admission tail and settles", async () => {
+    const server = agent();
+    const sender = store({ initialSession });
+    const observer = store({ initialSession, followWhile: () => false });
+    const receipt = await sender.send({ message: "sunny." });
+    observer.follow(receipt);
+    await vi.waitFor(() => expect(server.reads).toHaveLength(2));
+    expect(observer.snapshot.status).toBe("busy");
+    expect(observer.snapshot.session?.streamIndex).toBe(0);
+    server.append(testTurnFacts(0, "Sunny.", [receipt.deliveryId]));
+    await vi.waitFor(() => expect(observer.snapshot.status).toBe("idle"));
+    expect(observer.snapshot.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(server.reads[1]?.signal?.aborted).toBe(true);
+  });
+
+  it("keeps unseen receipts across a disconnect and a preceding settled delivery", async () => {
+    const server = agent();
+    const current = store({ initialSession, followWhile: () => false });
+    current.follow({ sessionId: "session_1", deliveryId: "a" });
+    current.follow({ sessionId: "session_1", deliveryId: "b" });
+    current.follow({ sessionId: "session_1", deliveryId: "b" });
+    await vi.waitFor(() => expect(server.reads).toHaveLength(1));
+    server.append(testTurnFacts(0, "A.", ["a"]));
+    await vi.waitFor(() => expect(delivery(current.snapshot.view, "a")?.status).toBe("settled"));
+    expect(current.snapshot.status).toBe("busy");
+    expect(server.reads[0]?.signal?.aborted).toBe(false);
+    detachEveAgentStore(current);
+    attachEveAgentStore(current);
+    await vi.waitFor(() => expect(server.reads).toHaveLength(2));
+    expect(current.snapshot.status).toBe("busy");
+    server.append(testTurnFacts(1, "B.", ["b"]));
+    await vi.waitFor(() => expect(current.snapshot.status).toBe("idle"));
+  });
+
+  it("retries a followed receipt after a non-retryable stream error", async () => {
+    const server = agent();
+    const current = store({ initialSession, followWhile: () => false });
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ error: "forbidden" }, { status: 403 }));
+    current.follow({ sessionId: "session_1", deliveryId: "d_0" });
+    await vi.waitFor(() => expect(current.snapshot.error).toBeDefined());
+    expect(current.snapshot.status).toBe("busy");
+    current.follow({ sessionId: "session_1", deliveryId: "d_0" });
+    await vi.waitFor(() => expect(server.reads).toHaveLength(1));
+    server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
+    await vi.waitFor(() => expect(current.snapshot.status).toBe("idle"));
+    expect(current.snapshot.error).toBeUndefined();
+  });
+
+  it.each(["follow", "resume"] as const)(
+    "reopens a failed %s stream once when onError follows the receipt again",
+    async (operation) => {
+      const server = agent();
+      const current = store({ initialSession, followWhile: () => false });
+      const receipt = { sessionId: "session_1", deliveryId: "d_0" };
+      vi.mocked(fetch).mockResolvedValueOnce(
+        Response.json({ error: "forbidden" }, { status: 403 }),
+      );
+      const onError = vi.fn(() => current.follow(receipt));
+      current.setCallbacks({ onError });
+      if (operation === "resume")
+        await expect(current.resume()).rejects.toMatchObject({ status: 403 });
+      else current.follow(receipt);
+      await vi.waitFor(() => expect(server.reads).toHaveLength(1));
+      server.append(testTurnFacts(0, "Sunny.", [receipt.deliveryId]));
+      await vi.waitFor(() => expect(current.snapshot.status).toBe("idle"));
+      expect(onError).toHaveBeenCalledOnce();
+      expect(current.snapshot.error).toBeUndefined();
+      expect(server.reads[0]?.signal?.aborted).toBe(true);
+    },
+  );
+
+  it.each(["completed", "failed"] as const)(
+    "does not complete historical %s work again when following its settled receipt",
+    async (outcome) => {
+      const server = agent();
+      server.append([
+        ...testTurnFacts(0, "Earlier.", ["old"]).map((event): SessionEvent =>
+          event.type === "turn.settled" && outcome === "failed"
+            ? {
+                ...event,
+                data: {
+                  ...event.data,
+                  outcome: "failed",
+                  error: { code: "EARLIER", message: "Earlier failure" },
+                },
+              }
+            : event,
+        ),
+        ...(outcome === "failed"
+          ? ([
+              {
+                type: "session.ended",
+                data: {
+                  outcome: "failed",
+                  error: { code: "SESSION_FAILED", message: "Session unavailable." },
+                },
+              },
+            ] as const)
+          : []),
+      ]);
+      const current = store({ initialSession, followWhile: () => false });
+      const onFinish = vi.fn();
+      const onError = vi.fn();
+      current.setCallbacks({
+        onFinish,
+        onError,
+        onEvent: (event) => {
+          if (event.type === "turn.settled")
+            current.follow({ sessionId: "session_1", deliveryId: "old" });
+        },
+      });
+      await current.resume();
+      const existingError = current.snapshot.error;
+      if (outcome === "failed") expect(existingError).toBeDefined();
+      expect(onFinish).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      const reads = server.reads.length;
+      current.follow({ sessionId: "session_1", deliveryId: "old" });
+      expect(server.reads).toHaveLength(reads);
+      expect(onFinish).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      expect(current.snapshot.error).toBe(existingError);
+    },
+  );
+
+  it("replays a partial committed line even when another reader advanced the handle", async () => {
+    const server = agent();
+    const session = new Client({ host: "https://eve.test" }).sessions.attach("session_1");
+    const receipt = await session.send("sunny.");
+    const facts = testTurnFacts(0, "Sunny.", [receipt.deliveryId]);
+    const at = "2026-10-10T00:00:00.000Z";
+    server.append(facts, true);
+    const saved = eventsOfLine(linesOf(facts, at)[0]!, 0, at).slice(0, 2);
+    const current = store({ session, initialEvents: saved, followWhile: () => false });
+    await receipt.result();
+    const received = vi.fn();
+    current.setCallbacks({ onEvent: received });
+    current.follow(receipt);
+    await vi.waitFor(() => expect(current.snapshot.session?.streamIndex).toBe(1));
+    expect(server.reads.at(-1)?.start).toBe(0);
+    expect(current.snapshot.events).toHaveLength(facts.length);
+    expect(received).toHaveBeenCalledTimes(facts.length - saved.length);
+    expect(current.snapshot.status).toBe("idle");
+  });
+
+  it("rejects receipts without a matching session and ignores already settled or unknown ids only after settlement", async () => {
+    const server = agent();
+    expect(() => store().follow({ sessionId: "session_1", deliveryId: "d_0" })).toThrow();
+    const current = store({ initialSession, followWhile: () => false });
+    expect(() => current.follow({ sessionId: "other", deliveryId: "d_0" })).toThrow();
+    server.append(testTurnFacts(0, "Sunny.", ["d_0"]));
+    await current.resume();
+    const count = server.reads.length;
+    current.follow({ sessionId: "session_1", deliveryId: "d_0" });
+    expect(current.snapshot.status).toBe("idle");
+    expect(server.reads).toHaveLength(count);
+    current.follow({ sessionId: "session_1", deliveryId: "unknown" });
+    expect(current.snapshot.status).toBe("busy");
+    await vi.waitFor(() => expect(server.reads).toHaveLength(count + 1));
+    current.newSession();
+    expect(current.snapshot.status).toBe("idle");
+  });
+
+  it.each(["live", "historical"] as const)(
+    "clears unseen receipts on a %s session end without replaying errors",
+    async (timing) => {
+      const server = agent();
+      const current = store({ initialSession, followWhile: () => false });
+      const receipt = { sessionId: "session_1", deliveryId: "not-admitted" };
+      const onError = vi.fn(() => {
+        if (onError.mock.calls.length < 3) current.follow(receipt);
+      });
+      current.setCallbacks({ onError });
+      if (timing === "live") {
+        current.follow(receipt);
+        await vi.waitFor(() => expect(server.reads).toHaveLength(1));
+      }
+      server.append([
+        {
+          type: "session.ended",
+          data: {
+            outcome: "failed",
+            error: { code: "SESSION_FAILED", message: "Session unavailable." },
+          },
+        },
+      ]);
+      if (timing === "historical") current.follow(receipt);
+      await vi.waitFor(() => expect(current.snapshot.error?.message).toBe("Session unavailable."));
+      expect(current.snapshot.status).toBe("idle");
+      const error = current.snapshot.error;
+      current.follow({ sessionId: "session_1", deliveryId: "not-admitted-later" });
+      expect(current.snapshot.status).toBe("idle");
+      expect(onError).toHaveBeenCalledTimes(timing === "live" ? 1 : 0);
+      expect(current.snapshot.error).toBe(error);
+    },
+  );
+
+  it("publishes only committed lines when a receipt arrives inside a line", async () => {
+    const server = agent();
+    let keepFollowing = true;
+    const current = store({ initialSession, followWhile: () => keepFollowing });
+    const before = current.snapshot;
+    current.setCallbacks({
+      onEvent: (event) => {
+        if (event.type === "delivery.admitted") {
+          current.follow({ sessionId: "session_1", deliveryId: "d_0" });
+          expect(current.snapshot.view).toBe(before.view);
+          expect(current.snapshot.events).toBe(before.events);
+          expect(current.snapshot.status).toBe("busy");
+        }
+      },
+    });
+    await current.resume();
+    keepFollowing = false;
+    server.append(testTurnFacts(0, "Sunny.", ["d_0"]), true);
+    await vi.waitFor(() => expect(current.snapshot.session?.streamIndex).toBe(1));
+    expect(current.snapshot.status).toBe("idle");
+  });
+
+  it("closes on an interaction wait with the !idle predicate", async () => {
+    const server = agent();
+    server.append(testTurnFacts(0, "Later.", ["d_0"]).slice(0, 4));
+    server.append(
+      [
+        { type: "model.settled", data: { runId: "run_0", outcome: "completed" } },
+        {
+          type: "interaction.opened",
+          data: {
+            interactionId: "question",
+            request: { kind: "question", prompt: "Which?" },
+            subject: { turnId: "turn_0" },
+          },
+        },
+        {
+          type: "turn.paused",
+          data: { turnId: "turn_0", awaiting: [{ interactionId: "question" }] },
+        },
+        {
+          type: "delivery.settled",
+          data: { deliveryId: "d_0", outcome: "awaiting-input", turnId: "turn_0" },
+        },
+      ],
+      true,
+    );
+    const current = store({ initialSession, followWhile: (view) => !idle(view) });
+    await current.resume();
+    expect(idle(current.snapshot.view)).toBe(true);
+    expect(server.reads[0]?.signal?.aborted).toBe(true);
+  });
+
+  it("closes during active work when the predicate declines, retaining the busy snapshot", async () => {
+    const server = agent();
+    const current = store({ initialSession, followWhile: () => false });
+    server.append(testTurnFacts(0, "Sunny.", ["other"]).slice(0, 4), true);
+    await current.resume();
+    expect(current.snapshot.status).toBe("busy");
+    expect(server.reads[0]?.signal?.aborted).toBe(true);
   });
 });
