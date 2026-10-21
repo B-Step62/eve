@@ -15,7 +15,7 @@ export interface NoReplyToolInput {
  * ```ts
  * import { noReply } from "eve/tools/no_reply";
  *
- * export default noReply();
+ * export default noReply;
  * ```
  *
  * A turn that ends with `no_reply` completes without a final message, so

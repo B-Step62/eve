@@ -109,7 +109,7 @@ const ASK_QUESTION_OUTPUT_SCHEMA = defineJsonSchema<AskQuestionOutput>({
  * ```ts
  * import { askQuestion } from "eve/tools/ask_question";
  *
- * export default askQuestion();
+ * export default askQuestion;
  * ```
  *
  * Each call runs as a durable workflow that asks through `ctx.ask()`, so the

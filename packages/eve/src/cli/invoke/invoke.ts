@@ -6,7 +6,7 @@ import {
   type ClientSessionState,
 } from "#client/index.js";
 import type { SendTurnPayload } from "#client/types.js";
-import { collectTurnEvents, summarizeTurnEvents } from "#client/session-utils.js";
+import { turnSummary } from "#client/session-utils.js";
 import { deliveryEvents } from "#client/delivery-events.js";
 import { parseJsonValue } from "#shared/json.js";
 import type { RemoteDevelopmentTarget } from "#services/dev-client/target.js";
@@ -77,7 +77,13 @@ export async function runInvoke(input: RunInvokeInput): Promise<InvokeResult> {
     throw error;
   }
 
-  return observeSafely(input, session, response, response.deliveryId, deploymentResolution);
+  return observeSafely(
+    input,
+    session,
+    response.stream({ signal: input.signal }),
+    response.deliveryId,
+    deploymentResolution,
+  );
 }
 
 /** Converts a prompt and optional previous result into one valid invoke operation. */
@@ -156,9 +162,12 @@ async function observeInvocation(
   response: AsyncIterable<SessionStreamEvent>,
   deliveryId: string,
 ): Promise<InvokeResult> {
-  const summary = summarizeTurnEvents(await collectTurnEvents(response, deliveryId), deliveryId);
+  const accumulator = turnSummary(deliveryId);
+  for await (const event of response) accumulator.observe(event);
+  const summary = accumulator.result();
   return {
     status: summary.status,
+    outcome: summary.outcome,
     sessionEnded: summary.sessionEnded,
     resume: createResume(target, session.state, deliveryId),
     interactions: summary.interactions.map(projectInvocationInteraction),

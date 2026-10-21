@@ -9,7 +9,7 @@ import {
   callOutputSource,
   waiting,
 } from "#protocol/session-projection/selectors.js";
-import { callPlace, interaction, runPlace } from "#protocol/session-reader.js";
+import { callPlace, interaction, runPlace } from "#protocol/session-projection/reader.js";
 
 const at = "2026-10-10T00:00:00.000Z";
 

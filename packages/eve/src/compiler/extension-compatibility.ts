@@ -28,8 +28,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   tool: {
-    current: 103,
-    supported: [103],
+    current: 104,
+    supported: [104],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -133,6 +133,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       100: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
       101: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       102: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      103: "Reusable delivery reads and opaque session observations changes the authoring contract; rebuild the extension.",
     },
   },
   dynamicTool: {
@@ -235,8 +236,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 71,
-    supported: [71],
+    current: 72,
+    supported: [72],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -308,11 +309,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       68: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       69: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
       70: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      71: "Reusable delivery reads and opaque session observations changes the authoring contract; rebuild the extension.",
     },
   },
   schedule: {
-    current: 40,
-    supported: [40],
+    current: 41,
+    supported: [41],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -353,6 +355,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       37: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       38: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       39: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      40: "Reusable delivery reads and opaque session observations changes the authoring contract; rebuild the extension.",
     },
   },
   subagent: {
@@ -405,8 +408,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 60,
-    supported: [60],
+    current: 61,
+    supported: [61],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -467,11 +470,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       57: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       58: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
       59: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      60: "Reusable delivery reads and opaque session observations changes the authoring contract; rebuild the extension.",
     },
   },
   hook: {
-    current: 53,
-    supported: [53],
+    current: 54,
+    supported: [54],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -525,6 +529,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       50: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       51: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
       52: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      53: "Reusable delivery reads and opaque session observations changes the authoring contract; rebuild the extension.",
     },
   },
   skill: {

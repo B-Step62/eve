@@ -1,5 +1,6 @@
 import type { SpanContext } from "#compiled/@opentelemetry/api/index.js";
-import { currentView } from "#harness/session-machine/current.js";
+import { enteredView } from "#harness/session-machine/current.js";
+import { contextStorage } from "#context/container.js";
 
 import {
   type InstrumentationSessionStartedEvent,
@@ -223,10 +224,11 @@ export function createEveSessionTracing(input: EveSessionTracingInput): EveSessi
     turnFor,
     dropped,
     async turnSettled(event) {
-      const view = currentView();
+      const ctx = contextStorage.getStore();
+      const view = ctx === undefined ? undefined : enteredView(ctx);
       // The same commit's session end carries the provider-filtered failure after its cascade.
       if (
-        view.session.status === "ended" &&
+        view?.session.status === "ended" &&
         view.session.outcome === "failed" &&
         view.session.closedAt === view.turns[event.turnId]?.closedAt
       )

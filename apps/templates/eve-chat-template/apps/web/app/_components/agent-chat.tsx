@@ -1,7 +1,7 @@
 "use client";
 
 import type { ClientSessionState, EveAgentStoreSnapshot, SessionStreamEvent } from "eve/client";
-import { activity, interaction, type Interaction } from "eve/events";
+import { activity, openInteractions, session as sessionState, type Interaction } from "eve/events";
 import type { EveMessage } from "eve/react";
 import { useEveAgent } from "eve/react";
 import {
@@ -212,12 +212,9 @@ export function AgentChatSession({
   const currentActivity = activity(agent.view);
   const displayChatId = chatId ?? activeChatId ?? "new";
   const hasLocalPendingUserMessage = Boolean(localPendingUserMessage);
-  const pendingAuthorizations = Object.keys(agent.view.interactions)
-    .flatMap((id) => interaction(agent.view, id) ?? [])
-    .filter(
-      (interaction) => interaction.status === "open" && interaction.request.kind === "sign-in",
-    )
-    .map(toPendingAuthorization);
+  const pendingAuthorizations = openInteractions(agent.view, { kind: "sign-in" }).map(
+    toPendingAuthorization,
+  );
   const isWaitingForAuthorization = pendingAuthorizations.length > 0;
 
   const latestSnapshotRef = useRef<EveAgentStoreSnapshot>(agent);
@@ -229,7 +226,7 @@ export function AgentChatSession({
     if (
       !resumeStartedRef.current ||
       !snapshot.session ||
-      snapshot.view.session.status === "new" ||
+      sessionState(snapshot.view).status === "new" ||
       snapshot.status === "resuming"
     )
       return;
