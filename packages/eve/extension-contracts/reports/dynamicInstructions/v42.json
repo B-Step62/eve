@@ -1,0 +1,7 @@
+{
+  "kind": "eve-extension-capability-contract",
+  "capability": "dynamicInstructions",
+  "epoch": 42,
+  "sha256": "bff2bfe3a41389255a5569610a51c4daccbf867ad8d5cc4aaa53648a6c05fdc1",
+  "exports": ["defineDynamic"]
+}
