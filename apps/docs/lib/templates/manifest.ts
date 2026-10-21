@@ -151,7 +151,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         {
           from: "agent",
           tools: ["plan_a_trip", "get_weather"],
-          text: "Sunny and 24°C both days. Alfama and the castle Saturday, then sunset at Graça.",
+          text: "Sunny and 24°C both days. Alfama and the castle Saturday, then sunset at Graça. Sunday: pastries in Belém and the LX Factory market.",
         },
       ],
     },
@@ -184,11 +184,11 @@ export const templateManifest: TemplateManifestEntry[] = [
       surface: "web",
       context: "tasks.example.com",
       messages: [
-        { from: "user", text: "How's my task list looking?" },
+        { from: "user", text: "How's my task list looking this week? Anything overdue?" },
         {
           from: "agent",
           tools: ["compute_stats"],
-          text: "7 open, 3 due this week. The oldest is ship v2 docs.",
+          text: "7 open, 3 due this week, none overdue. The oldest is ship v2 docs, open for 12 days. You close about 9 a week, so you're on pace.",
         },
       ],
     },
@@ -266,10 +266,10 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/slack-assistant.svg",
       context: "general",
       messages: [
-        { from: "user", text: "@assistant plan a Saturday in Tokyo" },
+        { from: "user", text: "@assistant plan a Saturday in Tokyo for two, we love food and art" },
         {
           from: "agent",
-          text: "Clear and 18°C. Senso-ji in the morning, lunch in Asakusa, then sunset from [Shibuya Sky](https://www.shibuya-scramble-square.com/sky/).",
+          text: "Clear and 18°C. Senso-ji at 8 before the crowds, ramen in Asakusa, then teamLab Planets. Book [Shibuya Sky](https://www.shibuya-scramble-square.com/sky/) for 5:30 to catch sunset.",
         },
       ],
     },
@@ -447,10 +447,13 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/contentful.svg",
       context: "content",
       messages: [
-        { from: "user", text: "@contentful turn this outline into a blog post draft" },
+        {
+          from: "user",
+          text: "@contentful turn the outline in this thread into a blog post draft for the spring launch",
+        },
         {
           from: "agent",
-          text: "Drafted [Spring Launch Recap](https://app.contentful.com) in Contentful. Want me to request approval to publish?",
+          text: "Drafted [Spring Launch Recap](https://app.contentful.com) in Contentful: 1,100 words, four sections, and a hero image from the media library. Want me to request approval to publish?",
         },
       ],
     },
@@ -483,10 +486,10 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/vercel-drives.svg",
       context: "team",
       messages: [
-        { from: "user", text: "@knowledge how much PTO do new hires get?" },
+        { from: "user", text: "@knowledge how much PTO do new hires get, and does it roll over?" },
         {
           from: "agent",
-          text: "15 days in year one, accrued monthly. From `handbook/time-off.md` on the [team Drive](https://drive.example.com/team).",
+          text: "15 days in year one, accrued monthly, and up to 5 unused days roll over. From `handbook/time-off.md` on the [team Drive](https://drive.example.com/team).",
         },
       ],
     },
@@ -519,10 +522,10 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/memory-agent.svg",
       context: "general",
       messages: [
-        { from: "user", text: "@memory keep your answers to me short" },
+        { from: "user", text: "@memory keep your answers to me short, and skip the pleasantries" },
         {
           from: "agent",
-          text: "Saved to your preferences. Short answers from now on, in every channel.",
+          text: "Saved to your preferences. Short, direct answers from now on, in every channel and DM. Say “forget that” anytime to undo it.",
         },
       ],
     },
@@ -554,11 +557,14 @@ export const templateManifest: TemplateManifestEntry[] = [
       surface: "web",
       context: "chat.example.com",
       messages: [
-        { from: "user", text: "Compare Postgres hosts for a side project" },
+        {
+          from: "user",
+          text: "Compare Postgres hosts for a weekend side project on a tight budget",
+        },
         {
           from: "agent",
           tools: ["render_ui"],
-          text: "Here's a table of free tiers. Neon fits best if you want branching.",
+          text: "Here's a table of free tiers. Neon fits best if you want branching, Supabase if you also need auth and storage, and Turso if SQLite at the edge is enough.",
         },
       ],
     },
@@ -744,7 +750,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@social turn the v2 launch brief in Notion into an X thread" },
         {
           from: "agent",
-          text: "Drafted a 5-post thread in [Typefully](https://typefully.com), queued for Thursday 9 AM. Want a LinkedIn version too?",
+          text: "Drafted a 5-post thread in [Typefully](https://typefully.com) with the launch video on post 1, queued for Thursday 9 AM. Want a LinkedIn version too?",
         },
       ],
     },
@@ -786,7 +792,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@sre checkout 5xx spiked at 14:02, what happened?" },
         {
           from: "agent",
-          text: "A deploy went out at 14:01. All errors come from the new `payments-client`. Rollback is the fastest fix.",
+          text: "A deploy went out at 14:01, and every error since comes from the new `payments-client` timing out against Stripe. Rollback is the fastest fix. Want me to start it?",
         },
       ],
     },
@@ -826,7 +832,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@sanity which blog posts are missing an SEO description?" },
         {
           from: "agent",
-          text: "12 published posts have no `seo.description`. Want me to draft them in a new release for review?",
+          text: "12 published posts have no `seo.description`, mostly from the 2024 archive. Want me to draft them in a new release for review?",
         },
       ],
     },
@@ -863,10 +869,13 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/design.svg",
       context: "design",
       messages: [
-        { from: "user", text: "@design what's our minimum tap target on mobile?" },
+        {
+          from: "user",
+          text: "@design what's our minimum tap target on mobile? Asking for the new nav",
+        },
         {
           from: "agent",
-          text: "44×44px, per the [interaction guidelines](https://design.example.com/interaction). Pad small icons instead of scaling them up.",
+          text: "44×44px, per the [interaction guidelines](https://design.example.com/interaction). Pad small icons instead of scaling them up, and keep 8px between targets.",
         },
       ],
     },
