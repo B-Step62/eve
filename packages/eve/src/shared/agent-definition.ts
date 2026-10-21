@@ -184,7 +184,9 @@ export interface AgentLimitsDefinition {
    */
   readonly sessionTimeoutMs?: number | false;
   /**
-   * Maximum provider-reported input tokens accumulated by one durable session.
+   * Maximum new input tokens accumulated by one durable session: uncached
+   * input plus cache writes. Cache reads don't count. When the provider
+   * reports no cache details, all input counts.
    *
    * eve checks this before starting each model call. The model call that crosses
    * the limit is allowed to finish because providers only report exact usage

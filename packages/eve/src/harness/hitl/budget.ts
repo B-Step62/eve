@@ -69,6 +69,7 @@ export function checkSessionUsageLimit(input: {
             usedCostUsd: violation.usedCostUsd,
           }
         : {
+            cacheReadTokens: usage.cacheReadTokens,
             inputTokens: usage.inputTokens,
             kind: violation.kind,
             limit: violation.limit,

@@ -115,15 +115,14 @@ export function getSessionRuntimeUsageLimits(
 
 /**
  * Bumps the runtime usage limits after the user grants a continuation. Each
- * capped axis is re-anchored to `current usage + configured limit`, so one
+ * capped axis is re-anchored to `current budget usage + configured limit`, so one
  * approval buys one full configured window even after an overshoot. All axes
  * bump together to avoid back-to-back prompts. Configured limits never change.
  */
 export function bumpSessionRuntimeUsageLimits(session: HarnessSession): HarnessSession {
-  const usage = getSessionTokenUsage(session);
   const bumped = grantRuntimeUsageLimits({
     configured: configuredSessionUsageLimits(session),
-    usage,
+    usage: getSessionBudgetUsage(session),
   });
   return {
     ...session,
@@ -144,21 +143,29 @@ export function getSessionRemainingUsageQuota(session: Pick<HarnessSession, "lim
   inputTokens: number | false;
   outputTokens: number | false;
 } {
-  const usage = getSessionTokenUsage(session);
   const runtime = getSessionRuntimeUsageLimits(session);
-  return remainingRuntimeUsageQuota({ runtime, usage });
+  return remainingRuntimeUsageQuota({ runtime, usage: getSessionBudgetUsage(session) });
 }
 
 export function getSessionUsageLimitViolation(
   session: Pick<HarnessSession, "limits" | "state">,
 ): SessionUsageLimitViolation | null {
-  const usage = getSessionTokenUsage(session);
   const runtime = getSessionRuntimeUsageLimits(session);
   return findRuntimeUsageLimitViolation({
     configured: configuredSessionUsageLimits(session),
     runtime,
-    usage,
+    usage: getSessionBudgetUsage(session),
   });
+}
+
+/**
+ * The session's usage as the limits count it. Cache reads are replayed history, not new work,
+ * so the input axis counts only new input: uncached input plus cache writes. A provider that
+ * reports no cache details counts its full input, as before.
+ */
+function getSessionBudgetUsage(session: Pick<HarnessSession, "state">): TokenUsageTotals {
+  const usage = getSessionTokenUsage(session);
+  return { ...usage, inputTokens: Math.max(0, usage.inputTokens - usage.cacheReadTokens) };
 }
 
 function configuredSessionUsageLimits(
