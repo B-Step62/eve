@@ -1,3 +1,11 @@
 [
+  "DecisionAnswer",
+  "DecisionInput",
+  "DecisionModel",
+  "DecisionOptions",
+  "DecisionQuestion",
+  "DecisionResult",
+  "DecisionState",
+  "DecisionStatePart",
   "decide"
 ]
