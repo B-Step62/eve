@@ -1,0 +1,30 @@
+{
+  "kind": "eve-extension-capability-contract",
+  "capability": "channel",
+  "epoch": 75,
+  "sha256": "30598bd0f7292860348e1f0d7d9cc2bfba3d375f938b90a79616ed17c9019379",
+  "exports": [
+    "CancelTurnResult",
+    "ClearSessionResult",
+    "CompactSessionResult",
+    "DELETE",
+    "GET",
+    "HEAD",
+    "InvalidSessionHistoryError",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+    "ResetSessionResult",
+    "SessionNotActiveError",
+    "SessionStrandedError",
+    "WS",
+    "answerFromText",
+    "attachmentError",
+    "createWebSocketUpgradeServer",
+    "defineChannel",
+    "disableRoute",
+    "isChannel",
+    "isDisabledRouteSentinel"
+  ]
+}

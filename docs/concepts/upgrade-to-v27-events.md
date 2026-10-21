@@ -20,7 +20,7 @@ This page covers what to change. Work through the sections that apply to your ag
 | Clients, frontends, and evals             | Event types, cursors (line positions), event identity (`meta.position`), and interaction names.                                            |
 | Channel config, workflow tools, policies  | Names: `onAnswers`, `ToolQuestion`, `request.interactionId`. See [Renamed APIs](#renamed-apis).                                            |
 | MCP clients and `eve invoke` scripts      | Pending questions and sign-ins are `interactions`, keyed by `interactionId`.                                                               |
-| `defineDynamic` resolvers                 | Nothing in this release. The keys stay; the event argument is now the matching v27 fact.                                                   |
+| `defineDynamic` resolvers                 | Keys stay; the event argument is the matching v27 fact. Authored channel identity becomes `channel:<name>`, including route-only channels. |
 | Memory providers                          | Nothing in this release.                                                                                                                   |
 | Instrumentation (`defineInstrumentation`) | Session, turn, call and input events take the stream's names; see [Instrumentation](/docs/observability/instrumentation#lifecycle-events). |
 
@@ -206,6 +206,26 @@ Read a row's `taskId` for a task, `callState(card.view, callId)` for its status,
 
 A channel that keeps something in step with the session can handle `committed`, once per
 committed line with the line's facts and `ctx.view`, instead of several facts.
+
+### Delivery hooks and channel identity
+
+A `deliver(payload, channel)` hook receives `ChannelDelivery<TState>` from `eve/channels`:
+`message`, `answers`, `context`, `outputSchema`, and typed per-delivery `state`. Return the same
+shape to replace the payload, or return nothing to keep it unchanged. To ignore a delivery,
+return `{}` instead of `undefined`. Stop importing harness input types or building a default
+harness projection in the hook. Imported prior history is framework-owned and is not part of
+the hook's replacement shape; ignoring or replacing a delivery cannot drop that history.
+
+Authored channels use `channel:<name>` in hooks, instrumentation, dynamic resolvers, and a
+delivery's `source.channel`, including channels that only declare routes. The default eve HTTP
+channel is `channel:eve`, not `http`; update visibility and authorization checks accordingly.
+`isChannel` now matches those channels in hooks. The internal adapter key used to restore
+durable sessions is unchanged.
+Remove `kindHint` from channel definitions; the file path determines the public identity.
+
+Move a visibility classifier from `metadata().audience` to `audience(input)`. Metadata no longer
+classifies visibility, and a channel without an audience hook is `unknown`.
+See [Custom channels](../channels/custom) for payload and audience examples.
 
 ## Instrumentation
 

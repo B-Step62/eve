@@ -232,8 +232,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 73,
-    supported: [73],
+    current: 82,
+    supported: [82],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -307,6 +307,15 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       70: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       71: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       72: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
+      73: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
+      74: "Corrected public authoring contracts require rebuilding this extension.",
+      75: "Corrected public authoring contracts require rebuilding this extension.",
+      76: "Corrected public authoring contracts require rebuilding this extension.",
+      77: "Corrected public authoring contracts require rebuilding this extension.",
+      78: "Corrected public authoring contracts require rebuilding this extension.",
+      79: "Corrected public authoring contracts require rebuilding this extension.",
+      80: "Corrected public authoring contracts require rebuilding this extension.",
+      81: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   schedule: {
