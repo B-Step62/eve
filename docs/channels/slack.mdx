@@ -336,7 +336,7 @@ The model calls the tool with a channel name and a first message for the new cha
 
 The tool returns `unavailable` outside Slack and inside a code channel. It needs `codeChannels: true` on the Slack channel, and it only opens a channel from a message in the calling session's own Slack conversation, so a session started with forwarded auth can't copy its transcript into a channel opened from someone else's message. When Slack refuses to create the channel, for example for a Slack Connect conversation, when code channels are disabled, or when a scope is missing, the call fails with Slack's error and the model continues in the thread. eve retries transient Slack errors such as rate limits.
 
-One person gets one code channel per message. A repeated call for the same message, or a retried step, reaches the same channel and delivers the conversation to its session again. That way a session someone started by writing in the new channel first still gets the thread's history.
+One person gets one code channel per message. A repeated call for the same message reaches the same channel and delivers the conversation to its session again; a retried step delivers it once. That way a session someone started by writing in the new channel first still gets the thread's history.
 
 ### Other Events API callbacks
 

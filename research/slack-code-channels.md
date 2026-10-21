@@ -14,15 +14,15 @@ last_updated: "2026-10-20"
 > since eve can't read a forked channel's owner before dispatch. Replies follow the thread the user
 > wrote in. Not yet: the membership check, and phase 3.
 >
-> Phase 2 is in, with at-least-once delivery and no `ctx.startInChannel()`. It differs from the
+> Phase 2 is in, without `ctx.startInChannel()`. It differs from the
 > plan: a workflow body can't capture factory options, and Slack credentials live on the channel,
 > so the Slack channel's `receive()` opens the code channel (`target.codeChannel`), and the tool is
 > `openCodeChannel()` from `eve/channels/slack/tools`, with no options, reaching the channel
 > named `slack`. No signed binding yet; `ctx.slack.openCodeChannel()` for inbound handlers is
 > not built. Creation sends `origin_channel_id` and `origin_message_ts` and leaves origin
 > eligibility to Slack, per Slack's method docs, then confirms a private origin produced a private
-> channel before copying history. A repeated call delivers again rather than joining silently, so
-> a session started early in the channel still gets the thread. There is no `codeChannels.*`
+> channel before copying history. A retried step delivers once; a repeated call delivers again
+> rather than joining silently, so a session started early in the channel still gets the thread. There is no `codeChannels.*`
 > fallback.
 
 ## Summary
@@ -267,8 +267,9 @@ async execute(input, ctx) {
 
 ### Retries and races
 
-Delivery is at-least-once. A retried step or a repeated call reaches the same channel and
-delivers the history and the message again, so the first turn can run twice. If someone posts in
+A retried step reaches the same channel and address, and #5096's step-derived idempotency key
+lets the session there drop the redelivery. A repeated call is a new step, so it reaches the same
+channel and delivers the history and the message again, and the first turn can run twice. If someone posts in
 the new channel before the tool's `send()`, their message starts the session, and the tool's
 delivery then adds the history and the model's handoff message to it. Nothing is lost, but the
 imported turns land after the person's first message.
