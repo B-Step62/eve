@@ -22,7 +22,7 @@ import {
   turnInputOnly,
   withoutTurnInput,
 } from "#harness/hitl/index.js";
-import { blocked, park } from "#harness/step/park.js";
+import { blocked, hasQueuedTurnInput, park } from "#harness/step/park.js";
 import {
   clear,
   controlDeliveryFor,
@@ -147,6 +147,11 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     const stopped = await applyHumanDecisions(step, answered.decided);
     if (stopped !== undefined) return stopped;
     if (blocked(step.view(), step.session.state)) return park(step);
+    // Read input held behind approved calls before the model can ask for more work.
+    if (hasQueuedTurnInput(step.view())) {
+      await step.apply(queueInput(step.view(), turnInputOnly(answered.input)));
+      return { next: step.runStep, session: step.session };
+    }
     return runModelStep(step, {
       onResponse: (response) => handleStepResult(step, response),
       generation,
