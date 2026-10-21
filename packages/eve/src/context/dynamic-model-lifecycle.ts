@@ -1,3 +1,6 @@
+import type { PublicAgentDynamicModelDefinition } from "#shared/agent-definition.js";
+import type { DynamicResolveContext } from "#dynamic/definition.js";
+import { dynamicEventKey } from "#dynamic/definition.js";
 import type { ModelMessage } from "ai";
 
 import { buildResolveContext } from "#context/dynamic-resolve-context.js";
@@ -20,7 +23,7 @@ import {
   type ResolvedRuntimeModelSelection,
   type RuntimeModelResolutionScope,
 } from "#runtime/agent/resolve-model.js";
-import type { DynamicScopeEvent, DynamicToolEventName } from "#dynamic/definition.js";
+import type { DynamicScopeEvent } from "#dynamic/definition.js";
 import { toErrorMessage } from "#shared/errors.js";
 
 const DYNAMIC_MODEL_SELECTION_ERROR_CODE = "EVE_DYNAMIC_MODEL_SELECTION_FAILED";
@@ -44,7 +47,7 @@ export function isDynamicModelSelectionError(error: unknown): error is DynamicMo
 }
 
 function durableKeyForEvent(
-  eventType: DynamicToolEventName,
+  eventType: DynamicScopeEvent["type"],
 ): ContextKey<RuntimeModelReference | null> | undefined {
   switch (eventType) {
     case "session.started":
@@ -66,7 +69,7 @@ export async function resolveDynamicModel(input: {
   readonly scope: RuntimeModelResolutionScope;
 }): Promise<void> {
   if (input.dynamicModel === undefined) return;
-  if (!input.dynamicModel.eventNames.includes(input.event.type)) return;
+  if (!input.dynamicModel.eventNames.includes(dynamicEventKey(input.event.type))) return;
 
   setSelectionForEvent(input.ctx, input.event.type, null);
   try {
@@ -74,19 +77,15 @@ export async function resolveDynamicModel(input: {
       dynamicModel: input.dynamicModel,
       scope: input.scope,
     });
-    const handler = definition.events[input.event.type];
-
-    if (handler === undefined) {
-      throw new Error(
-        `Dynamic model resolver is missing its compiled "${input.event.type}" handler.`,
-      );
-    }
-
     input.abortSignal?.throwIfAborted();
-    const rawResult = await handler(input.event.fact, {
+    const rawResult = await invokeModel(definition, input.event, {
       ...buildResolveContext(input.ctx, input.messages),
       abortSignal: input.abortSignal,
     });
+    if (rawResult === undefined)
+      throw new Error(
+        `Dynamic model resolver needs a "${dynamicEventKey(input.event.type)}" handler that returns a model selection or null.`,
+      );
     input.abortSignal?.throwIfAborted();
     const selection = await resolveRuntimeModelSelection({
       durability: input.event.type === "step.started" ? "live" : "durable",
@@ -102,7 +101,7 @@ export async function resolveDynamicModel(input: {
 
 function setSelectionForEvent(
   ctx: AlsContext,
-  eventType: DynamicToolEventName,
+  eventType: DynamicScopeEvent["type"],
   selection: ResolvedRuntimeModelSelection | null,
 ): void {
   if (eventType === "step.started") {
@@ -121,4 +120,21 @@ function setSelectionForEvent(
   const durableKey = durableKeyForEvent(eventType);
   if (durableKey === undefined) return;
   ctx.set(durableKey, selection?.reference ?? null);
+}
+
+// A switch preserves the correlation between each typed key and its fact.
+// Runtime tool/skill registries use widened handler maps, unlike model definitions.
+function invokeModel(
+  definition: PublicAgentDynamicModelDefinition,
+  point: DynamicScopeEvent,
+  ctx: DynamicResolveContext,
+) {
+  switch (point.type) {
+    case "session.started":
+      return definition.events.beforeSession?.(point.fact, ctx);
+    case "turn.started":
+      return definition.events.beforeTurn?.(point.fact, ctx);
+    case "step.started":
+      return definition.events.beforeModel?.(point.fact, ctx);
+  }
 }
