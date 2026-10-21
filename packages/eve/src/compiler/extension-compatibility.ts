@@ -22,8 +22,8 @@ interface ExtensionCapabilityContract {
 const EXTENSION_CAPABILITY_CONTRACTS = {
   extension: { current: 1, supported: [1], dropped: {} },
   tool: {
-    current: 98,
-    supported: [98],
+    current: 99,
+    supported: [99],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -122,6 +122,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       95: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       96: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       97: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
+      98: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
     },
   },
   dynamicTool: {
@@ -220,8 +221,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 66,
-    supported: [66],
+    current: 67,
+    supported: [67],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -288,11 +289,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       63: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       64: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       65: "Typed channel delivery hooks and canonical identity changes the authoring contract; rebuild the extension.",
+      66: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
     },
   },
   schedule: {
-    current: 37,
-    supported: [37],
+    current: 38,
+    supported: [38],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -330,6 +332,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       34: "v27 replaces v26 session event payloads; rebuild the extension against eve/events facts",
       35: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       36: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      37: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
     },
   },
   subagent: {
@@ -379,8 +382,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 55,
-    supported: [55],
+    current: 56,
+    supported: [56],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -436,6 +439,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       52: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       53: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       54: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
+      55: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
     },
   },
   hook: {
@@ -589,12 +593,22 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
   },
   config: { current: 1, supported: [1], dropped: {} },
   state: {
-    current: 13,
-    supported: [1, 2, 3, 4, 5, 7, 9, 10, 12, 13],
+    current: 14,
+    supported: [14],
     dropped: {
+      1: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      2: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      3: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      4: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      5: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       6: "Sandbox sessions no longer expose core identity and mutable networking is provider-specific.",
+      7: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       8: "SandboxSession no longer exposes setNetworkPolicy; pass the configured environment to ctx.getSandbox(environment) to access network policy capabilities",
+      9: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      10: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       11: "Sandbox provider handle hooks were renamed to onSandboxStop and onSandboxDelete.",
+      12: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      13: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
     },
   },
 } as const satisfies Record<string, ExtensionCapabilityContract>;

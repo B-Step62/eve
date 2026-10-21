@@ -28,10 +28,10 @@ export default defineEval({
         response: { optionId: production.id },
       },
     });
-    const reply = answered.message?.includes("RELAY-RESULT")
+    const reply = answered.reply?.includes("RELAY-RESULT")
       ? answered
       : await waitForReply(t, answered.session, "RELAY-RESULT");
     reply.messageIncludes(/RELAY-RESULT QUESTION-CHILD-RESULT .*Production/u);
-    t.calledSubagent("question-child", { status: "completed", count: 1 });
+    t.calledAgent("question-child", { status: "completed", count: 1 });
   },
 });
