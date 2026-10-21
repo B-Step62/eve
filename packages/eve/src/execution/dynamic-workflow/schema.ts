@@ -1,4 +1,4 @@
-import { parseJsonObject, parseJsonValue, type JsonObject, type JsonValue } from "#shared/json.js";
+import { parseJsonObject, type JsonObject, type JsonValue } from "#shared/json.js";
 
 export const DEFAULT_WORKFLOW_PROGRAM_MAX_SUBAGENTS = 100;
 export const MAX_WORKFLOW_PROGRAM_MAX_SUBAGENTS = 128;
@@ -75,15 +75,6 @@ export function readWorkflowProgramAgentCall(value: unknown): WorkflowProgramAge
     input.outputSchema = parseJsonObject(rawInput.outputSchema);
   }
   return { input, target: call.target };
-}
-
-/**
- * Applies `JSON.stringify` semantics to a program's return value. The sandbox
- * returns richer values, so `Date`s become strings and `undefined` members drop.
- */
-export function parseWorkflowProgramOutput(value: unknown): JsonValue {
-  const json = JSON.stringify(value);
-  return json === undefined ? null : parseJsonValue(JSON.parse(json));
 }
 
 function isPositiveInteger(value: unknown): value is number {
