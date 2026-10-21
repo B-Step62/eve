@@ -1,7 +1,7 @@
 ---
 issue: TBD
 status: proposed
-last_updated: "2026-10-10"
+last_updated: "2026-10-21"
 ---
 
 # Native code mode
@@ -82,8 +82,10 @@ return stale.map((issue, i) => ({ id: issue.identifier, review: reviews[i] }));
   Neither can pause a program mid-flight. Durable pause and resume is what eve
   adds.
 - **The runtime is vendored.** eve already runs model-written JavaScript in
-  QuickJS through `@ai-sdk/code-mode` 1.0.85 for the `workflow` tool, with
-  signed continuations whose key comes from a durable step.
+  QuickJS through `@ai-sdk/code-mode` 1.0.94 for the `workflow` tool, with
+  signed continuations whose key comes from a durable step. The vendor script
+  bundles it with `run`, whose version comes from the exact `run` 2.1.2
+  devDependency pin in `packages/eve/package.json`.
 
 ## Current state
 
@@ -419,18 +421,41 @@ model step ── eve__execute({ code }) ── program runs (QuickJS, app runti
 
 **Limits.** These are fixed, and there are no settings at ship:
 
-| Limit                          | Value                                            | Notes                                                                         |
-| ------------------------------ | ------------------------------------------------ | ----------------------------------------------------------------------------- |
-| Nested calls per execute call  | 256                                              | The `maxBridgeRequests` default. Agent calls and searches count toward it     |
-| In-flight nested calls         | 32                                               | The AI SDK default                                                            |
-| Guest compute per program step | 30 s of guest execution (`cpuTimeoutMs`)         | Excludes time spent waiting on nested calls; needs run#78, see open questions |
-| Memory, stack, source, console | AI SDK defaults (64 MiB, 2 MiB, 256 KiB, 64 KiB) |                                                                               |
-| Nested input and output        | 1 MiB input, 4 MiB output per call               |                                                                               |
-| Continuation size              | 8 MiB                                            | Over the cap, the call fails and tells the model to return less               |
-| Model-facing result            | 10,000 estimated tokens                          | Head and tail kept                                                            |
+| Limit                          | Value                                            | Notes                                                                       |
+| ------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------- |
+| Nested calls per execute call  | 256                                              | The `maxBridgeRequests` default. Agent calls and searches count toward it   |
+| In-flight nested calls         | 32                                               | The AI SDK default                                                          |
+| Guest compute per program step | 30 s of guest execution (`cpuTimeoutMs`)         | Excludes time spent waiting on nested calls; replay counts, see below       |
+| Wall clock per program step    | 5 min (`timeoutMs`)                              | Includes inline nested calls; parked calls don't count. An estimate to tune |
+| Memory, stack, source, console | AI SDK defaults (64 MiB, 2 MiB, 256 KiB, 64 KiB) |                                                                             |
+| Nested input and output        | 1 MiB input, 4 MiB output per call               |                                                                             |
+| Continuation size              | 8 MiB                                            | Over the cap, the call fails and tells the model to return less             |
+| Model-facing result            | 10,000 estimated tokens                          | Head and tail kept                                                          |
 
 Errors over a limit name the limit, such as
 `EXECUTE_CALL_LIMIT_REACHED: a program may make at most 256 calls; "linear__get_issue" was not called.`
+
+**Compute and wall-clock time.** `run` 2.1.8 added `cpuTimeoutMs`
+([vercel-labs/run#78](https://github.com/vercel-labs/run/pull/78), which closed
+[vercel-labs/run#76](https://github.com/vercel-labs/run/issues/76)). It counts
+only guest execution, so time spent waiting on nested calls is free, and it
+replaces the hidden 10,000-check interrupt cap. `@ai-sdk/code-mode` exposes it
+as `executionPolicy.cpuTimeoutMs` and throws `CodeModeCpuTimeoutError`
+([vercel/ai#23812](https://github.com/vercel/ai/pull/23812)). eve sets both
+limits:
+
+- **The CPU limit needs a higher wall clock.** Guest time never exceeds wall
+  time, so `run` only applies `cpuTimeoutMs` when it is lower than `timeoutMs`.
+  Under the AI SDK's 30 s wall-clock default, a 30 s CPU limit would never
+  trigger. The 5 min wall clock leaves room for inline nested calls, such as
+  sandbox commands, on top of 30 s of guest compute.
+- **Each program step starts a fresh budget.** Each resume gets a new CPU
+  budget, but it replays the guest source from the start. Replayed guest work
+  counts toward that resume's 30 s, so the budget must cover the replayed
+  prefix plus the new work.
+- **Over the limit, the program fails instead of parking.** `run` never lets a
+  pending interruption hide an exceeded budget. The execute call returns an
+  error that names the limit.
 
 ### Nested calls on the protocol
 
@@ -509,6 +534,16 @@ tools.
 ### Pull requests
 
 Stacked, following the #4400 shape.
+
+A dependency PR lands first, while `workflow()` still exists. It bumps the
+`@ai-sdk/code-mode` catalog entry to the release that includes
+[vercel/ai#23812](https://github.com/vercel/ai/pull/23812), bumps the `run` pin
+to 2.1.10, re-vendors, and sets `cpuTimeoutMs` and `timeoutMs` in
+`createWorkflowSandboxOptions`. Both bumps go in the same PR: from `run` 2.1.8
+on, a 10 s CPU limit applies by default, and without #23812 it surfaces as a
+raw `RunError`. `run` is not in `minimumReleaseAgeExclude`, so 2.1.10 can be
+installed from 2026-10-22 23:00 UTC. `@ai-sdk/*` is excluded and can be
+installed as soon as it publishes.
 
 | PR            | Scope                                                                                                                                                                                                                                                                                                                                                                          |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -603,19 +638,14 @@ with this data.
 | Input form                    | JSON `{ code }` at ship                                                                      | Lark grammar at ship (provider-specific declaration, history normalization, and unverified on AI Gateway); see open questions                                                 |
 | `workflow()`                  | Removed in the same release                                                                  | Keeping a second JavaScript tool; a transition period                                                                                                                         |
 | Network                       | None in programs                                                                             | `fetch` (opencode has no SSRF guard or permission check)                                                                                                                      |
-| Limits                        | Fixed AI SDK defaults plus eve caps on continuation and result size                          | Settings on `codeMode` at ship                                                                                                                                                |
+| Limits                        | Fixed AI SDK defaults plus eve CPU, wall-clock, continuation, and result-size caps           | Settings on `codeMode` at ship                                                                                                                                                |
 
 ## Open questions
 
-- **Compute timeout versus nested waits.** In `run` 2.1, `timeoutMs` is a
-  wall-clock deadline that includes time awaiting host calls. The only compute
-  bound is a hidden 10,000-check interrupt cap, which replay spends again
-  ([vercel-labs/run#76](https://github.com/vercel-labs/run/issues/76)).
-  [vercel-labs/run#78](https://github.com/vercel-labs/run/pull/78) adds
-  `cpuTimeoutMs`, which counts only guest execution, and removes the cap.
-  eve then sets `cpuTimeoutMs` tight and the wall-clock `timeoutMs` from the
-  step's budget. `@ai-sdk/code-mode` still needs a matching
-  `executionPolicy.cpuTimeoutMs`.
+- **`@ai-sdk/code-mode` release.** The compute limit depends on
+  [vercel/ai#23812](https://github.com/vercel/ai/pull/23812) merging and
+  publishing. Until then, eve can't set `cpuTimeoutMs` through
+  `executionPolicy`.
 - **Raw JavaScript input.** pi declares a Lark grammar for OpenAI models so
   the model writes source instead of a JSON-escaped string. eve's
   `@ai-sdk/openai` 4.0.84 exposes `customTool`. Shipping it means a
@@ -644,3 +674,6 @@ with this data.
   call. That is no worse than one model step per call, but it isn't free.
 - **Continuation growth.** The ledger re-serializes every recorded result on
   each resume. The 8 MiB cap is an estimate to tune against real programs.
+- **Time limits are estimates.** The 30 s CPU and 5 min wall-clock limits
+  aren't measured. Programs that park often spend more of each resume's CPU
+  budget on replay.
