@@ -86,6 +86,8 @@ export function discordDriver(
   const uploads = new Map<string, SentFile>();
   /** The message each interaction token's `@original` response is, once known. */
   const originals = new Map<string, string>();
+  /** Interaction tokens answered with an ephemeral deferred response, which only the presser sees. */
+  const ephemeralTokens = new Set<string>();
   /** The thread the bot started for the conversation, once it has. */
   let threadId: string | undefined;
   /** The bot's latest channel message, which a person in a server replies to so the bot hears them. */
@@ -299,21 +301,47 @@ export function discordDriver(
     },
     shownMessage(call) {
       if (!isMessageWrite(call)) return undefined;
+      const token = /\/webhooks\/[^/]+\/([^/]+)\/messages\/@original$/u.exec(call.method)?.[1];
       return {
         id: (call.response as { readonly id: string }).id,
         links: linkTargets((call.body as { readonly components?: unknown }).components),
         onlyPerson:
+          (token !== undefined && ephemeralTokens.has(token)) ||
           (((call.body as { readonly flags?: number }).flags ?? 0) & EPHEMERAL_FLAG) !== 0,
         options: choicesOf(call),
         text: (call.body as { readonly content?: string }).content ?? "",
+      };
+    },
+    shownReply(body) {
+      // A message answering an interaction; with the ephemeral flag, only the presser sees it.
+      const reply = body as {
+        readonly data?: {
+          readonly components?: unknown;
+          readonly content?: string;
+          readonly flags?: number;
+        };
+        readonly type?: number;
+      };
+      if (reply.type !== 4 || reply.data === undefined) return undefined;
+      return {
+        id: "",
+        links: linkTargets(reply.data.components),
+        onlyPerson: ((reply.data.flags ?? 0) & 64) !== 0,
+        options: [],
+        text: reply.data.content ?? "",
       };
     },
     personShownAs: [`<@${PERSON.id}>`, PERSON.username],
     press(option, person: Person) {
       const handle = option.handle as PressHandle;
       const id = nextInteraction();
-      // A component interaction's `@original` response is the message holding the component.
-      originals.set(`tok-${id}`, handle.messageId);
+      if (handle.customId.startsWith("eve_auth:")) {
+        // eve answers a sign-in press with an ephemeral deferred response, a new message.
+        ephemeralTokens.add(`tok-${id}`);
+      } else {
+        // A component interaction's `@original` response is the message holding the component.
+        originals.set(`tok-${id}`, handle.messageId);
+      }
       return signed(
         JSON.stringify({
           application_id: "APP1",

@@ -402,7 +402,11 @@ describe("discordChannel() inbound route", () => {
         };
       };
       const prompt = {
-        body: { components: [], content: "Approve?\n\nNo longer active" },
+        body: {
+          allowed_mentions: { parse: [] },
+          components: [],
+          content: "Approve?\n\nNo longer active",
+        },
         method: "PATCH",
         url: "https://discord.com/api/v10/channels/C01/messages/M01",
       };
@@ -676,6 +680,61 @@ describe("discordChannel() default event handlers", () => {
     expect(writes.filter(([key]) => key === "eve.continuationToken")).toEqual([
       ["eve.continuationToken", "discord:C01:M01"],
     ]);
+  });
+
+  it.each([
+    {
+      name: "a 1:1 DM shows the link in the open",
+      where: { audience: "private", directMessage: true },
+      link: true,
+    },
+    {
+      name: "a group DM keeps the link behind a button",
+      where: { audience: "private" },
+      link: false,
+    },
+    {
+      name: "a session with no known audience keeps the link behind a button",
+      where: {},
+      link: false,
+    },
+  ])("posting a sign-in: $name", async ({ where, link }) => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ channel_id: "C01", id: "M01" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = withState(
+      getAdapter(discordChannel({ credentials: { applicationId: "APP1", botToken: "bot-token" } })),
+      {
+        ...where,
+        applicationId: "APP1",
+        channelId: "C01",
+        conversationId: "M00",
+        guildId: null,
+        hasMessageAnchor: true,
+        initialResponseSent: true,
+        interactionToken: null,
+      },
+    );
+
+    await callEvent(
+      adapter,
+      makeEvent("authorization.required", {
+        authorization: { url: "https://calendar.example/sign-in", userCode: "ABCD-1234" },
+        description: "Sign in to Calendar",
+        name: "calendar",
+        principalId: "discord:123",
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "t1",
+      }),
+      buildAdapterContext(adapter, captureAccessor("discord:C01:M00").accessor),
+    );
+
+    const posted = String(fetchMock.mock.calls[0]![1]!.body);
+    expect(posted.includes("https://calendar.example/sign-in")).toBe(link);
+    expect(posted.includes("ABCD-1234")).toBe(link);
+    expect(posted.includes('"label":"Sign in"')).toBe(!link);
   });
 
   it("receive starts a proactive channel session", async () => {
