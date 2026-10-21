@@ -23,18 +23,18 @@ type CallbackPhase =
   | "labelComplete"
   | "labelDelta"
   | "labelStart"
-  | "approvalKey"
   | "approvalPrompt"
   | "approvalRequest"
+  | "approvalKey"
   | "approvalResponse"
   | "execute"
   | "toModelOutput"
   | "inputSchema"
   | "outputSchema";
 type CallbackPropertyName =
-  | "approvalKey"
   | "label"
   | "approval"
+  | "key"
   | "prompt"
   | "execute"
   | "start"
@@ -76,15 +76,22 @@ export async function transformDynamicToolExecute(
   source: string,
   workflowFunctions: ReadonlySet<string> = NO_WORKFLOW_FUNCTIONS,
 ): Promise<{ code: string } | null> {
-  if (!source.includes("defineTool") && !source.includes("defineWorkflowTool")) return null;
+  if (
+    !source.includes("defineTool") &&
+    !source.includes("defineWorkflowTool") &&
+    !source.includes("once")
+  )
+    return null;
 
   const ast = (await parseWithNitroRolldownAst(filename, source)) as AstNode;
   const defineToolAliases = findEveImportAliases(ast, ["defineTool", "defineWorkflowTool"]);
-  if (defineToolAliases.size === 0) return null;
+  const onceAliases = findEveImportAliases(ast, ["once"]);
+  if (defineToolAliases.size === 0 && onceAliases.size === 0) return null;
 
   const callbacks: CallbackInfo[] = [];
   walkForCallbacks(source, ast, callbacks, [], {
     defineToolAliases,
+    onceAliases,
     workflowFunctions,
     durableSchemaAliases: findEveImportAliases(ast, ["defineDurableSchema"]),
   });
@@ -95,6 +102,7 @@ const NO_WORKFLOW_FUNCTIONS: ReadonlySet<string> = new Set();
 
 interface WalkContext {
   readonly defineToolAliases: ReadonlySet<string>;
+  readonly onceAliases: ReadonlySet<string>;
   readonly durableSchemaAliases: ReadonlySet<string>;
   /**
    * Top-level `"use workflow"` functions the directive transform already
@@ -137,6 +145,14 @@ function walkForCallbacks(
     return;
   }
 
+  if (
+    node.type === "CallExpression" &&
+    context.onceAliases.has(readDefinerName(node.callee) ?? "")
+  ) {
+    collectOnceKey(source, node, results, nestedScopes, context);
+    return;
+  }
+
   for (const value of Object.values(node)) {
     if (Array.isArray(value)) {
       for (const child of value) {
@@ -159,6 +175,29 @@ function isWorkflowExecute(property: AstNode | undefined, context: WalkContext):
   );
 }
 
+function collectOnceKey(
+  source: string,
+  value: AstNode | undefined,
+  results: CallbackInfo[],
+  nestedScopes: readonly ScopeEntry[],
+  context: WalkContext,
+): void {
+  if (
+    value?.type !== "CallExpression" ||
+    !context.onceAliases.has(readDefinerName(value.callee) ?? "") ||
+    value.arguments?.[0]?.type !== "ObjectExpression"
+  )
+    return;
+  collectCallbackProperty(
+    source,
+    findProperty(value.arguments[0], "key"),
+    "approvalKey",
+    "key",
+    results,
+    nestedScopes,
+  );
+}
+
 function collectToolCallbacks(
   source: string,
   tool: AstNode,
@@ -170,14 +209,6 @@ function collectToolCallbacks(
   if (!isWorkflowExecute(execute, context)) {
     collectCallbackProperty(source, execute, "execute", "execute", results, nestedScopes);
   }
-  collectCallbackProperty(
-    source,
-    findProperty(tool, "approvalKey"),
-    "approvalKey",
-    "approvalKey",
-    results,
-    nestedScopes,
-  );
   const label = findProperty(tool, "label");
   const labelValue = label?.value as AstNode | undefined;
   if (labelValue?.type === "ObjectExpression") {
@@ -251,6 +282,13 @@ function collectToolCallbacks(
   const approval = findProperty(tool, "approval");
   const approvalValue = approval?.value as AstNode | undefined;
   if (approvalValue?.type === "ObjectExpression") {
+    collectOnceKey(
+      source,
+      findProperty(approvalValue, "request")?.value as AstNode | undefined,
+      results,
+      nestedScopes,
+      context,
+    );
     collectCallbackProperty(
       source,
       findProperty(approvalValue, "request"),
@@ -276,6 +314,7 @@ function collectToolCallbacks(
       nestedScopes,
     );
   } else {
+    collectOnceKey(source, approvalValue, results, nestedScopes, context);
     collectCallbackProperty(source, approval, "approvalRequest", "approval", results, nestedScopes);
   }
 }

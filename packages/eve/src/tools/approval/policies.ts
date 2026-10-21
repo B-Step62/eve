@@ -1,9 +1,14 @@
 import type { Experimental_DecisionModel as DecisionModel } from "ai";
 
-import type { ApprovalContext, ApprovalPolicy } from "#approval/definition.js";
+import type { ApprovalContext, ApprovalPolicy, ApprovalToolInput } from "#approval/definition.js";
 import { decide } from "#ai/decide.js";
+import { evaluateOnce } from "#approval/evaluation.js";
 import { parseJsonValue, type JsonObject } from "#shared/json.js";
-import { stampDurableDynamicCallback } from "#tools/durable-callbacks.js";
+import {
+  callDurableDynamicCallback,
+  readDurableDynamicCallback,
+  stampDurableDynamicCallback,
+} from "#tools/durable-callbacks.js";
 
 const MAX_ACTION_BYTES = 64 * 1024;
 
@@ -71,13 +76,6 @@ function neverApproval(_closure: JsonObject): "not-applicable" {
   return "not-applicable";
 }
 
-function onceApproval(
-  _closure: JsonObject,
-  context: ApprovalContext,
-): "not-applicable" | "user-approval" {
-  return context.approvedTools.has(context.toolName) ? "not-applicable" : "user-approval";
-}
-
 /**
  * Returns an `approval` callback that asks an AI SDK decision model whether
  * the exact tool call presents concrete security danger. Defaults to TypeSafe Jev.
@@ -85,12 +83,22 @@ function onceApproval(
  */
 export function auto<TInput = unknown>(options: AutoApprovalOptions = {}): ApprovalPolicy<TInput> {
   const decisionModel = options.model ?? "typesafe-ai/jev";
-  const callback = (_closure: JsonObject, context: ApprovalContext) =>
-    autoApproval(decisionModel, options, context);
-  return stampDurableDynamicCallback(
-    (context) => autoApproval(decisionModel, options, context as ApprovalContext),
-    { callback, closure: {} },
-  ) as ApprovalPolicy<TInput>;
+  const policy: ApprovalPolicy<TInput> = (context) =>
+    autoApproval(decisionModel, options, context as ApprovalContext);
+  if (typeof decisionModel !== "string") return policy;
+  const closure = {
+    model: decisionModel,
+    instructions: options.instructions ?? DEFAULT_INSTRUCTIONS,
+    criteria: {
+      clear: options.criteria?.clear ?? DEFAULT_CLEAR_DESCRIPTION,
+      caution: options.criteria?.caution ?? DEFAULT_CAUTION_DESCRIPTION,
+    },
+  };
+  return stampDurableDynamicCallback(policy, {
+    callback: (saved: JsonObject, context: ApprovalContext) =>
+      autoApproval(saved.model as string, saved as AutoApprovalOptions, context),
+    closure,
+  });
 }
 
 /**
@@ -115,17 +123,37 @@ export function never<TInput = unknown>(): ApprovalPolicy<TInput> {
   });
 }
 
-/**
- * Returns an `approval` callback that requires approval until the user
- * approves this tool once in the current session. A tool is recorded as
- * approved only on an explicit approval; a denial (or continuing without
- * responding) leaves it unrecorded, so the next call prompts again. Keys off
- * the bare tool name, so it ignores compound approval keys.
- */
-export function once<TInput = unknown>(): ApprovalPolicy<TInput> {
-  return stampDurableDynamicCallback(
-    ({ approvedTools, toolName }) =>
-      approvedTools.has(toolName) ? "not-applicable" : "user-approval",
-    { callback: onceApproval, closure: {} },
-  );
+/** Remembers a person's approval for this tool, optionally scoped to a key from its input. */
+export function once<TInput = unknown>(options?: {
+  readonly key?: (input: ApprovalToolInput<TInput>) => string;
+}): ApprovalPolicy<TInput> {
+  const evaluate = (
+    context: ApprovalContext<TInput>,
+    selectKey = options?.key,
+  ): "not-applicable" | "user-approval" => {
+    const grantable = selectKey === undefined || context.toolInput !== undefined;
+    const key =
+      selectKey !== undefined && context.toolInput !== undefined
+        ? selectKey(context.toolInput)
+        : undefined;
+    if (grantable && selectKey !== undefined && typeof key !== "string") {
+      throw new TypeError("once({ key }) must return a string key.");
+    }
+    return evaluateOnce(context as ApprovalContext, { key, grantable })
+      ? "not-applicable"
+      : "user-approval";
+  };
+  const keyCallback = readDurableDynamicCallback(options?.key);
+  // Untransformed keys remain valid for static tools, but cannot promise durable captures.
+  if (options?.key !== undefined && keyCallback === undefined) return evaluate;
+  return stampDurableDynamicCallback(evaluate, {
+    callback: (closure: JsonObject, context: ApprovalContext<TInput>) =>
+      evaluate(
+        context,
+        keyCallback === undefined
+          ? undefined
+          : (input) => callDurableDynamicCallback(keyCallback.callback, closure, input) as string,
+      ),
+    closure: keyCallback?.closure ?? {},
+  });
 }
