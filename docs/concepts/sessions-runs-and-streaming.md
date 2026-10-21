@@ -156,7 +156,12 @@ Everything that reaches a session arrives as a delivery: a message, an answer, a
 | `failed`         | It couldn't be handled, such as when the session ended first.                                       |
 
 `POST /eve/v1/session/:sessionId` returns the message's `deliveryId`, so a client resuming from an old cursor knows which `delivery.settled` ends its response. Steering and coalesced messages each keep their own delivery. The id is assigned before dispatch,
-not derived from stream position. An answer's response also stops on its own `delivery.settled`.
+not derived from stream position. An answer-only delivery stops on its own `delivery.settled`.
+When someone other than the turn's caller sends an answer and a message together through a
+channel, eve takes the answer into the waiting turn as a separate delivery. The message keeps
+the receipt's `deliveryId` and waits for that sender's turn. Follow the message by its receipt;
+follow the answer through its interaction's response and settlement. A message from the turn's
+own caller is not split and can steer that turn.
 A stranded reset records its control's admission and settlement before ending the session, with
 `session.ended.data.cause.deliveryId` naming the reset.
 
