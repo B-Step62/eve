@@ -56,14 +56,18 @@ export function waitedCallRuns(session: {
 export async function stopRuns(
   targets: readonly RunStopTarget[],
   stop: RunStop,
+  options: { readonly waitForEnd?: boolean } = {},
 ): Promise<readonly string[]> {
   const signalled = await Promise.all(
     targets.map(async (target) => ({ target, told: await tell(target.run, stop) })),
   );
   const ending = signalled.filter(({ target }) => target.ends);
-  const lingering = await runsStillRunning(
-    ending.filter(({ told }) => told).map(({ target }) => target.run.runId),
-  );
+  const lingering =
+    options.waitForEnd === false
+      ? []
+      : await runsStillRunning(
+          ending.filter(({ told }) => told).map(({ target }) => target.run.runId),
+        );
   const unreachable = ending.filter(({ told }) => !told).map(({ target }) => target.run.runId);
   const cancelled = await Promise.all(
     [...unreachable, ...lingering].map(async (runId) =>
