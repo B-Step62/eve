@@ -24,10 +24,10 @@ by the eve HTTP session API. See [Custom channels](../channels/custom#channel-op
 A session completes after 30 idle days by default; configure
 `limits.sessionTimeoutMs` in `agent.ts`, or set it to `false` to disable the
 timeout. The idle window restarts each time a turn settles, and a session never
-expires while a turn is open. At expiration, eve emits `session.ended` with
-`outcome: "completed"` and releases its continuation addresses so the next
-qualifying channel message starts fresh. Stored session data is not deleted.
-See [Agent config](../agent-config#runtime-limits).
+expires while a turn is open. At expiration, eve emits `session.ended` with `outcome: "completed"` and
+releases the session's continuation addresses so the next qualifying channel
+message starts fresh. Stored session data is not deleted. See
+[Agent config](../agent-config#runtime-limits).
 
 React, Vue, and Svelte apps reach for [`useEveAgent()`](../guides/frontend/overview) instead of calling these routes by hand. Next.js and Nuxt apps can proxy them to the eve runtime from the same origin.
 
@@ -85,7 +85,7 @@ Facts are grouped into families. Each family has a lifecycle: one fact introduce
 | Family        | Facts                                                                | What it is                                                                                                                                                                                                                                                                                                             |
 | ------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session`     | `session.started`, `session.ended`                                   | The session. `session.started` carries `runtime`, `parent` for a child session, `predecessor` when the session [replaced a stranded one](./execution-model-and-durability#what-a-replacement-session-receives), and `trace` when traced. `session.ended` has `outcome` `"completed"` or `"failed"`.                    |
-| `delivery`    | `delivery.admitted`, `delivery.consumed`, `delivery.settled`         | One accepted message, answer, control, or callback. `delivery.consumed` carries the `parts` a turn received; `delivery.settled` reports what became of it.                                                                                                                                                             |
+| `delivery`    | `delivery.admitted`, `delivery.consumed`, `delivery.settled`         | One accepted message, answer, control, or callback. `delivery.consumed` carries the `parts` a turn received, and any `history` the delivery imported; `delivery.settled` reports what became of it.                                                                                                                    |
 | `turn`        | `turn.started`, `turn.paused`, `turn.settled`                        | A turn. `turn.paused` lists the interactions it's `awaiting`. `turn.settled` has `outcome` `"completed"`, `"failed"`, or `"cancelled"` and, when completed, the `reply` part ids.                                                                                                                                      |
 | `model`       | `model.requested`, `model.started`, `model.retried`, `model.settled` | One model run, owned by a turn or a context change. `model.started` names the `modelId` and the `attempt`, once per attempt; `model.retried` records an attempt that failed and is tried again; `model.settled` carries `outcome` and `finishReason`.                                                                  |
 | `content`     | `content.completed`                                                  | One finished part of model output: `kind` `"text"`, `"reasoning"`, `"result"`, or `"file"`, its `value`, and its `phase`: `"reply"` or `"narration"`.                                                                                                                                                                  |
@@ -101,9 +101,9 @@ Progress records are `content.delta` (a text or reasoning delta for a `partId`),
 
 Call labels use `capability.label` before execution, `call.progress.data.label` for a progress
 snapshot, and `call.settled.data.label` at completion. The fold keeps the final label as
-`view.calls[callId].label`. A prompt's heading remains `request.title`.
+`call(view, callId)?.label`. A prompt's heading remains `request.title`.
 
-The full catalog, its outcome sets, and TypeScript types are exported from `eve/events`, along with the shared fold that turns facts into tables and selectors over them:
+The full catalog, its outcome sets, and TypeScript types are exported from `eve/events`, along with the shared fold and queries over [opaque session snapshots](#query-session-state):
 
 ```ts
 import { FACT_CATALOG, foldEvents, activeTurn, reply } from "eve/events";
@@ -138,31 +138,31 @@ Note: consider the privacy, confidentiality, and user-experience implications fo
 
 ### Replies and narration
 
-A model often writes text before it calls a tool. Each text part's `content.completed.data.phase` tells you which it is: `"narration"` for text written on the way to more work, `"reply"` for the turn's answer. `turn.settled.data.reply` lists the reply's part ids, so a reader that only needs the answer can wait for the turn to settle and read those parts. It's the same list a folded view keeps as `view.turns[turnId].reply`, and `reply(ctx.view, turnId)` reads those parts in a hook or channel handler. When a turn requested an output schema, the structured result is a `content.completed` with `kind: "result"`.
+A model often writes text before it calls a tool. Each text part's `content.completed.data.phase` tells you which it is: `"narration"` for text written on the way to more work, `"reply"` for the turn's answer. `turn.settled.data.reply` lists the reply's part ids, so a reader that only needs the answer can wait for the turn to settle and read those parts. `reply(ctx.view, turnId)` returns those parts in a hook or channel handler without exposing the backing table. When a turn requested an output schema, the structured result is a `content.completed` with `kind: "result"`.
 
-Spend is recorded on `usage.recorded`, once per model run (`owner: { runId }`), once per delegated call for what the agent it called spent (`owner: { callId }`), and once per compaction (`owner: { changeId }`). A session's total is the sum of its records; the shared fold keeps it in `view.usage.total`. Spend a task reports after its calls settled is recorded with the task's scope and `kind: "delegated-late"`.
+Spend is recorded on `usage.recorded`, once per model run (`owner: { runId }`), once per delegated call for what the agent it called spent (`owner: { callId }`), and once per compaction (`owner: { changeId }`). A session's total is the sum of its records; `usage(view).total` returns it. Spend a task reports after its calls settled is recorded with the task's scope and `kind: "delegated-late"`.
 
 ### Deliveries and responses
 
-Everything that reaches a session arrives as a delivery: a message, an answer, a control such as `cancel` or `reset`, or a sign-in callback. `delivery.admitted` records it, with the sender's `principal` and its `source`. A message that a turn takes in is `delivery.consumed`, with the `parts` it received: text, plus file metadata without raw bytes or internal sandbox paths. Every delivery ends with exactly one `delivery.settled`:
+Everything that reaches a session arrives as a delivery: a message, an answer, a control such as `cancel` or `reset`, or a sign-in callback. `delivery.admitted` records it, with the sender's `principal` and its `source`. A message that a turn takes in is `delivery.consumed`, with the `parts` it received: text, plus file metadata without raw bytes or internal sandbox paths. A delivery that brought [prior history](../channels/eve#start-from-prior-history) also carries it there, in `history`. Every delivery ends with exactly one `delivery.settled`:
 
-| Outcome          | Meaning                                                                                       |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| `handled`        | The turn that consumed it settled.                                                            |
-| `awaiting-input` | The turn paused on a person. The delivery's answer is the pause; the answer resumes the turn. |
-| `applied`        | A control or answer took effect.                                                              |
-| `ignored`        | It had nothing to act on, such as a cancel with no active turn.                               |
-| `refused`        | Its sender may not do what it asked; `reason` says why.                                       |
-| `failed`         | It couldn't be handled, such as when the session ended first.                                 |
+| Outcome          | Meaning                                                                                             |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `handled`        | The turn that consumed it settled.                                                                  |
+| `awaiting-input` | The turn paused on an interaction. The delivery's answer is the pause; the answer resumes the turn. |
+| `applied`        | A control or answer took effect.                                                                    |
+| `ignored`        | It had nothing to act on, such as a cancel with no active turn.                                     |
+| `refused`        | Its sender may not do what it asked; `reason` says why.                                             |
+| `failed`         | It couldn't be handled, such as when the session ended first.                                       |
 
 `POST /eve/v1/session/:sessionId` returns the message's `deliveryId`, so a client resuming from an old cursor knows which `delivery.settled` ends its response. Steering and coalesced messages each keep their own delivery. The id is assigned before dispatch,
 not derived from stream position. An answer's response also stops on its own `delivery.settled`.
 A stranded reset records its control's admission and settlement before ending the session, with
 `session.ended.data.cause.deliveryId` naming the reset.
 
-### Turns and people
+### Turns and interactions
 
-A turn doesn't end while it waits on a person; it pauses. `turn.paused.data.awaiting` names the interactions it waits on, as `{ interactionId }`. Nothing announces the turn resuming: the next fact under it, such as its next `model.requested`, shows it's running again, and only `turn.settled` ends it. A turn waiting on its own work, such as its tasks, stays running without pausing.
+A turn doesn't end while it waits on an interaction; it pauses. `turn.paused.data.awaiting` names the interactions it waits on, as `{ interactionId }`. Nothing announces the turn resuming: the next fact under it, such as its next `model.requested`, shows it's running again, and only `turn.settled` ends it. A turn waiting on its own work, such as its tasks, stays running without pausing.
 
 A question or sign-in from inside a running call does not end the turn either. This covers a workflow tool's `ctx.ask()`, including the built-in `ask_question` tool, and a delegated subagent's question or sign-in. The stream emits `interaction.opened`, then `turn.paused` awaiting it, committed with `delivery.settled` (`awaiting-input`) for the deliveries the turn was answering. An answer arrives as a new delivery with a `response.submitted` for each answer it carries, and `interaction.settled` once the interaction is decided. A request relayed from a subagent or a workflow tool run carries `origin` naming the session and request that asked, and `origin.call` naming the asker's call. A subagent's tool approval stays open until the subagent settles it, and the session relays that settlement.
 
@@ -191,6 +191,63 @@ A provider response ending with `content-filter` fails its run and turn with `MO
 and a `hint` to review the request against the provider's content policy. eve does not retry the
 filtered response or complete its partial text; deltas already streamed remain visible. The session
 then waits for another user message.
+
+## Query session state
+
+`SessionView` from `eve/events` is an opaque, immutable snapshot derived from the stream. Use
+queries instead of reading tables or joining rows:
+
+```ts
+import { activeTurn, call, calls, openInteractions, usage } from "eve/events";
+
+const currentTurn = activeTurn(agent.view);
+const tools = calls(agent.view, { kind: "tool", turnId: currentTurn?.turnId });
+const pending = openInteractions(agent.view);
+const totals = usage(agent.view);
+const observed = call(agent.view, callId);
+if (observed?.state === "failed") console.error(observed.error.message);
+```
+
+Calls include their resolved `turnId`, `runId`, and `taskId` when known, so applications do not
+join calls to runs to find their turn. `turns`, `deliveries`, `tasks`, `runs`, `parts`, and
+`children` return curated observations. Identity lookups include `turn`,
+`delivery`, `task`, and `interaction`. `waiting`, `activity`, and `reply` answer
+the same lifecycle questions used by built-in clients and channels. These queries are
+synchronous and perform no I/O; referenced payloads remain references until explicitly read.
+
+`waiting(view, turnId)` returns `{ on: "session" }` while the session can make progress,
+`{ on: "interaction", interactions }` when answers are needed, or
+`{ on: "work", calls, tasks }` when calls or tasks hold the turn. It returns `undefined` only
+when the turn is absent or settled. `openInteractions(view, { about: { callId } })` includes the
+call's approval, questions relayed through it, and interactions belonging to its task;
+`{ about: { taskId } }` includes that task's interactions. A turn or response `about` filter
+matches its subject exactly. Read `interaction.subject` to match the subject itself. A response
+already answered but still being weighed by a response policy remains open and appears in
+`openInteractions` until it settles; `callState(view, callId)` distinguishes `approval` and
+`blocked` from running work. Both selectors return immutable observations.
+
+The public view contains no tables or preview dictionaries. Query results cannot mutate the
+fold, and a snapshot you retain stays unchanged when later events arrive. Interactions omit
+private sign-in callback URLs, including when returned by `waiting`, `activity`, or `openInteractions`. Use
+`callPreview(view, callId)` and `contentPreviews(view)` for transient progress held by a client
+or a custom fold; committed values remain separate. Hook and channel snapshots describe the
+whole committed line, never half of it.
+
+A custom reader uses the same fold:
+
+```ts
+import { emptySessionView, foldEvents, calls } from "eve/events";
+
+let view = emptySessionView();
+for await (const event of session.stream()) {
+  view = foldEvents(view, [event]);
+  render(calls(view, { kind: "tool" }));
+}
+```
+
+`foldEvents` returns a new snapshot without changing its input. It retains incomplete lines
+internally until their final event arrives and absorbs overlapping replay. Persist events and
+session cursors to reconstruct a view; the opaque value is not a serialization format.
 
 ## Positions
 
@@ -345,7 +402,7 @@ for await (const event of events) {
 }
 ```
 
-`stream()` takes `SessionStreamOptions` from `eve/client`: `startIndex` (a durable line position, with negative values counting back from the tail), `follow`, and `signal`. Client readers also accept `streamReconnectPolicy`. Key stored events on [`meta.position`](#positions), which stays stable across reads. With `follow: false`, the read ends at the durable tail observed when it opens; otherwise it keeps following new events until the stream closes or the signal aborts.
+`stream()` takes `SessionStreamOptions` from `eve/sessions`: `startIndex` (a durable line position, with negative values counting back from the tail), `follow`, and `signal`. Client readers also accept `streamReconnectPolicy`. Key stored events on [`meta.position`](#positions), which stays stable across reads. With `follow: false`, the read ends at the durable tail observed when it opens; otherwise it keeps following new events until the stream closes or the signal aborts.
 
 A read reflects events that are already durable. A hook runs after its line is written, so a bounded read there includes the event that triggered it. `sessions` reads any session ID without channel auth, so check that a caller may read a session before passing an ID from a request. It is available only in code that runs inside the eve server.
 

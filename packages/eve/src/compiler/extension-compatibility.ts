@@ -30,8 +30,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   tool: {
-    current: 119,
-    supported: [119],
+    current: 120,
+    supported: [120],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -151,6 +151,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       116: "Corrected public authoring contracts require rebuilding this extension.",
       117: "Corrected public authoring contracts require rebuilding this extension.",
       118: "Corrected public authoring contracts require rebuilding this extension.",
+      119: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   dynamicTool: {
@@ -264,8 +265,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 87,
-    supported: [87],
+    current: 88,
+    supported: [88],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -353,11 +354,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       84: "Corrected public authoring contracts require rebuilding this extension.",
       85: "Corrected public authoring contracts require rebuilding this extension.",
       86: "Corrected public authoring contracts require rebuilding this extension.",
+      87: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   schedule: {
-    current: 50,
-    supported: [50],
+    current: 51,
+    supported: [51],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -408,6 +410,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       47: "Corrected public authoring contracts require rebuilding this extension.",
       48: "Corrected public authoring contracts require rebuilding this extension.",
       49: "Corrected public authoring contracts require rebuilding this extension.",
+      50: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   subagent: {
@@ -467,8 +470,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 76,
-    supported: [76],
+    current: 77,
+    supported: [77],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -545,11 +548,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       73: "Corrected public authoring contracts require rebuilding this extension.",
       74: "Corrected public authoring contracts require rebuilding this extension.",
       75: "Corrected public authoring contracts require rebuilding this extension.",
+      76: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   hook: {
-    current: 64,
-    supported: [64],
+    current: 65,
+    supported: [65],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -614,6 +618,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       61: "Corrected public authoring contracts require rebuilding this extension.",
       62: "Corrected public authoring contracts require rebuilding this extension.",
       63: "Corrected public authoring contracts require rebuilding this extension.",
+      64: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   skill: {

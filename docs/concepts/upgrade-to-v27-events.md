@@ -70,7 +70,7 @@ answer, control, and callback), `model.requested`, `model.retried`, `call.starte
 `response.admitted`, and `usage.recorded`.
 
 A turn that waits on its own work, such as a task it started, doesn't pause: it stays running
-until the work reports back. Only a turn waiting on a person (an approval, a question, a sign-in,
+until the work reports back. Only a turn waiting on an interaction (an approval, a question, a sign-in,
 or the budget prompt) pauses, and nothing announces that it resumed: the next fact under the turn
 says so.
 
@@ -84,7 +84,7 @@ says so.
 - **Calls.** `call.requested` names its `capability` (`{ kind, name, label? }`) and carries its
   `input`. `call.settled` carries `outcome` (`completed`, `failed`, `rejected`, `interrupted`,
   `abandoned`) and `output` or `error`, but not the tool's name: match it to its
-  `call.requested` by `callId`, or read `ctx.view.calls[callId]`. A call fails only when its
+  `call.requested` by `callId`, or query `call(ctx.view, callId)` from `eve/events`. A call fails only when its
   result sets `isError`.
 - **Model attempts.** `model.started` repeats once per attempt at the provider call, with
   `attempt` (0 for the first). `model.retried` records an attempt that failed and is tried again
@@ -98,7 +98,7 @@ says so.
   add to them: keep a default branch when you switch on one. See
   [what a later release can add](./sessions-runs-and-streaming#what-a-later-release-can-add).
 - **Usage.** Usage is recorded on `usage.recorded` per model run, delegated call, or compaction,
-  rather than copied onto turn and session terminals. Sum the records, or read `view.usage.total`.
+  rather than copied onto turn and session terminals. Sum the records, or read `usage(view).total`.
 - **Errors.** Failures carry `error: { code, message, id?, hint? }`.
 
 ## Renamed APIs
@@ -111,11 +111,11 @@ The interaction vocabulary replaces input requests and responses everywhere:
 | `send({ inputResponses })`, `respond(inputResponses)`                   | `send({ answers })`, `respond(answers)`                                                                                  |
 | `parseInputResponse`, `parseInputResponses`, `isInputResponse`          | `parseAnswer`, `parseAnswers`, `isAnswer`                                                                                |
 | A response's `inputRequests` and `authorizations`                       | `interactions`, sign-ins included                                                                                        |
-| `ConversationState.inputs`, `ConversationInput`                         | `view.interactions`, `Interaction`                                                                                       |
+| `ConversationState.inputs`, `ConversationInput`                         | `interactions(view)`, `Interaction`                                                                                      |
 | `openConversationInputs(state)`                                         | `openInteractions(view)` from `eve/events`                                                                               |
 | `EveAuthorizationPart`, `EveMessageInputRequest`                        | `EveInteractionPart` (`type: "interaction"`)                                                                             |
 | `dynamic-tool` part, `toolMetadata.eve.inputRequest` / `inputResponse`  | `tool` part (`EveToolPart`), `part.interaction` with its `answer`                                                        |
-| `conversationReducer`, `defaultMessageReducer`, `EveAgentReducer`       | Removed: read `view`, `previews`, `messages`, and `agents` directly                                                      |
+| `conversationReducer`, `defaultMessageReducer`, `EveAgentReducer`       | Removed: query opaque `view`; read `messages` and `agents`                                                               |
 | `transcriptReducer(options)`                                            | `transcriptOf(events, options)`                                                                                          |
 | `toolCallState(conversation, callId)`                                   | The call's `tool` part                                                                                                   |
 | Evals: `inputRequests`, `pendingInputRequests`, `requireInputRequest()` | `interactions`, `pendingInteractions`, `requireInteraction()`                                                            |
@@ -133,21 +133,22 @@ continue to decode their own earlier options.
 
 Readers use `interaction(view, interactionId)` from `eve/events`. Its `interactionId`, `call`,
 `status`, `answer`, and location are top-level; the prompt fields stay under `request`, matching
-`InteractionRow`. A submitted answer leaves `status: "open"` until the interaction settles. CLI
+the opened fact. A submitted answer leaves `status: "open"` until the interaction settles. CLI
 and MCP JSON results use the same nesting and omit `request.signIn.callbackUrl`.
 
 Call labels use `capability.label`, `call.progress.data.label`, `call.settled.data.label`, and
-`CallRow.label`. A prompt's heading still uses `request.title`. Stream parts use `kind`, because
+`call(view, callId)?.label`. A prompt's heading still uses `request.title`. Stream parts use `kind`, because
 `type` names their event; authoring and UI parts keep their `type` discriminant. Task cancellation
 reasons use kebab case: `task-cancel`, `turn-cancelled`, and `turn-ended`.
 
 ## Hooks
 
 Change keys and payloads. A hook's context gains `ctx.position`, the event's place on the stream,
-and `ctx.view`, the session's tables as of the event's commit:
+and `ctx.view`, an immutable, opaque snapshot of the event's whole commit:
 
 ```diff title="agent/hooks/audit.ts"
  import { defineHook } from "eve/hooks";
++import { call } from "eve/events";
  import { toolResultFrom } from "eve/tools";
  import getWeather from "../tools/get-weather";
 
@@ -165,7 +166,7 @@ and `ctx.view`, the session's tables as of the event's commit:
 +     log(event.data.value);
 +   },
 +   "call.settled"(event, ctx) {
-+     const weather = toolResultFrom(ctx.view.calls[event.data.callId], getWeather);
++     const weather = toolResultFrom(call(ctx.view, event.data.callId), getWeather);
 +   },
    },
  });
@@ -199,9 +200,9 @@ Slack renderers take `(event, ctx, next)`, with Slack's handles on `ctx.channel.
 [Slack: Customize rendering](../channels/slack#customize-rendering).
 
 A Slack renderer's `taskCard(card, next)` receives a `TaskCard` instead of a `TaskCardView`:
-the card's calls as table rows, with `view` to read them by, in place of `tasks` and `actions`.
-Read a row's `taskId` for a task, `callState(card.view, callId)` for its status,
-`callLabel(row)` for its title, and `waiting(card.view, { callId })` for what it's blocked on.
+the card's calls as immutable `CallObservation` values, with an opaque `view`, in place of
+`tasks` and `actions`. Read a call's `taskId`, `state`, and `label`, and
+`openInteractions(card.view, { about: { callId } })` for the interactions holding it up.
 `TaskCardTask`, `TaskCardAction`, `TaskCardBlocker` and `TaskCardStatus` are gone.
 
 A channel that keeps something in step with the session can handle `committed`, once per
@@ -267,9 +268,11 @@ The OpenTelemetry trace schema remains version 4, with the same span names and a
 ## Commands and session handles
 
 Sends, answers, and session controls return a `Delivery` directly. Its own `sessionId` and
-`deliveryId` are serializable without reading the stream. Iterate it or call `result()` to follow
-that exact command's settlement. Replace `MessageResponse` and `MessageResult` imports with
-`Delivery` and `DeliveryResult`. `ChannelSource.send()` returns a delivery too; use its `sessionId`
+`deliveryId` are serializable without reading the stream. Call `stream()` or `result()` to follow
+that exact command's settlement. The handle is not an async iterable; reads are independent and
+reusable, including after an early exit or abort. Pass a read signal explicitly to either method;
+the signal passed to `send()` covers submission. Replace `MessageResponse` and `MessageResult`
+imports with `Delivery` and `DeliveryResult` from `eve/sessions`. `ChannelSource.send()` returns a delivery too; use its `sessionId`
 to attach a session handle when you need one.
 
 A refused inactive-session command throws `SessionNotActiveError`; its `retryable` flag distinguishes
@@ -278,16 +281,29 @@ an inbox still starting from a session that cannot accept more work. There are n
 applied; a reset delivery settles after retirement and address release.
 
 Session readers expose `id` and `stream()`. `sessions.attach(id)` from `eve/server` returns a
-`SessionReader` without I/O, not a `ServerSession`. Channel handles carry the existing commands
-through `SessionOperations`; a reader does not acquire command authority. The data type previously
+`SessionReader` without I/O, not a `ServerSession`. Authenticated `Session` handles expose the
+commands directly; the generic `SessionOperations` export is removed. A reader does not acquire
+command authority. The data type previously
 exported as `Session` from `eve/context` is now `SessionInfo`, exactly the metadata in `ctx.session`:
 `id`, `auth`, `turn`, optional `parent`, `schedule`, and `predecessor`.
 
-Every reader takes `SessionStreamOptions` from `eve/client`, replacing `StreamOptions` and
+Every reader takes `SessionStreamOptions` from `eve/sessions`, replacing `StreamOptions` and
 `GetEventStreamOptions`. `startIndex` addresses durable lines, matching `meta.position.line`,
 not individual events. The shared options include `follow` and `signal`; only the client uses
 `streamReconnectPolicy`. Client handles (`ClientSession`, `ClientAgentSession`, `ClientSessions`)
 are type-only exports. Obtain them from `new Client()` and its methods instead of constructing them.
+
+`DeliveryResult.status` excludes `working`; it reports a settlement, including `awaiting-input`
+when a person must act. The answer is a new delivery. Every result carries the existing delivery
+`outcome`, and failure requires `error: ErrorInfo`. Results no longer collect `events`; capture
+`delivery.stream()` explicitly when you need the request log. Interrupted reads reject rather
+than inventing a result, and can be retried without resubmitting the command.
+
+Channel context factories take `context(state, channel)`, with `ChannelContext` from
+`eve/channels`. Move `session.continuation?.alias(token)` there to
+`channel.continuation?.alias(token)`; session identity/auth remain under `channel.session`.
+Event handlers use `ctx.channel.continuation`. `SessionHandle` is removed rather than renamed
+into a metadata type that still carries routing authority.
 
 ## Decision models
 
@@ -388,44 +404,47 @@ with a compatible Vercel Connect release, never as an eve-only runtime rename.
 
 - **Frontend commands resolve on acceptance.** `EveAgentStore.send()` and the frontend hooks'
   `send()`/`respond()` return a `Delivery` without waiting for a reply or question. Observe `view`
-  and callbacks, or await `delivery.result()`, which reads the store's existing stream rather than
-  opening a second one. `resume()` resolves after bounded catch-up, without waiting for a turn to end.
-- **Read the native tables.** Frontend snapshots expose `view` and `previews`. Replace `data.activeTurnId` with `activeTurn(view)?.turnId`,
-  `data.turns[turnId].waiting` with `waiting(view, turnId)`, and `data.tasks[taskId].calls`
-  with calls in `view.calls` whose `taskId` matches. Turns have `status: "running" | "settled"`
-  and a separate `outcome`, just like the event fold. The reduced `ConversationTurn`,
-  `ConversationTask`, and `ConversationTaskCall` types are removed.
+  and callbacks, or explicitly read `delivery.stream()` / `delivery.result()`. Those reads can open
+  another HTTP stream and survive a local `newSession()`; abort them with their own read signal. `resume()` resolves after bounded catch-up, without waiting for a turn to end.
+- **Query opaque snapshots.** Frontend `view` values expose no tables. Replace
+  `data.activeTurnId` with `activeTurn(view)?.turnId`, `data.turns[turnId].waiting` with
+  `waiting(view, turnId)`, and `data.tasks[taskId].calls` with `calls(view, { taskId })`.
+  Query results are immutable observations, not renamed rows. Public row types and `previews`
+  dictionaries are removed; use streamed messages, `callPreview`, or `contentPreviews`.
+  The reduced `ConversationTurn`, `ConversationTask`, and `ConversationTaskCall` types stay removed.
 - **Read v27 lines.** The client accepts stream version 27 only. Each stored line is a commit
   (`{at, facts}`) or a progress record (`{progress}`); the client materializes each as an event.
 - **Cursors are line positions.** `streamIndex` and `startIndex` count stored lines, not events.
   Saved cursors from v26 sessions don't apply to v27 sessions.
 - **Identity is `meta.position`.** `meta.id` is gone. Deduplicate on `(line, index)`.
 - **Responses end on their delivery.** A message's response ends when its `delivery.settled`
-  arrives, finishing that line. `result().status` now uses `RequestStatus`: `working`,
-  `awaiting-input`, `completed`, `failed`, or `cancelled`. **`completed` has changed meaning:**
+  arrives, finishing that line. `result().status` is `awaiting-input`, `completed`, `failed`, or
+  `cancelled`. For live state, read `delivery(view, deliveryId)` and its turn with `turn(view, turnId)`. **`completed` has changed meaning:**
   it means the request completed, not that the session ended. Replace old `completed` checks for
   session termination with `sessionEnded`; old `waiting` comparisons no longer typecheck. Read text
-  from `reply`, not `message`. `requestStatus(view, deliveryId)` from `eve/events` applies the same rule.
-- **Interactions.** Every interaction a person is asked, sign-ins included, is in one list:
-  `view.interactions`, a response's `interactions`, `openInteractions(view)`. Filter
+  from `reply`, not `message`. `waiting(view, turnId)` returns `{ on: "session" }` while the session can make progress, `{ on: "interaction", interactions }` while input is needed, or `{ on: "work", calls, tasks }` while work runs; it is `undefined` only for an absent or settled turn.
+- **Interactions.** Every open question, approval, and sign-in is in one list:
+  `interactions(view)`, a response's `interactions`, `openInteractions(view)`. Filter
   by `request.kind`. An approval or a question about a call shows on its call's tool part
   (`part.interaction`); every other interaction, such as a sign-in or the budget prompt, is an
   `EveInteractionPart` of its own.
 - **Tool parts share call state.** `EveToolPart.state` is `"streaming"` with partial `inputText`,
   then the shared `CallState`: `requested`, `approval`, `running`, `blocked`, `completed`, `failed`,
   `rejected`, or `cancelled`. `kind` and `stepIndex` are required. Read raw outcomes, reasons,
-  and task identities from `view.calls[part.callId]`; duplicated part fields are removed.
-- **Flat snapshots.** The hook and store expose `view`, `previews`, `messages`, `agents`,
+  and task identities from `call(view, part.callId)`; duplicated part fields are removed.
+- **Flat snapshots.** The hook and store expose `view`, `messages`, `agents`,
   `events`, `session`, `status`, and `error`, without a `data` wrapper. Status is `idle`, `busy`,
   or `resuming`; errors are separate. All callbacks stay. Save `events` and `session` as they
   change, not only in `onFinish`, so pauses survive reloads.
 - **No local interaction lifecycle.** Optimistic answers last only through the POST round trip;
   response rows then own them. An interaction remains `open` until settlement, not `responded`.
-- **Use the shared fold.** `eve/events` exports the catalog, the fold that turns facts into tables,
-  and selectors such as `activeTurn`, `reply`, `openInteractions`, `waiting`, and `idle`, so a
+- **Use the shared fold.** `eve/events` exports the catalog, the fold that builds opaque snapshots,
+  and queries such as `activeTurn`, `reply`, `openInteractions`, `waiting`, and `idle`, so a
   client doesn't need its own reducer for session state. `callState(view, callId)` says where a
-  call stands for a display, `callLabel(row)` how to name it, and `waiting(view, { taskId })` or
-  `waiting(view, { callId })` who a task's or call's work waits on.
+  call stands for a display, `callLabel(observation)` how to name it, and
+  `openInteractions(view, { about: { callId } })` (or `{ about: { taskId } }`) lists its open interactions.
+  Public folding returns a new snapshot: `view = foldEvents(view, events)`. It preserves the
+  previous view and holds unfinished commits privately. Persist events/cursors, not the backing view.
 - **Distinguish local and server resets.** Call `newSession()` to clear local frontend state and
   its cursor. `reset()` now retires the server-side session and returns its delivery.
 - **Follow children with `child.opened`.** `session.agent(opened)` takes a `child.opened` event.
@@ -438,12 +457,14 @@ with a compatible Vercel Connect release, never as an eve-only runtime rename.
   `await session.nextTurn()`. Attachment is I/O-free. Replace `t.target.watchTurn(id, options)` with
   `t.target.attach(id, { startIndex }).watch({ until })`, passing only the options you need. Reads
   advance the handle's cursor. Eval session handles use `id`; accepted turns still expose `sessionId`.
-- Turn results expose `view`, `reply`, `data`, `sessionEnded`, and the shared request status.
+- Turn results expose opaque `view`, `reply`, `data`, `sessionEnded`, and the shared request
+  status, with delivery `outcome` when observed and direct failure `error`. Evals explicitly
+  retain their event slices and cumulative catch-up; ordinary delivery results do not.
 - Match v27 facts in `t.event(...)`, `eventOrder(...)`, and `waitForEvent(...)`. Event matchers can
   match a fact's `scope`.
 - `turn.waitForToolCall(name, options)` waits for a settled call to a tool. Replace `toolCallsOf`
-  with `Object.values(turn.view.calls)`; names are `call.capability.name`, and settled results use
-  `call.outcome`. Use `callOutputSource(turn.view, call.callId)` from `eve/events` when a call shares
+  with `calls(turn.view, { kind: "tool" })`; names are `call.name`, and settled results use
+  the shared `call.state` and `call.outcome`. Use `callOutputSource(turn.view, call.callId)` from `eve/events` when a call shares
   another call's output. Eval tool calls still carry their `callId`.
 - The subagent matcher's `remoteUrl` is removed, and a subagent call's `status` is `pending` until
   it settles, then its outcome (`completed`, `failed`, `rejected`, `interrupted`, `abandoned`).
@@ -452,7 +473,8 @@ with a compatible Vercel Connect release, never as an eve-only runtime rename.
 
 ## Public imports and authoring types
 
-- Import fact and view types from `eve/events`, `SessionContext` and `HistoryMessage` from
+- Import delivery/session operation contracts from `eve/sessions`, fact/view/query types from
+  `eve/events`, `SessionContext`, `SessionInfo`, and `HistoryMessage` from
   `eve/context`, and assertion types and `ToolStub` from `eve/evals`. The client no longer
   re-exports the event catalog's types. Named judge, mock-model, approval, and disabled-marker
   types remain available.
@@ -486,7 +508,7 @@ with a compatible Vercel Connect release, never as an eve-only runtime rename.
   poll again. An id names one interaction for the session's life, so an earlier batch's ids never
   answer a later one. `sessionEnded` separately reports session termination.
 - **`eve remote invoke`.** JSON results use the shared request statuses, `reply`, `data`, and
-  `sessionEnded`, without a nested `outcome`. Resume coordinates include the original `deliveryId`.
+  `sessionEnded`, with the delivery `outcome` when observed and direct failure `error`. Resume coordinates include the original `deliveryId`.
   Deployment authentication failures are CLI errors, not session statuses. An `awaiting-input`
   sign-in resumes without a prompt once completed.
 - **Direct tools.** `invokeTool` returns a call-shaped `outcome`: `completed` with `output` and
