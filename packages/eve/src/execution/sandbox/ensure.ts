@@ -47,6 +47,13 @@ interface EnsureSandboxAccessInput {
   readonly registry: RuntimeSandboxRegistry;
   readonly sessionId: string;
   readonly state: SandboxState | null;
+  /**
+   * `true` for a caller that borrows a session's sandbox outside its turns,
+   * such as a workflow step. Its handle stays out of the shutdown registry,
+   * which tracks one handle per session, so it never replaces or drops the
+   * session's own.
+   */
+  readonly borrowed?: boolean;
 }
 
 /** The access `ensureSandboxAccess` builds, with what the opener may do beyond the sandbox API. */
@@ -92,6 +99,12 @@ export async function ensureSandboxAccess(
   let opened: OpenedSandbox | undefined;
   let opening: Promise<SandboxProviderHandle> | undefined;
   let requiring: Promise<SandboxProviderHandle> | undefined;
+  const track: typeof trackActiveSandboxHandle = (entry) => {
+    if (input.borrowed !== true) trackActiveSandboxHandle(entry);
+  };
+  const untrack: typeof untrackActiveSandboxHandle = (entry) => {
+    if (input.borrowed !== true) untrackActiveSandboxHandle(entry);
+  };
   const appRoot =
     getRuntimeCompiledArtifactsSandboxAppRoot(input.compiledArtifactsSource) ?? process.cwd();
   const captured = (): SandboxState => ({ session: persisted });
@@ -226,7 +239,7 @@ export async function ensureSandboxAccess(
       });
     const handle = await opening;
     installHandle(provider.providerName, handle);
-    trackActiveSandboxHandle({
+    track({
       handle,
       providerName: provider.providerName,
       sessionId: input.sessionId,
@@ -314,7 +327,7 @@ export async function ensureSandboxAccess(
       persisted = null;
       throw error;
     }
-    trackActiveSandboxHandle({
+    track({
       handle: opened.handle,
       providerName: opened.providerName,
       sessionId: input.sessionId,
@@ -334,7 +347,7 @@ export async function ensureSandboxAccess(
   function forgetHandle() {
     const current = opened;
     if (current !== undefined) {
-      untrackActiveSandboxHandle({
+      untrack({
         handle: current.handle,
         providerName: current.providerName,
         sessionId: input.sessionId,
