@@ -53,7 +53,7 @@ export async function agentToolServeWorkflow(
       if (event.result.status === "failed") {
         // The throw ends this task, so the model can only retry with a new one.
         throw new Error(
-          `The agent's turn failed: ${event.result.error?.message ?? "no reason given"}\nThis task has ended; to retry, call ${ctx.toolName} without taskId.`,
+          `The agent's turn failed: ${event.result.error.message}\nThis task has ended; to retry, call ${ctx.toolName} without taskId.`,
         );
       }
       // `next` can take a call after the result wins the race, and the reply
@@ -67,7 +67,7 @@ export async function agentToolServeWorkflow(
         next = following;
         continue;
       }
-      ctx.reply(event.result.message ?? "");
+      ctx.reply(event.result.reply ?? "");
     }
     turn = sendToAgent(agent, await next);
     next = receive();
