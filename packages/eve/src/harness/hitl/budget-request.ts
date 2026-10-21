@@ -15,7 +15,7 @@ import type { TokenUsage } from "#shared/token-usage.js";
 const SESSION_LIMIT_CONTINUATION_TOOL_NAME = "session_limit_continuation";
 
 /** Option id that starts a new usage window. */
-const SESSION_LIMIT_CONTINUE_OPTION_ID = "continue";
+export const SESSION_LIMIT_CONTINUE_OPTION_ID = "continue";
 
 /** Option id that declines continuation and ends the session. */
 export const SESSION_LIMIT_STOP_OPTION_ID = "stop";
@@ -124,13 +124,17 @@ export function resolveSessionLimitContinuation(input: {
   if (response === undefined) {
     return undefined;
   }
+  const granted = sessionLimitDecision(response);
+  return granted === undefined ? undefined : { granted };
+}
 
-  if (response.optionId === SESSION_LIMIT_CONTINUE_OPTION_ID) {
-    return { granted: true };
-  }
-  if (response.optionId === SESSION_LIMIT_STOP_OPTION_ID) {
-    return { granted: false };
-  }
-
+/**
+ * Whether an answer to a session-limit prompt approves (`true`) or stops
+ * (`false`). Any other answer, such as an unknown option or text alone,
+ * decides nothing.
+ */
+export function sessionLimitDecision(response: InputResponse): boolean | undefined {
+  if (response.optionId === SESSION_LIMIT_CONTINUE_OPTION_ID) return true;
+  if (response.optionId === SESSION_LIMIT_STOP_OPTION_ID) return false;
   return undefined;
 }

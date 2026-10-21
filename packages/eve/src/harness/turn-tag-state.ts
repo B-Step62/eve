@@ -87,20 +87,38 @@ export function toUsage(totals: TokenUsageTotals): TokenUsage {
 
 /**
  * What the session spent since the last approved continuation, or since it
- * started. This is the `window` the session usage limit sees.
+ * started. This is the `window` the session usage limit sees. A window that
+ * starts at spend a child hasn't reported yet reads zero until it does.
  */
 export function getSessionUsageWindow(session: Pick<HarnessSession, "state">): TokenUsage {
-  return toUsage(subtractTokenUsage(getSessionTokenUsage(session), getWindowStart(session)));
+  return toUsage(
+    maxTokenUsage(
+      subtractTokenUsage(getSessionTokenUsage(session), getWindowStart(session)),
+      ZERO_TOKEN_USAGE,
+    ),
+  );
 }
 
-/** Starts a new usage window at the session's current totals, after an approved continuation. */
-export function resetSessionUsageWindow<T extends Pick<HarnessSession, "state">>(session: T): T {
+/**
+ * Starts a new usage window after an approved continuation, at the session's
+ * totals plus `unreported`: spend its children showed in their prompts but
+ * haven't reported yet. A window never starts earlier than the current one,
+ * so a continuation that arrives twice moves the start once.
+ */
+export function resetSessionUsageWindow<T extends Pick<HarnessSession, "state">>(
+  session: T,
+  unreported?: TokenUsageDelta,
+): T {
+  const start = maxTokenUsage(
+    addTokenUsage(getSessionTokenUsage(session), toTokenUsageDelta(unreported)),
+    getWindowStart(session),
+  );
   return {
     ...session,
     state: {
       ...session.state,
       [SESSION_USAGE_WINDOW_INDEX_KEY]: getSessionUsageWindowIndex(session) + 1,
-      [SESSION_USAGE_WINDOW_START_KEY]: getSessionTokenUsage(session),
+      [SESSION_USAGE_WINDOW_START_KEY]: start,
     },
   };
 }
@@ -272,6 +290,17 @@ function subtractTokenUsage(total: TokenUsageTotals, base: TokenUsageTotals): To
     inputTokens: total.inputTokens - base.inputTokens,
     outputTokens: total.outputTokens - base.outputTokens,
     sawCost: total.sawCost || base.sawCost,
+  };
+}
+
+function maxTokenUsage(a: TokenUsageTotals, b: TokenUsageTotals): TokenUsageTotals {
+  return {
+    cacheReadTokens: Math.max(a.cacheReadTokens, b.cacheReadTokens),
+    cacheWriteTokens: Math.max(a.cacheWriteTokens, b.cacheWriteTokens),
+    costUsd: Math.max(a.costUsd, b.costUsd),
+    inputTokens: Math.max(a.inputTokens, b.inputTokens),
+    outputTokens: Math.max(a.outputTokens, b.outputTokens),
+    sawCost: a.sawCost || b.sawCost,
   };
 }
 

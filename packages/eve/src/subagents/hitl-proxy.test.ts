@@ -177,20 +177,37 @@ describe("routeDeliverPayload", () => {
       {
         childContinuationToken: "child-a",
         payload: { inputResponses: [{ optionId: "stop", requestId: "req-limit" }] },
-        resolved: {
-          event: REQUEST_EVENT,
-          resolutions: [
-            {
-              kind: "session-limit",
-              outcome: "answered",
-              requestId: "req-limit",
-              response: { optionId: "stop", requestId: "req-limit" },
-            },
-          ],
-        },
+        // The child closes its own prompt: a Continue elsewhere may have settled it first.
+        resolved: { event: REQUEST_EVENT, resolutions: [] },
       },
     ]);
     expect(routed.parentAction).toEqual({ kind: "cancel-turn" });
+    expect(routed.continued).toBeUndefined();
+  });
+
+  it.each([
+    { continues: true, response: { optionId: "continue", requestId: "req-limit" } },
+    { continues: false, response: { optionId: "maybe", requestId: "req-limit" } },
+    { continues: false, response: { requestId: "req-limit", text: "Approve" } },
+  ])("raises the allowance only for a real Continue: $response", ({ continues, response }) => {
+    const session = withRelays(createSession(), {
+      entries: [
+        [
+          "req-limit",
+          { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "session-limit" },
+        ],
+      ],
+      forChildContinuationToken: "child-a",
+    });
+
+    const routed = routeDeliverPayload({
+      payload: { inputResponses: [response] },
+      state: session.state,
+    });
+
+    expect(routed.forChildren).toMatchObject([{ childContinuationToken: "child-a" }]);
+    expect(routed.continued).toBe(continues ? "req-limit" : undefined);
+    expect(routed.parentAction).toBeUndefined();
   });
 });
 
