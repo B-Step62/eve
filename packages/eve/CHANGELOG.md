@@ -1,5 +1,21 @@
 # eve
 
+## 0.83.0
+
+### Minor Changes
+
+- 3f698dd: Sandbox providers now key each sandbox by its session: `start()` must return the existing sandbox for `ctx.session.id` when one exists, and the required `onSessionEnd(ctx, state | null, { reason })` takes no artifact and must delete by key when `state` is `null`. Session end now removes a sandbox even when the session never recorded it, such as one a subagent sharing the sandbox opened first. Built-in providers keep a session's sandbox across rebuilds and open-option changes.
+
+### Patch Changes
+
+- 2b07d0a: The Discord channel can now answer DMs, mentions, and thread replies. `discordChannel({ gateway: {} })` accepts messages forwarded from the Discord Gateway, and `experimental_runDiscordGatewayRelay` from the new `eve/channels/discord/gateway` entry point holds that connection, for example in a Vercel Daemon. In text channels, a mention starts a thread that holds the conversation, and a reply to any bot message continues the session that posted it; set `gateway.startThread: false` to answer in the channel, or return `conversation` or `startThread` from `gateway.onMessage` to decide per message. `defaultDiscordMessageAuth` gives a message's author the same principal `defaultDiscordAuth` gives them for commands and button presses.
+- 87962a0: `eve add channel/discord` now first asks whether people reach the agent through DMs, mentions, and threads, or a slash command. The first scaffolds the Discord Gateway relay in `daemon/`, registers it as a Vercel Daemon in `vercel.json`, enables `gateway` on the channel, turns on the bot's Message Content intent when Discord allows it, and skips registering `/ask`; the second keeps today's slash command setup and is what `--yes` picks. Non-interactive runs answer `discord-messages` with `"gateway"` or `"commands"`.
+- acc76d5: The Discord channel now shows connection sign-ins. In a DM it posts the sign-in link and any confirmation code; in a server it posts a **Sign in** button that shows the link only to the person who has to sign in, in an ephemeral message. The message updates once the sign-in completes or is cancelled.
+- 580417f: Fix repeated horizontal rules and question text accumulating in terminal scrollback during human-in-the-loop prompts. Question and approval drawers now fit small terminals, keeping the focused choice or text editor visible.
+- 39a8b4c: A session whose sandbox is gone (for example after a microsandbox daemon restart, a removed Docker container, a deleted Vercel Sandbox, or a deleted just-bash session directory) now starts a fresh sandbox on its next `ctx.getSandbox()`. Previously every sandbox call in that session failed with the same resume error until the session ended. Thanks @bradhallett for reporting this in #5113 and @moinulmoin for the just-bash case in #4440.
+- 9d1998f: Export `agentWithModel` for `agent/tools/agent.ts` to opt into a root-copy tool whose model-facing input selects the AI Gateway model for each task.
+- dd0aac6: A `"use step"` helper in a workflow tool can now call `ctx.getSandbox()` to open the sandbox of the session that called the tool, on any sandbox provider, so a task can prepare files the session's later tool calls read. When the session had not recorded its sandbox when it called the tool, the step opens it with the owning session's sandbox definition; the step never owns the sandbox, and the session removes it when the session ends.
+
 ## 0.82.0
 
 ### Minor Changes
