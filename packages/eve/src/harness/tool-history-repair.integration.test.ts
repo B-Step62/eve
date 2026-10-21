@@ -3,17 +3,13 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 
 import { ContextContainer, contextStorage } from "#context/container.js";
-import { writeTaskTable } from "#execution/tasks/table.js";
 import { createUserMessage } from "#harness/messages.js";
 import { enterSessionProjection } from "#harness/session-machine/current.js";
 import { repairToolHistory } from "#harness/tool-history-repair.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import { setTurnClientContextState } from "#harness/turn-client-context.js";
 import type { HarnessSession } from "#harness/types.js";
-import { registerWorkflowToolRun } from "#harness/workflow-tool-runs.js";
 import { foldingHandler, withOpenTurn } from "#internal/testing/session-machine.js";
-import { initialSessionProjection } from "#protocol/session-projection.js";
-import type { InputRequest } from "#shared/input.js";
 
 const call = { type: "tool-call" as const, toolCallId: "old-call", toolName: "work", input: {} };
 const calling: ModelMessage = { role: "assistant", content: [call] };
@@ -28,13 +24,6 @@ const unknownResult = {
   ...result,
   output: { type: "error-text", value: expect.stringContaining("execution outcome is unknown") },
 };
-const approval: InputRequest = {
-  action: { kind: "tool-call", callId: call.toolCallId, toolName: "work", input: {} },
-  kind: "tool-approval",
-  prompt: "Approve?",
-  requestId: "approval",
-};
-
 function results(messages: readonly ModelMessage[]) {
   return messages.flatMap((message) =>
     message.role === "tool" ? message.content.filter((part) => part.type === "tool-result") : [],
@@ -140,25 +129,8 @@ describe("saved tool history", () => {
     "duplicate-call",
     "late-result",
     "earlier-result",
-    "suspended-call",
-    "approval",
-    "approved",
-    "suspended-task",
-    "workflow",
-    "task",
-    "task-result",
-    "open-input",
-    "running",
-    "awaiting-input",
-    "projected-task",
-  ])("leaves %s ownership/history untouched", (kind) => {
-    let view: Parameters<typeof repairToolHistory>[0]["view"] = {
-      turn: { grants: [], suspended: [] },
-      projection: initialSessionProjection(),
-    };
-    let state: HarnessSession["state"];
+  ])("leaves %s history untouched", (kind) => {
     let messages: ModelMessage[] = [calling, user];
-    const event = { sequence: 1, stepIndex: 0, turnId: "previous-turn" };
     if (kind === "provider")
       messages = [{ role: "assistant", content: [{ ...call, providerExecuted: true }] }, user];
     if (kind === "inline-result") messages = [{ role: "assistant", content: [call, result] }, user];
@@ -173,85 +145,8 @@ describe("saved tool history", () => {
     if (kind === "duplicate-call") messages.push(calling);
     if (kind === "late-result") messages.push({ role: "tool", content: [result] });
     if (kind === "earlier-result") messages.unshift({ role: "tool", content: [result] });
-    if (["suspended-call", "approval", "approved", "suspended-task"].includes(kind)) {
-      const task = {
-        kind: "workflow-task" as const,
-        callId: call.toolCallId,
-        toolName: "work",
-        input: {},
-        workflowId: "workflow",
-        entry: { entryPoint: "execute" as const },
-      };
-      view = {
-        ...view,
-        turn: {
-          grants: [],
-          suspended: [
-            {
-              event,
-              messages: kind === "suspended-call" ? [calling] : [],
-              requests: kind === "approval" ? [approval] : [],
-              approved: kind === "approved" ? [approval] : [],
-              tasks: kind === "suspended-task" ? [task] : [],
-            },
-          ],
-        },
-      };
-    }
-    if (kind === "workflow") {
-      const run = {
-        callId: call.toolCallId,
-        toolName: "work",
-        origin: event,
-        address: { runId: "run", hookToken: "hook" },
-      };
-      state = registerWorkflowToolRun({ state }, run).state;
-    }
-    if (kind === "task" || kind === "task-result") {
-      const calls = [{ callId: call.toolCallId, turnId: event.turnId }];
-      const task = {
-        id: "task",
-        kind: "agent" as const,
-        name: "agent",
-        resumable: false,
-        calls: kind === "task" ? calls : [],
-        results:
-          kind === "task-result" ? [{ calls, status: "completed" as const, output: "done" }] : [],
-      };
-      state = writeTaskTable({ state }, { tasks: [task] }).state;
-    }
-    if (kind === "open-input")
-      view = {
-        ...view,
-        projection: {
-          ...view.projection,
-          inputs: { approval: { ...event, request: approval, status: "open" } },
-        },
-      };
-    if (["running", "awaiting-input", "projected-task"].includes(kind))
-      view = {
-        ...view,
-        projection: {
-          ...view.projection,
-          calls: {
-            [call.toolCallId]: {
-              callId: call.toolCallId,
-              name: "work",
-              ...event,
-              ...(kind === "projected-task"
-                ? { taskId: "task" }
-                : {
-                    status:
-                      kind === "awaiting-input"
-                        ? ("awaiting-input" as const)
-                        : ("running" as const),
-                  }),
-            },
-          },
-        },
-      };
     const original = structuredClone(messages);
-    expect(repairToolHistory({ messages, state, view, insertionIndex: 1 })).toEqual({
+    expect(repairToolHistory({ messages, insertionIndex: 1 })).toEqual({
       messages: original,
       insertionIndex: 1,
     });

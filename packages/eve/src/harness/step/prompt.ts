@@ -31,8 +31,6 @@ export interface Prompt {
 export async function buildPrompt(step: Step, turn: TurnInput): Promise<Prompt> {
   const repaired = repairToolHistory({
     messages: step.session.history,
-    state: step.session.state,
-    view: step.view(),
     insertionIndex: turn.storedClientContext?.insertionIndex,
   });
   const messages = validateHarnessModelMessages(repaired.messages);
