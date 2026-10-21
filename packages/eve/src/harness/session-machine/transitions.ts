@@ -906,10 +906,7 @@ export function cancel(view: SessionView, input: { readonly cause?: Cause } = {}
 function unreadSettled(view: SessionView): SessionEvent[] {
   const tables = view.projection.view;
   return (view.turn.queued?.deliveries ?? [])
-    .filter(({ deliveryId }) => {
-      const row = tables.deliveries[deliveryId];
-      return row !== undefined && row.status !== "settled";
-    })
+    .filter(({ deliveryId }) => tables.deliveries[deliveryId]?.status === "admitted")
     .map(({ deliveryId }) => fact("delivery.settled", { deliveryId, outcome: "ignored" }));
 }
 
