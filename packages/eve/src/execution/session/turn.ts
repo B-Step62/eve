@@ -193,15 +193,20 @@ export class SessionExecution {
       const { cursor } = this.input;
       const caller = bindCaller;
       bindCaller = undefined;
-      const result = await cursor.advanceWithHistory((state) =>
-        turnStep({
-          ...state,
-          abortSignal: turn.signal,
-          caller,
-          input: nextStepInput,
-          steeringSignal: turn.steeringSignal,
-        }),
-      );
+      const run = (recover?: true) =>
+        cursor.advanceWithHistory((state) =>
+          turnStep({
+            ...state,
+            abortSignal: turn.signal,
+            caller,
+            input: nextStepInput,
+            recover,
+            steeringSignal: turn.steeringSignal,
+          }),
+        );
+      // A step that fails every attempt fails its turn, not the session; only a failed recovery
+      // ends the session.
+      const result = await run().catch(() => run(true));
       if (result.compacted === true) turn.compacted = true;
 
       // Deliveries the boundary admits next arrived while the step ran. A step

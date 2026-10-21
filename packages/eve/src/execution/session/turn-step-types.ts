@@ -40,6 +40,8 @@ export interface TurnStepInput {
   readonly serializedContext: Record<string, unknown>;
   readonly sessionState: DurableSessionState;
   readonly history: HarnessModelMessage[];
+  /** Every attempt of this step failed: recover what they published and fail the turn. */
+  readonly recover?: true;
 }
 
 /** The session state every step result carries. */

@@ -2,10 +2,8 @@ import { readDurableSession } from "#execution/durable-session-store.js";
 import { recordRemoteChildBinding, type RemoteChildBinding } from "#execution/child-binding.js";
 import { stopLateAgentSessionStep } from "#execution/agent-sessions/steps.js";
 import { publishSessionEvents, type SessionStepState } from "#execution/publish-session-events.js";
-import {
-  withSessionStateDelta,
-  type SessionStateTransition,
-} from "#execution/session/state-delta.js";
+import { type SessionStateTransition } from "#execution/session/state-delta.js";
+import { withSessionStateDelta } from "#execution/session/step-state-delta.js";
 import { applyTaskRunMessage, type TaskRunMessage } from "#execution/tasks/steps.js";
 import { isActiveTaskRun, readTaskTable } from "#execution/tasks/table.js";
 import type {
