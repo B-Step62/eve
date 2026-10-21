@@ -187,6 +187,12 @@ describe("local instrumentation runtime", () => {
         outcome: "completed",
         type: "turn.settled",
       });
+      await hooks.publish({
+        idempotencyKey: sessionIdempotencyKey("session-1"),
+        sessionId: "session-1",
+        outcome: "completed",
+        type: "session.ended",
+      });
     };
     await runtimeContext.with(activeContext, () =>
       contextStorage.run(new ContextContainer(), exerciseRuntime),
