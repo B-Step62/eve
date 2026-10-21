@@ -19,7 +19,11 @@ import {
   runnableCalls,
 } from "#harness/session-machine/transitions.js";
 import { sessionEndedFacts } from "#harness/facts.js";
-import type { SuspendedStep } from "#harness/session-machine/state.js";
+import {
+  readTurnState,
+  writeTurnState,
+  type SuspendedStep,
+} from "#harness/session-machine/state.js";
 import type { SessionView } from "#harness/session-machine/view.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import { createStreamChecker } from "#protocol/session-events/checker.js";
@@ -383,6 +387,27 @@ describe("controls and callbacks as deliveries", () => {
     });
     expect(accepted(session, events)).toEqual([]);
   });
+
+  it.each(["cancel", "clear"] as const)(
+    "%s settles input the turn queued but never read as ignored",
+    (control) => {
+      const admitted = withPublished(waitingTurn(), [
+        { data: { deliveryId: "d-typed" }, type: "delivery.admitted" },
+      ]);
+      const queued = writeTurnState(admitted, {
+        ...readTurnState(admitted.state),
+        queued: { deliveries: [{ deliveryId: "d-typed", parts: [] }], message: "approve" },
+      });
+      const view = viewOf(queued);
+      const transition =
+        control === "cancel" ? cancel(view) : clear(view, { sessionId: BASE.sessionId });
+      const events = cascade(view.projection.view, transition.events);
+
+      expect(settledBy(events)).toMatchObject({ "delivery.settled:d-typed": "ignored" });
+      expect(transition.turn).not.toHaveProperty("queued");
+      expect(accepted(queued, events)).toEqual([]);
+    },
+  );
 
   it("completes a sign-in from its callback without recording the provider's payload", () => {
     const session = waitingTurn();
