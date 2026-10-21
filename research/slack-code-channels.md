@@ -13,7 +13,7 @@ last_updated: "2026-10-20"
 > Every member can start turns; the `participants` policy (`"owner"`, `"confirm"`) is deferred,
 > since eve can't read a forked channel's owner before dispatch. Replies follow the thread the user
 > wrote in. Not yet: the membership check, and phases 2 and 3. Phase 2 ships with at-least-once
-> delivery, without `to().create()`.
+> delivery, without `ctx.startInChannel()`.
 
 ## Summary
 
@@ -32,14 +32,14 @@ phases:
    `agent_session_stopped`.
 2. **Fork a thread into a code channel.** A workflow tool lets the model create the code channel
    from the triggering message and start a new eve session there with the thread's conversation as
-   `history`. It uses `ctx.to(channel, target).send()` for workflow tools from
+   `history`. It uses `ctx.sendToChannel()` for workflow tools from
    [#5096](https://github.com/vercel/eve/pull/5096) and `history` from
    [#4477](https://github.com/vercel/eve/pull/4477). Apps can also fork from inbound handlers.
 3. **Code channel surfaces.** Typed helpers for the context bar, views, rename, slash commands,
    and archive.
 
 This plan stacks on #5096. Phase 2 can ship on #5096 as it stands, with at-least-once delivery.
-Making the fork exactly-once and safe against a racing message needs `create()` on `to()` handles
+Making the fork exactly-once and safe against a racing message needs `ctx.startInChannel()`
 with a first message, which #5096 defers until a caller needs it; code channels are that caller
 (see [Forking needs from eve](#forking-needs-from-eve)).
 
@@ -221,9 +221,11 @@ async execute(input, ctx) {
   if (!isSlackMessage(auth)) return { status: "unavailable", reason: "..." };
   if (auth.attributes.thread_ts === "0") return { status: "unavailable", reason: "..." };
   const history = await readTranscript(ctx.session.id); // step
-  const { sessionId } = await ctx
-    .to<SlackChannel>("slack", { channelId, codeChannel: { name, originTs: message_ts } })
-    .send(input.message, { auth, history });
+  const { sessionId } = await ctx.sendToChannel<SlackChannel>("slack", input.message, {
+    target: { channelId, codeChannel: { name, originTs: message_ts } },
+    auth,
+    history,
+  });
   return { status: "opened", sessionId };
 }
 ```
@@ -235,7 +237,7 @@ async execute(input, ctx) {
 2. **Read the transcript.** Fold the calling session's stream with `transcriptReducer()`, as in
    the fork pattern. It keeps the current turn's user message and
    finished assistant text, and leaves out partial text and tool calls.
-3. **Start the session.** `ctx.to("slack", ...).send()` runs the Slack channel's `receive()` in a
+3. **Start the session.** `ctx.sendToChannel("slack", …)` runs the Slack channel's `receive()` in a
    step, which opens the channel and starts its session.
 
 ### The code channel target
@@ -261,9 +263,9 @@ the new channel before the tool's `send()`, their message starts the session, an
 delivery then adds the history and the model's handoff message to it. Nothing is lost, but the
 imported turns land after the person's first message.
 
-`to().create({ history, message })` would fix both: whoever claims the address seeds it in the
-same call that starts its first turn, and a losing claimant sends its message as a follow-up
-instead of dropping it. That waits for `create()` on `to()` handles.
+`ctx.startInChannel(name, message, { target, history })` would fix both: whoever claims the address
+seeds it in the same call that starts its first turn, and a losing claimant sends its message as a
+follow-up instead of dropping it. That waits for `ctx.startInChannel()`.
 
 A signed channel binding (source session, turn, and owner in `agent_resource`) and discovery for
 channels opened from Slack's UI are deferred with it.
@@ -317,7 +319,7 @@ for [Participants](#participants).
 
 ## Forking needs from eve
 
-#4477 adds `history` on `send()` and `create()`. #5096 adds `ctx.to(channel, target).send()` to
+#4477 adds `history` on `send()` and `create()`. #5096 adds `ctx.sendToChannel()` to
 workflow tools, with `history`. Against those:
 
 | Need                               | Status                                                                                                                          |
@@ -325,13 +327,13 @@ workflow tools, with `history`. Against those:
 | Channel operations from a tool     | Covered by #5096 for workflow tools. Ordinary tools stay out, since a retried call could deliver again with no recorded result. |
 | Read the calling session's history | Covered: `sessions.attach()` and `transcriptReducer()` in a step, as in #5096's fork pattern.                                   |
 | Forking mid-turn                   | Covered: the transcript keeps the current user message and finished assistant text.                                             |
-| Exactly-once first turn, race-free | Needs `create()` on `to()` handles with a first `message`. #5096 defers it until a caller needs it.                             |
+| Exactly-once first turn, race-free | Needs `ctx.startInChannel()` with a first `message`. #5096 defers it until a caller needs it.                                   |
 | Size check against Workflow limits | Needed. See below.                                                                                                              |
 | Tool results as text               | Can follow.                                                                                                                     |
 | Lineage (`forkedFrom`)             | Can follow. Not stored until lineage exists, to avoid a second lineage store.                                                   |
 
-**`create()` on `to()` handles.** `to(channel, target).create({ auth, history, message })` runs
-`receive()` with a `from()` whose `send()` becomes a `create()` at the same address, and returns
+**`ctx.startInChannel()`.** `ctx.startInChannel(name, message, { target, auth, history })`
+runs `receive()` with a `from()` whose `send()` becomes a `create()` at the same address, and returns
 `{ created, sessionId }`. An earlier revision of #5096 had this shape before it was deferred.
 `from().create()` gains the same optional first `message`.
 
@@ -392,8 +394,8 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 - Phase 1 is inside the Slack channel: inbound classification, session keying, binding options,
   default hooks, and renderer defaults. No harness or workflow change.
 - Phase 2 adds the Slack `codeChannel` receive target and the `openCodeChannel()` tool. It runs on
-  #5096's workflow tool `ctx.to()`. `create()` on `to()` handles, with a first message, is the one
-  framework addition it would want later, and it is additive.
+  #5096's workflow tool `ctx.sendToChannel()`. `ctx.startInChannel()`, with a first message, is
+  the one framework addition it would want later, and it is additive.
 - Phase 3 is Slack API wrappers and state.
 
 ## Non-goals
@@ -420,7 +422,7 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 5. **Stop semantics.** Whether `agent_session_stopped` should cancel only the active turn or also
    pending tasks the turn started.
 6. **Ship before `create()`?** Phase 2 works on #5096 with at-least-once delivery. Decide whether
-   to ship it that way first or land `to().create()` together with it.
+   to ship it that way first or land `ctx.startInChannel()` together with it.
 
 ## Validation plan
 
@@ -433,9 +435,9 @@ routes them to the existing `onSlashCommand` with the code channel's session tar
 - Integration, modeled on #5096's `channel-handoff.integration.test.ts` against the real
   `slackChannel()` with Slack's API mocked: the tool forks a thread into a code channel, the code
   channel session's first model call sees the thread's history, a later message in the code
-  channel reaches only that session, and the source thread keeps answering. With `to().create()`:
-  a retried send step runs the first turn once, and a message posted before the fork's `create()`
-  still gets the seeded history before it. `agent_session_stopped` cancels the active turn and
+  channel reaches only that session, and the source thread keeps answering. With
+  `ctx.startInChannel()`: a retried send step runs the first turn once, and a message posted
+  before the fork's `create()` still gets the seeded history before it. `agent_session_stopped` cancels the active turn and
   suppresses later posts.
 - Conformance: the Slack conformance suite gains code channel cases (top-level replies, no
   mention required, threaded user replies).
