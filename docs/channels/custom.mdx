@@ -30,8 +30,8 @@ export default defineChannel({
         return Response.json(await source.reset({ reason: "User requested /new" }));
       }
 
-      const session = await source.send(body.message, { auth: null });
-      return Response.json({ sessionId: session.id });
+      const delivery = await source.send(body.message, { auth: null });
+      return Response.json(delivery, { status: 202 });
     }),
 
     POST("/threads/:threadId/cancel", async (_request, { from, params }) =>
@@ -44,8 +44,26 @@ export default defineChannel({
       Response.json(await from(params.threadId).clear()),
     ),
 
-    GET("/sessions/:sessionId/stream", async (_request, { attachSession, params }) => {
-      const stream = await attachSession(params.sessionId).getEventStream();
+    GET("/sessions/:sessionId/stream", async (request, { attachSession, params }) => {
+      const iterator = attachSession(params.sessionId)
+        .stream({ signal: request.signal })
+        [Symbol.asyncIterator]();
+      // This custom event-NDJSON route is not the built-in eve/client wire endpoint.
+      // Read before sending headers so stranded-session errors reach the route.
+      const first = await iterator.next();
+      let firstPending = true;
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const next = firstPending ? first : await iterator.next();
+          firstPending = false;
+          if (next.done) controller.close();
+          else controller.enqueue(encoder.encode(JSON.stringify(next.value) + "\n"));
+        },
+        async cancel() {
+          await iterator.return?.();
+        },
+      });
       return new Response(stream, {
         headers: { "content-type": "application/x-ndjson; charset=utf-8" },
       });
@@ -161,12 +179,12 @@ await session.cancel({ turnId });
 await session.compact();
 await session.clear();
 await session.reset({ reason: "Retire this session" });
-await session.getEventStream({ startIndex: 12 });
+for await (const event of session.stream({ startIndex: 12 })) render(event);
 ```
 
 For a stranded session, `Session.send()`, `Session.respond()`, and a following
-`Session.getEventStream()` throw `SessionStrandedError` from `eve/channels` and deliver nothing.
-`getEventStream({ follow: false })` still reads the recorded history up to the current tail without
+read through `Session.stream()` throw `SessionStrandedError` from `eve/channels` and deliver nothing.
+`stream({ follow: false })` still reads the recorded history up to the current tail without
 changing the session. `error.owner.eveVersion` names the eve release that built the session when it recorded one. Call
 `reset()` to end the stranded session, then start a new one:
 
