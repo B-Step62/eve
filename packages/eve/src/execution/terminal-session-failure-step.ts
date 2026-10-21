@@ -4,6 +4,7 @@ import type { TokenUsage } from "#shared/token-usage.js";
 import { summarizeKnownError } from "#harness/semantic-errors/index.js";
 import { createLogger, formatError } from "#internal/logging.js";
 import type { SessionProjection } from "#protocol/session-projection.js";
+import type { DurableSessionState } from "#execution/durable-session-store.js";
 
 const log = createLogger("execution.workflow-entry");
 
@@ -16,6 +17,7 @@ export async function emitTerminalSessionFailureStep(input: {
   readonly usage: TokenUsage | undefined;
   /** The session's last checkpointed projection. */
   readonly projection?: SessionProjection;
+  readonly sessionState?: DurableSessionState;
 }): Promise<void> {
   "use step";
 
@@ -34,8 +36,12 @@ export async function emitTerminalSessionFailureStep(input: {
     };
     details = summary.hint === undefined ? curated : { ...curated, hint: summary.hint };
   }
-  const code = typeof details.name === "string" ? details.name : "WORKFLOW_EXECUTION_FAILED";
   const message = typeof details.message === "string" ? details.message : String(input.error);
+  const code = message.startsWith("STEP_INTERRUPTED:")
+    ? "STEP_INTERRUPTED"
+    : typeof details.name === "string"
+      ? details.name
+      : "WORKFLOW_EXECUTION_FAILED";
   const sessionId = (input.serializedContext["eve.sessionId"] as string | undefined) ?? "";
   log.error("workflow loop threw — ending the session failed", {
     sessionId,
@@ -51,6 +57,7 @@ export async function emitTerminalSessionFailureStep(input: {
     },
     errorId: typeof details.errorId === "string" ? details.errorId : undefined,
     projection: input.projection,
+    sessionState: input.sessionState,
     serializedContext: input.serializedContext,
     sessionWritable: input.sessionWritable,
     turnId: input.turnId,

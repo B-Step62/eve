@@ -257,7 +257,7 @@ examples.
 
 Running in the app runtime is what lets a tool import shared code from `lib/`, read `process.env`, and take part in eve’s durable pause/resume model.
 
-eve never runs authored tools during discovery. The model sees descriptors first, and only what it actually calls gets executed. Completed steps never re-run; eve replays the recorded result. A step interrupted mid-execution re-runs, so make non-idempotent side effects like charges or emails idempotent, or gate them with approval.
+eve never runs authored tools during discovery. The model sees descriptors first, and only what it actually calls gets executed. Completed steps never re-run; eve replays the recorded result. An interrupted turn step that has not published session events re-runs and can repeat tool calls; one that already published events retains an already settled turn or fails an open one rather than re-running model or tool work. Make non-idempotent side effects like charges or emails idempotent, or gate them with approval.
 
 ## When a tool throws
 

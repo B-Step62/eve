@@ -1,3 +1,5 @@
+import { FatalError, getStepMetadata } from "#compiled/@workflow/core/index.js";
+import { readSessionStreamTailIndex, streamSessionLines } from "#execution/session-event-stream.js";
 import { isHookCancellableEvent } from "#execution/session/turn-event-handler.js";
 import type { ControlDelivery } from "#harness/types.js";
 import { buildAdapterContext } from "#channel/adapter-context.js";
@@ -50,7 +52,7 @@ import type {
 } from "#harness/types.js";
 import { bindSessionInstrumentation } from "#instrumentation/runtime.js";
 import { createLogger } from "#internal/logging.js";
-import { eventsOfLine, linesOf } from "#protocol/session-lines.js";
+import { createEventReader, eventsOfLine, linesOf } from "#protocol/session-lines.js";
 import type { SessionEvent, SessionStreamEvent } from "#protocol/session-event.js";
 import { encodeLineBytes, type FactPosition } from "#protocol/session-events/envelope.js";
 import { type SessionProjection } from "#protocol/session-projection.js";
@@ -129,6 +131,7 @@ async function publishEventsFromStep(
   }
   const restored = await restoreSessionStep(target);
   const { published } = await publishFromSessionStep(restored, {
+    recoveryLines: linesOf(events, "").length,
     cancelTurn,
     origin,
     async publish(emit) {
@@ -164,6 +167,8 @@ export async function restoreSessionStep(step: SessionStepState): Promise<Restor
  * restored with its history.
  */
 export interface SessionStepPublication<T, R, S extends HarnessSessionBase = HarnessSessionBase> {
+  /** A fixed publication can be adopted from the stream without re-running its writer. */
+  readonly recoveryLines?: number;
   /** A hook stops this publication's running turn; its owner adopts the cancellation after commit. */
   readonly cancelTurn?: () => void;
   readonly origin: SessionEventOrigin;
@@ -268,6 +273,20 @@ async function publishInSessionScope<T>(
   });
   try {
     return await withContextScope(ctx, session, async (enrichedSession) => {
+      if (publication.recoveryLines !== undefined) {
+        const recovered = await reconcilePublishedSessionLines({
+          ctx,
+          sessionId: session.sessionId,
+          cancelTurn: publication.cancelTurn,
+        });
+        if (recovered > 0) {
+          if (recovered !== publication.recoveryLines)
+            throw new FatalError(
+              "STEP_INTERRUPTED: A non-turn step published work that cannot be reconstructed from its checkpoint. Start a new session.",
+            );
+          return { result: undefined as T, session: enrichedSession };
+        }
+      }
       const emit =
         instrumentation?.createHandleEvent({ handleEvent: publisher.publish }) ?? publisher.publish;
       const result = await publication.publish(emit, enrichedSession);
@@ -361,6 +380,117 @@ export function checksSessionEvents(): boolean {
   if (configured === "1") return true;
   if (configured === "0") return false;
   return process.env.EVE_DEV === "1";
+}
+
+/**
+ * Reconcile a retried step with lines that its checkpoint did not include. The stream is the
+ * authority for positions: a released writer's chunks survive a failed step. Dispatch is
+ * at-least-once, including when a previous attempt delivered a line but did not checkpoint it.
+ */
+export async function hasUncheckpointedSessionLines(
+  ctx: ContextContainer,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    if (getStepMetadata().attempt <= 1) return false;
+  } catch (error) {
+    if (error instanceof Error && error.name === "NotInStepContextError") return false;
+    throw error;
+  }
+  const tail = await readSessionStreamTailIndex(sessionId);
+  const first = nextLinePosition(ctx);
+  if (tail + 1 < first) throw new Error("Session checkpoint is ahead of its stream.");
+  return tail >= first;
+}
+
+export async function reconcilePublishedSessionLines(input: {
+  readonly ctx: ContextContainer;
+  readonly sessionId: string;
+  readonly onEvent?: (event: SessionStreamEvent) => void;
+  readonly cancelTurn?: () => void;
+  /** Terminal closure must inspect the stream even on its first attempt. */
+  readonly terminal?: boolean;
+  readonly dispatch?: boolean;
+}): Promise<number> {
+  if (!input.terminal) {
+    let metadata: ReturnType<typeof getStepMetadata>;
+    try {
+      metadata = getStepMetadata();
+    } catch (error) {
+      if (error instanceof Error && error.name === "NotInStepContextError") return 0;
+      throw error;
+    }
+    if (metadata.attempt <= 1) return 0;
+  }
+  const { ctx, sessionId } = input;
+  const first = nextLinePosition(ctx);
+  const tail = await readSessionStreamTailIndex(sessionId);
+  if (tail < first) {
+    if (tail + 1 !== first) throw new Error("Session checkpoint is ahead of its stream.");
+    return 0;
+  }
+  log.warn("recovering published lines from interrupted session step", {
+    sessionId,
+    orphanedLines: tail - first + 1,
+  });
+  const dispatcher = input.dispatch === false ? undefined : createSessionEventDispatcher({ ctx });
+  // Only a progress line needs a prior timestamp. One bounded forward read avoids a
+  // durable open per preceding record and refuses to invent an unknown event time.
+  let progressAt: string | undefined;
+  const firstLines = streamSessionLines(sessionId, { follow: false, startIndex: first });
+  let firstRecord;
+  try {
+    firstRecord = (await firstLines.next()).value;
+  } finally {
+    await firstLines.return(undefined);
+  }
+  if (firstRecord?.line === undefined)
+    throw new Error("Cannot reconcile an unreadable session line.");
+  if ("progress" in firstRecord.line) {
+    const start = Math.max(0, first - 256);
+    for await (const record of streamSessionLines(sessionId, {
+      follow: false,
+      startIndex: start,
+    })) {
+      if (record.position >= first) break;
+      if (record.line === undefined)
+        throw new Error("Cannot reconcile an unreadable session line.");
+      if ("facts" in record.line) progressAt = record.line.at;
+    }
+    if (progressAt === undefined)
+      throw new Error(
+        "Cannot reconcile progress: no preceding commit in the bounded history window.",
+      );
+  }
+  const reader = createEventReader(progressAt);
+  let position = first;
+  for await (const record of streamSessionLines(sessionId, { follow: false, startIndex: first })) {
+    if (record.position > tail) break;
+    if (record.line === undefined) throw new Error("Cannot reconcile an unreadable session line.");
+    const events = reader.read(record.line, record.position);
+    if (record.position !== position) throw new Error("Cannot reconcile a missing session line.");
+    recordPublishedLine(ctx, record.line, position, events);
+    const view = currentView(ctx);
+    const progress = "progress" in record.line;
+    const written = events.map((event) => ({
+      event,
+      position: event.meta.position,
+      progress,
+      view,
+    }));
+    for (const event of events) input.onEvent?.(event);
+    if (dispatcher !== undefined) {
+      await contextStorage.run(ctx, async () => {
+        await dispatcher.deliver(written);
+        await dispatcher.runHooks(written, (event) =>
+          isHookCancellableEvent(event.type) ? input.cancelTurn : undefined,
+        );
+      });
+    }
+    position++;
+  }
+  if (position !== tail + 1) throw new Error("Session stream ended before its reported tail.");
+  return position - first;
 }
 
 export function openSessionEventPublisher(input: {
@@ -527,8 +657,11 @@ function openSessionEventWriter(sessionWritable: WritableStream<Uint8Array>): St
       await streamWriter.write(bytes);
     },
     close: async () => {
-      await streamWriter.close();
-      release();
+      try {
+        await streamWriter.close();
+      } finally {
+        release();
+      }
     },
     release,
   };
@@ -561,6 +694,7 @@ export async function publishTerminalSessionEvent(input: {
   readonly errorId?: string;
   readonly ending: SessionEnding;
   readonly serializedContext: Record<string, unknown>;
+  readonly sessionState?: DurableSessionState;
   readonly sessionWritable: WritableStream<Uint8Array>;
   /** The session's last turn, for channel handlers' `ctx.session.turn`. */
   readonly turn?: { readonly id: string; readonly sequence: number };
@@ -572,13 +706,32 @@ export async function publishTerminalSessionEvent(input: {
   const sessionId = (input.serializedContext["eve.sessionId"] as string | undefined) ?? "";
   const fields = { errorId: input.errorId, sessionId };
   const type = "session.ended";
-  const facts = sessionEndedFacts(input.projection, input.ending);
-
+  let projection =
+    input.projection ??
+    (input.sessionState === undefined
+      ? undefined
+      : storedProjection(readDurableSession(input.sessionState).state));
   let ctx: ContextContainer;
   let publisher: SessionEventPublisher;
   try {
     ctx = await deserializeContext(input.serializedContext);
-    enterSessionProjectionAt(ctx, input.projection);
+    enterSessionProjectionAt(ctx, projection);
+    if (input.sessionState === undefined) {
+      await reconcilePublishedSessionLines({ ctx, sessionId, terminal: true, dispatch: false });
+    } else {
+      const durable = readDurableSession(input.sessionState);
+      const agent = resolveEffectiveAgentRuntime(ctx.require(BundleKey), ctx);
+      const session = hydrateDurableSession({
+        compactionOverrides: { thresholdPercent: agent.thresholdPercent },
+        durable,
+        turnAgent: agent.turnAgent,
+      });
+      await withContextScope(ctx, session, async (enriched) => ({
+        result: await reconcilePublishedSessionLines({ ctx, sessionId, terminal: true }),
+        session: enriched,
+      }));
+    }
+    projection = currentProjection(ctx);
     publisher = openSessionEventPublisher({
       ctx,
       origin: "own",
@@ -586,11 +739,43 @@ export async function publishTerminalSessionEvent(input: {
     });
   } catch (error) {
     log.error(`failed to restore context for terminal ${type} event`, { ...fields, error });
-    // The writer that would close what the session leaves open isn't available: close it here.
-    const closed = input.projection === undefined ? facts : cascade(input.projection.view, facts);
+    // Even when providers or handlers cannot run, fold the physical tail if the context
+    // can deserialize. The fallback still appends to the stream's actual tail.
+    try {
+      const fallbackCtx = await deserializeContext(input.serializedContext);
+      enterSessionProjectionAt(fallbackCtx, projection);
+      await reconcilePublishedSessionLines({
+        ctx: fallbackCtx,
+        sessionId,
+        terminal: true,
+        dispatch: false,
+      });
+      projection = currentProjection(fallbackCtx);
+    } catch (foldError) {
+      log.error(`failed to fold tail for terminal ${type} event`, { ...fields, error: foldError });
+    }
+    if (projection?.view.session.status === "ended") {
+      try {
+        await openSessionEventWriter(input.sessionWritable).close();
+      } catch {
+        // Another attempt may have closed the stream already.
+      }
+      return;
+    }
+    const facts = sessionEndedFacts(projection, input.ending);
+    const closed = projection === undefined ? facts : cascade(projection.view, facts);
     await writeUnroutedSessionEvent(input.sessionWritable, closed).catch((writeError) =>
       log.error(`failed to write terminal ${type} event`, { ...fields, error: writeError }),
     );
+    return;
+  }
+
+  if (projection?.view.session.status === "ended") {
+    try {
+      await publisher.writer.close();
+    } finally {
+      publisher.writer.release();
+    }
     return;
   }
 
@@ -624,7 +809,7 @@ export async function publishTerminalSessionEvent(input: {
   }
   const emit = instrumentation?.createHandleEvent({ handleEvent: publish }) ?? publish;
   try {
-    await contextStorage.run(ctx, () => emit(facts));
+    await contextStorage.run(ctx, () => emit(sessionEndedFacts(projection, input.ending)));
   } catch (error) {
     log.error(`failed to publish terminal ${type} event`, { ...fields, error });
   } finally {
@@ -698,6 +883,7 @@ async function commit(
   },
 ): Promise<PublishedSessionEvents> {
   const { published } = await publishFromSessionStep(restored, {
+    recoveryLines: transitions.flatMap((transition) => transition.events).length > 0 ? 1 : 0,
     inputSource: options.inputSource,
     cancelTurn: options.cancelTurn,
     origin: options.origin,

@@ -173,7 +173,7 @@ export default defineHook({
 });
 ```
 
-A consumer that re-reads the stream gets the same positions, so ingesting an event twice is safe. Hooks are still at-least-once: if the step that published a line is interrupted after its hooks ran, a retry can run them again for the same position, and the key above absorbs that.
+A consumer that re-reads the stream gets the same positions, so ingesting an event twice is safe. Hooks are still at-least-once: when a turn step is interrupted after publishing, recovery re-dispatches its recorded lines, even if their hooks already ran. The key above absorbs a repeated delivery at the same position. A turn interrupted before publishing any lines can retry its work normally.
 
 A side effect that must happen once per turn or call — a charge, an email, a ticket — keys well on the fact's own identity, such as `turnId` on `turn.settled` or `callId` on `call.settled`. Each is introduced once and settles once.
 
