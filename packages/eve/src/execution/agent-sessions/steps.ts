@@ -15,6 +15,8 @@ import {
   type SubagentStartTarget,
 } from "#execution/agent-sessions/target.js";
 import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
+import { isTaskWorkflowTargetGone } from "#execution/tasks/workflow-target.js";
+import { cancelRun, getWorld } from "#internal/workflow/runtime.js";
 import {
   createWorkflowCallbackUrl,
   resolveWorkflowCallbackBaseUrl,
@@ -270,6 +272,22 @@ export async function endAgentSessionsStep(input: {
   "use step";
 
   await Promise.all(input.sessions.map(endAgentSession));
+}
+
+/** A late address cannot rely on its cancelled run to clean up the child. */
+export async function stopLateAgentSessionStep(opened: OpenedAgentSession): Promise<void> {
+  "use step";
+  if (opened.address.kind === "remote") {
+    await endAgentSession(opened);
+    return;
+  }
+  try {
+    await cancelRun(await getWorld(), opened.address.sessionId, {
+      cancelReason: RUN_FINISHED_REASON,
+    });
+  } catch (error) {
+    if (!isTaskWorkflowTargetGone(error)) throw error;
+  }
 }
 
 async function endAgentSession(opened: OpenedAgentSession): Promise<void> {

@@ -174,13 +174,14 @@ model reads which tasks settled and which are still working, for example:
 deploy-4hd8sa completed; its result follows. 1 task is still working: researcher-7k2m9q.
 ```
 
-**`eve__task_cancel({ taskId })`** stops a task's current work and says so. A resumable task's answer
-also tells the model how to give it new work. When the task has no work to stop, because it already
-finished or is an idle resumable task, `eve__task_cancel` says that instead:
+**`eve__task_cancel({ taskId })`** stops a task's current work and says so. A cancelled agent task
+ends; to delegate again, start a new agent task. Other resumable tasks stay available, and their
+answer tells the model how to give them new work. When the task has no work to stop, because it
+already finished or is an idle resumable task, `eve__task_cancel` says that instead:
 
 ```text
 Stopped deploy-4hd8sa; it won't report back.
-Stopped researcher-7k2m9q's current work; it won't report back. To give it new work, call researcher again with taskId researcher-7k2m9q.
+Stopped researcher-7k2m9q; it won't report back.
 researcher-7k2m9q had no work to stop.
 ```
 
@@ -252,12 +253,12 @@ correct an agent by calling it again with its `taskId`, or stop a task with `eve
 - **A failed turn** cancels every working task.
 - **The end of the session** ends every task.
 
-Cancelled work never reports back. A `task` tool's task is then finished; its run waits up to 30
-seconds for the body to finish unwinding, then ends as cancelled. A `serve` tool's task stays
-available instead: its waiting calls settle as `cancelled`, the stretch's `abortSignal` aborts, and
-the task becomes idle, as long as the body catches that abort and returns to `receive()`. For an
-agent, that cancels the agent's current turn and keeps its conversation, so a later call with the
-same `taskId` continues where it left off. A `serve` body that doesn't return to `receive()` within
+Cancelled agent and `task` tool tasks end immediately. Later reports, questions, and child-open
+notices from their runs do not reach the session stream. If a child opens after its task ended,
+eve stops that child. The parent can start another turn without waiting for the cancelled run to
+finish cleaning up. Other `serve` tools stay available: their waiting calls settle as `cancelled`,
+the stretch's `abortSignal` aborts, and the task becomes idle, as long as the body catches that
+abort and returns to `receive()`. A `serve` body that doesn't return to `receive()` within
 30 seconds of a cancel ends, and the task finishes.
 
 ## Stream events
@@ -267,10 +268,10 @@ same `taskId` continues where it left off. A `serve` body that doesn't return to
 | `task.started` | A call starts a task                                                     | `taskId`, `name`, `kind`, and `startedBy: { callId }`     |
 | `call.started` | A call reaches its task, including a later call to a resumable task      | `callId` and `taskId`                                     |
 | `call.settled` | A reply, return, failure, or cancel settles one call                     | `callId`, `outcome`, and `output`, `outputOf`, or `error` |
-| `task.ended`   | The task's run ends                                                      | `taskId`, `outcome`, and `reason` or `error`              |
+| `task.ended`   | The task ends, including immediately on cancellation                     | `taskId`, `outcome`, and `reason` or `error`              |
 | `child.opened` | A workflow run, including an agent tool's, opens a session with an agent | `sessionId`, `name`, `stream`, and `owner`                |
 
-`task.started` comes once per task, and `task.ended` once when its run ends. Each call the task
+`task.started` comes once per task, and `task.ended` once when it ends. Each call the task
 serves has its own `call.started` with the `taskId` and its own `call.settled`, whose scope names
 that call's turn, which for a resumable task's later call can be a later turn than the one that
 started the task. `kind` is `"agent"` for an agent tool's task and `"tool"` otherwise. A call's
