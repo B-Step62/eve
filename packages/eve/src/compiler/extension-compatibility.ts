@@ -22,8 +22,8 @@ interface ExtensionCapabilityContract {
 const EXTENSION_CAPABILITY_CONTRACTS = {
   extension: { current: 1, supported: [1], dropped: {} },
   tool: {
-    current: 116,
-    supported: [116],
+    current: 117,
+    supported: [117],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -140,11 +140,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       113: "Corrected public authoring contracts require rebuilding this extension.",
       114: "Corrected public authoring contracts require rebuilding this extension.",
       115: "Corrected public authoring contracts require rebuilding this extension.",
+      116: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   dynamicTool: {
-    current: 102,
-    supported: [102],
+    current: 103,
+    supported: [103],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -247,6 +248,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       99: "Corrected public authoring contracts require rebuilding this extension.",
       100: "Corrected public authoring contracts require rebuilding this extension.",
       101: "Corrected public authoring contracts require rebuilding this extension.",
+      102: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   channel: {
@@ -392,8 +394,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   subagent: {
-    current: 49,
-    supported: [49],
+    current: 50,
+    supported: [50],
     dropped: {
       1: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
       2: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
@@ -443,6 +445,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       46: "Corrected public authoring contracts require rebuilding this extension.",
       47: "Corrected public authoring contracts require rebuilding this extension.",
       48: "Corrected public authoring contracts require rebuilding this extension.",
+      49: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   connection: {
