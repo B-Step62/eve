@@ -4,9 +4,9 @@ import { CHANNEL_SENTINEL, type CompiledChannel } from "#channel/compiled-channe
 import type { ChannelReceiveContext } from "#channel/channel-operations.js";
 import {
   createCrossChannelToFn,
-  createNamedCrossChannelTargetHandle,
   type CrossChannelTarget,
   type CrossChannelToFn,
+  sendToNamedChannel,
 } from "#channel/cross-channel-receive.js";
 import type { Session } from "#channel/session.js";
 import type { Runtime } from "#channel/types.js";
@@ -229,11 +229,12 @@ describe("cross-channel handoff delivery", () => {
       sessionId: "sess_owner",
       status: "accepted",
     });
-    const inbox = createNamedCrossChannelTargetHandle(runtime, [inboxChannel()], "inbox", {
-      ref: 1,
+    await sendToNamedChannel(runtime, [inboxChannel()], "inbox", {
+      auth: null,
+      history,
+      message: "Continue.",
+      target: { ref: 1 },
     });
-
-    await inbox.send("Continue.", { auth: null, history });
 
     expect(runtime.dispatchContinuation).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -242,10 +243,14 @@ describe("cross-channel handoff delivery", () => {
     );
   });
 
-  it("names the available channels when a name matches none", () => {
-    expect(() =>
-      createNamedCrossChannelTargetHandle(makeRuntime(), [inboxChannel()], "slack", {}),
-    ).toThrow(
+  it("names the available channels when a name matches none", async () => {
+    await expect(
+      sendToNamedChannel(makeRuntime(), [inboxChannel()], "slack", {
+        auth: null,
+        message: "Continue.",
+        target: {},
+      }),
+    ).rejects.toThrow(
       'no channel named "slack". Pass the path-derived name of a file in agent/channels/: "inbox".',
     );
   });

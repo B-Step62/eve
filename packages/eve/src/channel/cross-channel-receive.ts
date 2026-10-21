@@ -88,24 +88,24 @@ export function createCrossChannelToFn(
 }
 
 /**
- * Builds a `to()` handle for a channel found by its path-derived name, as
- * workflow tool bodies address channels.
+ * Sends to a channel found by its path-derived name, as workflow tool bodies
+ * address channels with `ctx.channel()`.
  */
-export function createNamedCrossChannelTargetHandle(
+export async function sendToNamedChannel(
   runtime: Runtime,
   channels: readonly CrossChannelTarget[],
   name: string,
-  target: Readonly<Record<string, unknown>>,
-): CrossChannelTargetHandle {
+  input: InvokeChannelReceiveInput["input"],
+): Promise<Session> {
   const channel = channels.find((candidate) => candidate.name === name);
   if (channel === undefined) {
     const available = channels.map((candidate) => `"${candidate.name}"`).join(", ");
     throw new Error(
-      `ctx.to(): no channel named "${name}". Pass the path-derived name of a file in agent/channels/` +
+      `ctx.channel(): no channel named "${name}". Pass the path-derived name of a file in agent/channels/` +
         (available === "" ? "; this agent has no channels." : `: ${available}.`),
     );
   }
-  return createCrossChannelTargetHandle(runtime, channel, target);
+  return await invokeChannelReceive({ caller: "ctx.channel()", input, runtime, target: channel });
 }
 
 function createCrossChannelTargetHandle(
@@ -116,6 +116,7 @@ function createCrossChannelTargetHandle(
   return {
     async send(message, options) {
       return await invokeChannelReceive({
+        caller: "ctx.to()",
         runtime,
         target: channel,
         input: {
@@ -131,6 +132,8 @@ function createCrossChannelTargetHandle(
 }
 
 interface InvokeChannelReceiveInput {
+  /** The API the author called, named in errors. */
+  readonly caller: string;
   readonly runtime: Runtime;
   readonly target: Pick<CrossChannelTarget, "name" | "receive" | "adapter" | "turnPolicy">;
   readonly input: {
@@ -150,12 +153,12 @@ async function invokeChannelReceive(args: InvokeChannelReceiveInput): Promise<Se
   const { name } = args.target;
   if (!args.target.receive) {
     throw new Error(
-      `ctx.to(): channel "${name}" does not implement receive(). ` +
+      `${args.caller}: channel "${name}" does not implement receive(). ` +
         `Declare a receive hook on the channel to accept cross-channel sessions.`,
     );
   }
   if (!args.target.adapter) {
-    throw new Error(`ctx.to(): channel "${name}" has no adapter — cannot build ctx.from().`);
+    throw new Error(`${args.caller}: channel "${name}" has no adapter — cannot build ctx.from().`);
   }
   const channelOperations = createChannelOperations({
     adapter: args.target.adapter,

@@ -100,8 +100,10 @@ export interface AgentSession {
   ): Promise<AgentResponse<TOutput>>;
 }
 
-/** Options for {@link WorkflowChannelTarget.send}. */
-export interface WorkflowChannelSendOptions {
+/** Options for {@link WorkflowChannel.send}. */
+export interface WorkflowChannelSendOptions<TTarget = Record<string, unknown>> {
+  /** Where on the channel the message goes, as the channel's `receive()` hook accepts it. */
+  readonly target: TTarget;
   /** Who the session runs as. Pass `ctx.session.auth.current` to act as the caller. */
   readonly auth: SessionAuthContext | null;
   /** Prior conversation added before the message. */
@@ -109,18 +111,20 @@ export interface WorkflowChannelSendOptions {
 }
 
 /**
- * A channel target selected with `ctx.to()`. Delivery runs as a step through
- * the channel's `receive()` hook. The session belongs to the channel: it has
- * no parent and outlives the workflow run.
+ * One of the agent's channels, selected with `ctx.channel()`. Each `send`
+ * runs as a step through the channel's `receive()` hook. The session belongs
+ * to the channel: it has no parent and outlives the workflow run.
  */
-export interface WorkflowChannelTarget {
+export interface WorkflowChannel<TChannel extends ChannelReference<unknown> = ChannelReference> {
   /**
-   * Starts a session at the target, or continues the one that owns it. A step
-   * that fails after delivering retries, so the message may arrive twice.
+   * Starts a session at `target`, or continues the one that owns it. Each call
+   * resolves its target on its own, so two sends to a target the channel gives
+   * a new address each time start two sessions. A step that fails after
+   * delivering retries, so the message may arrive twice.
    */
   send(
     message: string,
-    options: WorkflowChannelSendOptions,
+    options: WorkflowChannelSendOptions<InferReceiveTarget<TChannel>>,
   ): Promise<{ readonly sessionId: string }>;
 }
 
@@ -143,15 +147,14 @@ export type WorkflowSharedContext = Pick<
    */
   ask(request: ToolInputRequest, options?: ToolInputRequestOptions): PromiseLike<ToolInputResponse>;
   /**
-   * Selects a target on one of the agent's channels, named by its path
-   * (`agent/channels/slack.ts` is `"slack"`). Type the target with a
-   * type-only import: `ctx.to<typeof slack>("slack", { channelId })`.
-   * Only tools on the root agent can call it; it throws in a subagent's tool.
+   * Returns one of the agent's channels, named by its path
+   * (`agent/channels/slack.ts` is `"slack"`). Type its targets with a
+   * type-only import: `ctx.channel<typeof slack>("slack")`. Only tools on the
+   * root agent can call it; it throws in a subagent's tool.
    */
-  to<TChannel extends ChannelReference<unknown> = ChannelReference>(
-    channel: string,
-    target: InferReceiveTarget<TChannel>,
-  ): WorkflowChannelTarget;
+  channel<TChannel extends ChannelReference<unknown> = ChannelReference>(
+    name: string,
+  ): WorkflowChannel<TChannel>;
 };
 
 /**

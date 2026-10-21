@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import * as tools from "#public/tools/index.js";
+import type { SlackChannel } from "#public/channels/slack/slackChannel.js";
 import { defineTool } from "#tools/definition.js";
 import {
   defineWorkflowTool,
@@ -36,6 +37,10 @@ describe("defineWorkflowTool", () => {
             reasoning: "high",
           },
         });
+        const slack = ctx.channel<SlackChannel>("slack");
+        void slack.send("Continue here.", { auth: null, target: { channelId: "C123" } });
+        // @ts-expect-error A Slack target needs a channelId.
+        void slack.send("Continue here.", { auth: null, target: { userId: "U123" } });
         // @ts-expect-error The message is sent with send(), not passed to ctx.agent().
         void ctx.agent("researcher", { message: "Review the deployment." });
         // Token capabilities are available when this context is passed into a step.

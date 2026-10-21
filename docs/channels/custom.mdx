@@ -414,7 +414,7 @@ The destination's `receive` hook defines the target fields and how they map to a
 
 `send` accepts `history`, prior conversation added before the message, in the same shape as [`history` on the eve channel](./eve#start-from-prior-history). eve passes it to the destination's `receive` hook as `input.history` and adds it to the session unless the hook's own `from(...).send(...)` passes `history`.
 
-`ctx.to(...)` is a route-handler API, not a method on every platform callback. [Handler-form schedules](../schedules#handler-form-run) provide the same operation as `to(...)`, and [workflow tools](../tools/workflows#start-channel-sessions-ctxto) provide it by channel name.
+`ctx.to(...)` is a route-handler API, not a method on every platform callback. [Handler-form schedules](../schedules#handler-form-run) provide the same operation as `to(...)`, and [workflow tools](../tools/workflows#start-channel-sessions-ctxchannel) reach channels by name with `ctx.channel(name).send(...)`.
 
 For notifications that don't need an agent turn, use the platform's API instead. See [Durable cross-channel notifications](../patterns/durable-cross-channel-notifications) when those posts also need retries.
 

@@ -29,9 +29,9 @@ tool runs three steps:
 2. **Decide what context to seed the new session with.** Fold the session's stream with
    `transcriptReducer()` and select the messages the new session should have access to.
 3. **Start the forked session.** Call
-   [`ctx.to(channel, target).send(...)`](../tools/workflows#start-channel-sessions-ctxto) with a
-   first message and the selected messages as `history`. The channel's `receive` hook maps the target to
-   a new thread and session, and the message runs the fork's first turn.
+   [`ctx.channel(name).send(...)`](../tools/workflows#start-channel-sessions-ctxchannel) with a
+   target, a first message, and the selected messages as `history`. The channel's `receive` hook
+   maps the target to a new thread and session, and the message runs the fork's first turn.
 
 ## Fork into a new Slack thread
 
@@ -56,8 +56,8 @@ export default defineWorkflowTool({
 
     const history = await readTranscript(ctx.session.id);
     const { sessionId } = await ctx
-      .to<typeof slack>("slack", { channelId })
-      .send("Continue this conversation here.", { auth, history });
+      .channel<typeof slack>("slack")
+      .send("Continue this conversation here.", { target: { channelId }, auth, history });
     return { forked: true, sessionId };
   },
 });
@@ -147,15 +147,19 @@ export default defineWorkflowTool({
 
     const history = await readTranscript(ctx.session.id);
     const { sessionId } = await ctx
-      .to<typeof teams>("teams", {
-        // Drop the current thread so the fork gets its own.
-        conversationId: conversation_id.split(";messageid=")[0],
-        conversationType: "channel",
-        initialMessage: "Continuing this conversation in a new thread.",
-        serviceUrl: service_url,
-        tenantId: typeof tenant_id === "string" ? tenant_id : undefined,
-      })
-      .send("Continue this conversation here.", { auth, history });
+      .channel<typeof teams>("teams")
+      .send("Continue this conversation here.", {
+        target: {
+          // Drop the current thread so the fork gets its own.
+          conversationId: conversation_id.split(";messageid=")[0],
+          conversationType: "channel",
+          initialMessage: "Continuing this conversation in a new thread.",
+          serviceUrl: service_url,
+          tenantId: typeof tenant_id === "string" ? tenant_id : undefined,
+        },
+        auth,
+        history,
+      });
     return { forked: true, sessionId };
   },
 });

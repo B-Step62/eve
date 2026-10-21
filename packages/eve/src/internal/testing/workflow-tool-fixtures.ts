@@ -296,9 +296,10 @@ async function readTranscript(sessionId: string) {
 /** Sends once, then waits durably, so the body replays past the recorded send. */
 export async function sendThenSleepWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
   "use workflow";
-  const delivered = await ctx
-    .to("dm", { userId: input.service })
-    .send("Here is the summary.", { auth: ctx.session.auth.current });
+  const delivered = await ctx.channel("dm").send("Here is the summary.", {
+    auth: ctx.session.auth.current,
+    target: { userId: input.service },
+  });
   await workflowSleep(1);
   return delivered;
 }
@@ -317,8 +318,8 @@ export async function forkToSlackDmWorkflow(
   const channelId = await openDirectMessage(userId);
   const history = await readTranscript(ctx.session.id);
   const { sessionId } = await ctx
-    .to("slack", { channelId })
-    .send("Continue this conversation here.", { auth, history });
+    .channel("slack")
+    .send("Continue this conversation here.", { auth, history, target: { channelId } });
   return { forked: true, sessionId };
 }
 
@@ -350,14 +351,16 @@ export async function forkToTeamsThreadWorkflow(
     return { forked: false, reason: "This conversation is not in a Teams channel." };
 
   const history = await readTranscript(ctx.session.id);
-  const { sessionId } = await ctx
-    .to("teams", {
+  const { sessionId } = await ctx.channel("teams").send("Continue this conversation here.", {
+    auth,
+    history,
+    target: {
       conversationId: conversation_id.split(";messageid=")[0],
       conversationType: "channel",
       initialMessage: "Continuing this conversation in a new thread.",
       serviceUrl: service_url,
       tenantId: typeof tenant_id === "string" ? tenant_id : undefined,
-    })
-    .send("Continue this conversation here.", { auth, history });
+    },
+  });
   return { forked: true, sessionId };
 }
