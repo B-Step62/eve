@@ -68,7 +68,7 @@ export interface EveAgentStoreInit {
   /**
    * Keep following while this predicate accepts the last committed view. Local POSTs, unsettled
    * receipts, and resume catch-up keep the stream open regardless. Evaluated only at complete
-   * line boundaries; a closed stream reopens on send, respond, resume, or follow, from the
+   * line boundaries; a closed stream reopens on any command, resume, or follow, from the
    * store's committed position. If it closes during machine work, the snapshot remains busy
    * until reopened. Defaults to always following, including between turns.
    */

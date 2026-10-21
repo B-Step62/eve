@@ -81,7 +81,7 @@ export function Chat() {
 | `session`          | Serializable fixed session cursor (`sessionId`, `streamIndex`).               |
 | `prewarm`          | Create the durable session without starting a turn.                           |
 | `send`, `respond`  | Submit a message or answers; resolve with a `Delivery` receipt when accepted. |
-| `resume`           | Replay through the current durable tail, then keep following independently.   |
+| `resume`           | Replay through the durable tail; further following obeys `followWhile`.       |
 | `follow`           | Follow a same-session delivery receipt, including one sent by another store.  |
 | `cancel`           | Request durable cancellation of the active turn.                              |
 | `clear`, `compact` | Queue a context change and return its delivery.                               |
@@ -199,7 +199,8 @@ clears. It cannot close a stream during a POST, while an accepted receipt has no
 while `resume()` is catching up. Unlike the previous idle-only policy, it may close during an
 active turn or while waiting for an interaction; the last snapshot can remain `"busy"` until the
 stream reopens. A closed stream cannot observe a change that would make the predicate true again.
-`send()`, `respond()`, `resume()`, or `follow()` reopen it from the store's last committed line,
+Any command (`send()`, `respond()`, `cancel()`, `clear()`, `compact()`, or `reset()`), `resume()`,
+or `follow()` reopens it from the store's last committed line,
 not a cursor advanced by another reader. A prewarmed session opens no stream until its first
 message unless the predicate allows following immediately. React reads the latest predicate
 without remounting the store, even for an inline callback; Vue and Svelte read the current
@@ -279,7 +280,7 @@ while a submission is pending or the session has active work, and `idle` otherwi
 means the hook is catching up an attached session; disable message and HITL submission then.
 A failure updates `error` without replacing the transport status.
 
-`send()` and `respond()` resolve on HTTP acceptance, before the agent needs to reply or pause. They reject if preparation or submission fails; a later execution failure arrives through `view`, `error`, and `onError`. A turn stays open while its work or questions are pending. Read `activeTurn(view)`, `waiting(view, turnId)`, and `activity(view)` from `eve/events` instead of maintaining another turn state. The stream continues after the command's promise resolves. The returned `Delivery` also has
+`send()` and `respond()` resolve on HTTP acceptance, before the agent needs to reply or pause. They reject if preparation or submission fails; a later execution failure arrives through `view`, `error`, and `onError`. A turn stays open while its work or questions are pending. Read `activeTurn(view)`, `waiting(view, turnId)`, and `activity(view)` from `eve/events` instead of maintaining another turn state. By default, the stream continues after the command's promise resolves. The returned `Delivery` also has
 independent `stream({ signal })` and `result({ signal })` reads. Those can open another HTTP
 stream and remain usable after `newSession()` or unmount; pass a signal when the read should
 end with your component. The store's saved cursor tracks only its own committed events, never

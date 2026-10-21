@@ -327,13 +327,7 @@ export class EveAgentStore {
   [attachStore](): void {
     this.#attached = true;
     this.#followAgents();
-    if (
-      this.#accepted.size > 0 ||
-      this.#pending.size > 0 ||
-      this.#posting > 0 ||
-      this.#resumePromise
-    )
-      this.#ensureStream();
+    if (this.#session !== undefined && this.#hasLocalObligation) this.#ensureStream();
     if (this.#autoPrewarm && this.#session === undefined) void this.prewarm().catch(() => {});
   }
 
@@ -520,13 +514,19 @@ export class EveAgentStore {
     }
   }
 
-  #closeStreamWhenIdle(): void {
-    if (this.#inLine) return;
-    if (
+  get #hasLocalObligation(): boolean {
+    return (
       this.#resumePromise !== undefined ||
       this.#pending.size > 0 ||
       this.#posting > 0 ||
-      this.#accepted.size > 0 ||
+      this.#accepted.size > 0
+    );
+  }
+
+  #closeStreamWhenIdle(): void {
+    if (
+      this.#inLine ||
+      this.#hasLocalObligation ||
       this.#followWhile(this.#conversationClient.conversation.view)
     )
       return;

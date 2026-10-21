@@ -214,11 +214,18 @@ describe("EveAgentStore acceptance and observation", () => {
     const current = store();
     const one = current.send({ message: "sunny." });
     const two = current.send({ message: "instead", turnPolicy: "steer" });
+    let attachmentError: unknown;
+    try {
+      attachEveAgentStore(current);
+    } catch (error) {
+      attachmentError = error;
+    }
     created.resolve();
     expect(await one).toEqual({ deliveryId: "d_0", sessionId: "session_1" });
     expect(await two).toEqual({ deliveryId: "d_1", sessionId: "session_1" });
     expect(server.posts).toEqual(["/eve/v1/session", "/eve/v1/session/session_1"]);
     expect(server.reads).toHaveLength(1);
+    expect(attachmentError).toBeUndefined();
   });
 
   it("does not replay historical errors into a new pending send", async () => {
