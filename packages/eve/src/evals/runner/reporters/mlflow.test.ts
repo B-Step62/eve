@@ -80,6 +80,24 @@ function summary(results: EveEvalResult[]): EveEvalRunSummary {
   };
 }
 
+function uploadedSpanAttributes(index = 0): Record<string, unknown> {
+  const artifact = JSON.parse(
+    JSON.stringify(sdk.uploadTraceData.mock.calls[index]?.[1].toJson(), (_, value) =>
+      typeof value === "bigint" ? String(value) : value,
+    ),
+  ) as { spans: { attributes: Record<string, string> }[] };
+  // MLflow decodes each JSON attribute once after reading the artifact JSON.
+  return Object.fromEntries(
+    Object.entries(artifact.spans[0]!.attributes).map(([key, value]) => {
+      try {
+        return [key, JSON.parse(value)];
+      } catch {
+        return [key, value];
+      }
+    }),
+  );
+}
+
 describe("MLflow", () => {
   const requests: { url: string; body: Record<string, unknown>; headers: unknown }[] = [];
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -143,7 +161,10 @@ describe("MLflow", () => {
       parent_span_id: "",
       start_time_unix_nano: 1767225600000000000n,
       end_time_unix_nano: 1767225601000000000n,
-      attributes: { "mlflow.spanInputs": "Weather in Brooklyn", "mlflow.spanOutputs": "Sunny" },
+    });
+    expect(uploadedSpanAttributes()).toMatchObject({
+      "mlflow.spanInputs": "Weather in Brooklyn",
+      "mlflow.spanOutputs": "Sunny",
     });
     const assessments = requests.filter((entry) => entry.url.endsWith("/assessments"));
     expect(assessments.map((entry) => entry.body.assessment)).toEqual([
@@ -174,6 +195,30 @@ describe("MLflow", () => {
     expect(console.log).toHaveBeenCalledWith(
       "MLflow experiment: https://mlflow.example.test/#/experiments/123\n",
     );
+  });
+
+  it("preserves text and structured values through MLflow's artifact decoder", async () => {
+    const outputs = [
+      "5",
+      '{"answer":"Jupiter"}',
+      "true",
+      "null",
+      "",
+      { answer: "Jupiter", count: 5, enabled: true, nothing: null, text: '{"planet":"Mars"}' },
+    ];
+    for (const output of outputs) {
+      const input = typeof output === "string" ? output : "5";
+      const reporter = MLflow({ experimentId: "123" });
+      const completed = result({ result: { ...result().result, output }, assertions: [] });
+      await reporter.onRunStart([{ ...evaluation, description: input }], target);
+      await reporter.onEvalComplete(completed);
+      await reporter.onRunComplete(summary([completed]));
+
+      const attributes = uploadedSpanAttributes(sdk.uploadTraceData.mock.calls.length - 1);
+      expect(attributes["mlflow.spanInputs"]).toStrictEqual(input);
+      expect(attributes["mlflow.spanOutputs"]).toStrictEqual(output);
+      expect(attributes["mlflow.experimentId"]).toBe("123");
+    }
   });
 
   it("omits disabled content from metadata, span data, and assessments while retaining scores", async () => {
@@ -297,13 +342,13 @@ describe("MLflow", () => {
     const info = sdk.createTrace.mock.calls[0]?.[0].toJson();
     expect(info.request_preview.length).toBeLessThanOrEqual(1000);
     expect(info.response_preview.length).toBeLessThanOrEqual(1000);
-    const data = sdk.uploadTraceData.mock.calls[0]?.[1].toJson();
-    expect(data.spans[0].attributes).toMatchObject({
+    const attributes = uploadedSpanAttributes();
+    expect(attributes).toMatchObject({
       "mlflow.spanInputs": input,
       "mlflow.spanOutputs": output,
     });
-    expect(data.spans[0].attributes.eveTraceContexts).toEqual(completed.result.traceContexts);
-    expect(data.spans[0].attributes.eveFailedAssertions).toEqual(completed.assertions);
+    expect(attributes.eveTraceContexts).toEqual(completed.result.traceContexts);
+    expect(attributes.eveFailedAssertions).toEqual(completed.assertions);
     expect(Object.values(info.trace_metadata).every((value) => String(value).length <= 250)).toBe(
       true,
     );

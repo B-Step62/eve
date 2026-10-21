@@ -226,7 +226,11 @@ export async function resolveMlflowClient(trackingUri: string): Promise<MlflowRe
                 start_time_unix_nano: BigInt(startedAt) * 1_000_000n,
                 end_time_unix_nano: BigInt(completedAt) * 1_000_000n,
                 status,
-                attributes,
+                // MLflow artifact attributes hold JSON-encoded OTel values. Keeping
+                // strings encoded preserves outputs such as "5" and JSON text.
+                attributes: Object.fromEntries(
+                  Object.entries(attributes).map(([key, value]) => [key, JSON.stringify(value)]),
+                ),
                 events: [],
               },
             ],
