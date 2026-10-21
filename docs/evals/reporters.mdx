@@ -1,6 +1,6 @@
 ---
 title: "Reporters"
-description: "Ship eval results to Braintrust, Datadog, or JUnit XML. eve runs and scores everything itself."
+description: "Ship eval results to Braintrust, MLflow, Datadog, or JUnit XML. eve runs and scores everything itself."
 ---
 
 eve runs and grades everything itself; reporters ship the results out. The CLI prints a console summary by default (one line per eval, with failed assertions and their messages), and reporters from `eve/evals/reporters` add destinations on top.
@@ -43,6 +43,32 @@ The reporter config takes an optional `projectName` and `experimentName`, plus a
 A reporter instance observes the evals that reference it. Share one instance across several evals (the config, a `shared.ts` export, or every entry of a dataset array) and their results land in a single experiment. Listing the same config reporter on an eval too does not double-report it.
 
 Braintrust needs its SDK installed in the app and credentials in the environment: install the `braintrust` package (`npm install braintrust`) and set `BRAINTRUST_API_KEY`. Pass `--skip-report` to run the eval without shipping results, which also suppresses config reporters and is useful locally when iterating.
+
+## MLflow
+
+`MLflow(...)` reports eval results to an MLflow 3 tracking server, including Databricks. Install the optional SDK with `npm install @mlflow/core@^0.4.0`, then configure an existing experiment:
+
+```ts title="evals/evals.config.ts"
+import { defineEvalConfig } from "eve/evals";
+import { MLflow } from "eve/evals/reporters";
+
+export default defineEvalConfig({
+  reporters: [
+    MLflow({
+      trackingUri: "http://127.0.0.1:5000",
+      experimentId: "123",
+    }),
+  ],
+});
+```
+
+`trackingUri` defaults to `MLFLOW_TRACKING_URI`, or `http://127.0.0.1:5000`. Start a local tracking server with `mlflow server`. File-based tracking URIs are not supported. Supply `experimentId` or set `MLFLOW_EXPERIMENT_ID`; the experiment must already exist. For Databricks, use `trackingUri: "databricks"` or `"databricks://profile"`. The SDK resolves authentication, including `DATABRICKS_HOST` and `DATABRICKS_TOKEN`, Databricks configuration profiles, or `MLFLOW_TRACKING_USERNAME`/`MLFLOW_TRACKING_PASSWORD` and `MLFLOW_TRACKING_TOKEN` for self-hosted servers.
+
+Each reporter instance creates one tracking run per invocation, with an optional `runName`, and one synthetic trace per completed eval. The trace contains the eval description (falling back to its id) as input, its output, verdict, and observed runtime trace contexts. These synthetic traces summarize eval results; the reporter does not copy the agent's runtime spans or change the app's tracing configuration. The SDK uploads both trace metadata and span data to the experiment's artifact storage.
+
+Assertion scores appear as trace assessments from the `eve` code source. Gate names receive a `gate:` prefix, repeated names report their lowest score, and errored assertions report no numeric assessment. Names with unsupported characters are normalized with a stable suffix to keep distinct names separate. The run records mean assertion scores and counts for passed, failed, scored, skipped, and errored evals. Failed evals mark the tracking run as failed. The reporter prints the experiment URL after completion.
+
+Eval inputs, outputs, execution errors, and assertion details are recorded by default. Pass `recordInputs: false`, `recordOutputs: false`, `recordErrors: false`, or `recordAssertionDetails: false` to omit the corresponding content. Assertion names and numeric scores are always exported, so review authored assertion labels before reporting sensitive evals. As with Braintrust, you can attach the reporter to individual evals, share an instance across several evals, or use `--skip-report` to suppress uploads.
 
 ## Datadog
 

@@ -2,6 +2,7 @@ export { Braintrust, type BraintrustReporterConfig } from "#evals/runner/reporte
 export { Console, type ConsoleReporterConfig } from "#evals/runner/reporters/console.js";
 export { Datadog, type DatadogReporterConfig } from "#evals/runner/reporters/datadog.js";
 export { JUnit, type JUnitReporterConfig } from "#evals/runner/reporters/junit.js";
+export { MLflow, type MLflowReporterConfig } from "#evals/runner/reporters/mlflow.js";
 export type {
   EvalReporter,
   EveEvalCompleteContext,
