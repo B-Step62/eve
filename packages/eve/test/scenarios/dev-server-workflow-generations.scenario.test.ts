@@ -92,7 +92,7 @@ function createGenerationMarkerToolSource(marker: string, crashOnce: boolean): s
 
 describe("eve dev server workflow generations", () => {
   it(
-    "retries an active child Workflow on its selected generation after promotion",
+    "fails an interrupted inline turn after promotion and uses the new generation next",
     async () => {
       const app = await scenarioApp(WORKFLOW_GENERATION_DESCRIPTOR);
       const server = await startEveDev(app.appRoot);
@@ -112,6 +112,10 @@ describe("eve dev server workflow generations", () => {
           createGenerationMarkerToolSource("generation-two", false),
         );
         await writeFile(
+          join(app.appRoot, "agent", "tools", "get_next_marker.ts"),
+          createGenerationMarkerToolSource("generation-two", false),
+        );
+        await writeFile(
           join(app.appRoot, "agent", "instrumentation", "reload.ts"),
           createInstrumentationSource("two"),
         );
@@ -121,15 +125,16 @@ describe("eve dev server workflow generations", () => {
         await writeFile(crashWorkerPath, "crash");
         const firstResult = await withinDeadline(
           firstTurn,
-          `Timed out waiting for the selected-generation retry.\n\nstdout:\n${server.stdout()}\n\nstderr:\n${server.stderr()}`,
+          `Timed out waiting for the interrupted turn to settle.\n\nstdout:\n${server.stdout()}\n\nstderr:\n${server.stderr()}`,
         );
-        expect(readCompletedMessages(firstResult.events)).toContain("generation-one");
-        // Providers are installed once by the active host, while durable tool
-        // code can retry from the generation that originally selected it.
-        expect(readCompletedMessages(firstResult.events)).toContain("instrumentation-two");
+        expect(firstResult.events.filter((event) => event.type === "turn.settled")).toMatchObject([
+          { data: { outcome: "failed", error: { code: "STEP_INTERRUPTED" } } },
+        ]);
+        expect(readCompletedMessages(firstResult.events)).not.toContain("generation-one");
+        expect(firstResult.events.filter((event) => event.type === "session.ended")).toEqual([]);
 
         const secondResult = await sendDevelopmentMessage({
-          message: "Use get_marker.",
+          message: "Use get_next_marker.",
           session: firstResult.session,
           serverUrl: server.url,
         });
