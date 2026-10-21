@@ -1,7 +1,10 @@
 import type { SessionAuthContext } from "#channel/types.js";
 
 import { resolvedPromptLabel } from "#channel/resolved-prompt.js";
-import { createLogger, extractErrorId, formatErrorHint } from "#internal/logging.js";
+import type { Interaction, RequestSettlement } from "#channel/interaction-prompts.js";
+import { postedIn, signInChallengeText, type SignInSurface } from "#channel/sign-in.js";
+import { surfaceEvents } from "#channel/surface.js";
+import { createLogger } from "#internal/logging.js";
 import {
   DISCORD_MESSAGE_CONTENT_MAX_LENGTH,
   splitDiscordMessageContent,
@@ -10,9 +13,10 @@ import type {
   DiscordCommandInteraction,
   DiscordInteractionBase,
 } from "#public/channels/discord/inbound.js";
-import { renderInputRequestComponents } from "#public/channels/discord/hitl.js";
+import { renderInteractionComponents } from "#public/channels/discord/hitl.js";
 import type {
   DiscordChannelEvents,
+  DiscordChannelState,
   DiscordCommandResult,
   DiscordContext,
   DiscordHandle,
@@ -81,85 +85,90 @@ export async function editDiscordResolvedPrompt(
   }
 }
 
-/** Built-in Discord event handlers for typing, replies, HITL, and terminal errors. */
-export const defaultEvents: DiscordChannelEvents = {
-  async "turn.started"(_event, channel, _ctx) {
-    await channel.discord.startTyping();
-  },
+type DiscordEventChannel = Parameters<
+  NonNullable<DiscordChannelEvents["interaction.opened"]>
+>[1]["channel"];
 
-  async "authorization.completed"(event, channel, _ctx) {
-    if (event.outcome === "authorized") {
-      await channel.discord.startTyping();
-    }
-  },
+/**
+ * Whether only the person signing in reads the conversation: a one-to-one DM (channel type 1).
+ * A group DM has no guild either, but every member reads it. A session eve started itself has no
+ * interaction, so it isn't taken as private.
+ */
+export function signsInPrivately(state: DiscordChannelState): boolean {
+  return state.channelType === 1 && state.interactionToken !== null;
+}
 
-  async "actions.requested"(_event, channel, _ctx) {
-    await channel.discord.startTyping();
-  },
-
-  async "input.requested"(event, channel, _ctx) {
-    for (const request of event.requests) {
-      const content = splitDiscordMessageContent(request.prompt)[0] ?? request.prompt;
-      const components = renderInputRequestComponents(request);
-      const posted = await channel.discord.post({ components, content });
-      if (components.length === 0 || !posted.id) continue;
-      channel.state.hitlPrompts = {
-        ...channel.state.hitlPrompts,
-        [request.requestId]: {
-          content,
-          messageId: posted.id,
-          options: (request.options ?? []).map(({ id, label }) => ({ id, label })),
-        },
-      };
-    }
-  },
-
-  // Covers every way a prompt ends: a press, a modal answer, or a withdrawal.
-  // The bot token outlives the interaction token the prompt may have been posted with.
-  async "input.resolved"(event, channel, _ctx) {
-    for (const resolution of event.resolutions) {
-      const prompt = channel.state.hitlPrompts?.[resolution.requestId];
-      if (prompt === undefined) continue;
-      const { [resolution.requestId]: _, ...rest } = channel.state.hitlPrompts ?? {};
-      channel.state.hitlPrompts = rest;
-      const label = resolvedPromptLabel(resolution, prompt.options);
+/**
+ * A Discord conversation as a sign-in shows on it: a DM gets the challenge; a group DM or server
+ * channel, a link-free status that points to a DM.
+ */
+function discordSignIns(channel: DiscordEventChannel): SignInSurface {
+  const { discord } = channel;
+  const post = async (content: string) => (await discord.post({ content })).id || undefined;
+  return {
+    private: signsInPrivately(channel.state),
+    postChallenge: (signIn) => post(signInChallengeText(signIn)),
+    post,
+    async edit(messageId, content) {
       try {
-        await editDiscordResolvedPrompt(channel.discord, prompt, label);
+        const response = await discord.request(
+          `/channels/${encodeURIComponent(discord.channelId)}/messages/${encodeURIComponent(messageId)}`,
+          { content },
+          { botAuth: true, method: "PATCH" },
+        );
+        if (!response.ok)
+          log.warn("Discord sign-in status edit failed", { status: response.status });
       } catch (error) {
-        log.warn("Discord answered prompt edit failed", { error, requestId: resolution.requestId });
+        log.warn("Discord sign-in status edit failed", { error });
       }
-    }
-  },
+    },
+    typing: () => discord.startTyping(),
+    posted: postedIn(channel.state, "pendingSignIns"),
+  };
+}
 
-  async "message.completed"(event, channel, _ctx) {
-    if (event.finishReason === "tool-calls" || !event.message) return;
-    await channel.discord.post(event.message);
-  },
+/** Built-in Discord event handlers for typing, replies, HITL, and terminal errors. */
+export const defaultEvents: DiscordChannelEvents = surfaceEvents<DiscordEventChannel>({
+  typing: (channel) => channel.discord.startTyping(),
+  post: (channel, text) => channel.discord.post(text),
+  restart: "command",
+  requests: { show: postDiscordRequest, settle: editDiscordSettledRequest },
+  signIns: discordSignIns,
+});
 
-  async "session.failed"(event, channel) {
-    const hint = formatErrorHint(event);
-    const errorId = extractErrorId(event.details);
-    await channel.discord.post(
-      [
-        `This session could not recover from an error${hint}.`,
-        "",
-        "Start a new command to continue.",
-        ...(errorId ? ["", `Error id: ${errorId}`] : []),
-      ].join("\n"),
-    );
-  },
+async function postDiscordRequest(
+  channel: DiscordEventChannel,
+  request: Interaction,
+): Promise<void> {
+  const content = splitDiscordMessageContent(request.request.prompt)[0] ?? request.request.prompt;
+  const components = renderInteractionComponents(request);
+  const posted = await channel.discord.post({ components, content });
+  if (components.length === 0 || !posted.id) return;
+  channel.state.hitlPrompts = {
+    ...channel.state.hitlPrompts,
+    [request.interactionId]: {
+      content,
+      messageId: posted.id,
+      options: (request.request.options ?? []).map(({ id, label }) => ({ id, label })),
+    },
+  };
+}
 
-  async "turn.failed"(event, channel, _ctx) {
-    if (event.terminal) return;
-    const hint = formatErrorHint(event);
-    const errorId = extractErrorId(event.details);
-    await channel.discord.post(
-      [
-        `I hit an error while handling your request${hint}.`,
-        "",
-        "Please try again, rephrase, or reach out if it keeps failing.",
-        ...(errorId ? ["", `Error id: ${errorId}`] : []),
-      ].join("\n"),
-    );
-  },
-};
+/**
+ * Shows a prompt's answer in place of its buttons. The bot token outlives the interaction token
+ * the prompt may have been posted with.
+ */
+async function editDiscordSettledRequest(
+  channel: DiscordEventChannel,
+  settlement: RequestSettlement,
+): Promise<void> {
+  const { [settlement.interactionId]: prompt, ...rest } = channel.state.hitlPrompts ?? {};
+  if (prompt === undefined) return;
+  channel.state.hitlPrompts = rest;
+  const label = resolvedPromptLabel(settlement, prompt.options);
+  try {
+    await editDiscordResolvedPrompt(channel.discord, prompt, label);
+  } catch (error) {
+    log.warn("Discord answered prompt edit failed", { error, requestId: settlement.interactionId });
+  }
+}
