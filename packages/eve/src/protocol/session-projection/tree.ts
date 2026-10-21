@@ -2,7 +2,7 @@
 // everything under it. Every walk over ownership — what a turn leaves open, what closes with a
 // task, which turn a fact belongs to, what retention must keep — reads this one rule.
 
-import { isObject } from "#shared/guards.js";
+import { isObject } from "#protocol/session-events/json.js";
 import type {
   CallRow,
   ChangeRow,
