@@ -190,6 +190,34 @@ function gate<T = void>() {
   return { open, wait };
 }
 
+async function waitForOwnerGate<T>(
+  promise: Promise<T>,
+  label: string,
+  events: () => readonly SessionStreamEvent[],
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Timed out waiting for ${label}; parent events: ${events()
+                  .map((event) => event.type)
+                  .join(", ")}`,
+              ),
+            ),
+          10_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * A reply that holds until `release` resolves. With `before`, that text streams first, so the
  * reply has started when it holds; without it, nothing has.
@@ -433,7 +461,10 @@ async function withSession(
       });
     } finally {
       stream.dispose();
-      await run.cancel().catch(() => {});
+      const cleanup = run.cancel().catch(() => {});
+      if (name === "edge-cancel-hung-task")
+        await waitForOwnerGate(cleanup, "parent run cancel cleanup", () => events);
+      else await cleanup;
     }
   });
   expectReadersAgree(events);
@@ -1374,12 +1405,16 @@ describe("work delegated to a child session", () => {
         },
       },
       async (session) => {
-        await running.wait;
+        await waitForOwnerGate(running.wait, "child model start", session.events);
         await session.until("task started", (event) => event.type === "task.started");
         await session.next("cancelled task's turn");
-        await session.send("Next turn.");
+        await waitForOwnerGate(session.send("Next turn."), "next turn delivery", session.events);
         await session.next("next turn");
-        await session.send("One more update.");
+        await waitForOwnerGate(
+          session.send("One more update."),
+          "later turn delivery",
+          session.events,
+        );
         await session.next("later turn");
         const projected = emptySessionView();
         foldEvents(projected, session.events(), { retention: "operational" });
@@ -1402,51 +1437,59 @@ describe("work delegated to a child session", () => {
           },
           { timeout: 5_000 },
         );
-        await resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
-          kind: "request",
-          from: {
-            callId: "call_agent",
-            input: { message: "CHILD: work" },
-            runId: runs.data[0]!.runId,
-            sequence: 0,
-            stepIndex: 0,
-            taskId,
-            toolName: "agent",
-            turnId: "turn_0",
-          },
-          replyTo: "late-question",
-          request: {
-            kind: "ask",
-            control: "late-control",
-            request: { prompt: "A late question", title: "Late question", options: [] },
-          },
-        });
+        await waitForOwnerGate(
+          resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
+            kind: "request",
+            from: {
+              callId: "call_agent",
+              input: { message: "CHILD: work" },
+              runId: runs.data[0]!.runId,
+              sequence: 0,
+              stepIndex: 0,
+              taskId,
+              toolName: "agent",
+              turnId: "turn_0",
+            },
+            replyTo: "late-question",
+            request: {
+              kind: "ask",
+              control: "late-control",
+              request: { prompt: "A late question", title: "Late question", options: [] },
+            },
+          }),
+          "late question delivery",
+          session.events,
+        );
         // Fault-inject a late address from the cancelled run through its live owner inbox.
         // This is a separate real child, not the original run opening another session.
-        const lateChild = await startSessionOwner(workflowEntry, [
-          {
-            kind: "initial",
-            ownerDeploymentId: "dpl_inline",
-            input: { message: "CHILD: late work" },
-            serializedContext: buildSerializedContext({
-              auth: ALICE,
-              channelKind: "subagent",
-              channelState: {
-                callId: "call_agent",
-                parentContinuationToken: "late-child-reply",
-                parentSessionId: parentId!,
-                subagentName: "edge-cancel-hung-task",
-              },
-              continuationToken: "late-child-continuation",
-              parent: {
-                callId: "call_agent",
-                rootSessionId: parentId!,
-                sessionId: parentId!,
-                turn: { id: "turn_0", sequence: 1 },
-              },
-            }),
-          },
-        ]);
+        const lateChild = await waitForOwnerGate(
+          startSessionOwner(workflowEntry, [
+            {
+              kind: "initial",
+              ownerDeploymentId: "dpl_inline",
+              input: { message: "CHILD: late work" },
+              serializedContext: buildSerializedContext({
+                auth: ALICE,
+                channelKind: "subagent",
+                channelState: {
+                  callId: "call_agent",
+                  parentContinuationToken: "late-child-reply",
+                  parentSessionId: parentId!,
+                  subagentName: "edge-cancel-hung-task",
+                },
+                continuationToken: "late-child-continuation",
+                parent: {
+                  callId: "call_agent",
+                  rootSessionId: parentId!,
+                  sessionId: parentId!,
+                  turn: { id: "turn_0", sequence: 1 },
+                },
+              }),
+            },
+          ]),
+          "late child startSessionOwner",
+          session.events,
+        );
         try {
           await vi.waitFor(
             async () => expect(await getRun(lateChild.runId).status).toBe("running"),
@@ -1485,45 +1528,59 @@ describe("work delegated to a child session", () => {
               }
               return await getByToken(token);
             });
-          await resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
-            kind: "agent-started",
-            from: {
-              callId: "call_agent",
-              input: { message: "CHILD: work" },
-              runId: runs.data[0]!.runId,
-              sequence: 0,
-              stepIndex: 0,
-              taskId,
-              toolName: "agent",
-              turnId: "turn_0",
-            },
-            session: {
-              continuationToken: "late-child-continuation",
-              kind: "local",
-              name: "edge-cancel-hung-task",
-              nodeId: "root",
-              sessionId: lateChild.runId,
-            },
-            context: { parent: { sessionId: parentId! } } as AgentSessionContext,
-          });
-          await vi.waitFor(() => expect(simulatedResetFailure).toBe(true));
-          await vi.waitFor(async () => {
-            const retirement = await (
-              await getWorld()
-            ).runs.list({
-              workflowName: lateAgentSessionRetirementWorkflowReference.workflowId,
-              pagination: { limit: 100 },
-              resolveData: "none",
+          try {
+            await waitForOwnerGate(
+              resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
+                kind: "agent-started",
+                from: {
+                  callId: "call_agent",
+                  input: { message: "CHILD: work" },
+                  runId: runs.data[0]!.runId,
+                  sequence: 0,
+                  stepIndex: 0,
+                  taskId,
+                  toolName: "agent",
+                  turnId: "turn_0",
+                },
+                session: {
+                  continuationToken: "late-child-continuation",
+                  kind: "local",
+                  name: "edge-cancel-hung-task",
+                  nodeId: "root",
+                  sessionId: lateChild.runId,
+                },
+                context: { parent: { sessionId: parentId! } } as AgentSessionContext,
+              }),
+              "late mature child address delivery",
+              session.events,
+            );
+            await vi.waitFor(() => expect(simulatedResetFailure).toBe(true));
+            await vi.waitFor(async () => {
+              const retirement = await (
+                await getWorld()
+              ).runs.list({
+                workflowName: lateAgentSessionRetirementWorkflowReference.workflowId,
+                pagination: { limit: 100 },
+                resolveData: "none",
+              });
+              expect(retirement.data.length).toBeGreaterThan(0);
             });
-            expect(retirement.data.length).toBeGreaterThan(0);
-          });
-          missSpy.mockRestore();
+          } finally {
+            missSpy.mockRestore();
+          }
           // Hold the second child's real boot just before it claims its command hook.
           // A missing hook cannot authorize a destructive cancel: once boot
           // continues, the child must be allowed to finalize itself.
           const bootGate = gate();
           const bootReached = gate();
           const world = await getWorld();
+          // Retirement may have a run_started event in flight. Only gate a run created
+          // after this snapshot, not the already-scheduled retirement or owned work.
+          const existingRunIds = new Set(
+            (await world.runs.list({ pagination: { limit: 100 }, resolveData: "none" })).data.map(
+              (run) => run.runId,
+            ),
+          );
           const createEvent = world.events.create.bind(world.events);
           let gatedRunId: string | undefined;
           const spy = vi.spyOn(world.events, "create").mockImplementation(async (...args) => {
@@ -1532,7 +1589,8 @@ describe("work delegated to a child session", () => {
               gatedRunId === undefined &&
               runId !== parentId &&
               runId !== lateChild.runId &&
-              event.eventType === "run_started"
+              event.eventType === "run_started" &&
+              !existingRunIds.has(runId)
             ) {
               gatedRunId = runId;
               bootReached.open();
@@ -1564,31 +1622,39 @@ describe("work delegated to a child session", () => {
               }),
             },
           ]);
-          await bootReached.wait;
-          const bootingId = gatedRunId!;
           try {
-            await resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
-              kind: "agent-started",
-              from: {
-                callId: "call_agent",
-                input: { message: "CHILD: work" },
-                runId: runs.data[0]!.runId,
-                sequence: 0,
-                stepIndex: 0,
-                taskId,
-                toolName: "agent",
-                turnId: "turn_0",
-              },
-              session: {
-                continuationToken: "booting-child-continuation",
-                kind: "local",
-                name: "edge-cancel-hung-task",
-                nodeId: "root",
-                sessionId: bootingId,
-              },
-              context: { parent: { sessionId: parentId! } } as AgentSessionContext,
-            });
-            await session.send("Final update.");
+            await waitForOwnerGate(bootReached.wait, "boot child run_started", session.events);
+            const bootingId = gatedRunId!;
+            await waitForOwnerGate(
+              resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
+                kind: "agent-started",
+                from: {
+                  callId: "call_agent",
+                  input: { message: "CHILD: work" },
+                  runId: runs.data[0]!.runId,
+                  sequence: 0,
+                  stepIndex: 0,
+                  taskId,
+                  toolName: "agent",
+                  turnId: "turn_0",
+                },
+                session: {
+                  continuationToken: "booting-child-continuation",
+                  kind: "local",
+                  name: "edge-cancel-hung-task",
+                  nodeId: "root",
+                  sessionId: bootingId,
+                },
+                context: { parent: { sessionId: parentId! } } as AgentSessionContext,
+              }),
+              "booting child address delivery",
+              session.events,
+            );
+            await waitForOwnerGate(
+              session.send("Final update."),
+              "parent progress before boot release",
+              session.events,
+            );
             await session.next("after late question and child");
             expect(await getRun(bootingId).status).toBe("pending");
             bootGate.open();
@@ -1600,8 +1666,16 @@ describe("work delegated to a child session", () => {
           } finally {
             bootGate.open();
             spy.mockRestore();
-            const booting = await bootingPromise;
-            await booting.cancel().catch(() => {});
+            const booting = await waitForOwnerGate(
+              bootingPromise,
+              "boot child startSessionOwner after release",
+              session.events,
+            );
+            await waitForOwnerGate(
+              booting.cancel().catch(() => {}),
+              "boot child cancel cleanup",
+              session.events,
+            );
           }
           await vi.waitFor(
             async () =>
@@ -1619,7 +1693,11 @@ describe("work delegated to a child session", () => {
             ),
           ).toEqual([]);
         } finally {
-          await lateChild.cancel().catch(() => {});
+          await waitForOwnerGate(
+            lateChild.cancel().catch(() => {}),
+            "late child cancel cleanup",
+            session.events,
+          );
         }
         expect(childId).toBeDefined();
         await vi.waitFor(
