@@ -13,13 +13,12 @@ import {
   runJsProgram,
 } from "#execution/dynamic-workflow/workflow.js";
 
-const pending = {
-  payload: {
-    kind: "eve.workflow-program-agent-call",
-    toolInput: { input: { message: "one" }, target: "researcher" },
-    toolName: "agent",
-  },
-} as never;
+const pending = { call: { input: { message: "one" }, target: "researcher" }, id: "interrupt-1" };
+const secondPending = {
+  call: { input: { message: "two" }, target: "researcher" },
+  id: "interrupt-2",
+};
+const continuation = "signed-continuation";
 /** Each child's reply to the one message a program sends it. */
 const reply = vi.fn();
 const agent = (target: string) => ({
@@ -43,7 +42,7 @@ describe("runJsProgram", () => {
 
   it("delegates agent interrupts and resumes the sandbox", async () => {
     mocks.runWorkflowProgramStep
-      .mockResolvedValueOnce({ interrupt: pending, pending: [pending], status: "interrupted" })
+      .mockResolvedValueOnce({ continuation, pending: [pending], status: "interrupted" })
       .mockResolvedValueOnce({ output: { result: "done" }, status: "completed" });
     reply.mockResolvedValue({ result: "child" });
 
@@ -52,26 +51,24 @@ describe("runJsProgram", () => {
     expect(mocks.runWorkflowProgramStep).toHaveBeenLastCalledWith(
       expect.objectContaining({
         resume: {
-          interrupt: pending,
-          resolutions: [{ status: "completed", output: { result: "child" } }],
+          continuation,
+          resolutions: [
+            {
+              interruptionId: "interrupt-1",
+              value: { status: "completed", output: { result: "child" } },
+            },
+          ],
         },
       }),
     );
   });
 
   it("keeps a pending batch in flight until every child settles", async () => {
-    const secondPending = {
-      payload: {
-        kind: "eve.workflow-program-agent-call",
-        toolInput: { input: { message: "two" }, target: "researcher" },
-        toolName: "agent",
-      },
-    } as never;
     const first = Promise.withResolvers<unknown>();
     const second = Promise.withResolvers<unknown>();
     mocks.runWorkflowProgramStep
       .mockResolvedValueOnce({
-        interrupt: pending,
+        continuation,
         pending: [pending, secondPending],
         status: "interrupted",
       })
@@ -89,11 +86,22 @@ describe("runJsProgram", () => {
 
     await expect(result).resolves.toEqual(["one", "two"]);
     expect(mocks.runWorkflowProgramStep).toHaveBeenCalledTimes(2);
+    expect(mocks.runWorkflowProgramStep).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        resume: {
+          continuation,
+          resolutions: [
+            { interruptionId: "interrupt-1", value: { status: "completed", output: "one" } },
+            { interruptionId: "interrupt-2", value: { status: "completed", output: "two" } },
+          ],
+        },
+      }),
+    );
   });
 
   it("returns catchable failures for failed children", async () => {
     mocks.runWorkflowProgramStep
-      .mockResolvedValueOnce({ interrupt: pending, pending: [pending], status: "interrupted" })
+      .mockResolvedValueOnce({ continuation, pending: [pending], status: "interrupted" })
       .mockResolvedValueOnce({ output: "caught", status: "completed" });
     reply.mockRejectedValue(new Error("child failed"));
 
@@ -101,8 +109,10 @@ describe("runJsProgram", () => {
     expect(mocks.runWorkflowProgramStep).toHaveBeenLastCalledWith(
       expect.objectContaining({
         resume: {
-          interrupt: pending,
-          resolutions: [{ status: "failed", error: "child failed" }],
+          continuation,
+          resolutions: [
+            { interruptionId: "interrupt-1", value: { status: "failed", error: "child failed" } },
+          ],
         },
       }),
     );
@@ -110,10 +120,10 @@ describe("runJsProgram", () => {
 
   it("bounds total calls across resumed batches", async () => {
     mocks.runWorkflowProgramStep
-      .mockResolvedValueOnce({ interrupt: pending, pending: [pending], status: "interrupted" })
+      .mockResolvedValueOnce({ continuation, pending: [pending], status: "interrupted" })
       .mockResolvedValueOnce({
-        interrupt: pending,
-        pending: [pending, pending],
+        continuation,
+        pending: [pending, secondPending],
         status: "interrupted",
       })
       .mockResolvedValueOnce({ output: "limited", status: "completed" });
@@ -125,11 +135,14 @@ describe("runJsProgram", () => {
       expect.objectContaining({
         resume: expect.objectContaining({
           resolutions: [
-            { status: "completed", output: "two" },
-            expect.objectContaining({
-              status: "failed",
-              error: expect.stringContaining("WORKFLOW_PROGRAM_SUBAGENT_LIMIT_REACHED"),
-            }),
+            { interruptionId: "interrupt-1", value: { status: "completed", output: "two" } },
+            {
+              interruptionId: "interrupt-2",
+              value: {
+                status: "failed",
+                error: expect.stringContaining("WORKFLOW_PROGRAM_SUBAGENT_LIMIT_REACHED"),
+              },
+            },
           ],
         }),
       }),
@@ -154,7 +167,7 @@ describe("runJsProgram", () => {
       callId: "workflow-call",
     } as never;
     mocks.runWorkflowProgramStep.mockResolvedValueOnce({
-      interrupt: pending,
+      continuation,
       pending: [pending],
       status: "interrupted",
     });
@@ -166,6 +179,20 @@ describe("runJsProgram", () => {
     await expect(runJsProgram("return 1", cancelledCtx, options)).rejects.toThrow(
       "owner cancelled",
     );
+    expect(mocks.runWorkflowProgramStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a program parked by a code-mode build before calling any child", async () => {
+    mocks.runWorkflowProgramStep.mockResolvedValueOnce({
+      interrupt: { type: "code-mode-interrupt" },
+      pending: [{ payload: { toolInput: { input: { message: "one" }, target: "researcher" } } }],
+      status: "interrupted",
+    });
+
+    await expect(runJsProgram("return 1", ctx, options)).rejects.toThrow(
+      "WORKFLOW_PROGRAM_CONTINUATION_UNSUPPORTED",
+    );
+    expect(reply).not.toHaveBeenCalled();
     expect(mocks.runWorkflowProgramStep).toHaveBeenCalledTimes(1);
   });
 });

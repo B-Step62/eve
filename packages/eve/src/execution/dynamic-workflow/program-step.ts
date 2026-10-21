@@ -1,30 +1,28 @@
-import { jsonSchema, type ToolSet } from "ai";
+import { createHash } from "node:crypto";
 
 import { FatalError } from "#compiled/@workflow/core/index.js";
+import type { RunLimits } from "#compiled/run/index.js";
 import {
   WORKFLOW_PROGRAM_BRIDGE_REQUEST_LIMIT,
-  WORKFLOW_PROGRAM_CALL_INTERRUPT_KIND,
+  WORKFLOW_PROGRAM_CPU_TIMEOUT_MS,
+  WORKFLOW_PROGRAM_TIMEOUT_MS,
   parseWorkflowProgramOutput,
-  readWorkflowProgramCallInterrupt,
-  type WorkflowProgramCallInterrupt,
+  readWorkflowProgramAgentCall,
+  type WorkflowProgramAgentCall,
+  type WorkflowProgramCallResult,
   type WorkflowProgramInput,
+  type WorkflowProgramPendingCall,
+  type WorkflowProgramResolution,
 } from "#execution/dynamic-workflow/schema.js";
 import { toErrorMessage } from "#shared/errors.js";
-import {
-  continueWorkflowSandboxInterrupt,
-  createParkingHostTool,
-  createWorkflowSandboxTool,
-  getWorkflowSandboxPendingInterrupts,
-  unwrapWorkflowSandboxResult,
-  type WorkflowSandboxContinuationSecurity,
-  type WorkflowSandboxInterrupt,
-} from "#shared/workflow-sandbox.js";
+import type { JsonValue } from "#shared/json.js";
+import { loadWorkflowSandboxModule } from "#shared/workflow-sandbox.js";
 
 export type WorkflowProgramStepOutcome =
-  | { readonly output: ReturnType<typeof parseWorkflowProgramOutput>; readonly status: "completed" }
+  | { readonly output: JsonValue; readonly status: "completed" }
   | {
-      readonly interrupt: WorkflowSandboxInterrupt;
-      readonly pending: readonly WorkflowSandboxInterrupt[];
+      readonly continuation: string;
+      readonly pending: readonly WorkflowProgramPendingCall[];
       readonly status: "interrupted";
     };
 
@@ -32,28 +30,26 @@ interface WorkflowProgramStepInput {
   readonly callId: string;
   readonly program: WorkflowProgramInput;
   readonly resume?: {
-    readonly interrupt: WorkflowSandboxInterrupt;
-    readonly resolutions: readonly unknown[];
+    readonly continuation: string;
+    readonly resolutions: readonly WorkflowProgramResolution[];
   };
 }
 
-const agentBridgeSchema = jsonSchema({
-  additionalProperties: false,
-  properties: {
-    input: {
-      additionalProperties: false,
-      properties: {
-        message: { type: "string" },
-        outputSchema: { type: "object" },
-      },
-      required: ["message"],
-      type: "object",
-    },
-    target: { type: "string" },
-  },
-  required: ["target", "input"],
-  type: "object",
-});
+const WORKFLOW_PROGRAM_CONTINUATION_AUDIENCE = "eve.workflow-program/v1";
+
+const WORKFLOW_PROGRAM_LIMITS: RunLimits = {
+  cpuTimeoutMs: WORKFLOW_PROGRAM_CPU_TIMEOUT_MS,
+  maxBridgeRequests: WORKFLOW_PROGRAM_BRIDGE_REQUEST_LIMIT,
+  maxConsoleOutputBytes: 64 * 1024,
+  maxHostFunctionArgumentsBytes: 1024 * 1024,
+  maxHostFunctionOutputBytes: 4 * 1024 * 1024,
+  maxInFlightBridgeRequests: WORKFLOW_PROGRAM_BRIDGE_REQUEST_LIMIT,
+  maxResultBytes: 1024 * 1024,
+  maxSourceBytes: 256 * 1024,
+  maxStackSizeBytes: 2 * 1024 * 1024,
+  memoryLimitBytes: 64 * 1024 * 1024,
+  timeoutMs: WORKFLOW_PROGRAM_TIMEOUT_MS,
+};
 
 /** Runs or resumes the side-effect-free JavaScript sandbox for one durable workflow. */
 export async function runWorkflowProgramStep(
@@ -72,69 +68,55 @@ export async function runWorkflowProgramStep(
 async function runWorkflowProgram(
   input: WorkflowProgramStepInput,
 ): Promise<WorkflowProgramStepOutcome> {
-  const tools = buildWorkflowProgramTools();
-  const security = input.program.continuationSecurity as WorkflowSandboxContinuationSecurity;
-  let raw: unknown;
-  if (input.resume === undefined) {
-    const tool = await createWorkflowSandboxTool({
-      bridgeRequestLimit: WORKFLOW_PROGRAM_BRIDGE_REQUEST_LIMIT,
-      continuationSecurity: security,
-      hostTools: tools,
-    });
-    if (tool.execute === undefined) throw new Error("Workflow program has no sandbox executor.");
-    raw = await tool.execute(
-      { js: wrapWorkflowProgram(input.program.js) } as never,
-      { toolCallId: input.callId } as never,
-    );
-  } else {
-    let current = input.resume.interrupt;
-    raw = current;
-    for (const resolution of input.resume.resolutions) {
-      raw = await continueWorkflowSandboxInterrupt({
-        bridgeRequestLimit: WORKFLOW_PROGRAM_BRIDGE_REQUEST_LIMIT,
-        continuationSecurity: security,
-        interrupt: current,
-        resolution,
-        tools,
-      });
-      const unwrapped = await unwrapWorkflowSandboxResult(raw, security);
-      if (unwrapped.status === "completed") break;
-      const next = getWorkflowSandboxPendingInterrupts(unwrapped.interrupt)[0];
-      if (next === undefined) {
-        throw new Error("Workflow program continuation contains no pending agent call.");
-      }
-      current = next;
-    }
-  }
-
-  const unwrapped = await unwrapWorkflowSandboxResult(raw, security);
-  if (unwrapped.status === "completed") {
-    return { output: parseWorkflowProgramOutput(unwrapped.output), status: "completed" };
-  }
-  const pending = getWorkflowSandboxPendingInterrupts(unwrapped.interrupt);
-  if (pending.length === 0) {
-    throw new Error("Workflow program continuation contains no pending agent call.");
-  }
-  for (const interrupt of pending) readWorkflowProgramCallInterrupt(interrupt);
-  return { interrupt: pending[0]!, pending, status: "interrupted" };
-}
-
-function buildWorkflowProgramTools(): ToolSet {
-  return {
-    agent: createParkingHostTool({
-      description: "Invoke one allowlisted child agent.",
-      inputSchema: agentBridgeSchema,
-      interrupt: (toolInput) =>
-        ({
-          kind: WORKFLOW_PROGRAM_CALL_INTERRUPT_KIND,
-          task: undefined,
-          toolInput,
-          toolName: "agent",
-        }) satisfies WorkflowProgramCallInterrupt,
+  const { createRunner, createSignedContinuationCodec, getHostFunctionContext, RunError } =
+    await loadWorkflowSandboxModule();
+  const { maxAgeMs, signingKey } = input.program.continuationSecurity;
+  const runner = createRunner({
+    continuationAudience: WORKFLOW_PROGRAM_CONTINUATION_AUDIENCE,
+    continuationCodec: createSignedContinuationCodec({
+      maxAgeMs,
+      // Hashing gives run a 32-byte secret whatever the stored key's length.
+      secret: createHash("sha256").update(signingKey).digest(),
     }),
-  } as ToolSet;
-}
+  });
 
-function wrapWorkflowProgram(source: string): string {
-  return `return await (async (ctx) => {\n${source}\n})(Object.freeze({\n  agent: (target, input) => tools.agent({ target, input }),\n}));`;
+  const result = await runner.run({
+    source: input.program.js,
+    hostFunctions: {
+      ctx: {
+        // run shows the program only RunError messages; other host errors read "Host function failed."
+        agent: async (target: unknown, agentInput: unknown) => {
+          let call: WorkflowProgramAgentCall;
+          try {
+            call = readWorkflowProgramAgentCall({ input: agentInput, target });
+          } catch (error) {
+            throw new RunError(toErrorMessage(error), "WORKFLOW_PROGRAM_INVALID_AGENT_CALL");
+          }
+          const { interrupt, resume } = getHostFunctionContext();
+          if (resume === undefined) return interrupt(call);
+          const outcome = resume.resolution as WorkflowProgramCallResult;
+          if (outcome.status === "failed") {
+            throw new RunError(outcome.error, "WORKFLOW_PROGRAM_AGENT_FAILED");
+          }
+          return outcome.output;
+        },
+      },
+    },
+    limits: WORKFLOW_PROGRAM_LIMITS,
+    continuationContext: { callId: input.callId },
+    continuation: input.resume?.continuation,
+    resolutions: input.resume?.resolutions.slice(),
+  });
+
+  if (result.status === "completed") {
+    return { output: parseWorkflowProgramOutput(result.value), status: "completed" };
+  }
+  return {
+    continuation: result.continuation,
+    pending: result.interruptions.map((interruption) => ({
+      call: readWorkflowProgramAgentCall(interruption.payload),
+      id: interruption.id,
+    })),
+    status: "interrupted",
+  };
 }

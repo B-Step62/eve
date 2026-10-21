@@ -2,10 +2,9 @@ import {
   DEFAULT_WORKFLOW_PROGRAM_MAX_SUBAGENTS,
   MAX_WORKFLOW_PROGRAM_MAX_SUBAGENTS,
   parseWorkflowProgramOptions,
-  readWorkflowProgramAgentCall,
-  readWorkflowProgramCallInterrupt,
   type WorkflowProgramAgentCall,
   type WorkflowProgramInput,
+  type WorkflowProgramResolution,
 } from "#execution/dynamic-workflow/schema.js";
 import {
   runWorkflowProgramStep,
@@ -41,32 +40,43 @@ export async function runJsProgram(
   let calls = 0;
   while (outcome.status === "interrupted") {
     ctx.abortSignal.throwIfAborted();
+    const continuation = readWorkflowProgramContinuation(outcome);
     const resolutions = await Promise.all(
-      outcome.pending.map(async (pending) => {
-        const interrupt = readWorkflowProgramCallInterrupt(pending);
-        const call = readWorkflowProgramAgentCall(interrupt.toolInput);
+      outcome.pending.map(async ({ call, id }): Promise<WorkflowProgramResolution> => {
         const invocationIndex = calls++;
         if (invocationIndex >= program.maxSubagents) {
           return {
-            status: "failed" as const,
-            error: `WORKFLOW_PROGRAM_SUBAGENT_LIMIT_REACHED: workflow may invoke at most ${String(program.maxSubagents)} agents; "${call.target}" was not called.`,
+            interruptionId: id,
+            value: {
+              status: "failed",
+              error: `WORKFLOW_PROGRAM_SUBAGENT_LIMIT_REACHED: workflow may invoke at most ${String(program.maxSubagents)} agents; "${call.target}" was not called.`,
+            },
           };
         }
         try {
           const output = await callProgramAgent(ctx, call);
-          return { status: "completed" as const, output };
+          return { interruptionId: id, value: { status: "completed", output } };
         } catch (error) {
           ctx.abortSignal.throwIfAborted();
-          return { status: "failed" as const, error: toErrorMessage(error) };
+          return { interruptionId: id, value: { status: "failed", error: toErrorMessage(error) } };
         }
       }),
     );
-    outcome = await runWorkflowProgramStep({
-      ...base,
-      resume: { interrupt: outcome.interrupt, resolutions },
-    });
+    outcome = await runWorkflowProgramStep({ ...base, resume: { continuation, resolutions } });
   }
   return outcome.output;
+}
+
+/**
+ * eve releases that ran programs on `@ai-sdk/code-mode` recorded a code-mode
+ * interrupt in this step's output, which `run` cannot resume. Fail before
+ * starting any child agent.
+ */
+function readWorkflowProgramContinuation(outcome: { readonly continuation?: unknown }): string {
+  if (typeof outcome.continuation === "string") return outcome.continuation;
+  throw new Error(
+    "WORKFLOW_PROGRAM_CONTINUATION_UNSUPPORTED: this workflow program was paused by an earlier eve version and cannot resume on this one. Run the workflow again.",
+  );
 }
 
 /** Sends one program agent call to a new session and returns that turn's reply. */

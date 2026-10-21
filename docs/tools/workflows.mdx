@@ -148,7 +148,13 @@ behave as they do for sessions an authored workflow tool opens with `ctx.agent`.
 The sandbox resumes after every pending call in the current batch settles. `Promise.all` supports
 fan-out followed by fan-in, but `Promise.race` does not resume after only the first child settles.
 A failed child turn throws at the corresponding `ctx.agent` call, so generated code can catch it.
-The program must return a JSON-serializable value.
+The program must return a JSON-serializable value; eve converts it as `JSON.stringify` does, so a
+`Date` becomes a string.
+
+The program starts again from the top on every resume, replaying earlier `ctx.agent` results
+instead of calling those agents again. Each start or resume may spend up to 30 seconds running
+JavaScript and up to 5 minutes in total. Time spent waiting for child agents does not count, so a
+program fails at either limit only when its own code runs too long.
 
 ### Migrate from `experimental_workflow`
 

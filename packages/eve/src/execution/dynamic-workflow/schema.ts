@@ -3,14 +3,10 @@ import { parseJsonObject, parseJsonValue, type JsonObject, type JsonValue } from
 export const DEFAULT_WORKFLOW_PROGRAM_MAX_SUBAGENTS = 100;
 export const MAX_WORKFLOW_PROGRAM_MAX_SUBAGENTS = 128;
 export const WORKFLOW_PROGRAM_BRIDGE_REQUEST_LIMIT = 256;
-export const WORKFLOW_PROGRAM_CALL_INTERRUPT_KIND = "eve.workflow-program-agent-call";
-
-export interface WorkflowProgramCallInterrupt {
-  readonly kind: typeof WORKFLOW_PROGRAM_CALL_INTERRUPT_KIND;
-  readonly task: undefined;
-  readonly toolInput: unknown;
-  readonly toolName: "agent";
-}
+/** Guest JavaScript time per run or resume; parked agent calls do not count. */
+export const WORKFLOW_PROGRAM_CPU_TIMEOUT_MS = 30_000;
+/** Wall-clock time per run or resume; parked agent calls do not count. */
+export const WORKFLOW_PROGRAM_TIMEOUT_MS = 300_000;
 
 export interface WorkflowProgramContinuationSecurity {
   readonly maxAgeMs?: number;
@@ -34,6 +30,21 @@ export interface WorkflowProgramAgentCall {
   readonly target: string;
 }
 
+/** One parked `ctx.agent()` call, keyed by its sandbox interruption id. */
+export interface WorkflowProgramPendingCall {
+  readonly call: WorkflowProgramAgentCall;
+  readonly id: string;
+}
+
+export type WorkflowProgramCallResult =
+  | { readonly output: JsonValue; readonly status: "completed" }
+  | { readonly error: string; readonly status: "failed" };
+
+export interface WorkflowProgramResolution {
+  readonly interruptionId: string;
+  readonly value: WorkflowProgramCallResult;
+}
+
 export function parseWorkflowProgramOptions(value: unknown): WorkflowProgramOptions {
   const input = parseJsonObject(value);
   if (
@@ -45,21 +56,6 @@ export function parseWorkflowProgramOptions(value: unknown): WorkflowProgramOpti
     );
   }
   return { maxSubagents: input.maxSubagents };
-}
-
-export function readWorkflowProgramCallInterrupt(input: {
-  readonly payload: unknown;
-}): WorkflowProgramCallInterrupt {
-  const payload = input.payload as Partial<WorkflowProgramCallInterrupt>;
-  if (payload.kind !== WORKFLOW_PROGRAM_CALL_INTERRUPT_KIND || payload.toolName !== "agent") {
-    throw new Error(`Unsupported workflow program interrupt kind "${String(payload.kind)}".`);
-  }
-  return {
-    kind: WORKFLOW_PROGRAM_CALL_INTERRUPT_KIND,
-    task: undefined,
-    toolInput: payload.toolInput,
-    toolName: "agent",
-  };
 }
 
 export function readWorkflowProgramAgentCall(value: unknown): WorkflowProgramAgentCall {
@@ -81,8 +77,13 @@ export function readWorkflowProgramAgentCall(value: unknown): WorkflowProgramAge
   return { input, target: call.target };
 }
 
+/**
+ * Applies `JSON.stringify` semantics to a program's return value. The sandbox
+ * returns richer values, so `Date`s become strings and `undefined` members drop.
+ */
 export function parseWorkflowProgramOutput(value: unknown): JsonValue {
-  return parseJsonValue(value ?? null);
+  const json = JSON.stringify(value);
+  return json === undefined ? null : parseJsonValue(JSON.parse(json));
 }
 
 function isPositiveInteger(value: unknown): value is number {
