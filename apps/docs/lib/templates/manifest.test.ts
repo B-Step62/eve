@@ -37,4 +37,13 @@ describe("template previews", () => {
   )("%s icon exists in public/", (_slug, icon) => {
     expect(existsSync(fileURLToPath(new URL(`../../public${icon}`, import.meta.url)))).toBe(true);
   });
+
+  it.each(
+    withPreview
+      .filter((entry) => entry.preview?.surface !== "slack")
+      .map((entry) => [entry.slug, entry] as const),
+  )("%s has no Slack-only formatting", (_slug, entry) => {
+    const texts = entry.preview?.messages.map((message) => message.text) ?? [];
+    expect(texts.filter((text) => /`|\]\(/.test(text))).toEqual([]);
+  });
 });

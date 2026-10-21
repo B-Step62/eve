@@ -31,6 +31,10 @@ export type TemplatePreviewSurface = "imessage" | "slack" | "voice" | "web";
 
 export interface TemplatePreviewMessage {
   from: "agent" | "user";
+  /**
+   * Plain text. On the `slack` surface, `code`, [label](url), and @mentions
+   * render in Slack's styles; other surfaces show text as written.
+   */
   text: string;
   /**
    * Tool or skill names shown as completed calls. Each must match a path in
@@ -448,7 +452,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@knowledge how much PTO do new hires get?" },
         {
           from: "agent",
-          text: "15 days in year one, accrued monthly. From handbook/time-off.md on the team Drive.",
+          text: "15 days in year one, accrued monthly. From `handbook/time-off.md` on the [team Drive](https://drive.example.com/team).",
         },
       ],
     },

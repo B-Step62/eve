@@ -263,7 +263,7 @@ const Slack = ({
           if (messages[index - 1]?.from === message.from) {
             return (
               <p className="-mt-2 break-words py-0.5 pr-5 pl-[64px]" key={message.text}>
-                <Mentions text={message.text} />
+                <SlackText text={message.text} />
               </p>
             );
           }
@@ -299,7 +299,7 @@ const Slack = ({
                   </span>
                 </div>
                 <p className="break-words">
-                  <Mentions text={message.text} />
+                  <SlackText text={message.text} />
                 </p>
               </div>
             </div>
@@ -310,20 +310,42 @@ const Slack = ({
   </div>
 );
 
-/** Slack's user mention: link blue on a 10% tint, 2px padding, 3px corners. */
-const Mentions = ({ text }: { text: string }) =>
-  text.split(/(@\w+)/).map((part, index) =>
-    part.startsWith("@") ? (
-      <span
-        className="rounded-[3px] bg-[rgba(29,155,209,0.1)] px-0.5 text-[#1264a3] dark:bg-[rgba(29,155,209,0.18)] dark:text-[#1d9bd1]"
-        key={`${index}${part}`}
-      >
-        {part}
-      </span>
-    ) : (
-      part
-    ),
-  );
+/** `code`, [label](url), and @mentions. The URL is not rendered; the card itself is the link. */
+const SLACK_TOKEN = /(`[^`]+`|\[[^\]]+\]\([^)]*\)|@\w+)/;
+
+/** Message text with Slack's inline code, link, and user mention styles. */
+const SlackText = ({ text }: { text: string }) =>
+  text.split(SLACK_TOKEN).map((part, index) => {
+    const key = `${index}${part}`;
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
+      return (
+        <code
+          className="rounded-[3px] border border-[rgba(29,28,29,0.13)] bg-[rgba(29,28,29,0.04)] px-[3px] pt-[2px] pb-px font-[Monaco,Menlo,Consolas,var(--font-mono),monospace] text-[#e01e5a] text-[12px] dark:border-[rgba(232,232,232,0.13)] dark:bg-[rgba(232,232,232,0.04)] dark:text-[#e8912d]"
+          key={key}
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    if (part.startsWith("[")) {
+      return (
+        <span className="text-[#1264a3] dark:text-[#1d9bd1]" key={key}>
+          {part.slice(1, part.indexOf("]"))}
+        </span>
+      );
+    }
+    if (part.startsWith("@")) {
+      return (
+        <span
+          className="rounded-[3px] bg-[rgba(29,155,209,0.1)] px-0.5 text-[#1264a3] dark:bg-[rgba(29,155,209,0.18)] dark:text-[#1d9bd1]"
+          key={key}
+        >
+          {part}
+        </span>
+      );
+    }
+    return part;
+  });
 
 /** Liquid glass: translucent fill, blurred backdrop, a bright top edge, and a soft drop shadow. */
 const GLASS =
