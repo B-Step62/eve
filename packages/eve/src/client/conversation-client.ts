@@ -40,6 +40,10 @@ export class ConversationClient {
     this.#conversation.holdUnconfirmedMessages(hold);
   }
 
+  get streaming(): boolean {
+    return this.#stream !== undefined && !this.#stream.ended;
+  }
+
   get following(): boolean {
     return this.#follower !== undefined;
   }
@@ -141,10 +145,11 @@ export class ConversationClient {
     return this.#stream;
   }
 
-  /** Closes the root stream; the next read starts at this conversation's folded cursor. */
+  /** Closes the root stream; the next read replays any partial line from the folded cursor. */
   closeStream(): void {
     this.#stream?.close();
     this.#stream = undefined;
+    this.#conversation.discardUncommitted();
   }
 
   stop(): void {
