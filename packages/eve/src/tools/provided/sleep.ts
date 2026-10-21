@@ -58,15 +58,13 @@ const SLEEP_OUTPUT_SCHEMA = defineJsonSchema<SleepToolOutput>({
  * Each call runs as a durable workflow, so the wait does not hold an
  * application runtime open. A new message ends the wait early.
  */
-export function sleep(): WorkflowExecuteToolDefinition<SleepToolInput, SleepToolOutput> {
-  return frameworkTool(
-    defineWorkflowTool({
-      description: SLEEP_TOOL_DESCRIPTION,
-      execute: executeSleepTool,
-      inputSchema: SLEEP_INPUT_SCHEMA,
-      outputSchema: SLEEP_OUTPUT_SCHEMA,
-      toModelOutput: toInterruptibleModelOutput,
-    }),
-  );
-}
+export const sleep: WorkflowExecuteToolDefinition<SleepToolInput, SleepToolOutput> = frameworkTool(
+  defineWorkflowTool({
+    description: SLEEP_TOOL_DESCRIPTION,
+    execute: executeSleepTool,
+    inputSchema: SLEEP_INPUT_SCHEMA,
+    outputSchema: SLEEP_OUTPUT_SCHEMA,
+    toModelOutput: toInterruptibleModelOutput,
+  }),
+);
 import { frameworkTool } from "./framework-tool.js";

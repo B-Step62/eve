@@ -80,7 +80,7 @@ function toDurableSkill(skill: MaterializableSkillPackage): DurableDynamicSkillM
   return {
     deferred: skill.deferred === true ? true : undefined,
     description: skill.description,
-    markdown: skill.markdown,
+    content: skill.content,
     name: skill.name,
     ...(skill.files.length > 1 ? { revision: skillPackageRevision(skill) } : {}),
   };

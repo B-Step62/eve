@@ -589,8 +589,6 @@ export type SlackMentionResult = {
   readonly title?: string;
 } | null;
 
-export type SlackMentionResultOrPromise = SlackMentionResult | Promise<SlackMentionResult>;
-
 /**
  * Alias of {@link SlackMentionResult} for the `onDirectMessage` signature,
  * so DM handlers do not read in terms of "mention".
@@ -598,7 +596,6 @@ export type SlackMentionResultOrPromise = SlackMentionResult | Promise<SlackMent
 export type SlackInboundResult = SlackMentionResult;
 
 /** {@link SlackInboundResult}, or a promise resolving to one. */
-export type SlackInboundResultOrPromise = SlackMentionResultOrPromise;
 
 /**
  * eve's full-context Slack event handlers: the innermost link of every
@@ -668,7 +665,10 @@ export interface SlackChannelConfig {
    * `onDirectMessage` handlers take precedence for their event types. Other
    * channel messages are ignored when this hook is omitted.
    */
-  onMessage?(ctx: SlackInboundMessageContext, message: SlackMessage): SlackInboundResultOrPromise;
+  onMessage?(
+    ctx: SlackInboundMessageContext,
+    message: SlackMessage,
+  ): SlackMentionResult | Promise<SlackMentionResult>;
 
   /**
    * Invoked when a Slack `app_mention` event arrives (only `app_mention`;
@@ -684,7 +684,7 @@ export interface SlackChannelConfig {
   onAppMention?(
     ctx: SlackInboundMessageContext,
     message: SlackMessage,
-  ): SlackMentionResultOrPromise;
+  ): SlackMentionResult | Promise<SlackMentionResult>;
 
   /**
    * Invoked on a direct message: a Slack `message` event with
@@ -704,7 +704,7 @@ export interface SlackChannelConfig {
   onDirectMessage?(
     ctx: SlackInboundMessageContext,
     message: SlackMessage,
-  ): SlackInboundResultOrPromise;
+  ): SlackMentionResult | Promise<SlackMentionResult>;
 
   /**
    * Fallback handler for signed Slack Events API callbacks. An authored
@@ -806,7 +806,9 @@ function rebuildSlackContext(
     onThreadTsChanged(ts) {
       state.threadTs = ts;
       if (state.channelId) {
-        session.continuation?.alias(slackContinuationToken(state.channelId, ts));
+        session.continuation?.alias(
+          slackContinuationToken({ channelId: state.channelId, threadTs: ts }),
+        );
       }
     },
   });
@@ -1053,7 +1055,7 @@ async function receiveOnSlack(
   }
 
   return deps
-    .from(slackContinuationToken(channelId, continuationThreadTs))
+    .from(slackContinuationToken({ channelId, threadTs: continuationThreadTs }))
     .send(input.message, { auth: input.auth, history: input.history, state, title: input.title });
 }
 
@@ -1228,7 +1230,10 @@ async function dispatchSlackMessage(input: {
   readonly threadContext: LoadThreadContextMessagesOptions | undefined;
   readonly uploadPolicy: UploadPolicy;
 }): Promise<void> {
-  const continuationToken = slackContinuationToken(input.message.channelId, input.message.threadTs);
+  const continuationToken = slackContinuationToken({
+    channelId: input.message.channelId,
+    threadTs: input.message.threadTs,
+  });
   const { thread, slack } = buildSlackBinding({
     api: input.api,
     appId: input.appId,
@@ -1362,7 +1367,7 @@ async function dispatchSlackEvent(input: {
         : undefined;
   const waitUntilTasks: Promise<unknown>[] = [];
   const sourceFor = (target: SlackSessionTarget) =>
-    input.from(slackContinuationToken(target.channelId, target.threadTs));
+    input.from(slackContinuationToken({ channelId: target.channelId, threadTs: target.threadTs }));
   const ctx: SlackInboundEventContext = {
     cancel: ({ target, turnId }) => sourceFor(target).cancel({ turnId }),
     clear: ({ target }) => sourceFor(target).clear(),
@@ -1370,7 +1375,9 @@ async function dispatchSlackEvent(input: {
     envelope: input.envelope,
     reset: ({ reason, target }) => sourceFor(target).reset({ reason }),
     resolveSession: ({ target }) =>
-      input.resolveSession(slackContinuationToken(target.channelId, target.threadTs)),
+      input.resolveSession(
+        slackContinuationToken({ channelId: target.channelId, threadTs: target.threadTs }),
+      ),
     respond: (answers, { auth, target }) =>
       sourceFor(target).respond(answers, {
         auth,

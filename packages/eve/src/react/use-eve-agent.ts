@@ -43,7 +43,7 @@ export type UseEveAgentSnapshot = EveAgentStoreSnapshot;
 /**
  * Snapshot plus commands returned by `useEveAgent`.
  */
-export interface UseEveAgentHelpers extends UseEveAgentSnapshot {
+export interface UseEveAgentReturn extends UseEveAgentSnapshot {
   /** Requests durable cancellation of the active turn while continuing to receive its events. */
   readonly cancel: () => Promise<Delivery>;
   /** Resolves at the durable tail; the session stream keeps following afterward. */
@@ -153,7 +153,7 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
  * callbacks (`onError`, `onEvent`, `onFinish`, `onSessionChange`, `prepareSend`)
  * refresh on every render.
  */
-export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentHelpers {
+export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentReturn {
   const storeRef = useRef<EveAgentStore | undefined>(undefined);
   const mountedRef = useRef(false);
   const resumeOnMountRef = useRef(options.resume ?? false);
