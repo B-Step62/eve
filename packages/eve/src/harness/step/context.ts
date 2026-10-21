@@ -8,7 +8,7 @@ import {
 import { isDynamicConnectionResolutionError } from "#context/dynamic-connection-lifecycle.js";
 import { isDynamicModelSelectionError } from "#context/dynamic-model-lifecycle.js";
 import { ParentSessionKey, SessionCallbackKey, SessionPredecessorKey } from "#context/keys.js";
-import { MemoryLifecycleError } from "#context/memory-event-lifecycle.js";
+import { isMemoryLifecycleError } from "#context/memory-event-lifecycle.js";
 import { drainMemoryCommit, prepareMemoryPreamble } from "#context/memory-lifecycle.js";
 import { type HarnessModelMessage, validateHarnessModelMessages } from "#harness/messages.js";
 import {
@@ -174,7 +174,7 @@ export async function failBoundaryEvent(step: Step, error: unknown): Promise<Ste
   throwIfTurnAborted(step.config.abortSignal);
   if (isTurnCancellation(error)) throw error;
   if (isDynamicModelSelectionError(error)) return failModelSelection(step, error);
-  if (isDynamicConnectionResolutionError(error) || error instanceof MemoryLifecycleError) {
+  if (isDynamicConnectionResolutionError(error) || isMemoryLifecycleError(error)) {
     return parkFailedTurn(step, error);
   }
   throw error;

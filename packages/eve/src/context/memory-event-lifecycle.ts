@@ -14,14 +14,25 @@ import type { MemoryInstrumentation } from "#instrumentation/memory.js";
 import { toErrorMessage } from "#shared/errors.js";
 
 const log = createLogger("memory");
+const MEMORY_LIFECYCLE_ERROR_CODE = "EVE_MEMORY_LIFECYCLE_FAILED";
 
 /** A memory provider handler threw: the turn fails and the session waits, so the next message can retry. */
 export class MemoryLifecycleError extends Error {
+  readonly code = MEMORY_LIFECYCLE_ERROR_CODE;
   override readonly name = "MemoryLifecycleError";
 
   constructor(error: unknown) {
     super(toErrorMessage(error), { cause: error });
   }
+}
+
+export function isMemoryLifecycleError(error: unknown): error is MemoryLifecycleError {
+  return (
+    error instanceof MemoryLifecycleError ||
+    (typeof error === "object" &&
+      error !== null &&
+      (error as { readonly code?: unknown }).code === MEMORY_LIFECYCLE_ERROR_CODE)
+  );
 }
 
 export async function dispatchMemoryLifecycleEvent(input: {

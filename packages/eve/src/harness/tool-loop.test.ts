@@ -1018,6 +1018,19 @@ describe("createToolLoopHarness", () => {
     expect(lastSessionEvent(events, "session.failed")?.data.usage).toEqual(DELEGATED_SPEND);
   });
 
+  it("parks the turn when a memory failure arrives as a plain object carrying only its code", async () => {
+    const emit: HarnessEmitFn = async (event) => {
+      events.push(event);
+      if (event.type === "turn.started") throw { code: "EVE_MEMORY_LIFECYCLE_FAILED" };
+    };
+    const events: UnstampedMessageStreamEvent[] = [];
+
+    await createToolLoopHarness(createTestConfig(emit))(withDelegatedSpend(), { message: "Hi" });
+
+    expect(events.map((event) => event.type).slice(-2)).toEqual(["turn.failed", "session.waiting"]);
+    expect(events.map((event) => event.type)).not.toContain("session.failed");
+  });
+
   it("uses one projected history view for step consumers while preserving raw history", async () => {
     setupMockAgent({
       finishReason: "stop",
