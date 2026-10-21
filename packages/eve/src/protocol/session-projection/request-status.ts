@@ -35,5 +35,7 @@ export function deliveryStatus(
       return "completed";
     case "handled":
       return turn === "cancelled" ? "cancelled" : turn === "failed" ? "failed" : "completed";
+    default:
+      return "failed";
   }
 }

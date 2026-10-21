@@ -3,7 +3,9 @@
 // call's row with the same selectors every reader uses (`callState`, `callLabel`, `waiting`).
 
 import { callTurn, waiting } from "#protocol/session-projection/selectors.js";
-import type { CallRow, SessionView } from "#protocol/session-projection/tables.js";
+import type { CallRow, SessionView as SessionTables } from "#protocol/session-projection/tables.js";
+import { snapshotOf, type SessionView } from "#protocol/session-projection/session-view.js";
+import { call, type CallObservation } from "#protocol/session-projection/public-view.js";
 import type { ChannelAudience } from "#shared/channel-audience.js";
 
 /** The most calls one card holds; the oldest settled ones drop first. */
@@ -26,8 +28,8 @@ export interface TaskCard {
    * The turn's calls the card shows, in call order. A task's call has a `taskId`. A call that
    * isn't a task belongs to the card open when it ended, or to the latest card while it runs.
    */
-  readonly calls: readonly CallRow[];
-  /** The tables, for the selectors that read each call. */
+  readonly calls: readonly CallObservation[];
+  /** The immutable observation snapshot used to build the card. */
   readonly view: SessionView;
   /** Who reads the card. A failed task's error and a request's prompt are for `private` only. */
   readonly audience: ChannelAudience;
@@ -35,7 +37,7 @@ export interface TaskCard {
 
 /** A turn's cards, oldest first; every card but the latest is finished. */
 export function taskCards(
-  view: SessionView,
+  view: SessionTables,
   turnId: string,
   audience: ChannelAudience,
 ): readonly TaskCard[] {
@@ -58,6 +60,7 @@ export function taskCards(
     return starts.findLastIndex((start) => start <= at);
   };
   const turnWorks = view.turns[turnId]?.status !== "settled";
+  const snapshot = snapshotOf(view);
   return starts.map((since, index): TaskCard => {
     const shown = bounded(calls.filter((row) => cardOf(row) === index));
     const tasks = shown.filter((row) => row.taskId !== undefined && row.status !== "settled");
@@ -67,18 +70,25 @@ export function taskCards(
       : tasks.length > 0 || (latest && turnWorks)
         ? "working"
         : "finished";
-    return { audience, calls: shown, since, state, turnId, view };
+    return {
+      audience,
+      calls: shown.flatMap((row) => call(snapshot, row.callId) ?? []),
+      since,
+      state,
+      turnId,
+      view: snapshot,
+    };
   });
 }
 
 /** The names of a turn's working tasks, for a status such as `Waiting on researcher...`. */
-export function workingTaskNames(view: SessionView, turnId: string): readonly string[] {
+export function workingTaskNames(view: SessionTables, turnId: string): readonly string[] {
   return turnCalls(view, turnId)
     .filter((row) => row.taskId !== undefined && row.status !== "settled")
     .map((row) => row.capability.name);
 }
 
-function turnCalls(view: SessionView, turnId: string): readonly CallRow[] {
+function turnCalls(view: SessionTables, turnId: string): readonly CallRow[] {
   return Object.values(view.calls)
     .filter(
       (row) =>

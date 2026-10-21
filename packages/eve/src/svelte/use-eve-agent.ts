@@ -51,7 +51,6 @@ export interface UseEveAgentReturn {
   /** Request durable cancellation of the active turn while continuing to receive its events. */
   readonly cancel: () => Promise<Delivery>;
   /** Rendered messages, local answers, native lifecycle tables, and followed agents. */
-  readonly previews: EveAgentStoreSnapshot["previews"];
   readonly messages: EveAgentStoreSnapshot["messages"];
   readonly agents: EveAgentStoreSnapshot["agents"];
   /** Last transport-level error, or `undefined` when healthy. */
@@ -174,10 +173,6 @@ class SvelteEveAgent implements UseEveAgentReturn {
     });
   }
 
-  get previews(): EveAgentStoreSnapshot["previews"] {
-    this.#subscribe();
-    return this.#snapshot.previews;
-  }
   get messages(): EveAgentStoreSnapshot["messages"] {
     this.#subscribe();
     return this.#snapshot.messages;

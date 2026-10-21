@@ -1,5 +1,7 @@
 import type { Delivery } from "#shared/delivery.js";
-import type { SessionView } from "#protocol/session-projection/tables.js";
+import type { DeliveryOutcome } from "#protocol/session-events/families/delivery.js";
+import type { ErrorInfo } from "#protocol/session-events/envelope.js";
+import type { SessionView } from "#protocol/session-projection/session-view.js";
 import type { RequestStatus } from "#protocol/session-projection/request-status.js";
 import type { ChildOpened } from "#protocol/session-events/families/child.js";
 import type { SessionStreamEvent } from "#protocol/session-event.js";
@@ -17,7 +19,7 @@ import type {
   RespondTurnOptions,
 } from "#client/types.js";
 import type { Answer } from "#shared/input.js";
-import type { Interaction } from "#protocol/session-reader.js";
+import type { Interaction } from "#protocol/session-projection/reader.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { AgentModelOptionsDefinition } from "#shared/agent-definition.js";
 import type { EvalReporter } from "#evals/runner/reporters/types.js";
@@ -161,6 +163,9 @@ export interface EveEvalTaskResult {
   readonly data: unknown;
   /** The last observed turn's reply text, when present. */
   readonly reply: string | undefined;
+  /** Present when the read observed its accepted delivery's settlement. */
+  readonly outcome?: DeliveryOutcome;
+  readonly error?: ErrorInfo;
   /** The primary captured session ID; other sessions are listed in sessions. */
   readonly sessionId?: string;
   /**
@@ -424,6 +429,9 @@ export interface EveEvalTurn extends EveEvalAssertions, EveEvalOutputAssertions 
   readonly events: readonly SessionStreamEvent[];
   readonly interactions: readonly Interaction[];
   readonly reply: string | undefined;
+  /** A watch may stop before a delivery settles, so its outcome can be absent. */
+  readonly outcome?: DeliveryOutcome;
+  readonly error?: ErrorInfo;
   /** Session that owns this turn; use it for follow-up messages. */
   readonly session: EveEvalSession;
   readonly sessionId: string;
