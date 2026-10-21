@@ -383,7 +383,8 @@ export interface TaskCancellation {
 /**
  * Cancels a task's current work: its calls settle as cancelled and never
  * report back, and a live run is told to stop. A run that hasn't started
- * holds the cancel. A resumable task stays available and becomes idle.
+ * holds the cancel only for a non-agent resumable task. Cancelling an agent or
+ * one-shot task ends it; another resumable task stays available and becomes idle.
  */
 export function cancelTask(table: TaskTable, taskId: string): TaskCancellation {
   const record = findTask(table, taskId);

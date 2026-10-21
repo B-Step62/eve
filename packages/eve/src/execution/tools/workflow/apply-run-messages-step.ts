@@ -125,8 +125,6 @@ export async function applyRunMessagesStep(
           storedProjection(sessionState).view?.tasks[taskId]?.status === "ended");
       if (message.kind === "agent-started") {
         if (ended) {
-          if (message.context === undefined)
-            throw new Error("A late child address has no parent context for stopping its session.");
           await stopLateAgentSessionStep({
             address: message.session,
             context: message.context,

@@ -22,6 +22,8 @@ import { createTestSessionState } from "#internal/testing/session-state.js";
 import { withSessionUsage } from "#internal/testing/session-usage.js";
 import type { TokenUsage } from "#shared/token-usage.js";
 
+const publishedFacts = vi.hoisted((): SessionEvent[] => []);
+
 vi.mock("#execution/stop-runs.js", () => ({
   stopRuns: async (
     targets: readonly { readonly run: { readonly runId: string }; readonly ends: boolean }[],
@@ -46,8 +48,10 @@ vi.mock("#execution/publish-session-events.js", async () => {
       const projection = storedProjection(session.state);
       const view = copyView(projection.view);
       for (const transition of decide(sessionView(projection, session.state)))
-        for (const event of transition.events)
+        for (const event of transition.events) {
+          publishedFacts.push(event);
           foldReceivedEvent(view, { ...event, meta: { endOfLine: false } });
+        }
       const state = { ...session.state, [SESSION_PROJECTION_STATE_KEY]: { ...projection, view } };
       return {
         serializedContext: target.serializedContext,
@@ -139,18 +143,66 @@ function spent(cursor: SessionStateCursor): TokenUsage {
 }
 
 describe("delegated agent usage", () => {
-  it("counts a cancelled run's final spend once without restoring its task", async () => {
-    const alice = sessionWithTask({ name: "reviewer", ownInputTokens: 100, cancelled: true });
+  it("counts cancelled run usage as it arrives, then only the final delta without restoring its task", async () => {
+    const alice = sessionWithTask({
+      name: "reviewer",
+      ownInputTokens: 100,
+      cancelled: true,
+      limits: { maxInputTokensPerSession: 400 },
+    });
+    publishedFacts.length = 0;
+    await alice.execution.handleWorkflowMessage({
+      from: { ...alice.from, runId: "stale-run" },
+      kind: "usage",
+      usage: usage(900),
+    });
+    expect(spent(alice.cursor)).toEqual(usage(100));
+
+    const report = { from: alice.from, kind: "usage" as const, usage: usage(300, 0.25) };
+    await alice.execution.handleWorkflowMessage(report);
+    await alice.execution.handleWorkflowMessage(report);
+
+    expect(spent(alice.cursor)).toEqual(usage(400, 0.25));
+    expect(getSessionUsageLimitViolation(committed(alice.cursor))).toEqual({
+      kind: "input",
+      limit: 400,
+      usedTokens: 400,
+    });
+    expect(readTaskTable(committed(alice.cursor).state).tasks[0]?.run?.runId).toBe(
+      alice.from.runId,
+    );
+    expect(publishedFacts.filter((event) => event.type === "usage.recorded")).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ kind: "delegated-late", usage: usage(300, 0.25) }),
+      }),
+    ]);
+    expect(
+      publishedFacts.filter((event) => event.type === "usage.recorded").map((event) => event.scope),
+    ).toEqual([undefined]);
+
     const outcome = {
       from: alice.from,
       kind: "outcome" as const,
       result: { status: "cancelled" as const },
-      usage: usage(300, 0.25),
+      usage: usage(500, 0.4),
     };
     await alice.execution.handleWorkflowMessage(outcome);
     await alice.execution.handleWorkflowMessage(outcome);
+    await alice.execution.handleWorkflowMessage(report);
 
-    expect(spent(alice.cursor)).toEqual(usage(400, 0.25));
+    expect(spent(alice.cursor)).toEqual(usage(600, 0.4));
+    expect(publishedFacts.filter((event) => event.type === "usage.recorded")).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ kind: "delegated-late" }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          kind: "delegated-late",
+          usage: expect.objectContaining({ inputTokens: 200 }),
+        }),
+      }),
+    ]);
+    expect(
+      publishedFacts.filter((event) => event.type === "usage.recorded").map((event) => event.scope),
+    ).toEqual([undefined, undefined]);
     const task = readTaskTable(committed(alice.cursor).state).tasks[0];
     expect(task?.calls).toEqual([]);
     expect(task?.run).toBeUndefined();

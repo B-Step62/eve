@@ -217,7 +217,7 @@ appends the results, and calls the model again in the same turn. No result ever 
 its own. An idle resumable task isn't working, so it doesn't hold the turn.
 
 A held turn stays open. While it waits on its tasks, when eve holds it or when `eve__task_wait` has no
-result yet, the turn keeps running: it pauses only for a person. The next `model.requested` for the
+result yet, the turn keeps running: it pauses only for interactions. The next `model.requested` for the
 same `turnId` means the turn took its results, and `turn.settled` comes only when the turn really
 ends. The model's text before the wait depends on the session:
 
@@ -226,14 +226,14 @@ ends. The model's text before the wait depends on the session:
 - **Child sessions and a schedule's sessions:** the held text completes as `phase: "narration"`, so
   channels post only the final reply.
 
-A question or sign-in from a task, such as an agent's question, pauses the turn on the person: the
-stream emits `interaction.opened`, then `turn.paused` awaiting it, and the turn continues once the
-person answers or signs in.
+A question or sign-in from a task, such as an agent's question, pauses the turn on that interaction:
+the stream emits `interaction.opened`, then `turn.paused` awaiting it, and the turn continues once
+the question is answered or sign-in completes.
 
 The TypeScript client's `send(...).result()` and the MCP channel's `agent_get` read past a pause
 on tasks and report the final reply rather than the text written before the wait. `result()` stops
-at a pause only while the turn waits on a person, such as for a question, approval, sign-in, or
-`session-limit` prompt, and returns `status: "awaiting-input"`. Answer with `respond()`; its
+at a pause only while the turn waits on an interaction, such as a question, approval, sign-in, or
+budget prompt, and returns `status: "awaiting-input"`. Answer with `respond()`; its
 delivery's `result()` reads the same turn to its end. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
 Channels such as [Slack](/docs/channels/slack) post a root session's text before the wait as an
 ordinary reply, then post the reply after the results as another message. Slack also shows each
@@ -256,8 +256,9 @@ correct an agent by calling it again with its `taskId`, or stop a task with `eve
 Cancelled agent and `task` tool tasks end immediately. Later reports, questions, and child-open
 notices from their runs do not reach the session stream. If a child opens after its task ended,
 eve stops that child. The parent can start another turn without waiting for the cancelled run to
-finish cleaning up. Final reported spend still counts against session limits without naming the
-ended task again. Other `serve` tools stay available: their waiting calls settle as `cancelled`,
+finish cleaning up. Usage reports from a cancelled run count against session limits as they
+arrive; its final outcome adds only any remaining spend, without naming the ended task again.
+Other `serve` tools stay available: their waiting calls settle as `cancelled`,
 the stretch's `abortSignal` aborts, and the task becomes idle, as long as the body catches that
 abort and returns to `receive()`. A `serve` body that doesn't return to `receive()` within
 30 seconds of a cancel ends, and the task finishes.

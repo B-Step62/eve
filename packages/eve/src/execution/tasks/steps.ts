@@ -76,12 +76,13 @@ export async function applyTaskRunMessage(
   let table = readTaskTable(session.state);
   const cancelled = isCancelledTaskRun(table, taskId, message.from.runId);
   const ended = storedProjection(session.state).view?.tasks[taskId]?.status === "ended";
-  if ((!isActiveTaskRun(table, taskId, message.from.runId) || ended) && message.kind !== "outcome")
-    return { serializedContext: input.serializedContext, sessionState: input.sessionState };
-  if (cancelled && message.kind === "outcome") {
-    // The task already ended, so its final spend counts without naming it again.
+  if (cancelled && (message.kind === "usage" || message.kind === "outcome")) {
+    // The task already ended, so later spend counts without naming it again.
     const counted = countTaskRunUsage(table, taskId, message);
-    table = finishTaskRun(counted.table, taskId, message.from.runId);
+    table =
+      message.kind === "outcome"
+        ? finishTaskRun(counted.table, taskId, message.from.runId)
+        : counted.table;
     return await commitSessionStep(
       { ...input, sessionState: saveTable(input.sessionState, session, table) },
       (view) => [
