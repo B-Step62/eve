@@ -256,7 +256,8 @@ correct an agent by calling it again with its `taskId`, or stop a task with `eve
 Cancelled agent and `task` tool tasks end immediately. Later reports, questions, and child-open
 notices from their runs do not reach the session stream. If a child opens after its task ended,
 eve stops that child. The parent can start another turn without waiting for the cancelled run to
-finish cleaning up. Other `serve` tools stay available: their waiting calls settle as `cancelled`,
+finish cleaning up. Final reported spend still counts against session limits without naming the
+ended task again. Other `serve` tools stay available: their waiting calls settle as `cancelled`,
 the stretch's `abortSignal` aborts, and the task becomes idle, as long as the body catches that
 abort and returns to `receive()`. A `serve` body that doesn't return to `receive()` within
 30 seconds of a cancel ends, and the task finishes.
@@ -268,7 +269,7 @@ abort and returns to `receive()`. A `serve` body that doesn't return to `receive
 | `task.started` | A call starts a task                                                     | `taskId`, `name`, `kind`, and `startedBy: { callId }`     |
 | `call.started` | A call reaches its task, including a later call to a resumable task      | `callId` and `taskId`                                     |
 | `call.settled` | A reply, return, failure, or cancel settles one call                     | `callId`, `outcome`, and `output`, `outputOf`, or `error` |
-| `task.ended`   | The task ends, including immediately on cancellation                     | `taskId`, `outcome`, and `reason` or `error`              |
+| `task.ended`   | The task ends; agent and one-shot tasks end immediately on cancellation  | `taskId`, `outcome`, and `reason` or `error`              |
 | `child.opened` | A workflow run, including an agent tool's, opens a session with an agent | `sessionId`, `name`, `stream`, and `owner`                |
 
 `task.started` comes once per task, and `task.ended` once when it ends. Each call the task

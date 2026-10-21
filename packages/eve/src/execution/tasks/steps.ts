@@ -79,11 +79,19 @@ export async function applyTaskRunMessage(
   if ((!isActiveTaskRun(table, taskId, message.from.runId) || ended) && message.kind !== "outcome")
     return { serializedContext: input.serializedContext, sessionState: input.sessionState };
   if (cancelled && message.kind === "outcome") {
-    table = finishTaskRun(table, taskId, message.from.runId);
-    return {
-      serializedContext: input.serializedContext,
-      sessionState: saveTable(input.sessionState, session, table),
-    };
+    // The task already ended, so its final spend counts without naming it again.
+    const counted = countTaskRunUsage(table, taskId, message);
+    table = finishTaskRun(counted.table, taskId, message.from.runId);
+    return await commitSessionStep(
+      { ...input, sessionState: saveTable(input.sessionState, session, table) },
+      (view) => [
+        {
+          turn: view.turn,
+          events: counted.spend === undefined ? [] : [delegatedUsageFact(undefined, counted.spend)],
+        },
+      ],
+      { origin: "own" },
+    );
   }
   if (ended || !isActiveTaskRun(table, taskId, message.from.runId))
     return { serializedContext: input.serializedContext, sessionState: input.sessionState };
@@ -215,7 +223,7 @@ async function cancelTasks(
     saveTable(input.sessionState, session, table),
     { settles, withdraws },
   );
-  await Promise.all([
+  const [cancelledOutright] = await Promise.all([
     stopRuns(
       targets.filter((target) => target.ends),
       { kind: "end", reason: TASK_CANCEL_REASON },
@@ -228,7 +236,15 @@ async function cancelTasks(
     ),
     stopRuns(calls, { kind: "cancel", reason: TURN_CANCEL_REASON }),
   ]);
-  return committed;
+  if (cancelledOutright.length === 0) return committed;
+  const current = readDurableSession(committed.sessionState);
+  let finished = readTaskTable(current.state);
+  const cancelledRuns = new Set(cancelledOutright);
+  for (const record of finished.tasks) {
+    if (record.run !== undefined && cancelledRuns.has(record.run.runId))
+      finished = finishTaskRun(finished, record.id, record.run.runId);
+  }
+  return { ...committed, sessionState: saveTable(committed.sessionState, current, finished) };
 }
 
 /** A transition a task step decides against the session it commits to. */

@@ -7,7 +7,9 @@ import type { SessionInbox } from "#execution/session-inbox/inbox.js";
 import { SessionInputQueue } from "#execution/session/input-queue.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { SessionExecution } from "#execution/session/turn.js";
+import { cancelTasksStep } from "#execution/tasks/steps.js";
 import {
+  cancelTask,
   createTask,
   readTaskTable,
   recordTaskRun,
@@ -19,6 +21,13 @@ import type { HarnessSession } from "#harness/types.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
 import { withSessionUsage } from "#internal/testing/session-usage.js";
 import type { TokenUsage } from "#shared/token-usage.js";
+
+vi.mock("#execution/stop-runs.js", () => ({
+  stopRuns: async (
+    targets: readonly { readonly run: { readonly runId: string }; readonly ends: boolean }[],
+  ) => targets.filter((target) => target.ends).map((target) => target.run.runId),
+  waitedCallRuns: () => [],
+}));
 
 // A task step's commit folds what it decides into the session's saved view, as the writer does.
 vi.mock("#execution/publish-session-events.js", async () => {
@@ -63,6 +72,7 @@ function sessionWithTask(input: {
   readonly limits?: HarnessSession["limits"];
   readonly name: string;
   readonly ownInputTokens: number;
+  readonly cancelled?: boolean;
 }): {
   readonly cursor: SessionStateCursor;
   readonly execution: SessionExecution;
@@ -86,7 +96,7 @@ function sessionWithTask(input: {
       { ...base.snapshot.session, limits: input.limits },
       usage(input.ownInputTokens),
     ),
-    table,
+    input.cancelled ? cancelTask(table, created.taskId).table : table,
   );
   const inbox = {
     claimSessionHooks: vi.fn(),
@@ -129,6 +139,38 @@ function spent(cursor: SessionStateCursor): TokenUsage {
 }
 
 describe("delegated agent usage", () => {
+  it("counts a cancelled run's final spend once without restoring its task", async () => {
+    const alice = sessionWithTask({ name: "reviewer", ownInputTokens: 100, cancelled: true });
+    const outcome = {
+      from: alice.from,
+      kind: "outcome" as const,
+      result: { status: "cancelled" as const },
+      usage: usage(300, 0.25),
+    };
+    await alice.execution.handleWorkflowMessage(outcome);
+    await alice.execution.handleWorkflowMessage(outcome);
+
+    expect(spent(alice.cursor)).toEqual(usage(400, 0.25));
+    const task = readTaskTable(committed(alice.cursor).state).tasks[0];
+    expect(task?.calls).toEqual([]);
+    expect(task?.run).toBeUndefined();
+  });
+
+  it("reclaims a run address once stopping it confirms outright cancellation", async () => {
+    const alice = sessionWithTask({ name: "reviewer", ownInputTokens: 100 });
+    await alice.cursor.advance((state) =>
+      cancelTasksStep({
+        ...state,
+        reason: "task-cancel",
+        taskIds: [alice.from.taskId!],
+      }),
+    );
+
+    const task = readTaskTable(committed(alice.cursor).state).tasks[0];
+    expect(task?.calls).toEqual([]);
+    expect(task?.run).toBeUndefined();
+  });
+
   it("counts a task's usage once from its replies, usage reports, and outcome, however often they arrive, against the session's limits", async () => {
     const alice = sessionWithTask({
       limits: { maxInputTokensPerSession: 1_000 },
