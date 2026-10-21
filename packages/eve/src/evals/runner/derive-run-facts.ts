@@ -3,6 +3,7 @@ import type {
   MessageStreamEvent,
   TaskSettledStreamEvent,
 } from "#protocol/message.js";
+import { foldSession, initialSessionProjection, openInputs } from "#protocol/session-projection.js";
 import type { InputRequest } from "#shared/input.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { TokenUsage } from "#shared/token-usage.js";
@@ -41,9 +42,8 @@ export interface DeriveRunFactsOptions {
 }
 
 /**
- * Event types that only park or close out a turn. When the last meaningful
- * event before them is `input.requested`, the run ended parked on unanswered
- * HITL input.
+ * Event types that only park or close out a turn. A run that ends on one while
+ * a request is open ended parked on unanswered HITL input.
  */
 const PARKING_EVENT_TYPES: ReadonlySet<MessageStreamEvent["type"]> = new Set([
   "turn.waiting",
@@ -269,16 +269,23 @@ export function createEmptyDerivedFacts(): EveEvalDerivedFacts {
 }
 
 /**
- * A run ended parked when the last event before its parking events is
- * `input.requested`: either the turn ended on the request (`turn.completed` →
- * `session.waiting`), or a call the turn runs asked and the open turn parked
- * (`turn.waiting`).
+ * Input requests raised in `events` that no later event settles. A partial
+ * answer settles only the requests it answers; the rest stay open.
+ */
+export function openInputRequests(events: readonly MessageStreamEvent[]): InputRequest[] {
+  let projection = initialSessionProjection();
+  for (const event of events) projection = foldSession(projection, event);
+  return openInputs(projection).map((input) => input.request);
+}
+
+/**
+ * A run ended parked when it ends on a parking event while a request is still
+ * open: the turn ended on the request (`turn.completed` → `session.waiting`),
+ * or the open turn parked on it (`turn.waiting`), also after a partial answer.
  */
 function endedParkedOnInput(events: readonly MessageStreamEvent[]): boolean {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (event === undefined || PARKING_EVENT_TYPES.has(event.type)) continue;
-    return event.type === "input.requested";
-  }
-  return false;
+  const last = events.at(-1);
+  return (
+    last !== undefined && PARKING_EVENT_TYPES.has(last.type) && openInputRequests(events).length > 0
+  );
 }

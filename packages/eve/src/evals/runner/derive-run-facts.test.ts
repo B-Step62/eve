@@ -511,15 +511,24 @@ describe("deriveRunFacts", () => {
     expect(facts.parked).toBe(true);
   });
 
-  it("does not mark the run parked when the turn continued past the input request", () => {
+  it("does not mark the run parked when the turn continued past an answered input request", () => {
     const events: UnstampedMessageStreamEvent[] = [
       turnStarted("t1", 0),
       inputRequested(["r1"]),
       {
-        type: "message.completed",
-        data: { finishReason: "stop", message: "done", stepIndex: 1, turnId: "t1", sequence: 2 },
+        type: "input.resolved",
+        data: {
+          resolutions: [{ kind: "tool-approval", outcome: "approved", requestId: "r1" }],
+          sequence: 2,
+          stepIndex: 0,
+          turnId: "t1",
+        },
       },
-      { type: "turn.completed", data: { sequence: 3, turnId: "t1" } },
+      {
+        type: "message.completed",
+        data: { finishReason: "stop", message: "done", stepIndex: 1, turnId: "t1", sequence: 3 },
+      },
+      { type: "turn.completed", data: { sequence: 4, turnId: "t1" } },
       {
         type: "session.waiting",
         data: { continuationToken: "session-id", wait: "next-user-message" },
