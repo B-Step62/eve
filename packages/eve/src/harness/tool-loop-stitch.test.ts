@@ -43,4 +43,13 @@ describe("stitchUnansweredToolCalls", () => {
     ] as ModelMessage[];
     expect(stitchUnansweredToolCalls(messages)).toEqual(messages);
   });
+
+  it("answers each parallel orphan in one tool message", () => {
+    const second = { ...call, toolCallId: "c2" };
+    const out = stitchUnansweredToolCalls([
+      { role: "assistant", content: [call, second] },
+    ] as ModelMessage[]);
+    expect(out).toHaveLength(2);
+    expect((out[1]?.content as unknown[]).length).toBe(2);
+  });
 });
