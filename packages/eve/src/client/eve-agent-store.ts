@@ -22,7 +22,7 @@ import {
   waitWithSignal,
 } from "#client/eve-agent-store-helpers.js";
 import { activeTurn, failure, idle } from "#protocol/session-projection/selectors.js";
-import { openSignIns } from "#protocol/session-projection/reader.js";
+import type { DeliveryReceipt } from "#protocol/delivery.js";
 import { toError } from "#shared/errors.js";
 import type { ClientSessionState, SendTurnPayload } from "#client/types.js";
 
@@ -36,20 +36,21 @@ export type {
 
 const detachStore = Symbol("detachEveAgentStore");
 const attachStore = Symbol("attachEveAgentStore");
+type ReceiptOrigin = "submitted" | "followed";
 
 /** An observable durable session. Commands resolve on acceptance; only its stream changes its lifecycle. */
 export class EveAgentStore {
   readonly #client: Client | undefined;
   readonly #autoPrewarm: boolean;
   readonly #followChildStreams: boolean;
-  readonly #followIdle: boolean;
+  readonly #followWhile: NonNullable<EveAgentStoreInit["followWhile"]>;
   readonly #externalSession: boolean;
   readonly #subscribers = new Set<() => void>();
   readonly #turnWaiters = new Set<() => void>();
   readonly #conversationClient: ConversationClient;
   readonly #messageSubmissions: OptimisticMessageSubmissions;
   readonly #pending = new Set<Promise<string | undefined>>();
-  readonly #accepted = new Set<string>();
+  readonly #accepted = new Map<string, ReceiptOrigin>();
   #attached = false;
   #callbacks: EveAgentStoreCallbacks = {};
   #controller = new AbortController();
@@ -72,7 +73,7 @@ export class EveAgentStore {
   constructor(init: EveAgentStoreInit) {
     this.#autoPrewarm = init.prewarm ?? false;
     this.#followChildStreams = init.followAgents ?? false;
-    this.#followIdle = init.followIdle ?? true;
+    this.#followWhile = init.followWhile ?? (() => true);
     this.#externalSession = init.session !== undefined;
     this.#client = this.#externalSession
       ? undefined
@@ -125,7 +126,11 @@ export class EveAgentStore {
         this.#fail(error);
       throw error;
     }
-    if (lifetime === this.#controller && this.#followIdle) this.#ensureStream();
+    if (
+      lifetime === this.#controller &&
+      this.#followWhile(this.#conversationClient.conversation.view)
+    )
+      this.#ensureStream();
   }
 
   /** Accepts a message or answers. Observe the stream for its durable result. */
@@ -201,7 +206,27 @@ export class EveAgentStore {
     }
   }
 
-  /** Replays through the current durable tail, then follows independently of this promise. */
+  /**
+   * Follow an accepted delivery in this session until it settles or the session ends.
+   * The receipt may come from another store. Repeating it is safe and retries a closed stream.
+   * Catch-up updates recorded failures without replaying live completion callbacks.
+   * Normal session stream authorization still applies.
+   */
+  follow(receipt: DeliveryReceipt): void {
+    if (this.#session === undefined)
+      throw new Error("An eve session is required before following.");
+    if (receipt.sessionId !== this.#session.id)
+      throw new Error("The delivery belongs to a different eve session.");
+    const view = this.#conversationClient.view;
+    const delivery = view.deliveries[receipt.deliveryId];
+    if (view.session.status === "ended" || delivery?.status === "settled") return;
+    this.#error = undefined;
+    this.#acceptReceipt(receipt.deliveryId, "followed");
+    if (this.#accepted.has(receipt.deliveryId)) this.#ensureStream();
+    this.#publish();
+  }
+
+  /** Replays through the durable tail; subsequent following obeys `followWhile`. */
   resume(): Promise<void> {
     if (this.#resumePromise !== undefined) return this.#resumePromise;
     if (this.#session === undefined)
@@ -214,10 +239,6 @@ export class EveAgentStore {
     const promise = stream.caughtUp
       .then(() => {
         if (lifetime === this.#controller) this.#error ??= this.#recordedFailure();
-      })
-      .catch((error: unknown) => {
-        if (lifetime === this.#controller && !isAbortError(error)) this.#fail(error);
-        throw error;
       })
       .finally(() => {
         if (lifetime !== this.#controller) return;
@@ -241,7 +262,7 @@ export class EveAgentStore {
   }
 
   async #submittedTurn(signal: AbortSignal): Promise<string | undefined> {
-    const deliveries = new Set(this.#accepted);
+    const deliveries = new Set(this.#accepted.keys());
     const pending = [...this.#pending];
     let remaining = pending.length;
     const result = Promise.withResolvers<string | undefined>();
@@ -306,6 +327,7 @@ export class EveAgentStore {
   [attachStore](): void {
     this.#attached = true;
     this.#followAgents();
+    if (this.#session !== undefined && this.#hasLocalObligation) this.#ensureStream();
     if (this.#autoPrewarm && this.#session === undefined) void this.prewarm().catch(() => {});
   }
 
@@ -406,6 +428,7 @@ export class EveAgentStore {
     this.#followAgents();
     const lifetime = this.#controller;
     return this.#conversationClient.stream(this.#session, {
+      startIndex: this.#conversationClient.view.position,
       ...options,
       onEvent: (event, historical) => {
         if (lifetime === this.#controller) this.#acceptServerEvent(event, historical);
@@ -433,24 +456,30 @@ export class EveAgentStore {
       this.#endings.push({ event, historical });
     if (this.#inLine) return;
     const view = this.#conversationClient.view;
-    const submitted = this.#accepted.size > 0;
-    const submittedTurns = new Set(
-      [...this.#accepted].flatMap((id) => {
-        const turnId = view.deliveries[id]?.turnId;
-        return turnId === undefined ? [] : [turnId];
-      }),
-    );
+    const submitted = [...this.#accepted.values()].includes("submitted");
+    const submittedTurns = new Set<string>();
+    const followedTurns = new Set<string>();
+    for (const [id, origin] of this.#accepted) {
+      const turnId = view.deliveries[id]?.turnId;
+      if (turnId !== undefined)
+        (origin === "submitted" ? submittedTurns : followedTurns).add(turnId);
+    }
     this.#reconcile();
     for (const ending of this.#endings.splice(0)) {
       if (ending.event.type === "turn.settled") {
         if (!ending.historical || submittedTurns.has(ending.event.data.turnId))
           this.#finishTurn(ending.event.data.turnId);
-      } else if ((!ending.historical || submitted) && ending.event.data.outcome === "failed") {
-        this.#fail(
-          Object.assign(new Error(ending.event.data.error?.message ?? "The session failed."), {
+        else if (followedTurns.has(ending.event.data.turnId))
+          this.#error ??= this.#recordedFailure(ending.event.data.turnId);
+      } else if (ending.event.data.outcome === "failed") {
+        const error = Object.assign(
+          new Error(ending.event.data.error?.message ?? "The session failed."),
+          {
             name: ending.event.data.error?.code ?? "SESSION_FAILED",
-          }),
+          },
         );
+        if (!ending.historical || submitted) this.#fail(error);
+        else this.#error ??= error;
       }
       if (lifetime !== this.#controller) return;
     }
@@ -461,9 +490,9 @@ export class EveAgentStore {
     this.#closeStreamWhenIdle();
   }
 
-  #acceptReceipt(deliveryId: string): void {
+  #acceptReceipt(deliveryId: string, origin: ReceiptOrigin = "submitted"): void {
     const lifetime = this.#controller;
-    this.#accepted.add(deliveryId);
+    if (this.#accepted.get(deliveryId) !== "submitted") this.#accepted.set(deliveryId, origin);
     this.#reconcile();
     const view = this.#conversationClient.view;
     const error = view.session.status === "ended" ? failure(view) : undefined;
@@ -471,30 +500,35 @@ export class EveAgentStore {
       this.#fail(Object.assign(new Error(error.message), { name: error.code }));
     if (lifetime !== this.#controller) return;
     const turnId = view.deliveries[deliveryId]?.turnId;
-    if (turnId !== undefined && view.turns[turnId]?.status === "settled") this.#finishTurn(turnId);
+    if (origin === "submitted" && turnId !== undefined && view.turns[turnId]?.status === "settled")
+      this.#finishTurn(turnId);
   }
 
   #reconcile(): void {
     const view = this.#conversationClient.view;
     if (view.session.status === "ended") this.#accepted.clear();
     this.#messageSubmissions.reconcile(view);
-    for (const id of this.#accepted) {
+    for (const id of this.#accepted.keys()) {
       const delivery = view.deliveries[id];
       if (delivery?.status === "settled") this.#accepted.delete(id);
     }
   }
 
-  #closeStreamWhenIdle(): void {
-    const view = this.#conversationClient.view;
-    if (
-      this.#followIdle ||
+  get #hasLocalObligation(): boolean {
+    return (
       this.#resumePromise !== undefined ||
       this.#posting > 0 ||
       this.#pending.size > 0 ||
-      this.#accepted.size > 0 ||
-      activeTurn(view) !== undefined ||
-      !idle(view) ||
-      openSignIns(view).length > 0
+      this.#posting > 0 ||
+      this.#accepted.size > 0
+    );
+  }
+
+  #closeStreamWhenIdle(): void {
+    if (
+      this.#inLine ||
+      this.#hasLocalObligation ||
+      this.#followWhile(this.#conversationClient.conversation.view)
     )
       return;
     this.#conversationClient.closeStream();
@@ -511,9 +545,9 @@ export class EveAgentStore {
       this.#fail(Object.assign(new Error(error.message), { name: error.code }));
   }
 
-  #recordedFailure(): Error | undefined {
+  #recordedFailure(turnId = this.#conversationClient.view.session.latestTurnId): Error | undefined {
     const view = this.#conversationClient.view;
-    const error = failure(view, view.session.latestTurnId);
+    const error = failure(view, turnId);
     return error === undefined
       ? undefined
       : Object.assign(new Error(error.message), { name: error.code });
@@ -568,9 +602,13 @@ export class EveAgentStore {
   #publish(force = false): void {
     if (this.#resumePromise !== undefined && !force) return;
     if (this.#inLine) {
-      if (this.#error === undefined) return;
-      // Transport or observer failure must be visible without publishing an unfinished line.
-      this.#snapshot = { ...this.#snapshot, error: this.#error };
+      if (this.#error === undefined && this.#accepted.size === 0) return;
+      // Keep the committed projection intact even when an obligation or failure arrives mid-line.
+      this.#snapshot = {
+        ...this.#snapshot,
+        error: this.#error,
+        status: this.#accepted.size > 0 ? "busy" : this.#snapshot.status,
+      };
       for (const subscriber of this.#subscribers) subscriber();
       return;
     }

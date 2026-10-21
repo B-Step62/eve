@@ -29,7 +29,7 @@ export type { PrepareSend };
  *
  * - `"idle"`: nothing is pending, so a new turn can start.
  * - `"resuming"`: catching up on an attached session; submission is disabled.
- * - `"busy"`: a send is in flight, or a turn, task, or sign-in is still pending.
+ * - `"busy"`: a send or followed receipt is pending, or a turn, task, or sign-in is still pending.
  */
 export type UseEveAgentStatus = EveAgentStoreStatus;
 
@@ -46,7 +46,9 @@ export type UseEveAgentSnapshot = EveAgentStoreSnapshot;
 export interface UseEveAgentReturn extends UseEveAgentSnapshot {
   /** Requests durable cancellation of the active turn while continuing to receive its events. */
   readonly cancel: () => Promise<Delivery>;
-  /** Resolves at the durable tail; the session stream keeps following afterward. */
+  /** Follow a same-session delivery receipt from this or another store until settlement. */
+  readonly follow: (receipt: Pick<Delivery, "sessionId" | "deliveryId">) => void;
+  /** Resolves at the durable tail; subsequent following obeys `followWhile`. */
   readonly resume: () => Promise<void>;
   /** Creates the session without starting its first turn. */
   readonly prewarm: () => Promise<void>;
@@ -112,12 +114,8 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
   readonly optimistic?: boolean;
   /** Follow each subagent call's session into `agents` while mounted. @default false */
   readonly followAgents?: boolean;
-  /**
-   * Keep the session stream open between turns to show events that arrive from schedules,
-   * channels, or other clients. Set to false to close it once the session is idle and reopen it
-   * on the next send, answer, or resume. @default true
-   */
-  readonly followIdle?: boolean;
+  /** Keep following while the committed view matches; local obligations always keep the stream open. @default () => true */
+  readonly followWhile?: (view: EveAgentStoreSnapshot["view"]) => boolean;
   /**
    * Prewarm an owned session when true. React observes this value across renders;
    * changing it from false to true prepares the current session, and reset checks
@@ -151,10 +149,12 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
  * `initialSession`, `auth`, `headers`, `optimistic`, `resume`) are read once
  * when the store is created; remount to change them. `prewarm` and lifecycle
  * callbacks (`onError`, `onEvent`, `onFinish`, `onSessionChange`, `prepareSend`)
- * refresh on every render.
+ * and `followWhile` refresh on every render.
  */
 export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentReturn {
   const storeRef = useRef<EveAgentStore | undefined>(undefined);
+  const followWhileRef = useRef(options.followWhile);
+  followWhileRef.current = options.followWhile;
   const mountedRef = useRef(false);
   const resumeOnMountRef = useRef(options.resume ?? false);
   const [autoResumePending, setAutoResumePending] = useState(resumeOnMountRef.current);
@@ -177,7 +177,7 @@ export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentReturn
       initialSession: options.initialSession,
       optimistic: options.optimistic,
       followAgents: options.followAgents,
-      followIdle: options.followIdle,
+      followWhile: (view) => followWhileRef.current?.(view) ?? true,
       session: options.session,
     });
   }
@@ -241,6 +241,10 @@ export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentReturn
   }, [store]);
   const prewarm = useCallback(() => store.prewarm(), [store]);
   const resume = useCallback(() => store.resume(), [store]);
+  const follow = useCallback(
+    (receipt: Pick<Delivery, "sessionId" | "deliveryId">) => store.follow(receipt),
+    [store],
+  );
   const send = useCallback(
     <TOutput = unknown>(message: MessageContent, options?: SendTurnOptions<TOutput>) => {
       return store.send({ ...options, message });
@@ -270,8 +274,21 @@ export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentReturn
       reset,
       respond,
       resume,
+      follow,
       send,
     }),
-    [cancel, clear, compact, newSession, prewarm, reset, respond, resume, send, visibleSnapshot],
+    [
+      cancel,
+      clear,
+      compact,
+      follow,
+      newSession,
+      prewarm,
+      reset,
+      respond,
+      resume,
+      send,
+      visibleSnapshot,
+    ],
   );
 }
