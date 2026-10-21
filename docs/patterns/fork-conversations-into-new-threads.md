@@ -23,12 +23,14 @@ person's existing conversation instead of forking.
 Build the fork as a [workflow tool](../tools/workflows) so the model decides when to call it. The
 tool runs three steps:
 
-1. **Pick the destination.** Read the current channel from `ctx.session.auth.current`, or open a
-   direct conversation with the caller.
-2. **Read the current conversation.** Fold the session's stream with `transcriptReducer()`.
+1. **Identify the destination.** Start a new thread in the current channel, read from
+   `ctx.session.auth.current`, open a new direct conversation with the caller, or send a new
+   message elsewhere.
+2. **Decide what context to seed the new session with.** Fold the session's stream with
+   `transcriptReducer()` and select the messages the new session should have access to.
 3. **Start the forked session.** Call
    [`ctx.to(channel, target).send(...)`](../tools/workflows#start-channel-sessions-ctxto) with a
-   first message and the transcript as `history`. The channel's `receive` hook maps the target to
+   first message and the selected messages as `history`. The channel's `receive` hook maps the target to
    a new thread and session, and the message runs the fork's first turn.
 
 ## Fork into a new Slack thread
