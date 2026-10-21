@@ -2,7 +2,7 @@ import type { DeliverHookPayload, TurnCaller } from "#channel/types.js";
 import { mapHeldInputResponsesStep } from "#execution/proxied-deliver-step.js";
 import { routeDeliverToChildren } from "#execution/route-child-delivery.js";
 import { admitSessionInboxPayload } from "#execution/session/admission.js";
-import { applySessionUsageContinuation } from "#execution/session-usage-continuation.js";
+import { applySessionUsageContinuation } from "#execution/session/usage-continuation.js";
 import {
   isSteeringDelivery,
   isSteeringMessage,

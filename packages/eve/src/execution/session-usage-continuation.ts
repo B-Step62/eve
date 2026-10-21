@@ -1,4 +1,3 @@
-import type { DeliverHookPayload } from "#channel/types.js";
 import {
   type DurableSession,
   type DurableSessionState,
@@ -6,8 +5,6 @@ import {
   replaceDurableSessionSnapshot,
 } from "#execution/durable-session-store.js";
 import type { SessionStepState } from "#execution/publish-session-events.js";
-import type { DeliveryAdmission, SessionInputQueue } from "#execution/session/input-queue.js";
-import type { SessionStateCursor } from "#execution/session/state-cursor.js";
 import {
   type SessionStateTransition,
   withSessionStateDelta,
@@ -15,7 +12,6 @@ import {
 import { readTaskTable } from "#execution/tasks/table.js";
 import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
 import type { WorkflowToolRunControlMessage } from "#execution/tools/workflow/messages.js";
-import { SESSION_LIMIT_CONTINUE_OPTION_ID } from "#harness/hitl/budget-request.js";
 import { readHitlState } from "#harness/hitl/requests.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { resetSessionUsageWindow, type TokenUsageDelta } from "#harness/turn-tag-state.js";
@@ -36,9 +32,12 @@ const log = createLogger("eve:session-usage");
 const USAGE_CONTINUED: WorkflowToolRunControlMessage = { kind: "usage-continued" };
 
 /**
- * Starts a new usage window at the session's totals plus what its direct
- * children's open session-limit prompts show they spent and haven't reported,
- * so that spend counts once, in the window being approved.
+ * Starts a new usage window at the session's totals plus what its open relayed
+ * session-limit prompts show was spent and not yet reported, so that spend
+ * counts once, in the window being approved. A prompt's total less what this
+ * session counted from the run that relayed it never exceeds that run's
+ * unreported spend, so the credit can fall short, never overshoot. Only task
+ * runs report usage up, so only their prompts earn credit.
  */
 export function continueSessionUsage(session: DurableSession): DurableSession {
   const relays = readHitlState(session.state).relays;
@@ -46,11 +45,11 @@ export function continueSessionUsage(session: DurableSession): DurableSession {
   const unreported = { cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 0, outputTokens: 0 };
   for (const { request } of openInputs(storedProjection(session.state))) {
     const relay = relays.get(request.requestId);
-    const child = relay?.childSessionInbox?.sessionId;
-    // A prompt id starts with the id of the session that asked.
-    if (request.kind !== "session-limit" || !request.requestId.startsWith(`${child}:`)) continue;
+    if (request.kind !== "session-limit" || relay === undefined) continue;
     const total = request.action.input["total"] as TokenUsageDelta | undefined;
-    const counted = tasks.find((task) => task.run?.runId === relay?.runId)?.run?.usage;
+    const run = tasks.find((task) => task.run?.runId === relay.runId)?.run;
+    if (run === undefined) continue;
+    const counted = run.usage;
     for (const field of Object.keys(unreported) as (keyof typeof unreported)[]) {
       unreported[field] += Math.max(0, (total?.[field] ?? 0) - (counted?.[field] ?? 0));
     }
@@ -101,31 +100,4 @@ export async function pushSessionUsageContinuationStep(input: {
 }): Promise<void> {
   "use step";
   await pushSessionUsageContinuation(readDurableSession(input.sessionState));
-}
-
-/**
- * Applies a pushed continuation and queues a Continue for the session's own
- * prompts it settled, so a turn parked on one goes on. The answer carries no
- * auth, so it acts as the turn's own identity. Returns its admission.
- */
-export async function applySessionUsageContinuation(input: {
-  readonly cursor: SessionStateCursor;
-  readonly queue: SessionInputQueue;
-}): Promise<DeliveryAdmission | undefined> {
-  const { approved } = await input.cursor.advance((state) =>
-    applySessionUsageContinuationStep(state),
-  );
-  if (approved.length === 0) return undefined;
-  const delivery: DeliverHookPayload = {
-    kind: "deliver",
-    payloads: [
-      {
-        inputResponses: approved.map((requestId) => ({
-          optionId: SESSION_LIMIT_CONTINUE_OPTION_ID,
-          requestId,
-        })),
-      },
-    ],
-  };
-  return input.queue.enqueueDelivery(delivery);
 }

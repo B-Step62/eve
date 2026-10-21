@@ -10,7 +10,7 @@ import type {
 } from "#execution/session/input-queue.js";
 import type { SessionInboxReader } from "#execution/session-inbox/inbox.js";
 import { admitSessionInboxPayload } from "#execution/session/admission.js";
-import { applySessionUsageContinuation } from "#execution/session-usage-continuation.js";
+import { applySessionUsageContinuation } from "#execution/session/usage-continuation.js";
 import type { SessionStateCursor } from "#execution/session/state-cursor.js";
 import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
 

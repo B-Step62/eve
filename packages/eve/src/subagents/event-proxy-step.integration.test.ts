@@ -31,13 +31,24 @@ import { emitProxiedSubagentEvent } from "#subagents/event-proxy-step.js";
 import { routeDeliverPayload } from "#subagents/hitl-proxy.js";
 import { routeProxiedDeliverStep } from "#execution/proxied-deliver-step.js";
 import type { DeliverHookPayload, SessionAuthContext } from "#channel/types.js";
+import { countRunUsage } from "#execution/agent-sessions/usage.js";
+import { readDurableSession } from "#execution/durable-session-read.js";
+import { applySessionStateDelta } from "#execution/session/state-delta.js";
+import { createTask, readTaskTable, writeTaskTable } from "#execution/tasks/table.js";
+import { DEFAULT_SESSION_USAGE_LIMIT } from "#harness/hitl/budget.js";
+import { getSessionUsage, getSessionUsageWindow } from "#harness/turn-tag-state.js";
 
 const sent = vi.hoisted(() => ({
+  hook: vi.fn(async (..._args: unknown[]) => {}),
   remote: vi.fn(async (..._args: unknown[]) => {}),
   session: vi.fn(async (..._args: unknown[]) => {}),
   workflowAsk: vi.fn(async (..._args: unknown[]) => {}),
 }));
 vi.mock("#execution/session-inbox/resume.js", () => ({ resumeSessionInbox: sent.session }));
+vi.mock("#internal/workflow/runtime.js", async (importOriginal: () => Promise<object>) => ({
+  ...(await importOriginal()),
+  resumeHook: sent.hook,
+}));
 vi.mock("#execution/agent-sessions/remote.js", () => ({
   resolveRemoteAgentStreamHeaders: async () => ({}),
   respondToRemoteAgentSession: sent.remote,
@@ -187,17 +198,8 @@ describe("proxied stream hooks", () => {
       {
         childContinuationToken: "child-token",
         payload: { inputResponses: [{ requestId: f.request.requestId, optionId: "continue" }] },
-        resolved: {
-          event: { sequence: 7, stepIndex: 2, turnId: "child-turn" },
-          resolutions: [
-            {
-              kind: "session-limit",
-              outcome: "answered",
-              requestId: f.request.requestId,
-              response: { requestId: f.request.requestId, optionId: "continue" },
-            },
-          ],
-        },
+        // The child closes its own prompt: a Continue elsewhere may have settled it first.
+        resolved: { event: { sequence: 7, stepIndex: 2, turnId: "child-turn" }, resolutions: [] },
       },
     ]);
   });
@@ -694,4 +696,168 @@ describe("typed answers to a relayed prompt", () => {
       expect(routed.stateDelta.serializedContext).toBeUndefined();
     },
   );
+});
+
+describe("a Continue on a relayed session-limit prompt", () => {
+  const alice: SessionAuthContext = {
+    attributes: {},
+    authenticator: "test",
+    principalId: "alice",
+    principalType: "user",
+  };
+  const M = 1_000_000;
+  const usage = (inputTokens: number) => ({
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    inputTokens,
+    outputTokens: 0,
+  });
+
+  /** A root whose direct child asked at 45M, through a started task run. */
+  async function rootWithChildPrompt(input: { readonly root: string; readonly counted?: number }) {
+    const f = fixture();
+    f.ctx.set(AuthKey, alice);
+    const request = createSessionLimitContinuationRequest({
+      sessionId: "child-session",
+      total: usage(45 * M),
+      turnSequence: 0,
+      window: usage(45 * M),
+      windowIndex: 0,
+    });
+    const created = createTask(readTaskTable(f.durableSession.state), {
+      callId: "child-call",
+      kind: "agent",
+      name: "child",
+      resumable: true,
+      turnId: "parent-turn",
+    });
+    const table = {
+      tasks: created.table.tasks.map((task) => ({
+        ...task,
+        run: {
+          hookToken: `${input.root}-run-hook`,
+          runId: `${input.root}-run`,
+          started: true,
+          ...(input.counted === undefined ? {} : { usage: usage(input.counted) }),
+        },
+      })),
+    };
+    const durableSession = writeTaskTable(f.durableSession, table);
+    enterSessionProjection(f.ctx, durableSession.state);
+    const relayed = await emitProxiedSubagentEvent({
+      ...f,
+      durableSession,
+      hookPayload: {
+        ...f.hookPayload,
+        childSessionInbox: { sessionId: "child-session" },
+        event: { ...f.hookPayload.event, requests: [request] },
+      },
+      runId: `${input.root}-run`,
+    });
+    sent.hook.mockClear();
+    sent.session.mockClear();
+    return { f, relayed, request };
+  }
+
+  async function answer(
+    root: Awaited<ReturnType<typeof rootWithChildPrompt>>,
+    delivery: DeliverHookPayload,
+  ) {
+    const values = {
+      history: [],
+      serializedContext: root.relayed.serializedContext,
+      sessionState: root.relayed.sessionState,
+    };
+    const routed = await routeProxiedDeliverStep({
+      delivery,
+      serializedContext: values.serializedContext,
+      sessionState: values.sessionState,
+      sessionWritable: root.f.sessionWritable,
+    });
+    const next = applySessionStateDelta(values, routed.stateDelta);
+    return { next, routed, session: readDurableSession(next.sessionState) };
+  }
+
+  const continueOn = (requestId: string, auth: SessionAuthContext): DeliverHookPayload => ({
+    auth,
+    kind: "deliver",
+    payloads: [{ inputResponses: [{ optionId: "continue", requestId }] }],
+  });
+
+  it("settles Bob's Continue on Alice's relayed prompt without changing the root's auth", async () => {
+    const root = await rootWithChildPrompt({ root: "a" });
+    const bob = { ...alice, principalId: "bob" };
+
+    const { next, routed } = await answer(root, continueOn(root.request.requestId, bob));
+
+    expect(sent.session).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sent.session.mock.calls[0])).toContain(root.request.requestId);
+    expect(routed.stateDelta.serializedContext).toBeUndefined();
+    expect(next.serializedContext["eve.auth"]).toEqual(root.relayed.serializedContext["eve.auth"]);
+  });
+
+  it("credits the child's unreported spend, so the root asks at 90M, not 45M", async () => {
+    const root = await rootWithChildPrompt({ root: "a" });
+
+    const { session } = await answer(root, continueOn(root.request.requestId, alice));
+
+    const reported = countRunUsage(session, usage(45 * M));
+    expect(getSessionUsage(reported).inputTokens).toBe(45 * M);
+    expect(
+      DEFAULT_SESSION_USAGE_LIMIT({
+        total: usage(45 * M),
+        window: getSessionUsageWindow(reported),
+      } as never),
+    ).toBe(false);
+    const sibling = countRunUsage(reported, usage(90 * M), usage(45 * M));
+    expect(getSessionUsageWindow(sibling).inputTokens).toBe(45 * M);
+    expect(
+      DEFAULT_SESSION_USAGE_LIMIT({
+        total: usage(90 * M),
+        window: getSessionUsageWindow(sibling),
+      } as never),
+    ).toBe(true);
+  });
+
+  it("credits only what the child's run has not reported yet", async () => {
+    const root = await rootWithChildPrompt({ counted: 30 * M, root: "a" });
+
+    const { session } = await answer(root, continueOn(root.request.requestId, alice));
+
+    expect(getSessionUsageWindow(session).inputTokens).toBe(0);
+    const reported = countRunUsage(session, usage(45 * M), usage(30 * M));
+    expect(getSessionUsageWindow(reported).inputTokens).toBe(0);
+    expect(
+      getSessionUsageWindow(countRunUsage(reported, usage(46 * M), usage(45 * M))).inputTokens,
+    ).toBe(M);
+  });
+
+  it("still renews the root when the push to a run fails, so that child asks itself", async () => {
+    const root = await rootWithChildPrompt({ root: "a" });
+    sent.hook.mockRejectedValueOnce(new Error("hook unreachable"));
+
+    const { session } = await answer(root, continueOn(root.request.requestId, alice));
+
+    expect(sent.hook).toHaveBeenCalledTimes(1);
+    expect(getSessionUsageWindow(countRunUsage(session, usage(45 * M))).inputTokens).toBe(0);
+  });
+
+  it("pushes to this tree's runs only, and only on Continue", async () => {
+    const a = await rootWithChildPrompt({ root: "a" });
+    const b = await rootWithChildPrompt({ root: "b" });
+
+    await answer(a, continueOn(a.request.requestId, alice));
+    expect(sent.hook.mock.calls).toEqual([["a-run-hook", { kind: "usage-continued" }]]);
+
+    sent.hook.mockClear();
+    const { session } = await answer(b, {
+      auth: alice,
+      kind: "deliver",
+      payloads: [{ inputResponses: [{ optionId: "maybe", requestId: b.request.requestId }] }],
+    });
+    expect(sent.hook.mock.calls).toEqual([]);
+    expect(getSessionUsageWindow(session)).toEqual(
+      getSessionUsageWindow(readDurableSession(b.relayed.sessionState)),
+    );
+  });
 });

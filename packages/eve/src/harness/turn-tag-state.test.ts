@@ -409,6 +409,25 @@ describe("session usage limit", () => {
     });
   });
 
+  it("starts a window at unreported child spend, reading zero until it reports", () => {
+    const session = sessionAfterStep({ inputTokens: 10, outputTokens: 3 });
+    const credited = resetSessionUsageWindow(session, { inputTokens: 45, outputTokens: 0 });
+
+    // The clamp keeps the limit from seeing negative usage before the child reports.
+    expect(getSessionUsageWindow(credited)).toMatchObject({ inputTokens: 0, outputTokens: 0 });
+    const reported = sessionAfterStep({ inputTokens: 50, outputTokens: 3 }, credited, "turn_1");
+    expect(getSessionUsageWindow(reported)).toMatchObject({ inputTokens: 5, outputTokens: 3 });
+  });
+
+  it("never moves a window's start back when a continuation arrives again", () => {
+    const session = sessionAfterStep({ inputTokens: 10, outputTokens: 3 });
+    const credited = resetSessionUsageWindow(session, { inputTokens: 45, outputTokens: 0 });
+    const again = resetSessionUsageWindow(credited);
+
+    const later = sessionAfterStep({ inputTokens: 50, outputTokens: 0 }, again, "turn_1");
+    expect(getSessionUsageWindow(later)).toMatchObject({ inputTokens: 5 });
+  });
+
   it("passes the total and the window to the limit", () => {
     const limit = vi.fn<SessionUsageLimit>(() => false);
     const session = sessionAfterStep({ inputTokens: 4, outputTokens: 2 }, undefined, "turn_0");
