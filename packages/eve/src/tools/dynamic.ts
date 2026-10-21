@@ -1,81 +1,24 @@
-import type { DynamicResolverEvent } from "#dynamic/definition.js";
-import type { Approval } from "#approval/definition.js";
-import type { DynamicResolveContext, DynamicToolEventName } from "#dynamic/definition.js";
-import type {
-  PublicToolInputSchema,
-  PublicToolOutputSchema,
-  ToolLabelDefinition,
-  ToolContext,
-} from "#tools/definition.js";
-import type { ToolModelOutput } from "#tools/model-output.js";
+import {
+  defineDynamic as defineDynamicDefinition,
+  type DefineDynamic,
+} from "#dynamic/definition.js";
+import type { ToolDefinition } from "#tools/definition.js";
 
 /**
- * A single tool entry within a resolved dynamic tool set.
- *
- * Identity comes from context: a single returned entry is named after
- * the file slug; entries in a returned `Record<string, DynamicToolEntry>`
- * are each named by their bare key, prefixed with the mount namespace for an
- * extension's resolver.
- *
- * `TInput` defaults to `Record<string, unknown>` but is inferred when
- * `inputSchema` is a Standard Schema (e.g. Zod) via the `defineTool`
- * wrapper. `TOutput` defaults to `any`; provide an `outputSchema`
- * (Standard Schema) to infer and check the executor return type.
+ * One tool a dynamic resolver returns, created with `defineTool()`. A single returned entry is
+ * named after the file; entries of a returned map are named by their keys, prefixed with the
+ * mount namespace for an extension's resolver.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export interface DynamicToolEntry<TInput = Record<string, unknown>, TOutput = any> {
-  readonly availableInSubagents?: boolean;
-  /** Keeps this entry out of the model's tool list, as `deferred` on `defineTool`. */
-  readonly deferred?: boolean;
-  readonly label?: ToolLabelDefinition<TInput, TOutput>;
-  readonly description: string;
-  /**
-   * Ends the turn after a successful call, as `endsTurn: true` on
-   * `defineTool`. Dynamic tools accept only `true` or `false`: eve rejects a
-   * function when the resolver returns this entry.
-   */
-  readonly endsTurn?: boolean | ((output: TOutput) => boolean | Promise<boolean>);
-  readonly inputSchema: PublicToolInputSchema<TInput>;
-  readonly outputSchema?: PublicToolOutputSchema<TOutput>;
-  execute(input: TInput, ctx: ToolContext): TOutput | Promise<TOutput>;
-  readonly toModelOutput?: (output: TOutput) => ToolModelOutput | Promise<ToolModelOutput>;
-  /**
-   * Optional per-call approval gate, mirroring the authored-tool
-   * `approval` contract: return `"user-approval"` to require user approval
-   * before the call executes. Dynamic approval request and response callbacks
-   * use the same durable descriptor boundary as `execute` and `toModelOutput`.
-   */
-  readonly approval?: Approval<TInput>;
-}
+export type DynamicToolEntry = Pick<ToolDefinition, "description" | "inputSchema">;
 
-/**
- * A resolved tool set: keys are entry identifiers, values are
- * {@link DynamicToolEntry} objects created via `defineTool` inside a
- * resolver. Entry type params are `any` so entries with differing
- * schemas stay assignable to one Record; `defineTool` captures each
- * entry's concrete types before this widened container.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type DynamicToolSet = Readonly<Record<string, DynamicToolEntry<any, any>>>;
+/** A map of dynamic tools, named by key. */
+export type DynamicToolSet = Readonly<Record<string, DynamicToolEntry>>;
 
-/**
- * Return type for a `defineDynamic` event handler: a single tool entry
- * (named after the file slug), a map of entries (named by their keys), or
- * `null` for no tools.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type DynamicToolResult = DynamicToolEntry<any, any> | DynamicToolSet | null;
+/** What a dynamic tool resolver returns: one tool, a map of them, or `null`. */
+export type DynamicToolResult = DynamicToolEntry | DynamicToolSet | null;
 
-/**
- * Slot-typed handler map used by `defineDynamic` from `eve/tools`.
- * Each change point receives its typed fact and may return only tool entries.
- */
-export type DynamicToolEvents = {
-  readonly [K in DynamicToolEventName]?: (
-    event: DynamicResolverEvent<K>,
-    ctx: DynamicResolveContext,
-  ) => DynamicToolResult | Promise<DynamicToolResult>;
-};
+/** `defineDynamic()` for `agent/tools/`: returns one tool, a map of them, or `null`. */
+export const defineDynamic = defineDynamicDefinition as DefineDynamic<DynamicToolResult>;
 
 /**
  * Symbol-based brand stamped by `defineTool` on every entry. Invisible
@@ -84,11 +27,7 @@ export type DynamicToolEvents = {
  */
 export const TOOL_BRAND = Symbol.for("eve:tool-brand");
 
-/**
- * Returns true if `value` carries the `defineTool` brand symbol. Used
- * to detect single entry vs map of entries and to validate that entries
- * are properly wrapped.
- */
+/** True when `value` carries the `defineTool` brand. */
 export function isBrandedToolEntry(value: unknown): boolean {
   return (
     typeof value === "object" &&

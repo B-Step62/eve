@@ -1,9 +1,5 @@
 import { defineDynamic } from "eve/tools";
 
-export default defineDynamic({
-  events: {
-    beforeSession: async () => {
-      return null;
-    },
-  },
+export default defineDynamic(() => {
+  return null;
 });

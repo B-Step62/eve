@@ -100,11 +100,10 @@ describe("workflowEntry sign-in failure", () => {
     const runtime = await createTestRuntime({
       agent: {
         definition: defineAgent({
-          model: defineDynamic({
-            events: {
-              beforeModel: () => ({ model: scriptedModel, modelContextWindowTokens: 200_000 }),
-            },
-          }),
+          model: defineDynamic(() => ({
+            model: scriptedModel,
+            modelContextWindowTokens: 200_000,
+          })),
         }),
         name: "workflow-entry-sign-in-failure",
       },

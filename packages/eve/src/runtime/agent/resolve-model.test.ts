@@ -121,18 +121,13 @@ describe("dynamic runtime model resolution", () => {
   it("loads resolver-only definitions and normalizes explicit metadata", async () => {
     const moduleMap = createModuleMap({
       default: {
-        model: defineDynamic({
-          events: {
-            beforeSession: (_event, ctx) => ({
-              model:
-                ctx.channel.kind === "channel:slack" ? "openai/gpt-5.5-mini" : "openai/gpt-5.5",
-              modelContextWindowTokens: 128_000,
-              modelOptions: {
-                providerOptions: { gateway: { order: ["openai"] } },
-              },
-            }),
+        model: defineDynamic((ctx) => ({
+          model: ctx.channel.kind === "channel:slack" ? "openai/gpt-5.5-mini" : "openai/gpt-5.5",
+          modelContextWindowTokens: 128_000,
+          modelOptions: {
+            providerOptions: { gateway: { order: ["openai"] } },
           },
-        }),
+        })),
       },
     });
 
@@ -140,15 +135,9 @@ describe("dynamic runtime model resolution", () => {
       dynamicModel: DYNAMIC_MODEL_SOURCE,
       scope: { moduleMap, nodeId: undefined },
     });
-    const result = await definition.events["beforeSession"]?.(
-      { type: "session.started", data: {} },
-      {
-        model: { id: "openai/gpt-5.5" },
-        channel: { kind: "channel:slack", metadata: {} },
-        messages: [{ content: "Hi", role: "user" }],
-        session: { auth: { current: null, initiator: null }, id: "session-1" },
-      },
-    );
+    const result = await definition.evaluate({
+      channel: { kind: "channel:slack", metadata: {} },
+    } as never);
 
     const resolved = await resolveRuntimeModelSelection({
       durability: "live",
@@ -307,7 +296,14 @@ describe("dynamic runtime model resolution", () => {
         } as never,
         state,
       }),
-    ).rejects.toThrow(/unknown key\(s\): contextWindowTokens/);
+    ).rejects.toThrow(/returned "contextWindowTokens", which can't vary per session/);
+    await expect(
+      resolveRuntimeModelSelection({
+        durability: "live",
+        selection: { build: {}, defaultTools: false, model: "openai/gpt-5.5-mini" } as never,
+        state,
+      }),
+    ).rejects.toThrow(/returned "build", "defaultTools".*declare them on defineAgent\(\) instead/);
     await expect(
       resolveRuntimeModelSelection({
         catalog: createCatalog(null),

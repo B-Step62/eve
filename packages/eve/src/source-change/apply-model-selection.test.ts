@@ -128,9 +128,8 @@ describe("applyModelSelectionToSource", () => {
 
   it.each([
     `export default defineAgent({ model: process.env.MODEL ?? "a/b" });\n`,
-    `export default defineAgent({ model: \`a/\${x}\` });
-`,
-    `export default defineAgent({ model: defineDynamic({ events: {} }) });\n`,
+    "export default defineAgent({ model: `a/${x}` });\n",
+    `export default defineAgent({ model: defineDynamic(() => "a/b") });\n`,
     `export default defineAgent({ instructions: "hello" });\n`,
     `export const x = 1;\n`,
   ])("bails rather than rewriting a non-static model", async (source) => {

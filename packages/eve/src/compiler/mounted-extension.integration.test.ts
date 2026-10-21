@@ -253,26 +253,19 @@ describe("mounted extension via authored-source loader", () => {
       manifest.subagents.find((subagent) => subagent.name === `${name}__worker`)!,
     );
     expect(workers[0]?.owner).toMatchObject({ mountId: "extensions/one" });
-    const reasoning = workers.map((worker) => {
-      if ("configResolver" in worker) throw new Error("Expected static worker config.");
-      const configSourceId = worker.agent.config.source.sourceId;
-      const definition = moduleMap.nodes[worker.nodeId]!.modules[configSourceId]!.default as {
-        model: { events: { beforeSession: () => { reasoning: string } } };
-      };
-      return definition.model.events["beforeSession"]().reasoning;
-    });
+    // Each mounted worker reads its own extension configuration.
+    const reasoningOf = (map: typeof moduleMap, worker: (typeof workers)[number]) => {
+      if (!("config" in worker.agent)) throw new Error("Expected a worker config.");
+      const definition = map.nodes[worker.nodeId]!.modules[worker.agent.config.source.sourceId]!
+        .default as { model: { evaluate: (ctx: object) => { reasoning: string } } };
+      return definition.model.evaluate({}).reasoning;
+    };
+    const reasoning = workers.map((worker) => reasoningOf(moduleMap, worker));
     expect(reasoning).toEqual(["high", "low"]);
     const second = await loadCompiledModuleMapFromAuthoredSource({
       compiledArtifactsSource: createDiskRuntimeCompiledArtifactsSource(app.appRoot),
     });
-    const secondReasoning = workers.map((worker) => {
-      if ("configResolver" in worker) throw new Error("Expected static worker config.");
-      const definition = second.nodes[worker.nodeId]!.modules[worker.agent.config.source.sourceId]!
-        .default as {
-        model: { events: { beforeSession: () => { reasoning: string } } };
-      };
-      return definition.model.events["beforeSession"]().reasoning;
-    });
+    const secondReasoning = workers.map((worker) => reasoningOf(second, worker));
     expect(secondReasoning).toEqual(["high", "low"]);
   });
 
@@ -694,18 +687,15 @@ describe("mounted extension via directory form with override", () => {
         ].join("\n"),
         "node_modules/@acme/crm/extension/tools/crm_pulse.mjs": [
           'import { defineDynamic, defineTool } from "eve/tools";',
-          "export default defineDynamic({",
-          "  events: {",
-          '    "beforeSession": async () =>',
-          "      defineTool({",
-          '        description: "A dynamic tool the consumer opts out of.",',
-          "        inputSchema: { type: 'object', properties: {}, additionalProperties: false },",
-          "        async execute() {",
-          "          return { pulse: true };",
-          "        },",
-          "      }),",
-          "  },",
-          "});",
+          "export default defineDynamic(() =>",
+          "    defineTool({",
+          '      description: "A dynamic tool the consumer opts out of.",',
+          "      inputSchema: { type: 'object', properties: {}, additionalProperties: false },",
+          "      async execute() {",
+          "        return { pulse: true };",
+          "      },",
+          "    }),",
+          ");",
           "",
         ].join("\n"),
       },
