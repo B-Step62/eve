@@ -1,5 +1,6 @@
 import { ensureDevelopmentSandboxesPrepared } from "#execution/sandbox/development-lazy-prewarm.js";
 import { isEveDevEnvironment } from "#internal/application/dev-environment.js";
+import { createLogger } from "#internal/logging.js";
 import { contextStorage } from "#context/container.js";
 import {
   buildCallbackContext,
@@ -35,6 +36,7 @@ import {
   type SandboxProviderSessionContext,
 } from "#shared/sandbox-provider.js";
 import type { RuntimeSandboxSession } from "#shared/sandbox-session.js";
+import { SandboxSessionGoneError } from "#shared/sandbox-session-gone-error.js";
 import { SandboxTemplateNotProvisionedError } from "#shared/sandbox-template-error.js";
 
 interface EnsureSandboxAccessInput {
@@ -76,6 +78,8 @@ interface OpenedSandbox {
 // process late arrivals resume from the winner's state instead of running
 // the selector again.
 const pendingSandboxStarts = new Map<string, Promise<SandboxSessionState | null>>();
+
+const log = createLogger("execution.sandbox");
 
 export async function ensureSandboxAccess(
   input: EnsureSandboxAccessInput,
@@ -242,7 +246,17 @@ export async function ensureSandboxAccess(
 
     const context = providerContext("sandbox-initialization");
     if (persisted !== null) {
-      return await resumePersisted(context);
+      try {
+        return await resumePersisted(context);
+      } catch (error) {
+        if (!(error instanceof SandboxSessionGoneError)) throw error;
+        log.warn("session sandbox is gone, starting a fresh one", {
+          error,
+          providerName: persisted.providerName,
+          sessionId: input.sessionId,
+        });
+        persisted = null;
+      }
     }
 
     // Apps hosted in one process can reuse a node id and a tool session id.
