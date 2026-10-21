@@ -22,8 +22,8 @@ interface ExtensionCapabilityContract {
 const EXTENSION_CAPABILITY_CONTRACTS = {
   extension: { current: 1, supported: [1], dropped: {} },
   tool: {
-    current: 99,
-    supported: [99],
+    current: 100,
+    supported: [100],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -123,11 +123,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       96: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       97: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
       98: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      99: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   dynamicTool: {
-    current: 90,
-    supported: [90],
+    current: 91,
+    supported: [91],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -218,11 +219,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       87: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       88: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       89: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
+      90: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   channel: {
-    current: 67,
-    supported: [67],
+    current: 68,
+    supported: [68],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -290,6 +292,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       64: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       65: "Typed channel delivery hooks and canonical identity changes the authoring contract; rebuild the extension.",
       66: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      67: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   schedule: {
@@ -336,8 +339,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   subagent: {
-    current: 41,
-    supported: [41],
+    current: 42,
+    supported: [42],
     dropped: {
       1: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
       2: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
@@ -379,11 +382,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       38: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       39: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      41: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   connection: {
-    current: 56,
-    supported: [56],
+    current: 57,
+    supported: [57],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -440,11 +444,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       53: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       54: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
       55: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      56: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   hook: {
-    current: 49,
-    supported: [49],
+    current: 50,
+    supported: [50],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -494,12 +499,13 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       46: "v27 replaces v26 session event payloads; rebuild the extension against eve/events facts",
       47: "v27 replaces v26 session event payloads; rebuild the extension against eve/events facts",
       48: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      49: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   skill: { current: 3, supported: [1, 2, 3], dropped: {} },
   dynamicSkill: {
-    current: 41,
-    supported: [41],
+    current: 42,
+    supported: [42],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -541,12 +547,13 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       38: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       39: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      41: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   instructions: { current: 2, supported: [1, 2], dropped: {} },
   dynamicInstructions: {
-    current: 42,
-    supported: [42],
+    current: 43,
+    supported: [43],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -589,12 +596,13 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       39: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       41: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      42: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
   config: { current: 1, supported: [1], dropped: {} },
   state: {
-    current: 14,
-    supported: [14],
+    current: 15,
+    supported: [15],
     dropped: {
       1: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       2: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
@@ -609,6 +617,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       11: "Sandbox provider handle hooks were renamed to onSandboxStop and onSandboxDelete.",
       12: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       13: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      14: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
 } as const satisfies Record<string, ExtensionCapabilityContract>;
