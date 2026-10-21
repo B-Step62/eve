@@ -12,7 +12,7 @@ import {
 import { readTaskTable } from "#execution/tasks/table.js";
 import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
 import type { WorkflowToolRunControlMessage } from "#execution/tools/workflow/messages.js";
-import { readHitlState } from "#harness/hitl/requests.js";
+import { readHitlState } from "#harness/hitl/index.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { resetSessionUsageWindow, type TokenUsageDelta } from "#harness/turn-tag-state.js";
 import { getBlockingWorkflowToolRuns } from "#harness/workflow-tool-runs.js";

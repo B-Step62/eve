@@ -731,17 +731,13 @@ describe("a Continue on a relayed session-limit prompt", () => {
       resumable: true,
       turnId: "parent-turn",
     });
-    const table = {
-      tasks: created.table.tasks.map((task) => ({
-        ...task,
-        run: {
-          hookToken: `${input.root}-run-hook`,
-          runId: `${input.root}-run`,
-          started: true,
-          ...(input.counted === undefined ? {} : { usage: usage(input.counted) }),
-        },
-      })),
+    const run = {
+      hookToken: `${input.root}-run-hook`,
+      runId: `${input.root}-run`,
+      started: true,
+      usage: input.counted === undefined ? undefined : usage(input.counted),
     };
+    const table = { tasks: created.table.tasks.map((task) => ({ ...task, run })) };
     const durableSession = writeTaskTable(f.durableSession, table);
     enterSessionProjection(f.ctx, durableSession.state);
     const relayed = await emitProxiedSubagentEvent({
