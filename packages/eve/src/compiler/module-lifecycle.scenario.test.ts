@@ -12,7 +12,8 @@ describe("authored module lifecycle", () => {
   it("classifies static, dynamic, direct-model, and remote subagent configs", async () => {
     const app = await scenarioApp({
       files: {
-        "agent/agent.mjs": 'export default { model: "openai/gpt-5.4" };\n',
+        "agent/agent.mjs": `export default { model: "openai/gpt-5.4" };
+`,
         "agent/subagents/direct-model/agent.mjs": [
           "const model = {",
           '  specificationVersion: "v3",',
@@ -33,7 +34,7 @@ describe("authored module lifecycle", () => {
           '  description: "Chooses a model at runtime.",',
           "  model: {",
           '    kind: "eve:dynamic",',
-          '    events: { "session.started": () => "openai/gpt-5.4" },',
+          '    events: { "beforeSession": () => "openai/gpt-5.4" },',
           "  },",
           "};",
           "",
@@ -42,7 +43,7 @@ describe("authored module lifecycle", () => {
           "export default {",
           '  kind: "eve:dynamic",',
           "  events: {",
-          '    "session.started": () => ({',
+          '    "beforeSession": () => ({',
           '      description: "Dynamically available.",',
           '      model: "openai/gpt-5.4",',
           "    }),",

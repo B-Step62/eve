@@ -135,8 +135,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   dynamicTool: {
-    current: 92,
-    supported: [92],
+    current: 93,
+    supported: [93],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -229,11 +229,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       89: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
       90: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       91: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
+      92: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
     },
   },
   channel: {
-    current: 69,
-    supported: [69],
+    current: 70,
+    supported: [70],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -303,6 +304,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       66: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       67: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       68: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
+      69: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
     },
   },
   schedule: {
@@ -350,8 +352,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   subagent: {
-    current: 43,
-    supported: [43],
+    current: 44,
+    supported: [44],
     dropped: {
       1: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
       2: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
@@ -395,11 +397,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       41: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       42: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
+      43: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
     },
   },
   connection: {
-    current: 58,
-    supported: [58],
+    current: 59,
+    supported: [59],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -458,11 +461,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       55: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       56: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       57: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
+      58: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
     },
   },
   hook: {
-    current: 51,
-    supported: [51],
+    current: 52,
+    supported: [52],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -514,12 +518,13 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       48: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       49: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       50: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
+      51: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
     },
   },
   skill: { current: 3, supported: [1, 2, 3], dropped: {} },
   dynamicSkill: {
-    current: 42,
-    supported: [42],
+    current: 43,
+    supported: [43],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -562,12 +567,13 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       39: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       41: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      42: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
     },
   },
   instructions: { current: 2, supported: [1, 2], dropped: {} },
   dynamicInstructions: {
-    current: 43,
-    supported: [43],
+    current: 44,
+    supported: [44],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -611,6 +617,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       41: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       42: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      43: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
     },
   },
   config: {

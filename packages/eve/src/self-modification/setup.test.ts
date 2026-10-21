@@ -48,7 +48,10 @@ describe("self-modification setup", () => {
     ).toBe("authored");
     expect(
       classifySelfModificationConfig(
-        'import { defineSelfModificationConfig } from "eve/self-modification/config";\n\nexport default defineSelfModificationConfig({});\n',
+        `import { defineSelfModificationConfig } from "eve/self-modification/config";
+
+export default defineSelfModificationConfig({});
+`,
       ),
     ).toBe("authored");
   });
@@ -176,21 +179,21 @@ describe("self-modification setup", () => {
       principalType: "service",
     };
 
-    expect(authorize({ channel: { kind: "http" }, principal })).toBe(allowed);
+    expect(authorize({ channel: { kind: "http", metadata: {} }, principal })).toBe(allowed);
     expect(
       authorize({
-        channel: { kind: "http" },
+        channel: { kind: "http", metadata: {} },
         principal: { ...principal, attributes: { project_id: "prj_other" } },
       }),
     ).toBe(false);
     expect(
       authorize({
-        channel: { kind: "http" },
+        channel: { kind: "http", metadata: {} },
         principal: { ...principal, authenticator: "jwt-hmac" },
       }),
     ).toBe(false);
-    expect(authorize({ channel: { kind: "channel:slack" }, principal })).toBe(false);
-    expect(authorize({ channel: { kind: "http" }, principal: null })).toBe(false);
+    expect(authorize({ channel: { kind: "channel:slack", metadata: {} }, principal })).toBe(false);
+    expect(authorize({ channel: { kind: "http", metadata: {} }, principal: null })).toBe(false);
   });
 
   it("renders no HTTP authorization branch without a Vercel backend", () => {
