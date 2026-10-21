@@ -51,7 +51,10 @@ export function readSessionEventStream(
   startIndex?: number,
   signal?: AbortSignal,
 ): ReadableStream<SessionStreamEvent> {
-  const lines = streamSessionLines(sessionId, { startIndex, signal });
+  const cancellation = new AbortController();
+  const readSignal =
+    signal === undefined ? cancellation.signal : AbortSignal.any([signal, cancellation.signal]);
+  const lines = streamSessionLines(sessionId, { startIndex, signal: readSignal });
   const reader = createEventReader();
   return new ReadableStream<SessionStreamEvent>({
     async pull(controller) {
@@ -70,6 +73,8 @@ export function readSessionEventStream(
       }
     },
     async cancel() {
+      // A prefetched next() may be waiting on the live tail; unblock it before return().
+      cancellation.abort();
       await lines.return(undefined);
     },
   });

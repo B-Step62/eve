@@ -9,7 +9,7 @@ import type {
   SignInChallenge,
 } from "#protocol/session-events/families/interaction.js";
 import type { Answer } from "#protocol/session-events/families/response.js";
-import type { JsonValue } from "#shared/json.js";
+import type { JsonValue } from "#protocol/session-events/envelope.js";
 import {
   answeredInteractionIds,
   callRun,
@@ -98,11 +98,7 @@ export function askedCall(view: SessionView, row: InteractionRow): AskedCall | u
 }
 
 /** Where an interaction opened: the turn it holds, its step then, and the task whose run asks. */
-export interface InteractionPlace {
-  readonly turnId: string;
-  readonly stepIndex: number;
-  readonly taskId?: string;
-}
+type InteractionPlace = Pick<Interaction, "turnId" | "stepIndex" | "taskId">;
 
 export function interactionPlace(view: SessionView, row: InteractionRow): InteractionPlace {
   const owner = interactionOwner(view, row);
@@ -117,8 +113,11 @@ export function interactionPlace(view: SessionView, row: InteractionRow): Intera
 }
 
 /** An interaction as a conversation reader shows it: what it asks, where, and how it stands. */
-export interface Interaction extends InteractionPlace {
+export interface Interaction {
   readonly interactionId: string;
+  readonly turnId: string;
+  readonly stepIndex: number;
+  readonly taskId?: string;
   readonly request: Omit<InteractionRequest, "signIn"> & {
     readonly signIn?: Omit<SignInChallenge, "callbackUrl">;
   };

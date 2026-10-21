@@ -3,7 +3,7 @@ title: "Agent Configuration"
 description: "Configure an eve agent's model, reasoning effort, compaction, limits, and runtime behavior in agent.ts."
 ---
 
-An eve app has one root agent assembled from the files under `agent/`. Its optional `agent.ts` calls `defineAgent` (from `eve`) when you need to configure the model or other runtime behavior. Declared [subagents](./subagents) have their own `agent.ts` and capabilities; this page covers the configuration shared by root agents and subagents.
+An eve app's root agent uses files under `agent/` by default; a [flat layout](./reference/agent-files#flat-layout) places them directly in the app root instead. Its optional `agent.ts` calls `defineAgent` (from `eve`) when you need to configure the model or other runtime behavior. Declared [subagents](./subagents) have their own `agent.ts` and capabilities; this page covers the configuration shared by root agents and subagents.
 
 ## Set the model
 
@@ -195,7 +195,7 @@ fails the turn.
   return per-model values from the handler.
 
 The `session.started` runtime identity does not include a model id for a
-dynamic agent. Each public `step.started` event reports the concrete `modelId`
+dynamic agent. Each `model.started` event reports the concrete `modelId`
 selected for that model call.
 
 ## Reasoning effort
@@ -279,19 +279,24 @@ export default defineAgent({
 ```
 
 `sessionTimeoutMs` sets how long a session may sit idle before eve completes it,
-including delegated sessions. It defaults to 30 days. The idle window starts at
-creation and restarts each time a turn settles. A session never expires while
-a turn is open, including while tasks work or a person must answer. Process
-restarts do not change the window. When it elapses, eve emits `session.ended`
-with `outcome: "completed"` and releases every continuation address; the next
-qualifying channel message starts fresh. Set it to `false` to disable the
-timeout. Session expiration follows [run-data retention](#run-data-retention);
-a zero-retention session loses its stored payloads when it ends.
+for every session, including delegated sessions. It defaults to 30 days. The
+idle window starts at creation and restarts each time a turn settles, including
+turns that answer a message, clear or compact the context, or end in
+cancellation. A session never expires while a turn is open, including a turn
+held open while its [tasks](./tools/tasks) work or while it waits for a person
+to answer; the window restarts when that turn settles. Process restarts do not
+change the window. When the window elapses, eve emits `session.ended` with `outcome: "completed"` and
+releases every continuation address; the next qualifying channel message starts
+fresh. To carry an earlier conversation into the fresh session, pass it as
+[prior history](./channels/eve#start-from-prior-history). Set it to `false` to
+disable the timeout. Session expiration follows
+[run-data retention](#run-data-retention); a zero-retention session loses its
+stored payloads when it ends.
 
 Input tokens, output tokens, and model token cost are checked independently.
 The model call that crosses a limit is allowed to finish because exact usage
 arrives after the call completes. Before the next model call, eve pauses the
-turn (`turn.waiting`) and sends a deterministic continuation prompt with two options:
+turn (`turn.paused`) and sends a deterministic continuation prompt with two options:
 **Continue** grants a fresh window of each configured size and resumes the same
 turn, and **Stop**
 cancels the in-flight turn through the standard cancellation path
@@ -301,8 +306,8 @@ delegated child's prompt cancels the root turn, which cascades to the whole
 delegation tree — the delegating parent never receives an error result it
 could retry against a fresh quota share. A reply that answers neither option
 is queued while the existing prompt stays pending; eve does not raise another
-copy or start another turn. The reply is received (`message.received`) and
-processed in the held turn once the budget is granted.
+copy or start another turn. The reply waits unconsumed, and the held turn consumes it
+(`delivery.consumed`) once the budget is granted.
 
 For sessions already waiting on a continuation prompt from an older deployment,
 the previous turn has completed. A non-answer message still queues behind the
@@ -496,7 +501,7 @@ keeps the data. Confirm support with your World provider. See
 | -------------- | ------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `reasoning`    | `AgentReasoningDefinition`            | provider default | Provider-agnostic reasoning effort forwarded to the agent's turn model calls.                                                                                                                                                                                                                                                        |
 | `modelOptions` | `AgentModelOptionsDefinition`         | none             | Provider option overrides forwarded to the model call, and [`promptCache`](#prompt-caching) settings.                                                                                                                                                                                                                                |
-| `limits`       | `AgentLimitsDefinition`               | field-specific   | Framework-owned runtime limits. Sessions complete after 30 days by default; usage-limit defaults and inheritance are described above. Set a limit to `false` to disable it.                                                                                                                                                          |
+| `limits`       | `AgentLimitsDefinition`               | field-specific   | Framework-owned runtime limits. Sessions complete after 30 idle days by default; usage-limit defaults and inheritance are described above. Set a limit to `false` to disable it.                                                                                                                                                     |
 | `experimental` | `AgentExperimentalDefinition`         | unset            | Unstable opt-ins. `workflow.world` selects the Workflow world package on the root agent; `workflow.modelCallsPerStep` batches sequential model calls into a wider replay unit; `workflow.retention` controls how long the durable runtime keeps run data.                                                                            |
 | `build`        | `{ externalDependencies?: string[] }` | none             | Hosted-build packaging controls. `externalDependencies` keeps listed packages external while eve compiles authored modules such as tools and channels, and traces those packages into the hosted output.                                                                                                                             |
 | `tool`         | `boolean \| "deferred"`               | `true`           | Exposes this agent to its parent model as a tool. `"deferred"` keeps it out of the model's tool list; the model finds it with `eve__search` and calls it with `eve__tool`. On the root agent, controls the built-in `agent` tool. A subagent with `tool: false` remains callable from authored workflow tools through `ctx.agent()`. |
