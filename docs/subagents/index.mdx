@@ -126,7 +126,7 @@ import { defineAgent, defineDynamic } from "eve";
 
 export default defineDynamic({
   events: {
-    "session.started": (_event, ctx) =>
+    beforeSession: (_event, ctx) =>
       ctx.session.auth.current?.attributes.research === true
         ? defineAgent({
             description: "Investigate ambiguous questions before the parent responds.",
@@ -137,7 +137,7 @@ export default defineDynamic({
 });
 ```
 
-Resolvers run at `session.started` or `turn.started`; `step.started` is not
+Resolvers run at `beforeSession` or `beforeTurn`; `beforeModel` is not
 supported for subagents. A nullish result (`null` or `undefined`) removes the
 subagent's description and tool definition from the model-visible surface.
 The subagent's filesystem manifest is always compiled; a non-nullish result injects
@@ -150,7 +150,7 @@ Packaging controls must be available before the resolver runs. Put them on
 export default defineDynamic({
   build: { externalDependencies: ["native-package"] },
   events: {
-    "session.started": () =>
+    beforeSession: () =>
       defineAgent({
         description: "Use a native package when handling delegated work.",
         model: "anthropic/claude-opus-5.5",
