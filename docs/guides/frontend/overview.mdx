@@ -209,8 +209,10 @@ The `send` wrapper passes the chat's accepted receipt to the sidebar, so the sid
 that delivery even before its admission appears. Both stores must point to the same session. `follow()` throws without a session or for a different
 session ID, does not create a session, and does not grant stream access. It registers an idempotent
 barrier until that delivery settles or the session ends, even if catch-up first finds an idle tail
-before admission. Calling it again after a stream error retries observation, including from
-`onError`. A receipt already settled in the local view does not reopen the stream, replay
+before admission. Catch-up for a receipt from another store updates `view` and recorded errors
+without replaying historical `onFinish` or `onError` callbacks; later live events still invoke them.
+Calling `follow()` again after a stream error retries observation, including from `onError`.
+A receipt already settled in the local view does not reopen the stream, replay
 completion callbacks, or clear an existing error. Following an already-ended session is also
 a no-op; it preserves the terminal outcome without retrying it. To retain the former idle-only policy
 (including parked turns and sign-ins), use:

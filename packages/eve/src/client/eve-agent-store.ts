@@ -36,6 +36,7 @@ export type {
 
 const detachStore = Symbol("detachEveAgentStore");
 const attachStore = Symbol("attachEveAgentStore");
+type ReceiptOrigin = "submitted" | "followed";
 
 /** An observable durable session. Commands resolve on acceptance; only its stream changes its lifecycle. */
 export class EveAgentStore {
@@ -49,7 +50,7 @@ export class EveAgentStore {
   readonly #conversationClient: ConversationClient;
   readonly #messageSubmissions: OptimisticMessageSubmissions;
   readonly #pending = new Set<Promise<string | undefined>>();
-  readonly #accepted = new Set<string>();
+  readonly #accepted = new Map<string, ReceiptOrigin>();
   #attached = false;
   #callbacks: EveAgentStoreCallbacks = {};
   #controller = new AbortController();
@@ -208,6 +209,7 @@ export class EveAgentStore {
   /**
    * Follow an accepted delivery in this session until it settles or the session ends.
    * The receipt may come from another store. Repeating it is safe and retries a closed stream.
+   * Catch-up updates recorded failures without replaying live completion callbacks.
    * Normal session stream authorization still applies.
    */
   follow(receipt: DeliveryReceipt): void {
@@ -219,7 +221,7 @@ export class EveAgentStore {
     const delivery = view.deliveries[receipt.deliveryId];
     if (view.session.status === "ended" || delivery?.status === "settled") return;
     this.#error = undefined;
-    this.#acceptReceipt(receipt.deliveryId);
+    this.#acceptReceipt(receipt.deliveryId, "followed");
     if (this.#accepted.has(receipt.deliveryId)) this.#ensureStream();
     this.#publish();
   }
@@ -260,7 +262,7 @@ export class EveAgentStore {
   }
 
   async #submittedTurn(signal: AbortSignal): Promise<string | undefined> {
-    const deliveries = new Set(this.#accepted);
+    const deliveries = new Set(this.#accepted.keys());
     const pending = [...this.#pending];
     let remaining = pending.length;
     const result = Promise.withResolvers<string | undefined>();
@@ -460,24 +462,30 @@ export class EveAgentStore {
       this.#endings.push({ event, historical });
     if (this.#inLine) return;
     const view = this.#conversationClient.view;
-    const submitted = this.#accepted.size > 0;
-    const submittedTurns = new Set(
-      [...this.#accepted].flatMap((id) => {
-        const turnId = view.deliveries[id]?.turnId;
-        return turnId === undefined ? [] : [turnId];
-      }),
-    );
+    const submitted = [...this.#accepted.values()].includes("submitted");
+    const submittedTurns = new Set<string>();
+    const followedTurns = new Set<string>();
+    for (const [id, origin] of this.#accepted) {
+      const turnId = view.deliveries[id]?.turnId;
+      if (turnId !== undefined)
+        (origin === "submitted" ? submittedTurns : followedTurns).add(turnId);
+    }
     this.#reconcile();
     for (const ending of this.#endings.splice(0)) {
       if (ending.event.type === "turn.settled") {
         if (!ending.historical || submittedTurns.has(ending.event.data.turnId))
           this.#finishTurn(ending.event.data.turnId);
-      } else if ((!ending.historical || submitted) && ending.event.data.outcome === "failed") {
-        this.#fail(
-          Object.assign(new Error(ending.event.data.error?.message ?? "The session failed."), {
+        else if (followedTurns.has(ending.event.data.turnId))
+          this.#error ??= this.#recordedFailure(ending.event.data.turnId);
+      } else if (ending.event.data.outcome === "failed") {
+        const error = Object.assign(
+          new Error(ending.event.data.error?.message ?? "The session failed."),
+          {
             name: ending.event.data.error?.code ?? "SESSION_FAILED",
-          }),
+          },
         );
+        if (!ending.historical || submitted) this.#fail(error);
+        else this.#error ??= error;
       }
       if (lifetime !== this.#controller) return;
     }
@@ -488,9 +496,9 @@ export class EveAgentStore {
     this.#closeStreamWhenIdle();
   }
 
-  #acceptReceipt(deliveryId: string): void {
+  #acceptReceipt(deliveryId: string, origin: ReceiptOrigin = "submitted"): void {
     const lifetime = this.#controller;
-    this.#accepted.add(deliveryId);
+    if (this.#accepted.get(deliveryId) !== "submitted") this.#accepted.set(deliveryId, origin);
     this.#reconcile();
     const view = this.#conversationClient.view;
     const error = view.session.status === "ended" ? failure(view) : undefined;
@@ -498,14 +506,15 @@ export class EveAgentStore {
       this.#fail(Object.assign(new Error(error.message), { name: error.code }));
     if (lifetime !== this.#controller) return;
     const turnId = view.deliveries[deliveryId]?.turnId;
-    if (turnId !== undefined && view.turns[turnId]?.status === "settled") this.#finishTurn(turnId);
+    if (origin === "submitted" && turnId !== undefined && view.turns[turnId]?.status === "settled")
+      this.#finishTurn(turnId);
   }
 
   #reconcile(): void {
     const view = this.#conversationClient.view;
     if (view.session.status === "ended") this.#accepted.clear();
     this.#messageSubmissions.reconcile(view);
-    for (const id of this.#accepted) {
+    for (const id of this.#accepted.keys()) {
       const delivery = view.deliveries[id];
       if (delivery?.status === "settled") this.#accepted.delete(id);
     }
@@ -535,9 +544,9 @@ export class EveAgentStore {
       this.#fail(Object.assign(new Error(error.message), { name: error.code }));
   }
 
-  #recordedFailure(): Error | undefined {
+  #recordedFailure(turnId = this.#conversationClient.view.session.latestTurnId): Error | undefined {
     const view = this.#conversationClient.view;
-    const error = failure(view, view.session.latestTurnId);
+    const error = failure(view, turnId);
     return error === undefined
       ? undefined
       : Object.assign(new Error(error.message), { name: error.code });

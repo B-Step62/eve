@@ -887,7 +887,14 @@ describe("EveAgentStore with a follow predicate", () => {
       const current = store({ initialSession, followWhile: () => false });
       const onFinish = vi.fn();
       const onError = vi.fn();
-      current.setCallbacks({ onFinish, onError });
+      current.setCallbacks({
+        onFinish,
+        onError,
+        onEvent: (event) => {
+          if (event.type === "turn.settled")
+            current.follow({ sessionId: "session_1", deliveryId: "old" });
+        },
+      });
       await current.resume();
       const existingError = current.snapshot.error;
       if (outcome === "failed") expect(existingError).toBeDefined();
@@ -940,32 +947,39 @@ describe("EveAgentStore with a follow predicate", () => {
     expect(current.snapshot.status).toBe("idle");
   });
 
-  it("clears unseen receipts when the session ends", async () => {
-    const server = agent();
-    const current = store({ initialSession, followWhile: () => false });
-    const receipt = { sessionId: "session_1", deliveryId: "not-admitted" };
-    const onError = vi.fn(() => {
-      if (onError.mock.calls.length < 3) current.follow(receipt);
-    });
-    current.setCallbacks({ onError });
-    current.follow(receipt);
-    server.append([
-      {
-        type: "session.ended",
-        data: {
-          outcome: "failed",
-          error: { code: "SESSION_FAILED", message: "Session unavailable." },
+  it.each(["live", "historical"] as const)(
+    "clears unseen receipts on a %s session end without replaying errors",
+    async (timing) => {
+      const server = agent();
+      const current = store({ initialSession, followWhile: () => false });
+      const receipt = { sessionId: "session_1", deliveryId: "not-admitted" };
+      const onError = vi.fn(() => {
+        if (onError.mock.calls.length < 3) current.follow(receipt);
+      });
+      current.setCallbacks({ onError });
+      if (timing === "live") {
+        current.follow(receipt);
+        await vi.waitFor(() => expect(server.reads).toHaveLength(1));
+      }
+      server.append([
+        {
+          type: "session.ended",
+          data: {
+            outcome: "failed",
+            error: { code: "SESSION_FAILED", message: "Session unavailable." },
+          },
         },
-      },
-    ]);
-    await vi.waitFor(() => expect(current.snapshot.error?.message).toBe("Session unavailable."));
-    expect(current.snapshot.status).toBe("idle");
-    const error = current.snapshot.error;
-    current.follow({ sessionId: "session_1", deliveryId: "not-admitted-later" });
-    expect(current.snapshot.status).toBe("idle");
-    expect(onError).toHaveBeenCalledOnce();
-    expect(current.snapshot.error).toBe(error);
-  });
+      ]);
+      if (timing === "historical") current.follow(receipt);
+      await vi.waitFor(() => expect(current.snapshot.error?.message).toBe("Session unavailable."));
+      expect(current.snapshot.status).toBe("idle");
+      const error = current.snapshot.error;
+      current.follow({ sessionId: "session_1", deliveryId: "not-admitted-later" });
+      expect(current.snapshot.status).toBe("idle");
+      expect(onError).toHaveBeenCalledTimes(timing === "live" ? 1 : 0);
+      expect(current.snapshot.error).toBe(error);
+    },
+  );
 
   it("publishes only committed lines when a receipt arrives inside a line", async () => {
     const server = agent();

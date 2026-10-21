@@ -15,7 +15,7 @@ sidebar.follow(receipt);
 useEveAgent({ followWhile: (view) => !idle(view) });
 ```
 
-`follow(receipt): void` registers a synchronous, idempotent obligation against the store's existing session. A missing or different session throws; the receipt grants no access. The store stays busy until its committed view shows the delivery settled or the session ends. A repeated call can reopen the stream after a transport error. No per-receipt promise is exposed.
+`follow(receipt): void` registers a synchronous, idempotent obligation against the store's existing session. A missing or different session throws; the receipt grants no access. The store stays busy until its committed view shows the delivery settled or the session ends. A repeated call can reopen the stream after a transport error. No per-receipt promise is exposed. Externally followed receipts do not turn historical catch-up into live completion callbacks; recorded failures still update the snapshot.
 
 `followWhile(view)` replaces the previous idle-only boolean option. It defaults to true and decides whether to keep the stream open after a committed line. Local POSTs, unsettled receipts, and resume catch-up override the predicate. The predicate can close during active work; the busy snapshot then remains frozen until send, respond, resume, or follow reopens from the store's own committed cursor. Bindings use the latest callback without recreating their store.
 
