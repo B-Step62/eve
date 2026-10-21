@@ -55,6 +55,7 @@ import type {
 import { pausedOrParked, resolveSessionStepResult } from "#execution/session/turn-step-result.js";
 import { withSessionStateDelta } from "#execution/session/state-delta.js";
 import {
+  assertSessionCheckpoint,
   checksSessionEvents,
   openSessionEventPublisher,
 } from "#execution/publish-session-events.js";
@@ -131,6 +132,7 @@ async function runSessionStepBody(
   let durableSession = readDurableSession(input.sessionState);
   const ctx = await deserializeContext(input.serializedContext);
   enterSessionProjection(ctx, durableSession.state);
+  await assertSessionCheckpoint(ctx, durableSession.sessionId);
   const adapter = ctx.require(ChannelKey);
   const bundle = ctx.require(BundleKey);
   const effectiveAgent = resolveEffectiveAgentRuntime(bundle, ctx);
