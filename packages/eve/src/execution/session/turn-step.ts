@@ -383,14 +383,15 @@ async function runSessionStepBody(
         );
       }
     }
+    const recoveredSession = saveTransition(initialSession, {
+      events: [],
+      turn: {
+        ...turnState,
+        suspended: turnState.suspended.filter((step) => step.event.turnId !== recoveredTurnId),
+      },
+    });
     initialSession = {
-      ...saveTransition(initialSession, {
-        events: [],
-        turn: {
-          ...turnState,
-          suspended: turnState.suspended.filter((step) => step.event.turnId !== recoveredTurnId),
-        },
-      }),
+      ...recoveredSession,
       history: validateHarnessModelMessages([
         ...restoredHistory,
         ...consumedMessages.flatMap(({ deliveryId, messages }) =>
@@ -399,8 +400,8 @@ async function runSessionStepBody(
       ]),
       outputSchema: undefined,
       state: consumedPendingHistorySeed
-        ? withoutPendingHistory(initialSession.state)
-        : initialSession.state,
+        ? withoutPendingHistory(recoveredSession.state)
+        : recoveredSession.state,
     };
     if (
       failedCompaction &&

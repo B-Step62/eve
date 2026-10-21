@@ -10,6 +10,8 @@ import { createTestRuntime } from "#internal/testing/app-harness.js";
 import { textStreamResult, toolCallStreamResult } from "#internal/testing/approval-resume.js";
 import { mockTool } from "#internal/testing/mocks/mock-tool.js";
 import { buildSerializedContext } from "#internal/testing/entry-test-helpers.js";
+import { confirmDeployWorkflow } from "#internal/testing/workflow-tool-fixtures.js";
+import { defineWorkflowTool } from "#tools/workflow-definition.js";
 import { startSessionOwner, waitForHook } from "#internal/testing/workflow-test-helpers.js";
 import { getWorld, resumeHook } from "#internal/workflow/runtime.js";
 import { defineDynamic } from "#dynamic/definition.js";
@@ -194,6 +196,165 @@ it.each(["completed", "paused"] as const)(
   },
   90_000,
 );
+
+it("retires checkpointed suspended workflow calls when a resumed turn loses its settlement checkpoint", async () => {
+  const prompts: string[] = [];
+  let settled = false;
+  let interrupted = false;
+  let checkpointedWhileSuspended = false;
+  const model = markMockModel(
+    new MockLanguageModelV4({
+      modelId: "suspended-recovery",
+      provider: "eve-test",
+      doStream: async ({ prompt }) => {
+        prompts.push(JSON.stringify(prompt));
+        return prompts.length === 1
+          ? toolCallStreamResult({
+              input: '{"service":"api"}',
+              toolCallId: "call_confirm",
+              toolName: "confirm_deploy",
+            })
+          : textStreamResult(`reply ${prompts.length}`);
+      },
+    }),
+  );
+  const runtime = await createTestRuntime({
+    agent: {
+      name: "suspended-recovery",
+      definition: defineAgent({
+        model: defineDynamic({
+          events: { beforeModel: () => ({ model, modelContextWindowTokens: 200_000 }) },
+        }),
+      }),
+    },
+    modules: [
+      {
+        logicalPath: "tools/confirm_deploy.ts",
+        loadNamespace: async () => ({
+          default: defineWorkflowTool({
+            description: "Confirm a deployment.",
+            inputSchema: {
+              type: "object",
+              properties: { service: { type: "string" } },
+              required: ["service"],
+            },
+            execute: confirmDeployWorkflow,
+          }),
+        }),
+      },
+      {
+        logicalPath: "hooks/settled.ts",
+        loadNamespace: async () => ({
+          default: defineHook({
+            events: {
+              "turn.settled"() {
+                settled = true;
+              },
+            },
+          }),
+        }),
+      },
+    ],
+  });
+  await runtime.run(async () => {
+    const world = await getWorld();
+    const createBatch = world.events.createBatch;
+    world.events.createBatch = undefined;
+    const createEvent = world.events.create.bind(world.events);
+    let sessionId: string | undefined;
+    const spy = vi.spyOn(world.events, "create").mockImplementation(async (...args) => {
+      const [runId, event] = args as [string, AnyEventRequest];
+      if (runId === sessionId && event.eventType === "step_completed") {
+        if (settled && !interrupted) {
+          interrupted = true;
+          throw new Error("Lost settlement checkpoint after resumed workflow call");
+        }
+        if (!settled) {
+          const written = [];
+          for await (const line of streamSessionEvents(runId, { follow: false }))
+            written.push(line);
+          if (
+            written.some((line) => line.type === "call.started") &&
+            !written.some((line) => line.type === "call.settled")
+          )
+            checkpointedWhileSuspended = true;
+        }
+      }
+      return await createEvent(...args);
+    });
+    const token = "http:suspended-recovery";
+    const run = await startSessionOwner(workflowEntry, [
+      {
+        kind: "initial",
+        ownerDeploymentId: "dpl_inline",
+        input: { message: "Confirm deployment of api." },
+        serializedContext: {
+          ...buildSerializedContext({ channelKind: "http", continuationToken: token }),
+          "eve.capabilities": { requestInput: true },
+        },
+      },
+    ]);
+    sessionId = run.runId;
+    const read = async () => {
+      const events = [];
+      for await (const event of streamSessionEvents(run.runId, { follow: false }))
+        events.push(event);
+      return events;
+    };
+    const until = async (predicate: (events: Awaited<ReturnType<typeof read>>) => boolean) => {
+      for (let i = 0; i < 300; i++) {
+        const events = await read();
+        if (predicate(events)) return events;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error("Timed out waiting for suspended workflow recovery");
+    };
+    try {
+      const asked = await until(
+        (events) =>
+          checkpointedWhileSuspended &&
+          events.some(
+            (event) =>
+              event.type === "interaction.opened" && event.data.request.kind === "question",
+          ),
+      );
+      const question = asked.find(
+        (event) => event.type === "interaction.opened" && event.data.request.kind === "question",
+      );
+      if (question?.type !== "interaction.opened") throw new Error("Missing workflow question");
+      await resumeHook(sessionInboxHookToken(token), {
+        kind: "send",
+        auth: null,
+        delivery: createChannelDeliveryMetadata({ channelKind: "http", channelName: "test" }),
+        payload: { answers: [{ interactionId: question.data.interactionId, optionId: "approve" }] },
+      });
+      const recovered = await until(
+        (events) => interrupted && events.some((event) => event.type === "turn.settled"),
+      );
+      expect(checkpointedWhileSuspended).toBe(true);
+      expect(recovered.filter((event) => event.type === "call.settled")).toHaveLength(1);
+      await resumeHook(sessionInboxHookToken(token), {
+        kind: "send",
+        auth: null,
+        delivery: createChannelDeliveryMetadata({ channelKind: "http", channelName: "test" }),
+        payload: { message: "What happened with the deployment?" },
+      });
+      const events = await until(
+        (written) => written.filter((event) => event.type === "turn.settled").length === 2,
+      );
+      expect(events.filter((event) => event.type === "call.started")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "call.settled")).toHaveLength(1);
+      expect(prompts).toHaveLength(3);
+      expect(prompts[2]).toContain("call_confirm");
+      expect(prompts[2]).toContain("interrupted before its result was saved");
+      expect(prompts[2]).toContain("What happened with the deployment?");
+    } finally {
+      spy.mockRestore();
+      world.events.createBatch = createBatch;
+      await run.cancel().catch(() => {});
+    }
+  });
+}, 90_000);
 
 it("consumes create history only once when the first message loses its checkpoint twice", async () => {
   const seed = [{ role: "user" as const, text: "Seeded context" }];
