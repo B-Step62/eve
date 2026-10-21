@@ -11,7 +11,8 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": { "vitest": ["../../../packages/eve/node_modules/vitest"] }
   },
   "include": ["agent/**/*.ts", "evals/**/*.ts"]
 }
