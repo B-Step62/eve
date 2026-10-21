@@ -9,7 +9,11 @@ import {
   type StepResult,
   type ToolLoopHarnessConfig,
 } from "#harness/types.js";
-import { type HarnessModelMessage, validateHarnessModelMessages } from "#harness/messages.js";
+import {
+  type HarnessModelMessage,
+  isUserModelMessage,
+  validateHarnessModelMessages,
+} from "#harness/messages.js";
 import type { HistoryViewProjector } from "#shared/history-view.js";
 import type { Publish } from "#harness/session-machine/commit.js";
 import type { SessionAuthContext } from "#channel/types.js";
@@ -19,6 +23,7 @@ import { stepStartedForResolvers } from "#harness/session-machine/resolver-event
 import {
   buildGatewayAttributionHeaders,
   resolveEffectiveRuntimeModel,
+  withGatewayTraceContext,
 } from "#harness/model-call/model.js";
 import { canonicalizeMemoryRecords, shouldCanonicalizeMemory } from "#shared/memory-state.js";
 import {
@@ -96,6 +101,7 @@ export async function compactHistory(step: Step): Promise<StepResult> {
         runtimeIdentity: config.runtimeIdentity,
         session: step.session,
         telemetry: step.instrumentation?.telemetry(),
+        traceContextHeaders: step.instrumentation?.gatewayTraceContextHeaders,
       });
       step.session = compacted.session;
       if (compacted.failure !== undefined) throw compacted.failure.error;
@@ -152,6 +158,7 @@ export async function maybeCompact(input: {
   readonly runtimeIdentity?: ToolLoopHarnessConfig["runtimeIdentity"];
   readonly session: HarnessSession;
   readonly telemetry?: TelemetryOptions;
+  readonly traceContextHeaders?: () => Record<string, string> | undefined;
 }): Promise<{
   readonly compacted: boolean;
   /** The summary failed; `session` still counts the summary calls that finished. */
@@ -196,7 +203,7 @@ export async function maybeCompact(input: {
   const call = {
     abortSignal: input.abortSignal,
     headers: buildGatewayAttributionHeaders(profile, input.runtimeIdentity),
-    model,
+    model: withGatewayTraceContext(model, profile, input.traceContextHeaders),
     providerOptions,
     telemetry: input.telemetry && { ...input.telemetry, functionId: "eve.compaction" },
   };
@@ -311,13 +318,32 @@ export async function maybeCompact(input: {
     if (ctx !== undefined) {
       const commit = drainMemoryCommit(ctx);
       if (commit !== undefined) {
-        messages = validateHarnessModelMessages([...messages, ...commit.recalledMessages]);
+        messages = validateHarnessModelMessages(
+          placeRecalledMemory(messages, commit.recalledMessages, input.betweenTurns === true),
+        );
         session = { ...session, state: commit.state };
       }
     }
   }
 
   return { compacted: true, messages, session: replaceSessionHistory(session, messages) };
+}
+
+/**
+ * Memory recalled after a compaction during a turn goes where `turn.started` puts it: before the
+ * turn's latest user message, or its replay. Between turns it follows the history, so it still
+ * comes before the next turn's input.
+ */
+function placeRecalledMemory(
+  messages: readonly ModelMessage[],
+  recalled: readonly ModelMessage[],
+  betweenTurns: boolean,
+): ModelMessage[] {
+  const index = betweenTurns
+    ? -1
+    : messages.findLastIndex((message) => isUserModelMessage(message) && message.kind === "user");
+  if (index === -1) return [...messages, ...recalled];
+  return [...messages.slice(0, index), ...recalled, ...messages.slice(index)];
 }
 
 type CompactionSummaryPrompt = Parameters<CompactionSummarizer>[0];

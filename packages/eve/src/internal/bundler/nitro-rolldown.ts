@@ -6,15 +6,17 @@ import {
   onVendoredDependencyLog,
 } from "#internal/bundler/vendored-dependency-log.js";
 
-type RolldownOutputChunk = {
+export type RolldownOutputChunk = {
   readonly type: "chunk";
   readonly code: string;
   readonly fileName: string;
   readonly imports: readonly string[];
   readonly dynamicImports: readonly string[];
+  readonly isEntry: boolean;
+  readonly name: string;
 };
 
-type RolldownOutputAsset = {
+export type RolldownOutputAsset = {
   readonly type: "asset";
   readonly fileName: string;
   readonly source: string | Uint8Array;
@@ -105,11 +107,16 @@ export async function parseWithNitroRolldownAst(
  * unresolved imports.
  */
 export async function buildWithNitroRolldown(
-  options: Record<string, unknown>,
+  options: Record<string, unknown> & { readonly experimental?: Record<string, unknown> },
 ): Promise<RolldownOutput> {
   assertCustomRolldownConditionNames(options);
   const { build } = await loadNitroRolldown();
-  return await build({ onLog: onRolldownBuildLog, ...options });
+  return await build({
+    onLog: onRolldownBuildLog,
+    ...options,
+    // Debug module IDs contain temporary workspace paths and destabilize runtime fingerprints.
+    experimental: { ...options.experimental, attachDebugInfo: "none" },
+  });
 }
 
 // Unlike the Nitro host build, whose dependency graph deliberately leaves

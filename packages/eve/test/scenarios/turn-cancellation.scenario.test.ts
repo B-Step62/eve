@@ -99,7 +99,7 @@ const model = mockModel((request) => {
 });
 
 export default defineAgent({
-  ${options.sessionInputLimit === undefined ? "" : `limits: { maxInputTokensPerSession: ${String(options.sessionInputLimit)} },`}
+  ${options.sessionInputLimit === undefined ? "" : `limits: { sessionUsage: ({ window }) => window.inputTokens >= ${String(options.sessionInputLimit)} },`}
   model,
   modelContextWindowTokens: 32_000,
 });
@@ -289,8 +289,11 @@ describe("turn cancellation descendant cascade", () => {
           message:
             "Use workflow exactly once to call local-sleeper only with message Use wait-for-cancel.",
         });
+        // The limit prompt holds the root turn, so its stream pauses at
+        // `turn.waiting` rather than settling the session.
         const events = await readThroughBoundary({
           iterator: response[Symbol.asyncIterator](),
+          isBoundary: (event) => event.type === "turn.waiting",
           label: "root session-limit prompt",
         });
         // The workflow program runs as a task, so the root reaches its limit
@@ -382,8 +385,10 @@ async function readUntil(input: {
 
 async function readThroughBoundary(input: {
   readonly iterator: AsyncIterator<MessageStreamEvent>;
+  readonly isBoundary?: (event: MessageStreamEvent) => boolean;
   readonly label: string;
 }): Promise<readonly MessageStreamEvent[]> {
+  const isBoundary = input.isBoundary ?? isCurrentTurnBoundaryEvent;
   const events: MessageStreamEvent[] = [];
   await withinEventDeadline(
     (async () => {
@@ -391,7 +396,7 @@ async function readThroughBoundary(input: {
         const next = await input.iterator.next();
         if (next.done) throw new Error(`Stream ended before ${input.label}.`);
         events.push(next.value);
-        if (isCurrentTurnBoundaryEvent(next.value)) return;
+        if (isBoundary(next.value)) return;
       }
     })(),
     input.label,

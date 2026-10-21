@@ -28,7 +28,9 @@ import {
   importInstalledEnginePackage,
   isEveDevEnvironment,
 } from "#internal/application/optional-package-install.js";
+import { readInstalledPackageVersion } from "#internal/application/optional-package-import.js";
 import { withDevelopmentSandboxTags } from "#execution/sandbox/development-run.js";
+import { SANDBOX_AGENT_ENV } from "#execution/sandbox/session.js";
 import { WORKSPACE_ROOT } from "#runtime/workspace/types.js";
 import type { SandboxNetworkPolicy } from "#shared/sandbox-network-policy.js";
 import type { SandboxProviderHost } from "#shared/sandbox-provider.js";
@@ -238,6 +240,7 @@ export class MicrosandboxVm {
     }
 
     const env = {
+      ...SANDBOX_AGENT_ENV,
       ...this.#input.options.env,
       HOME: MICROSANDBOX_HOME,
       ...createTransformBrokerEnvironment(createMicrosandboxNetworkPlan(this.#networkPolicy)),
@@ -421,6 +424,13 @@ export async function connectMicrosandbox(input: {
   );
 }
 
+export function microsandboxRestoredSandboxName(metadata: MicrosandboxSessionMetadata): string {
+  return createProviderName(
+    "eve-sbx-restore",
+    JSON.stringify([metadata.sandboxName, metadata.stateSnapshotName]),
+  );
+}
+
 async function restoreMicrosandboxSessionSnapshot(input: {
   readonly metadata: MicrosandboxSessionMetadata;
   readonly metadataPath: string;
@@ -436,17 +446,28 @@ async function restoreMicrosandboxSessionSnapshot(input: {
     return null;
   }
 
-  const sandboxName = createProviderName("eve-sbx-ses", `${input.sessionKey}:${randomUUID()}`);
-  const sandbox = await createMicrosandbox({
-    fromSnapshot: input.metadata.stateSnapshotName,
-    module: input.module,
-    name: sandboxName,
-    networkPolicy: input.metadata.networkPolicy,
-    options: input.options,
-    tags: input.tags,
-    user: MICROSANDBOX_USER,
-    workdir: WORKSPACE_ROOT,
+  const sandboxName = microsandboxRestoredSandboxName(input.metadata);
+  // A previous process may have booted the restore target before publishing
+  // metadata. Reuse that target rather than abandoning its running work.
+  const existing = await input.module.Sandbox.get(sandboxName).catch((error: unknown) => {
+    if (isMicrosandboxNotFoundError(error)) return null;
+    throw error;
   });
+  const sandbox =
+    existing === null
+      ? await createMicrosandbox({
+          fromSnapshot: input.metadata.stateSnapshotName,
+          module: input.module,
+          name: sandboxName,
+          networkPolicy: input.metadata.networkPolicy,
+          options: input.options,
+          tags: input.tags,
+          user: MICROSANDBOX_USER,
+          workdir: WORKSPACE_ROOT,
+        })
+      : existing.status === "running" || existing.status === "draining"
+        ? await existing.connectWithTimeout(MICROSANDBOX_CONNECT_TIMEOUT_MS)
+        : await existing.startDetached();
   await removeSandboxIfExists(input.module, input.metadata.sandboxName);
 
   const vm = new MicrosandboxVm(
@@ -498,6 +519,8 @@ export async function loadMicrosandboxModule(input: {
     }),
   );
 
+  await assertSupportedMicrosandboxApi(module, input.host);
+
   input.log?.("checking microsandbox VM runtime");
   if (!module.isInstalled()) {
     if (!input.options.setup.autoInstall || !isEveDevEnvironment()) {
@@ -515,6 +538,32 @@ export async function loadMicrosandboxModule(input: {
 
   input.log?.("microsandbox runtime ready");
   return module;
+}
+
+/**
+ * microsandbox 0.7 renamed `isInstalled` and removed `setup`. Projects that
+ * already depend on it would otherwise fail every sandbox operation with a
+ * bare `TypeError`.
+ */
+async function assertSupportedMicrosandboxApi(
+  module: MicrosandboxModule,
+  host: SandboxProviderHost,
+): Promise<void> {
+  const loaded = module as Partial<Pick<MicrosandboxModule, "isInstalled" | "setup">>;
+  if (typeof loaded.isInstalled === "function" && typeof loaded.setup === "function") {
+    return;
+  }
+
+  const version = await readInstalledPackageVersion({
+    appRoot: host.resolveProjectPath("."),
+    packageName: MICROSANDBOX_PACKAGE_NAME,
+  }).catch(() => undefined);
+  const installed =
+    version === undefined ? "The installed `microsandbox`" : `\`microsandbox@${version}\``;
+  throw new Error(
+    `${installed} is not supported by eve. Install the supported version with ` +
+      `\`pnpm add -D ${MICROSANDBOX_INSTALL_SPECIFIER}\`, or use DockerSandbox or VercelSandbox instead.`,
+  );
 }
 
 async function withProgressHeartbeat<T>(
@@ -617,7 +666,6 @@ async function createMicrosandbox(input: {
     .labels(resolveMicrosandboxLabels(input.tags))
     .memory(input.options.memoryMiB)
     .pullPolicy(input.options.pullPolicy)
-    .replace()
     .workdir(input.workdir);
 
   if (input.fromSnapshot !== undefined) {
@@ -651,7 +699,7 @@ async function createMicrosandbox(input: {
   });
 }
 
-async function removeSandboxIfExists(
+export async function removeSandboxIfExists(
   module: MicrosandboxModule,
   sandboxName: string,
 ): Promise<void> {

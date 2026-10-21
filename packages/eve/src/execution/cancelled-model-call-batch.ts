@@ -1,6 +1,8 @@
 import { contextStorage, type ContextContainer } from "#context/container.js";
-import { AuthKey, TurnDeliveryIdsKey } from "#context/keys.js";
+import { createLogger } from "#internal/logging.js";
+import { AuthKey, OfferedCatalogToolsKey, SandboxKey, TurnDeliveryIdsKey } from "#context/keys.js";
 import { preserveSerializedSessionDynamicModelSelection } from "#context/serialized-dynamic-model-selection.js";
+import { withContextScope } from "#context/run-step.js";
 import { serializeContext } from "#context/serialize.js";
 import { preserveCancelledTurnMessage } from "#execution/cancelled-turn-message.js";
 import { createDurableSessionValues } from "#execution/durable-session-store.js";
@@ -9,7 +11,9 @@ import type { HarnessSession, StepInput, StepResult } from "#harness/types.js";
 import { appliedSession, saveSessionProjection } from "#harness/session-machine/current.js";
 import { takeDeferredMessage } from "#harness/hitl/index.js";
 import { preserveSerializedInstrumentationState } from "#instrumentation/state.js";
-import { preserveSerializedAgentTraceState } from "#tracing/agent-trace-context-store.js";
+import { preserveSerializedAgentTraceState } from "#tracing/eve/agent-trace-context-store.js";
+
+const log = createLogger("execution.cancelled-turn");
 
 export interface CompletedModelCallCheckpoint {
   readonly result: StepResult;
@@ -35,7 +39,26 @@ async function cancelledWithoutCheckpoint(
     session = deferred.session;
     if (deferred.message !== undefined) preserved = { ...stepInput, message: deferred.message };
   }
+  // A cancellation at step entry lands before the framework providers exist, and staging the
+  // message's attachments needs the sandbox.
+  if (ctx.get(SandboxKey) === undefined && hasFileParts(preserved?.message)) {
+    try {
+      const scoped = await withContextScope(ctx, session, async (current) => ({
+        result: undefined,
+        session: await preserveCancelledTurnMessage(current, preserved),
+      }));
+      return scoped.session;
+    } catch (error) {
+      // A cancellation must still settle; without a sandbox the attachments become notes.
+      log.warn("staging a cancelled turn's attachments failed", { error });
+      ctx.clearVirtualContext();
+    }
+  }
   return await contextStorage.run(ctx, () => preserveCancelledTurnMessage(session, preserved));
+}
+
+function hasFileParts(message: StepInput["message"]): boolean {
+  return Array.isArray(message) && message.some((part) => part.type === "file");
 }
 
 /** Builds the successful step result that commits a cancelled batch's completed model calls. */
@@ -56,6 +79,8 @@ export async function createCancelledModelCallBatchResult(input: {
   const checkpointContext = {
     ...(input.checkpoint?.serializedContext ?? input.beforeBatchContext),
     [AuthKey.name]: interruptedContext[AuthKey.name],
+    // The cut calls may name catalog tools in history, and the record only grows.
+    [OfferedCatalogToolsKey.name]: interruptedContext[OfferedCatalogToolsKey.name],
     [TurnDeliveryIdsKey.name]: interruptedContext[TurnDeliveryIdsKey.name],
   };
 

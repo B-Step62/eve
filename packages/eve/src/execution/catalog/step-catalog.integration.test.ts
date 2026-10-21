@@ -16,12 +16,8 @@ import { dispatchDynamicToolEvent } from "#context/dynamic-tool-lifecycle.js";
 import { SessionIdKey, StaticModelReferenceKey } from "#context/keys.js";
 import { ConnectionRegistryKey } from "#context/providers/connection-key.js";
 import { mockModel } from "#evals/mock-model.js";
-import {
-  CallbackBaseUrlKey,
-  clearPendingAuthorization,
-  getPendingAuthorization,
-  PendingAuthorizationResultKey,
-} from "#harness/authorization.js";
+import { CallbackBaseUrlKey, PendingAuthorizationResultKey } from "#harness/authorization.js";
+import { readHitlState, writeHitlState } from "#harness/hitl/requests.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import type { HarnessSession, HarnessToolMap, StepInput, StepResult } from "#harness/types.js";
 import {
@@ -188,9 +184,9 @@ function toolResultParts(
 }
 
 /** A dynamic tool, stamped with the durable callback the bundler adds to authored resolvers. */
-function dynamicTool(description: string) {
+function dynamicTool(description: string, { deferred = true } = {}) {
   const entry = defineTool({
-    deferred: true,
+    deferred,
     description,
     execute: async () => ({ synced: true }),
     inputSchema: { type: "object" },
@@ -347,7 +343,7 @@ describe("step catalog in the harness (real AI SDK)", () => {
     // A connection tool parks the turn for sign-in, then runs once the user signs in.
     reply(calls(call("items", CALL_TOOL_NAME, { name: "private__list_items" })));
     const signingIn = await drive({ message: "Alice wants the items in the private catalog." });
-    const [challenge] = getPendingAuthorization(signingIn.session.state)?.challenges ?? [];
+    const [challenge] = readHitlState(signingIn.session.state).signIns;
     expect(challenge?.name).toBe("private");
     expect(privateCatalog.signIns).toHaveLength(1);
     // Delivers the callback the way the turn step does when the user signs in.
@@ -360,14 +356,15 @@ describe("step catalog in the harness (real AI SDK)", () => {
         name: "private",
       },
     ]);
-    driver.session = {
-      ...driver.session,
-      state: clearPendingAuthorization(driver.session.state, [challenge!.attemptId!]),
-    };
-    reply(
-      calls(call("items-after-sign-in", CALL_TOOL_NAME, { name: "private__list_items" })),
-      text("The private catalog has Alice's lamp."),
-    );
+    driver.session = writeHitlState(driver.session, {
+      signIns: readHitlState(driver.session.state).signIns.filter(
+        (pending) => pending.attemptId !== challenge!.attemptId,
+      ),
+    });
+    // The callback arrives in a later step, whose virtual context starts empty, and the call the
+    // sign-in stopped runs by itself: the model is only asked to read its result.
+    ctx.clearVirtualContext();
+    reply(text("The private catalog has Alice's lamp."));
     await drive();
     expect(privateCatalog.calls).toEqual([{ input: {}, tool: "list_items" }]);
 
@@ -619,8 +616,7 @@ describe("step catalog in the harness (real AI SDK)", () => {
       "deploy_service",
       "research",
       "billing_specialist",
-      // The call that parked for sign-in, then the model's call after it.
-      "private__list_items",
+      // The call that parked for sign-in runs once, without the model asking again.
       "private__list_items",
       "products__get_status",
       SEARCH_TOOL_NAME,
@@ -779,6 +775,68 @@ describe("step catalog in the harness (real AI SDK)", () => {
       expect(catalogMessages(request)).toEqual([]);
     }
     expect(toolResult(requests[1]!, "load-rules")).toBe("# house-rules");
+  });
+
+  it("adds search and eve__tool once a resolver returns a deferred tool, then keeps them", async () => {
+    const ctx = createSessionContext();
+    let exportAvailable = false;
+    const surfaceTools = {
+      eventNames: ["session.started"],
+      events: {
+        "session.started": () => ({
+          send_reply: dynamicTool("Reply on Alice's surface.", { deferred: false }),
+          ...(exportAvailable ? { export_report: dynamicTool("Export the billing report.") } : {}),
+        }),
+      },
+      logicalPath: "agent/tools/surface.ts",
+      slug: "surface",
+      sourceId: "tools/surface.ts",
+      sourceKind: "module" as const,
+    };
+    const bundle = catalogBundle();
+    ctx.set(BundleKey, {
+      ...bundle,
+      resolvedAgent: { ...bundle.resolvedAgent, dynamicToolResolvers: [surfaceTools] } as never,
+    });
+    const resolve = () =>
+      dispatchDynamicToolEvent({
+        ctx,
+        event: createSessionStartedEvent(),
+        messages: [],
+        resolvers: [surfaceTools],
+      });
+    const driver = createDriver(ctx, toolMap(inlineTool("add")));
+
+    // Alice's surface resolves only a listed tool, so there is nothing to search.
+    await resolve();
+    driver.reply(text("Hello, Alice."));
+    await driver.drive({ message: "Alice says hello." });
+
+    // The resolver adds a deferred export tool, and Alice's next request uses it.
+    exportAvailable = true;
+    await resolve();
+    driver.reply(
+      calls(call("export", CALL_TOOL_NAME, { name: "export_report" })),
+      text("Exported the billing report."),
+    );
+    await driver.drive({ message: "Alice asks for the billing report." });
+
+    // The export tool goes away, and the catalog tools stay.
+    exportAvailable = false;
+    await resolve();
+    driver.reply(text("Anything else, Alice?"));
+    await driver.drive({ message: "Alice says thanks." });
+
+    const requests = driver.requests();
+    expect(requests.map((request) => request.tools?.map((tool) => tool.name))).toEqual([
+      ["add", "send_reply"],
+      ["add", "send_reply", SEARCH_TOOL_NAME, CALL_TOOL_NAME],
+      ["add", "send_reply", SEARCH_TOOL_NAME, CALL_TOOL_NAME],
+      ["add", "send_reply", SEARCH_TOOL_NAME, CALL_TOOL_NAME],
+    ]);
+    // The tool list changes once, when the catalog tools join it.
+    for (const request of requests.slice(2)) expect(request.tools).toEqual(requests[1]!.tools);
+    expect(toolResult(requests[2]!, "export")).toEqual({ synced: true });
   });
 
   it("validates a connection tool's input before asking anyone to approve the call", async () => {

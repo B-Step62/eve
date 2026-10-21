@@ -3,7 +3,10 @@ import { sleep } from "#compiled/@workflow/core/index.js";
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import { cancelDescendantTurnsStep } from "#execution/cancel-descendant-turns-step.js";
-import { dispatchCoordinationStep } from "#execution/coordination-dispatch-step.js";
+import {
+  dispatchCoordinationStep,
+  publishTaskStartedStep,
+} from "#execution/coordination-dispatch-step.js";
 import type { SessionInputQueue } from "#execution/session/input-queue.js";
 import { taskToolResult, type TaskToolCall } from "#execution/tasks/calls.js";
 import { TASK_WAIT_TOOL_NAME } from "#protocol/task-tools.js";
@@ -12,10 +15,8 @@ import { renderTaskWaitResult } from "#execution/tasks/render.js";
 import {
   answerTaskCancel,
   cancelWorkingTasks,
-  isTaskRunMessage,
   sessionTaskTable,
 } from "#execution/tasks/session.js";
-import { applyTaskRunMessageStep } from "#execution/tasks/steps.js";
 import { taskWaitResult } from "#execution/tasks/table.js";
 import {
   sessionCommandHookToken,
@@ -25,10 +26,14 @@ import type { SessionInboxReader } from "#execution/session-inbox/inbox.js";
 import { publishTurnWaitingStep } from "#execution/session/turn-waiting-step.js";
 import type { SessionStateCursor } from "#execution/session/state-cursor.js";
 import {
-  batchAgentStarts,
   handleWorkflowToolRunMessage,
+  isAppliedRunMessage,
+  takeLeadingAppliedRunMessages,
 } from "#execution/session-workflow-tool-run.js";
-import { emitAgentStartedStep } from "#execution/tools/workflow/emit-workflow-tool-run-report-step.js";
+import {
+  applyRunMessagesStep,
+  type AppliedRunMessage,
+} from "#execution/tools/workflow/apply-run-messages-step.js";
 import { interruptWorkflowToolRun } from "#execution/tools/workflow/interrupt.js";
 import type { WorkflowToolRunMessage } from "#execution/tools/workflow/messages.js";
 import type {
@@ -136,23 +141,38 @@ export class SessionExecution {
 
   /**
    * Applies what runs reported while the model step ran, so the next step sees
-   * it. Consecutive `agent-started` messages, such as a fan-out's, share one step.
-   * An ending session drops them: its stream is closed, and finalizing the
-   * session terminates the children.
+   * it. Consecutive messages the session applies as it reads them, such as a
+   * fan-out's, share one step. An ending session drops `agent-started`: its
+   * stream is closed, and finalizing the session terminates the children.
    */
   private async handleBoundaryMessages(
     messages: readonly WorkflowToolRunMessage[],
     ending = false,
+    turn?: ActiveTurn,
   ): Promise<void> {
-    for (const batch of batchAgentStarts(messages)) {
-      if (batch.kind === "message") {
-        await this.handleWorkflowMessage(batch.message);
-      } else if (!ending) {
-        await this.input.cursor.advance((state) =>
-          emitAgentStartedStep({ ...state, messages: batch.messages }),
-        );
+    let applied: AppliedRunMessage[] = [];
+    for (const message of messages) {
+      if (!isAppliedRunMessage(message)) {
+        await this.applyRunMessages(applied, turn);
+        applied = [];
+        await handleWorkflowToolRunMessage({ cursor: this.input.cursor, message });
+      } else if (!ending || message.kind !== "agent-started") {
+        applied.push(message);
       }
     }
+    await this.applyRunMessages(applied, turn);
+  }
+
+  /** Hooks on the messages' events may cancel `turn`, the turn that is running. */
+  private async applyRunMessages(
+    messages: readonly AppliedRunMessage[],
+    turn?: ActiveTurn,
+  ): Promise<void> {
+    if (messages.length === 0) return;
+    const { cancelled } = await this.input.cursor.advance((state) =>
+      applyRunMessagesStep({ ...state, canCancelTurn: turn !== undefined, messages }),
+    );
+    if (cancelled) turn?.abort();
   }
 
   private async runTurnSteps(
@@ -183,8 +203,17 @@ export class SessionExecution {
         result.action === "park" ? result.pendingCoordinationCallIds : undefined;
       const turnCompleted = result.action === "park" && result.settled !== undefined;
 
+      // Deliveries the boundary admits next arrived while the step ran. A step
+      // that raises a request publishes it before it returns, so they may
+      // reply to it.
+      const stepAdmission = this.input.queue.nextAdmission;
       await turn.admitBoundary();
-      await this.handleBoundaryMessages(turn.takeBoundaryMessages(), result.action === "done");
+      const ending = result.action === "done";
+      await this.handleBoundaryMessages(
+        turn.takeBoundaryMessages(),
+        ending,
+        ending ? undefined : turn,
+      );
 
       if (result.action === "cancelled") return await this.finishCancelledTurn(turn);
       if (!turnCompleted && turn.signal.aborted && pendingCallIds === undefined) {
@@ -209,7 +238,7 @@ export class SessionExecution {
         ) {
           throw new Error(NO_INPUT_CAPABILITY_ERROR_MESSAGE);
         }
-        const woke = await this.waitForHeldRequest(turn, result);
+        const woke = await this.waitForHeldRequest(turn, result, stepAdmission);
         if (woke === "cancelled") return await this.finishCancelledTurn(turn);
         nextStepInput = { delivery: woke };
         continue;
@@ -254,23 +283,39 @@ export class SessionExecution {
    * session answers them itself.
    */
   private async dispatchRuns(): Promise<readonly RuntimeActionResult[]> {
-    const dispatched = await this.input.cursor.advance((state) =>
+    const { cursor } = this.input;
+    const dispatched = await cursor.advance(({ serializedContext, sessionState }) =>
       dispatchCoordinationStep({
         action: "park",
+        serializedContext,
+        sessionState,
         workflowToolRunOwner: {
           inbox: sessionInboxHookToken(sessionCommandHookToken(this.input.sessionId)),
         },
-        ...state,
       }),
     );
+    // Published in a step of its own, so a retry while it runs cannot start the runs again.
+    if (dispatched.started.length > 0) {
+      await cursor.advance((state) =>
+        publishTaskStartedStep({ ...state, started: dispatched.started }),
+      );
+    }
     return dispatched.results;
   }
 
+  /**
+   * Handles a run message the session just read. One it applies as it reads
+   * it takes along those read after it, from `turn` while a turn runs, so a
+   * fan-out's messages share one step.
+   */
   async handleWorkflowMessage(
     message: WorkflowToolRunMessage,
+    turn?: ActiveTurn,
   ): Promise<RuntimeActionResult | undefined> {
-    if (isTaskRunMessage(message)) {
-      await this.input.cursor.advance((state) => applyTaskRunMessageStep({ ...state, message }));
+    if (isAppliedRunMessage(message)) {
+      const following =
+        turn?.takeAppliedRunMessages() ?? takeLeadingAppliedRunMessages(this.input.inbox);
+      await this.applyRunMessages([message, ...following], turn);
       return undefined;
     }
     return await handleWorkflowToolRunMessage({
@@ -321,7 +366,7 @@ export class SessionExecution {
           interrupted = true;
           continue;
         case "workflow":
-          await this.handleWorkflowMessage(next.message);
+          await this.handleWorkflowMessage(next.message, turn);
           continue;
         case "input":
         case "runtime-action-result":
@@ -335,7 +380,10 @@ export class SessionExecution {
    * The turn waits on a sign-in or tool approval it raised. It wakes with the
    * delivery its next step reads: the sign-in callback, an approval answer
    * from any responder, or a message from the turn's own person, which steers
-   * the turn and cancels the request. Anyone else's message queues behind it.
+   * the turn and cancels the request. Anyone else's message queues behind it,
+   * as does a queued message admitted before the step that raised the request
+   * (`heldSince`): it was sent before the request existed, so it must not
+   * answer it.
    */
   private async waitForHeldRequest(
     turn: ActiveTurn,
@@ -343,6 +391,7 @@ export class SessionExecution {
       readonly authorizationAttemptIds: readonly string[];
       readonly inputRequestIds: readonly string[];
     },
+    heldSince: number,
   ): Promise<DeliverHookPayload | "cancelled"> {
     const attemptIds = new Set(held.authorizationAttemptIds);
     const requestIds = new Set(held.inputRequestIds);
@@ -351,11 +400,11 @@ export class SessionExecution {
       if (callbacks !== undefined) return { kind: "deliver", payloads: callbacks };
       const answer = await turn.takeInputResponses(requestIds);
       if (answer !== undefined) return answer;
-      const steering = await turn.takeSteering({ heldOnPerson: true });
+      const steering = await turn.takeSteering({ heldSince });
       if (steering !== undefined) return steering;
       const next = await turn.nextRuntimeEvent([]);
       if (next === "cancelled") return next;
-      if (next.kind === "workflow") await this.handleWorkflowMessage(next.message);
+      if (next.kind === "workflow") await this.handleWorkflowMessage(next.message, turn);
     }
   }
 
@@ -432,7 +481,7 @@ export class SessionExecution {
           continue;
         }
 
-        const result = await this.handleWorkflowMessage(next.message);
+        const result = await this.handleWorkflowMessage(next.message, input.turn);
         if (result === undefined) continue;
         accept(result);
         if (next.message.kind === "outcome" && next.message.usage !== undefined) {

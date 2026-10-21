@@ -10,6 +10,7 @@ import {
   createApprovalSettledEvent,
   createAuthorizationCompletedEvent,
   createAuthorizationRequiredEvent,
+  createHistoryImportedEvent,
   createInputResolvedEvent,
   createInputRequestedEvent,
   createMessageAppendedEvent,
@@ -97,6 +98,85 @@ describe("defaultMessageReducer", () => {
       "user",
       "user",
       "assistant",
+    ]);
+  });
+
+  it("places added history ahead of its turn's pending message and response", () => {
+    const reducer = defaultMessageReducer();
+    let data = reducer.reduce(reducer.initial(), {
+      data: { createdAt: 1, message: "Continue", submissionId: "first" },
+      type: "client.message.submitted",
+    });
+    data = reduceServerEvents(reducer, data, [
+      createHistoryImportedEvent({
+        messages: [
+          { text: "Earlier question", id: "m1", role: "user" },
+          { text: "Earlier answer", role: "assistant" },
+        ],
+        sequence: 0,
+        turnId: "turn_0",
+      }),
+    ]);
+    expect(data.messages.map(({ id }) => id)).toEqual([
+      expect.stringContaining(":imported:0"),
+      expect.stringContaining(":imported:1"),
+      "optimistic:first:user",
+    ]);
+    expect(data.messages.map(({ metadata }) => metadata)).toEqual([
+      { historyId: "m1", imported: true, status: "complete" },
+      { imported: true, status: "complete" },
+      expect.anything(),
+    ]);
+
+    // App ids are unique only within one call: a later call reusing one keeps both messages.
+    data = reduceServerEvents(reducer, reducer.initial(), [
+      createHistoryImportedEvent({
+        messages: [{ text: "Earlier question", id: "m1", role: "user" }],
+        sequence: 0,
+        turnId: "turn_0",
+      }),
+      createHistoryImportedEvent({
+        messages: [{ text: "Later question", id: "m1", role: "user" }],
+        sequence: 1,
+        turnId: "turn_1",
+      }),
+    ]);
+    expect(data.messages.map(({ metadata }) => metadata?.historyId)).toEqual(["m1", "m1"]);
+    expect(new Set(data.messages.map(({ id }) => id)).size).toBe(2);
+
+    // Steering into an active turn: added history lands before that turn's response, which keeps
+    // streaming into its own message.
+    data = reduceServerEvents(reducer, reducer.initial(), [
+      createMessageReceivedEvent({ message: "First", sequence: 0, turnId: "turn_1" }),
+      createMessageAppendedEvent({
+        messageDelta: "Working",
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+      createHistoryImportedEvent({
+        messages: [{ text: "Bob: meanwhile", role: "user" }],
+        sequence: 2,
+        turnId: "turn_1",
+      }),
+      createMessageReceivedEvent({ message: "Correction", sequence: 2, turnId: "turn_1" }),
+      createMessageAppendedEvent({
+        messageDelta: " on it",
+        sequence: 3,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    ]);
+    expect(
+      data.messages.map(({ parts, role }) => [
+        role,
+        parts.map((part) => ("text" in part ? part.text : "")).join(""),
+      ]),
+    ).toEqual([
+      ["user", "First"],
+      ["user", "Bob: meanwhile"],
+      ["user", "Correction"],
+      ["assistant", "Working on it"],
     ]);
   });
 
@@ -400,6 +480,7 @@ describe("defaultMessageReducer", () => {
         code: "MODEL_FAILED",
         message: "model failed",
         sequence: 4,
+        terminal: false,
         turnId: "turn_1",
       }),
     ]);
@@ -428,6 +509,7 @@ describe("defaultMessageReducer", () => {
         code: "MODEL_FAILED",
         message: "model failed",
         sequence: 1,
+        terminal: false,
         turnId: "turn_1",
       }),
     ] as const;
@@ -553,6 +635,7 @@ describe("defaultMessageReducer", () => {
         code: "MODEL_FAILED",
         message: "model failed",
         sequence: 1,
+        terminal: false,
         turnId: "turn_1",
       }),
     ]);
@@ -898,8 +981,10 @@ describe("defaultMessageReducer", () => {
     const reducer = defaultMessageReducer();
     const data = reduceServerEvents(reducer, reducer.initial(), [
       createActionResultEvent({
+        rejected: true,
         result: {
           callId: "call_1",
+          isError: true,
           kind: "tool-result",
           output: JSON.stringify({
             code: "TOOL_EXECUTION_DENIED",

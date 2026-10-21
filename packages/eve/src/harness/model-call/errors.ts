@@ -214,8 +214,8 @@ function readErrorMessage(error: unknown): string {
 /**
  * A model call that produced no content. Raised by the model caller from
  * either of its two triggers: `isEmptyModelResponse` (a completed step
- * with finishReason 'other' and no output — AI Gateway HTTP 200 whose
- * stream carries no content, no usage, and no error) or
+ * with no usable output — e.g. AI Gateway HTTP 200 whose stream carries no
+ * content, no usage, and no error, or a delegated session's empty reply) or
  * {@link isNoOutputGeneratedError} (the AI SDK rejecting a stream that
  * closed after metadata without output, normalized via the model call's
  * rethrow so both shapes funnel into one recovery).
@@ -228,6 +228,19 @@ export class EmptyModelResponseError extends Error {
   constructor(options?: { cause?: unknown }) {
     super("The model did not return a response. Please try again.", options);
     this.name = "EmptyModelResponseError";
+  }
+}
+
+/**
+ * The AI SDK abandoned a model stream that stopped producing output. A stalled
+ * connection says nothing about the request, so a fresh call is worth trying.
+ */
+export class ModelStreamStalledError extends Error {
+  readonly isRetryable = true;
+
+  constructor(options: { cause: unknown }) {
+    super("The model stopped responding. Please try again.", options);
+    this.name = "ModelStreamStalledError";
   }
 }
 

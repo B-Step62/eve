@@ -2,10 +2,9 @@ import type { ModelMessage } from "ai";
 
 import type { SessionAuthContext } from "#channel/types.js";
 import { AuthKey, SessionKey } from "#context/keys.js";
-import { clearPendingAuthorization } from "#harness/authorization.js";
 import type { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-authorization.js";
 import { validateHarnessModelMessages } from "#harness/messages.js";
-import { fail } from "#harness/session-machine/transitions.js";
+import { fail, hold } from "#harness/session-machine/transitions.js";
 import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
 import type { StepCoordinates } from "#harness/session-machine/view.js";
 import type { Step } from "#harness/step/context.js";
@@ -25,7 +24,7 @@ import {
   requestLimit,
   requireSignIn,
 } from "./approvals.js";
-import { checkSessionUsageLimit } from "./budget.js";
+import { checkSessionUsageLimit, DEFAULT_SESSION_USAGE_LIMIT } from "./budget.js";
 import { retireActiveCandidates } from "./candidates.js";
 import { isEmptyInput } from "./delivery.js";
 import { holdForInput } from "./intake.js";
@@ -34,7 +33,7 @@ import { holdForInput } from "./intake.js";
 // meets it: a delivery's answers and sign-in callbacks before its turn runs (`acceptHumanInput`),
 // the work they approved once its model step starts (`runApprovedLocalCalls`), a model step's gated calls and
 // sign-ins, the budget gate before each model call, and what the model reads about pending
-// approvals. Nothing outside this directory reads its records.
+// approvals. Outside readers use only the read-only requests view exported here.
 
 export {
   acceptHumanInput,
@@ -47,6 +46,7 @@ export {
 } from "./intake.js";
 export { extractToolApprovalInputRequests } from "#harness/input-extraction.js";
 export { hasRunnableQueue } from "./approvals.js";
+export { discardClearedHitlState as discardClearedHumanInput } from "./requests.js";
 
 /**
  * A model step made calls that need a person's approval: the step parks on them beside any
@@ -62,8 +62,8 @@ export async function parkOnApprovals(
     readonly tasks: readonly RuntimeWorkflowTaskRequest[];
     /** The entries the step's calls ran, whose approvals the requests ask for. */
     readonly tools: HarnessToolLookup;
-    /** The step made calls the runtime runs, so the turn waits on them instead. */
-    readonly waitsOnRuntime: boolean;
+    /** Runtime calls run first, or the caller will report a sibling sign-in hold. */
+    readonly waitsOn: "runtime" | "sign-in" | undefined;
   },
 ): Promise<StepResult> {
   const transition = parkOnApprovalsTransition(step.view(), {
@@ -75,23 +75,29 @@ export async function parkOnApprovals(
     responseAuthRequiredRequestIds: responsePolicyRequestIds(input.tools, input.requests),
   });
   await step.apply(transition, [...step.session.history, ...(transition.commit ?? [])]);
-  if (input.waitsOnRuntime) return { next: null, session: step.session };
+  if (input.waitsOn !== undefined) {
+    if (
+      input.waitsOn === "runtime" &&
+      input.tasks.some((task) => task.entry.entryPoint === "execute")
+    )
+      await step.apply(hold(step.view(), { on: "tasks" }));
+    return { next: null, session: step.session };
+  }
   if (hasRunnableQueue(step.view())) return { next: step.runStep, session: step.session };
   return holdForInput(step);
 }
 
 /**
- * A call the model step ran needs a sign-in: the calls that need it stop, and the model calls
- * them again once it completes.
+ * A call the model step ran needs a sign-in: the calls that need it stop and wait in their
+ * steps, and run once it completes.
  */
 export async function stopForToolSignIn(
   step: Step,
   interrupt: NonNullable<ReturnType<typeof resolveInlineAuthorizationInterrupt>>,
 ): Promise<StepResult> {
-  step.session = { ...step.session, history: validateHarnessModelMessages(interrupt.history) };
   await step.apply(
     requireSignIn(step.view(), {
-      callIdsByName: interrupt.callIdsByName,
+      calls: interrupt.calls,
       challenges: interrupt.challenges,
     }),
     step.session.history,
@@ -110,6 +116,7 @@ export async function enforceBudget(
 ): Promise<StepResult | undefined> {
   const limit = checkSessionUsageLimit({
     canAsk: step.emit !== undefined && step.config.capabilities?.requestInput === true,
+    limit: step.config.sessionUsageLimit ?? DEFAULT_SESSION_USAGE_LIMIT,
     session: step.session,
     turnSequence: step.position().sequence,
   });
@@ -150,18 +157,6 @@ export function humanInputContext(
       view.turn.suspended.flatMap((parked) => parked.requests),
     ),
   };
-}
-
-const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
-
-/**
- * Drops what a cleared context owned: sign-in attempts and responders' approval progress. `clear`
- * reported each close; relay routes for live tasks stay.
- */
-export function discardClearedHumanInput<T extends HarnessSessionBase>(session: T): T {
-  const { [APPROVAL_STATE_KEY]: _approvals, ...state } =
-    clearPendingAuthorization(session.state) ?? {};
-  return { ...session, state: Object.keys(state).length > 0 ? state : undefined };
 }
 
 /**
@@ -210,3 +205,5 @@ export function takeDeferredMessage<T extends HarnessSessionBase>(
     session: writeTurnState(session, isEmptyInput(rest) ? turn : { ...turn, queued: rest }),
   };
 }
+
+export { readHitlState, holdsHitlRequests } from "./requests.js";

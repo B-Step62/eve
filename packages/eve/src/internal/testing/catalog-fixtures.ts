@@ -6,7 +6,12 @@
 
 import { ConnectionAuthorizationRequiredError } from "#connections/errors.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
-import { AuthKey, SessionIdKey } from "#context/keys.js";
+import {
+  AuthKey,
+  OfferedCatalogToolsKey,
+  SessionIdKey,
+  type OfferedCatalogTools,
+} from "#context/keys.js";
 import { ConnectionRegistryKey } from "#context/providers/connection-key.js";
 import { buildStepCatalog } from "#execution/catalog/step-catalog.js";
 import { CallbackBaseUrlKey } from "#harness/authorization.js";
@@ -160,6 +165,7 @@ export function fakeConnection(input: {
   readonly name: string;
   readonly rejectsToken?: boolean;
   readonly signIn?: boolean;
+  readonly toolCall?: ResolvedConnectionDefinition["toolCall"];
   readonly tools: readonly ConnectionToolMetadata[];
 }): FakeConnection {
   const calls: FakeConnection["calls"] = [];
@@ -172,6 +178,7 @@ export function fakeConnection(input: {
     protocol: "mcp",
     sourceId: `connections/${input.name}.ts`,
     sourceKind: "module",
+    toolCall: input.toolCall,
     url: `https://${input.name}.example.com/mcp`,
   };
   const connection: FakeConnection = {
@@ -251,6 +258,8 @@ export function catalogContext(
   input: {
     readonly connections?: readonly FakeConnection[];
     readonly dynamicSubagents?: readonly string[];
+    /** The catalog tools earlier steps of the session offered. */
+    readonly offered?: OfferedCatalogTools;
     readonly session?: { readonly rootSessionId?: string };
     readonly skills?: readonly CatalogSkillSource[];
     readonly tools?: readonly HarnessToolDefinition[];
@@ -276,6 +285,7 @@ export function catalogContext(
   if (input.connections !== undefined) {
     ctx.set(ConnectionRegistryKey, connectionRegistry(input.connections));
   }
+  if (input.offered !== undefined) ctx.set(OfferedCatalogToolsKey, input.offered);
   const catalog = buildStepCatalog({
     agentTools: toolMap(...(input.tools ?? [])),
     ctx,

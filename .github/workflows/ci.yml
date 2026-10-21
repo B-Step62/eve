@@ -44,6 +44,9 @@ jobs:
       - name: Guard mechanical code invariants
         run: pnpm guard:invariants
 
+      - name: Check templates match their copied source files
+        run: pnpm check:template-files
+
       - name: Validate /docs/public frontmatter and nav
         run: pnpm docs:check
 
@@ -95,8 +98,8 @@ jobs:
       - name: Run unit tests
         run: pnpm test:unit
 
-      - name: Test workflow helpers
-        run: node --test .github/scripts/*.test.mjs
+      - name: Test workflow and guard helpers
+        run: node --test .github/scripts/*.test.mjs scripts/hitl-state-readers.test.mjs
 
   test-integration:
     name: test-integration (${{ matrix.os }})

@@ -8,6 +8,7 @@ import {
 } from "ai";
 
 import { createRuntimeToolResultFromValue } from "#harness/action-result-helpers.js";
+import type { SessionAuthContext } from "#channel/types.js";
 import { isInlineAuthorizationToolResult } from "#harness/inline-tool-authorization.js";
 import { toolCallModelOutput } from "#harness/tool-call-io.js";
 import { projectDeltaPresentation, projectResultPresentation } from "#harness/tool-presentation.js";
@@ -20,11 +21,17 @@ import {
 import { throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import type { HarnessToolLookup } from "#harness/types.js";
 import { SEARCH_TOOL_NAME } from "#protocol/catalog-tools.js";
-import { createActionPartialEvent, createActionResultEvent } from "#protocol/message.js";
+import {
+  createActionPartialEvent,
+  createActionResultEvent,
+  createAuthorizationCompletedEvent,
+} from "#protocol/message.js";
+import { authorizationEventFields } from "#harness/authorization-event-fields.js";
+import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
 import { isAsyncIterable } from "#shared/async-iterable.js";
 import { toError } from "#shared/errors.js";
 import { createLogger, logError } from "#internal/logging.js";
-import type { InputRequest } from "#shared/input.js";
+import type { ApprovedCall } from "#harness/session-machine/state.js";
 import { parseJsonObject } from "#shared/json.js";
 import { toModelSchema } from "#tools/schema.js";
 import type { HandleEventFn } from "#harness/types.js";
@@ -46,7 +53,7 @@ export const APPROVED_CALL_INTERRUPTED_MESSAGE =
  * results in the steps that made the calls.
  */
 export async function runApprovedCalls(input: {
-  readonly requests: readonly InputRequest[];
+  readonly requests: readonly ApprovedCall[];
   /** The entries of the step that asked, which the approved calls run. */
   readonly tools: HarnessToolLookup;
   readonly approvedTools?: ReadonlySet<string>;
@@ -61,6 +68,8 @@ export async function runApprovedCalls(input: {
   readonly abortSignal: AbortSignal | undefined;
   /** The step attempt's telemetry, which hears each execution as the AI SDK reports it. */
   readonly telemetry?: TelemetryOptions;
+  /** Who approved each request, which the call reads as `ctx.approval`; it still runs as the requester. */
+  readonly responderOf: (request: ApprovedCall) => SessionAuthContext | undefined;
 }): Promise<{
   readonly settled: readonly ApprovedCallResult[];
   readonly toolResults: readonly TypedToolResult<ToolSet>[];
@@ -70,13 +79,36 @@ export async function runApprovedCalls(input: {
     stepIndex: input.position.stepIndex,
     turnId: input.position.turnId,
   };
+  /**
+   * The sign-ins a call waited on end with the call: authorized if it returned, failed with the
+   * reason it didn't. Reported before the call's result.
+   */
+  const reportSignIns = async (call: ApprovedCall, failure?: Error | string): Promise<void> => {
+    const reason = isConnectionAuthorizationFailedError(failure)
+      ? (failure.reason ?? failure.message)
+      : failure === undefined || typeof failure === "string"
+        ? failure
+        : failure.message;
+    for (const challenge of call.signIns ?? []) {
+      await input.publish(
+        createAuthorizationCompletedEvent({
+          ...authorizationEventFields(challenge),
+          ...at,
+          outcome: reason === undefined ? "authorized" : "failed",
+          ...(reason !== undefined && { reason }),
+          ...(isConnectionAuthorizationFailedError(failure) && { retryable: failure.retryable }),
+        }),
+      );
+    }
+  };
   /** A call that ends without running: the stream reports it failed, and the model reads why. */
   const settleFailure = async (
-    callId: string,
-    toolName: string,
-    message: string,
+    request: ApprovedCall,
+    failure: Error | string,
   ): Promise<ApprovedCallResult> => {
-    const failed = failedCall({ callId, message, toolName });
+    const { callId, toolName } = request.action;
+    const failed = failedCall({ callId, failure, toolName });
+    await reportSignIns(request, failure);
     await input.publish(createActionResultEvent({ ...at, result: failed.result }));
     return { part: failed.part };
   };
@@ -98,8 +130,7 @@ export async function runApprovedCalls(input: {
           return {
             settled: [
               await settleFailure(
-                callId,
-                toolName,
+                request,
                 unavailableToolMessage(toolName, input.tools.get(SEARCH_TOOL_NAME) !== undefined),
               ),
             ],
@@ -113,7 +144,7 @@ export async function runApprovedCalls(input: {
         ).validate?.(args);
         if (validation?.success === false) {
           const message = `The approved input is no longer valid for tool "${toolName}". Request a new tool call and approval.`;
-          return { settled: [await settleFailure(callId, toolName, message)], toolResults };
+          return { settled: [await settleFailure(request, message)], toolResults };
         }
         const recheck = await recheckApprovedCall(definition, {
           abortSignal: input.abortSignal,
@@ -122,36 +153,20 @@ export async function runApprovedCalls(input: {
           approvedTools: input.approvedTools,
         });
         if (recheck.denied) {
-          // The policy refused the call it approved earlier, so it doesn't run.
-          await input.publish(
-            createActionResultEvent({
-              ...at,
-              rejected: true,
-              result: {
-                callId,
-                isError: true,
-                kind: "tool-result",
-                output: {
-                  code: "TOOL_EXECUTION_DENIED",
-                  message: recheck.reason ?? TOOL_EXECUTION_DENIED_MESSAGE,
-                  tool: { result: "not_run" },
-                },
-                toolName,
-              },
+          await reportSignIns(request, recheck.reason ?? TOOL_EXECUTION_DENIED_MESSAGE);
+          settled.push(
+            await rejectApprovedCall({
+              request,
+              reason: recheck.reason,
+              position: at,
+              publish: input.publish,
             }),
           );
-          settled.push({
-            part: {
-              output: { reason: recheck.reason, type: "execution-denied" },
-              toolCallId: callId,
-              toolName,
-              type: "tool-result",
-            },
-          });
           return { settled, toolResults };
         }
         let output: unknown;
-        let failed = false;
+        /** The error the tool threw, kept whole so the result records its name. */
+        let failure: Error | undefined;
         const telemetry = toolTelemetry(input.telemetry, {
           messages: [...input.messages],
           toolCall: { input: args, toolCallId: callId, toolName, type: "tool-call" },
@@ -163,7 +178,9 @@ export async function runApprovedCalls(input: {
             const startedAt = performance.now();
             try {
               started = true;
+              const responder = input.responderOf(request);
               const executed = execute(args, {
+                ...(responder !== undefined && { approval: { responder } }),
                 abortSignal: input.abortSignal,
                 messages: [...input.messages],
                 toolCallId: callId,
@@ -202,10 +219,10 @@ export async function runApprovedCalls(input: {
           );
           throwIfTurnAborted(input.abortSignal);
           logError(log, "tool execution failed", error, { toolName, toolCallId: callId });
-          failed = true;
-          output = toError(error).message;
+          failure = toError(error);
+          output = failure.message;
         }
-        if (!failed) {
+        if (failure === undefined) {
           await telemetry.ended(
             { input: args, output, toolCallId: callId, toolName, type: "tool-result" },
             executionMs,
@@ -222,22 +239,30 @@ export async function runApprovedCalls(input: {
         if (isInlineAuthorizationToolResult(result)) return { settled, toolResults };
         completed = {
           part: {
-            output: failed
-              ? { type: "error-text", value: String(output) }
-              : await toolCallModelOutput(definition, output, callId),
+            output:
+              failure !== undefined
+                ? { type: "error-text", value: failure.message }
+                : await toolCallModelOutput(definition, output, callId),
             toolCallId: callId,
             toolName,
             type: "tool-result",
           },
         };
         settled.push(completed);
+        await reportSignIns(request, failure);
         await input.publish(
           createActionResultEvent({
             ...at,
-            presentation: failed
-              ? undefined
-              : projectResultPresentation(definition, callId, parseJsonObject(args), output),
-            result: createRuntimeToolResultFromValue({ callId, isError: failed, output, toolName }),
+            presentation:
+              failure !== undefined
+                ? undefined
+                : projectResultPresentation(definition, callId, parseJsonObject(args), output),
+            result: createRuntimeToolResultFromValue({
+              callId,
+              isError: failure !== undefined,
+              output: failure ?? output,
+              toolName,
+            }),
           }),
         );
         return { settled, toolResults };
@@ -249,7 +274,7 @@ export async function runApprovedCalls(input: {
         }
         logError(log, "approved tool failed", error, { toolName, toolCallId: callId });
         return {
-          settled: [await settleFailure(callId, toolName, toError(error).message)],
+          settled: [await settleFailure(request, toError(error))],
           toolResults,
         };
       }
@@ -271,6 +296,45 @@ function interruptedResult(callId: string, toolName: string): ApprovedCallResult
   return {
     part: {
       output: { type: "error-text", value: APPROVED_CALL_INTERRUPTED_MESSAGE },
+      toolCallId: callId,
+      toolName,
+      type: "tool-result",
+    },
+  };
+}
+
+/** Records an approved call refused by its final request-policy check. */
+export async function rejectApprovedCall(input: {
+  readonly request: ApprovedCall;
+  readonly reason?: string;
+  readonly position: {
+    readonly sequence: number;
+    readonly stepIndex: number;
+    readonly turnId: string;
+  };
+  readonly publish: HandleEventFn;
+}): Promise<ApprovedCallResult> {
+  const { callId, toolName } = input.request.action;
+  await input.publish(
+    createActionResultEvent({
+      ...input.position,
+      rejected: true,
+      result: {
+        callId,
+        isError: true,
+        kind: "tool-result",
+        toolName,
+        output: {
+          code: "TOOL_EXECUTION_DENIED",
+          message: input.reason ?? TOOL_EXECUTION_DENIED_MESSAGE,
+          tool: { result: "not_run" },
+        },
+      },
+    }),
+  );
+  return {
+    part: {
+      output: { reason: input.reason, type: "execution-denied" },
       toolCallId: callId,
       toolName,
       type: "tool-result",

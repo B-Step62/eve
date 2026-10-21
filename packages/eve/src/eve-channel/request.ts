@@ -11,7 +11,10 @@ import type { Session } from "#channel/session.js";
 import { strandedSessionResponse } from "#eve-channel/support.js";
 import { parseSessionCallback } from "#channel/session-callback.js";
 import { hasInternalRefScheme } from "#internal/attachments/url-refs.js";
-import { isMissingWorkflowRunError } from "#internal/workflow/is-inactive-workflow-run-error.js";
+import {
+  isExpiredWorkflowRunError,
+  isMissingWorkflowRunError,
+} from "#internal/workflow/is-inactive-workflow-run-error.js";
 import {
   EVE_MESSAGE_STREAM_CONTENT_TYPE,
   EVE_MESSAGE_STREAM_FORMAT,
@@ -24,6 +27,7 @@ import {
   EVE_STREAM_TAIL_INDEX_HEADER,
   EVE_STREAM_VERSION_HEADER,
 } from "#protocol/message.js";
+import type { ClientContextValue } from "#eve-channel/types.js";
 import {
   REMOTE_AGENT_PROTOCOL_MISMATCH,
   REMOTE_AGENT_PROTOCOL_VERSION,
@@ -139,7 +143,7 @@ interface ParsedSessionMessageBody {
   callback?: SessionCallback;
   message?: string | UserContent;
   inputResponses?: readonly ValidatedInputResponse[];
-  context?: readonly string[];
+  context?: ClientContextValue;
   outputSchema?: JsonObject;
   turnPolicy?: TurnPolicy;
 }
@@ -344,6 +348,12 @@ export async function createSessionStreamResponse(
   } catch (error) {
     const stranded = strandedSessionResponse(error);
     if (stranded !== undefined) return stranded;
+    if (isExpiredWorkflowRunError(error)) {
+      return Response.json(
+        { code: "session_expired", error: "Session history is no longer available.", ok: false },
+        { headers: { "cache-control": "no-store" }, status: 410 },
+      );
+    }
     const notFound = isMissingWorkflowRunError(error);
     return Response.json(
       { error: notFound ? "Session not found." : "Session stream unavailable.", ok: false },
@@ -479,8 +489,8 @@ function parseMessagePart(raw: unknown): TextPart | FilePart | Response {
       );
     }
     // Callers must never supply framework-internal refs (`eve-url:`,
-    // `eve-sandbox:`, `eve-attachment:`): the staging pipeline trusts the
-    // scheme and would reconstitute the string into a privileged sandbox read.
+    // `eve-sandbox:`): the staging pipeline trusts the scheme and would
+    // reconstitute the string into a privileged sandbox read.
     if (hasInternalRefScheme(part.data)) {
       return Response.json(
         { error: "File part 'data' must not use a framework-internal ref scheme.", ok: false },
@@ -563,13 +573,11 @@ function parseInputResponses(
   return inputResponses;
 }
 
-const CLIENT_CONTEXT_PREFIX = "Client context:\n";
-
-function parseClientContextField(value: unknown): string[] | Response | undefined {
+function parseClientContextField(value: unknown): ClientContextValue | Response | undefined {
   if (value === undefined) return undefined;
 
   if (typeof value === "string") {
-    return value.length > 0 ? [toClientContextMessage(value)] : undefined;
+    return value.length > 0 ? value : undefined;
   }
 
   if (Array.isArray(value)) {
@@ -582,7 +590,7 @@ function parseClientContextField(value: unknown): string[] | Response | undefine
       );
     }
 
-    return value.map((entry) => toClientContextMessage(entry));
+    return value;
   }
 
   if (value === null || typeof value !== "object") {
@@ -597,17 +605,13 @@ function parseClientContextField(value: unknown): string[] | Response | undefine
 
   try {
     const json = parseJsonObject(value);
-    return [toClientContextMessage(JSON.stringify(json))];
+    return json;
   } catch {
     return Response.json(
       { error: "Expected 'clientContext' to be a JSON-serializable object.", ok: false },
       { status: 400 },
     );
   }
-}
-
-function toClientContextMessage(content: string): string {
-  return `${CLIENT_CONTEXT_PREFIX}${content}`;
 }
 
 export function parseIncludeTailIndex(request: Request): boolean {

@@ -4,7 +4,10 @@ import { z } from "#compiled/zod/index.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
 import { defineMcpClientConnection } from "#public/definitions/connections/mcp.js";
 import { defineTool } from "#tools/definition.js";
-import { registerDefinitionSource } from "#internal/authored-definition/source-identity.js";
+import {
+  connectionDefinitionKey,
+  registerDefinitionSource,
+} from "#internal/authored-definition/source-identity.js";
 import {
   toolResultFrom,
   type MatchedConnectionResult,
@@ -63,7 +66,7 @@ describe("toolResultFrom", () => {
   registerDefinitionSource(
     linearConnection,
     { kind: "connection", name: "linear" },
-    "connection:https://mcp.linear.app",
+    connectionDefinitionKey("https://mcp.linear.app", "Linear"),
   );
 
   it("matches an authored tool result and returns typed output", () => {
@@ -156,26 +159,16 @@ describe("toolResultFrom", () => {
       "tool:Run the shared action.",
     );
 
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'eve could not assign a unique toolResultFrom identity for "tool:Run the shared action."',
-      ),
-    );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Conflicting definitions: tool "first_tool" from "tools/first.ts" and tool "second_tool" from "tools/second.ts".',
-      ),
-    );
     expect(toolResultFrom(toolResult("first_tool", { source: "first" }), first)).toEqual({
       callId: "call_1",
       output: { source: "first" },
       toolName: "first_tool",
     });
     expect(toolResultFrom(toolResult("first_tool", { source: "first" }), second)).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("does not use a colliding description fallback to narrow the wrong tool", () => {
+  it("does not use a colliding description fallback to narrow the wrong tool, and warns once", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const copy = defineTool({
       description: "Run the fallback action.",
@@ -194,8 +187,20 @@ describe("toolResultFrom", () => {
       "tool:Run the fallback action.",
     );
 
-    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
     expect(toolResultFrom(toolResult("first_tool", { source: "first" }), copy)).toBeUndefined();
+    expect(toolResultFrom(toolResult("second_tool", { source: "second" }), copy)).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'eve could not assign a unique toolResultFrom identity for "tool:Run the fallback action."',
+      ),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Conflicting definitions: tool "first_tool" from "tools/first.ts" and tool "second_tool" from "tools/second.ts".',
+      ),
+    );
   });
 
   it("matches a connection tool result with qualified name", () => {
@@ -219,39 +224,28 @@ describe("toolResultFrom", () => {
     expect(result).toBeUndefined();
   });
 
-  it("uses loaded definitions to distinguish connections with the same URL", () => {
+  it("uses loaded definitions to distinguish connections with the same URL and description", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const first = defineMcpClientConnection({
       url: "https://mcp.example.test",
-      description: "First",
+      description: "Shared",
     });
     const second = defineMcpClientConnection({
       url: "https://mcp.example.test",
-      description: "Second",
+      description: "Shared",
     });
 
     registerDefinitionSource(
       first,
       { kind: "connection", logicalPath: "connections/first.ts", name: "first" },
-      "connection:https://mcp.example.test",
+      connectionDefinitionKey("https://mcp.example.test", "Shared"),
     );
     registerDefinitionSource(
       second,
       { kind: "connection", logicalPath: "connections/second.ts", name: "second" },
-      "connection:https://mcp.example.test",
+      connectionDefinitionKey("https://mcp.example.test", "Shared"),
     );
 
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'eve could not assign a unique toolResultFrom identity for "connection:https://mcp.example.test"',
-      ),
-    );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Conflicting definitions: connection "first" from "connections/first.ts" and connection "second" from "connections/second.ts".',
-      ),
-    );
     expect(toolResultFrom(toolResult("first__search", []), first)).toEqual({
       callId: "call_1",
       connectionToolName: "search",
@@ -259,5 +253,40 @@ describe("toolResultFrom", () => {
       toolName: "first__search",
     });
     expect(toolResultFrom(toolResult("first__search", []), second)).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  // #3085: loaded definitions match by source identity, so a shared fallback
+  // key alone should not warn at registration time.
+  it("does not warn when loaded connections share a fallback identity", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const key = connectionDefinitionKey("https://api.githubcopilot.com/mcp/", "GitHub");
+    const github = defineMcpClientConnection({
+      url: "https://api.githubcopilot.com/mcp/",
+      description: "GitHub",
+    });
+    const githubWrite = defineMcpClientConnection({
+      url: "https://api.githubcopilot.com/mcp/",
+      description: "GitHub",
+    });
+
+    registerDefinitionSource(
+      github,
+      { kind: "connection", logicalPath: "connections/github.ts", name: "github" },
+      key,
+    );
+    registerDefinitionSource(
+      githubWrite,
+      { kind: "connection", logicalPath: "connections/githubwrite.ts", name: "githubwrite" },
+      key,
+    );
+
+    expect(toolResultFrom(toolResult("github__search", []), github)?.connectionToolName).toBe(
+      "search",
+    );
+    expect(
+      toolResultFrom(toolResult("githubwrite__search", []), githubWrite)?.connectionToolName,
+    ).toBe("search");
+    expect(warn).not.toHaveBeenCalled();
   });
 });

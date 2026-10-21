@@ -15,12 +15,13 @@ import {
   type ApprovalResponseDecision,
   type ApprovalResponsePolicy,
   type ApprovalStatus,
+  type ConnectionToolAnnotations,
 } from "#approval/definition.js";
 import { isConnectionAuthorizationRequiredError } from "#connections/errors.js";
 import { connectionToolName } from "#connections/ownership.js";
 import { loadContext } from "#context/container.js";
 import { ContextKey } from "#context/key.js";
-import { isApprovalRecheck } from "#harness/approval-recheck.js";
+import { isApprovalRecheck, markApprovalRecheck } from "#harness/approval-recheck.js";
 import type { AuthorizationSignal } from "#harness/authorization.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import type { ConnectionRegistry } from "#runtime/connections/registry-types.js";
@@ -78,7 +79,7 @@ export function connectionEntry(
 ): HarnessToolDefinition {
   const label = `${displayProperName(connection.connectionName)}: ${displayTitle(toolName)}`;
   return {
-    approval: connectionApproval(connection),
+    approval: connectionApproval(registry, connection, toolName),
     deferred: true,
     description: "",
     execute: (input: unknown, options: ToolExecuteOptions) =>
@@ -150,12 +151,18 @@ async function callConnectionTool(
     return await auth.handleError(listing.error, listing.authorization);
   }
   // Validation may have run before a sign-in made the tools listable.
-  const checked = await checkCall(connection, listing.tools, toolName, rawInput);
+  const isEventAction = client.eventActions?.ownsName(toolName) === true;
+  const checked = await checkCall(connection, listing.tools, toolName, rawInput, !isEventAction);
   if ("issues" in checked) throw new Error(issuesMessage(checked.issues));
   const { input, tool } = checked;
 
   let raw: unknown;
   try {
+    if (isEventAction)
+      return await client.eventActions!.execute(tool.name, input, {
+        abortSignal: options.abortSignal,
+        callId: options.toolCallId,
+      });
     raw = await client.executeTool(tool.name, input, {
       abortSignal: options.abortSignal,
       callId: options.toolCallId,
@@ -176,18 +183,22 @@ async function checkInput(
   toolName: string,
   input: unknown,
 ): Promise<StandardSchemaV1.Result<unknown>> {
+  const client = registry.getClient(connection.connectionName);
   let tools: readonly ConnectionToolMetadata[];
   try {
-    tools = await listToolMetadata(
-      connection.connectionName,
-      registry.getClient(connection.connectionName),
-    );
+    tools = await listToolMetadata(connection, client);
   } catch (error) {
     // Only the call itself can start the sign-in that makes its tools listable.
     if (isConnectionAuthorizationRequiredError(error)) return { value: input };
     return { issues: [{ message: listingFailureMessage(connection.connectionName, error) }] };
   }
-  const checked = await checkCall(connection, tools, toolName, input);
+  const checked = await checkCall(
+    connection,
+    tools,
+    toolName,
+    input,
+    client.eventActions?.ownsName(toolName) !== true,
+  );
   return "issues" in checked ? { issues: checked.issues } : { value: checked.input };
 }
 
@@ -201,13 +212,19 @@ async function checkCall(
   tools: readonly ConnectionToolMetadata[],
   toolName: string,
   input: unknown,
+  remote = true,
 ): Promise<CallCheck> {
   const tool = tools.find((entry) => entry.name === toolName);
   if (tool === undefined) {
     return { issues: [{ message: unknownToolMessage(connection, toolName, tools) }] };
   }
+  // Provided values replace these keys at execution, so a model value for one is dropped, not rejected.
+  const provided = remote ? (connection.toolCall?.providedArguments ?? {}) : {};
+  const modelInput = Object.fromEntries(
+    Object.entries(isObject(input) ? input : {}).filter(([key]) => !Object.hasOwn(provided, key)),
+  );
   const result = await defineJsonSchema(tool.inputSchema as JsonObject)["~standard"].validate(
-    isObject(input) ? input : {},
+    modelInput,
   );
   if (result.issues === undefined) return { input: result.value as JsonObject, tool };
   return {
@@ -255,11 +272,20 @@ function unknownToolMessage(
  * phase exists only when the connection defines one; without it, the pin is
  * checked when the approved call runs.
  */
-function connectionApproval(connection: ResolvedConnectionDefinition): Approval | undefined {
+function connectionApproval(
+  registry: ConnectionRegistry,
+  connection: ResolvedConnectionDefinition,
+  toolName: string,
+): Approval | undefined {
   const { approval } = connection;
   if (approval === undefined) return undefined;
   const policy = resolveApprovalPolicy(approval);
-  const request = (context: ApprovalContext) => requestApproval(connection, policy, context);
+  const request = async (context: ApprovalContext) =>
+    requestApproval(
+      connection,
+      policy,
+      withToolAnnotations(context, await toolAnnotations(registry, connection, toolName)),
+    );
   const response = typeof approval === "function" ? undefined : approval.response;
   if (response === undefined) return request;
   return {
@@ -284,6 +310,30 @@ async function requestApproval(
     pinApprovedInstance(context.callId, connection);
   }
   return status;
+}
+
+/** What the server declared about `toolName`, or nothing when it declared none or can't list. */
+async function toolAnnotations(
+  registry: ConnectionRegistry,
+  connection: ResolvedConnectionDefinition,
+  toolName: string,
+): Promise<ConnectionToolAnnotations | undefined> {
+  try {
+    const tools = await listToolMetadata(connection, registry.getClient(connection.connectionName));
+    return tools.find((tool) => tool.name === toolName)?.annotations;
+  } catch {
+    // Input validation already reported a listing failure; a sign-in the call needs comes later.
+    return undefined;
+  }
+}
+
+function withToolAnnotations(
+  context: ApprovalContext,
+  annotations: ConnectionToolAnnotations | undefined,
+): ApprovalContext {
+  if (annotations === undefined) return context;
+  const annotated = { ...context, toolAnnotations: annotations };
+  return isApprovalRecheck(context) ? markApprovalRecheck(annotated) : annotated;
 }
 
 function parksForApproval(status: ApprovalStatus): boolean {

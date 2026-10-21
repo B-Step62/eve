@@ -21,10 +21,11 @@ import { toEntryStep, toEntryStream, toEntryTelemetry } from "#harness/execute-c
 import { REPLY_TOOL_NAME } from "#protocol/reply-tool.js";
 import type { GenerationSteering } from "#harness/generation-steering.js";
 import { interruptStreamOnFailure } from "#harness/interruptible-stream.js";
-import type { HarnessModelMessage, UserModelMessage } from "#harness/messages.js";
+import type { HarnessModelMessage } from "#harness/messages.js";
 import {
   ContentFilteredModelResponseError,
   EmptyModelResponseError,
+  ModelStreamStalledError,
 } from "#harness/model-call/errors.js";
 import { type ModelProfile, resolveModelProfile } from "#harness/model-profile.js";
 import { estimateRequestEnvelope } from "#harness/request-envelope.js";
@@ -52,7 +53,7 @@ import { requireSessionModelReference, type StepResult } from "#harness/types.js
 import type { InstrumentationAttempt } from "#instrumentation/runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { maybeCompact } from "#harness/compaction/step.js";
-import { buildGatewayAttributionHeaders } from "./model.js";
+import { buildGatewayAttributionHeaders, withGatewayTraceContext } from "./model.js";
 import { isEmptyModelResponse, rethrowNoOutputAsEmptyResponse } from "./recovery.js";
 import {
   modelInstructions,
@@ -74,6 +75,13 @@ const environment = process.env.NODE_ENV ?? "unknown";
 
 const log = createLogger("harness.tool-loop");
 
+/**
+ * How long a model stream may go without output before the AI SDK abandons it and the
+ * call retries. Generous because reasoning can stay silent for minutes; tool execution
+ * does not count. Without it, a stream that stalls without closing holds the turn forever.
+ */
+const MODEL_OUTPUT_TIMEOUT_MS = 10 * 60_000;
+
 /** How one attempt differs from the step's first: what recovery and retries change. */
 export interface ModelCallOptions {
   readonly disabledProviderTools?: ReadonlySet<string>;
@@ -90,7 +98,7 @@ interface ModelCallerInput {
   readonly model: LanguageModel;
   readonly generation: GenerationSteering;
   readonly hidesHeldText: boolean;
-  readonly turnMessages: readonly UserModelMessage[];
+  readonly turnMessages: readonly HarnessModelMessage[];
   readonly approvedTools: ReadonlySet<string>;
   readonly pendingApprovalsNote: string | undefined;
   /** The prompt as the step started it, projected for the model. */
@@ -269,6 +277,7 @@ export class ModelCaller {
         runtimeIdentity: config.runtimeIdentity,
         session: step.session,
         telemetry: step.instrumentation?.telemetry(),
+        traceContextHeaders: step.instrumentation?.gatewayTraceContextHeaders,
       });
       if (compaction.failure !== undefined) throw compaction.failure.error;
     } catch (error) {
@@ -344,7 +353,11 @@ export class ModelCaller {
     const settings = {
       headers: this.attributionHeaders,
       instructions,
-      model,
+      model: withGatewayTraceContext(
+        model,
+        this.profile,
+        this.step.instrumentation?.gatewayTraceContextHeaders,
+      ),
       onLanguageModelCallEnd: (event: LanguageModelCallEndEvent) => {
         if (generation.interrupted) return;
         this.interruptedUsage = extractTokenUsageDelta({
@@ -369,6 +382,7 @@ export class ModelCaller {
       runtimeContext,
       stopWhen: isStepCount(1),
       telemetry: toEntryTelemetry(attempt?.telemetry, catalog.resolve),
+      timeout: { chunkMs: MODEL_OUTPUT_TIMEOUT_MS, firstChunkMs: MODEL_OUTPUT_TIMEOUT_MS },
       toolApproval: buildToolApproval({
         abortSignal: generation.signal,
         approvedTools: this.input.approvedTools,
@@ -388,9 +402,14 @@ export class ModelCaller {
       await attempt?.complete();
       return result;
     } catch (error) {
-      if (generation.interrupted) await attempt?.complete();
+      // A steered or cancelled generation stopped on purpose; only other failures are errors.
+      if (generation.interrupted || generation.signal.aborted) await attempt?.complete();
       else await attempt?.fail(error);
       generation.check();
+      // Only the output timeout above aborts the stream without aborting our signal.
+      if (isAbortError(error) && !generation.signal.aborted) {
+        throw new ModelStreamStalledError({ cause: error });
+      }
       return rethrowNoOutputAsEmptyResponse(error);
     }
   }
@@ -432,11 +451,11 @@ export class ModelCaller {
       ...(await Promise.all([stepResultPromise, streamResult.responseMessages])),
       catalog.resolve,
     );
-    assertUsableResponse(
-      stepResult,
-      accumulatedResponseMessages,
-      inlineAuthorizationResults.length > 0 || trailingInlineToolResultParts.length > 0,
-    );
+    assertUsableResponse(stepResult, accumulatedResponseMessages, {
+      allowEmptyStop: !step.hasDelegatedCaller,
+      hasInlineResults:
+        inlineAuthorizationResults.length > 0 || trailingInlineToolResultParts.length > 0,
+    });
     const skipped = answerSkippedToolCalls(stepResult, catalog);
     await emitStepActions(
       step.publish,
@@ -480,24 +499,30 @@ export class ModelCaller {
 }
 
 /**
- * A filtered response fails the step, and an empty one, without output or any tool result, is
- * retried by the empty-response recovery.
+ * A filtered response fails the step. A successful empty `stop` is usable only
+ * when no delegated caller needs a reply.
  */
 function assertUsableResponse(
   stepResult: HarnessStepResult,
   responseMessages: Parameters<typeof extractToolResultCallIds>[0],
-  hasInlineResults: boolean,
+  options: { readonly allowEmptyStop: boolean; readonly hasInlineResults: boolean },
 ): void {
   if (stepResult.finishReason === "content-filter") {
     throw new ContentFilteredModelResponseError(
       readGatewayGenerationId(stepResult.providerMetadata),
     );
   }
+  if (options.allowEmptyStop && stepResult.finishReason === "stop") return;
   if (
     isEmptyModelResponse(stepResult) &&
     extractToolResultCallIds(responseMessages).size === 0 &&
-    !hasInlineResults
+    !options.hasInlineResults
   ) {
     throw new EmptyModelResponseError();
   }
+}
+
+/** An aborted stream surfaces as `AbortError`; an aborted provider fetch rejects with the reason. */
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
 }

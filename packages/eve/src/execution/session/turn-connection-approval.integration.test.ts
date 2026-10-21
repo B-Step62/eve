@@ -16,7 +16,11 @@ import {
   getApprovalAuditState,
   markApprovalCandidateAuthorizationRequired,
 } from "#harness/hitl/candidates.js";
-import { CallbackBaseUrlKey, setPendingAuthorization } from "#harness/authorization.js";
+import { CallbackBaseUrlKey } from "#harness/authorization.js";
+
+import { withSignIns } from "#harness/hitl/sign-ins.js";
+import { readHitlState, writeHitlState } from "#harness/hitl/requests.js";
+
 import { ConnectionAuthorizationRequiredError } from "#connections/errors.js";
 import { defineInteractiveAuthorization } from "#shared/connection-types.js";
 import { suspendedSteps } from "#harness/session-machine/view.js";
@@ -629,17 +633,15 @@ describe("turn connection approval restoration", () => {
         challenge: { url: "https://example.com/sign-in" },
       },
     ];
-    fixture.updateSession((session) => ({
-      ...session,
-      state: setPendingAuthorization(
-        markApprovalCandidateAuthorizationRequired({
-          state: session.state,
-          candidateId: candidate.candidateId,
-          authorizationChallenges: challenges,
-        }),
-        { challenges },
-      ),
-    }));
+    fixture.updateSession((session) => {
+      const state = markApprovalCandidateAuthorizationRequired({
+        state: session.state,
+        candidateId: candidate.candidateId,
+        authorizationChallenges: challenges,
+      });
+      const signIns = withSignIns(readHitlState(state).signIns, challenges);
+      return { ...session, state: writeHitlState({ state }, { signIns }).state };
+    });
     clearDurableDynamicCallbacks(sessionId);
     const start = fixture.events.length;
     await fixture.step({
@@ -703,8 +705,8 @@ describe("turn connection approval restoration", () => {
         getApprovalAuditState(readDurableSession(resumed.sessionState).state).settlements,
       ).toEqual([expect.objectContaining({ outcome: "allowed", requestId: request.requestId })]);
       expect(fixture.fetch).toHaveBeenCalledOnce();
-      // Bob approved Alice's call, so the approved request goes out as Bob.
-      expect(callerHeader(fixture.fetch.mock.calls[0])).toBe("bob");
+      // Bob supplies consent; the connection request still uses Alice's credentials.
+      expect(callerHeader(fixture.fetch.mock.calls[0])).toBe("alice");
       expect(suspendedSteps(readDurableSession(resumed.sessionState).state)).toEqual([]);
       expect(resumed.serializedContext).not.toHaveProperty("eve.pendingConnectionCalls");
       expect(fixture.events.filter((event) => event.type === "turn.started")).toHaveLength(1);

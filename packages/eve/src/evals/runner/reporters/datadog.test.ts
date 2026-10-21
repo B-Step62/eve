@@ -484,6 +484,58 @@ describe("Datadog", () => {
     ]);
   });
 
+  it("names labeled assertion metrics by their label", async () => {
+    const { config, experiment } = makeConfig({ recordInputs: false });
+    const reporter = Datadog(config);
+    const result = makeEvalResult({
+      assertions: [
+        {
+          name: "score [grounding]",
+          key: "grounding",
+          score: 0.8,
+          severity: "soft",
+          errored: false,
+        },
+        {
+          name: "judge.boolean [citation]",
+          key: "citation",
+          score: 1,
+          severity: "gate",
+          threshold: 1,
+          passed: true,
+          errored: false,
+        },
+      ],
+    });
+
+    await reporter.onRunStart([makeEval()], makeTarget());
+    await reporter.onEvalComplete(result);
+
+    expect(experiment.submitEvaluationMetrics.mock.calls[0]?.[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "grounding", value: 0.8 }),
+        expect.objectContaining({ label: "gate_citation", value: 1 }),
+      ]),
+    );
+  });
+
+  it("omits assertion_passed when no member of a group has a verdict", async () => {
+    const { config, experiment } = makeConfig({ recordInputs: false });
+    const reporter = Datadog(config);
+    const result = makeEvalResult({
+      assertions: [{ name: "judge.boolean", score: 0.9, severity: "soft", errored: false }],
+    });
+
+    await reporter.onRunStart([makeEval()], makeTarget());
+    await reporter.onEvalComplete(result);
+
+    expect(experiment.submitEvaluationMetrics.mock.calls[0]?.[1]).toContainEqual({
+      label: "judge_boolean",
+      value: 0.9,
+      tags: { assertion_severity: "soft", assertion_count: "1" },
+    });
+  });
+
   it("records inputs, outputs, expected outputs, and runtime links in a shared dataset by default", async () => {
     const { client, config, datasets, experiment, lines } = makeConfig({ experimentName: "run-1" });
     const reporter = Datadog(config);

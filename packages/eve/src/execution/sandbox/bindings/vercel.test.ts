@@ -47,12 +47,13 @@ function createMockDetachedCommand(
 function createMockSandbox(input: {
   name: string;
   snapshotId?: string;
+  sourceSnapshotId?: string;
   status?: string;
   tags?: Record<string, string>;
 }) {
   const files = new Map<string, Buffer>();
   let tags = input.tags;
-  return {
+  const sandbox = {
     currentSnapshotId: input.snapshotId ?? "",
     delete: vi.fn().mockResolvedValue(undefined),
     fs: {
@@ -60,6 +61,7 @@ function createMockSandbox(input: {
       unlink: vi.fn().mockResolvedValue(undefined),
     },
     name: input.name,
+    sourceSnapshotId: input.sourceSnapshotId,
     readFile: vi.fn(async (file: { path: string }): Promise<object | null> => {
       const content = files.get(file.path);
       return content === undefined ? null : Readable.from([content]);
@@ -74,7 +76,11 @@ function createMockSandbox(input: {
             }
           : createMockCommandResult(),
       ),
-    snapshot: vi.fn().mockResolvedValue({ snapshotId: `${input.name}-snapshot` }),
+    // Like the SDK, a snapshot becomes the sandbox's `currentSnapshotId`.
+    snapshot: vi.fn(async () => {
+      sandbox.currentSnapshotId = `${input.name}-snapshot`;
+      return { snapshotId: sandbox.currentSnapshotId };
+    }),
     status: input.status ?? "running",
     stop: vi.fn().mockResolvedValue(undefined),
     get tags() {
@@ -93,6 +99,106 @@ function createMockSandbox(input: {
       },
     ),
   };
+  return sandbox;
+}
+
+/**
+ * `Sandbox.create` returning `sandboxes` in order, except that a build's
+ * template pointer (named exactly by the template key) gets a fresh mock.
+ */
+function createSandboxesInOrder(...sandboxes: ReadonlyArray<ReturnType<typeof createMockSandbox>>) {
+  const queue = [...sandboxes];
+  return vi.fn(async (options: MockCreateOptions) =>
+    TEMPLATE_POINTER_NAME.test(options.name)
+      ? createMockSandbox({ ...mockFromCreateOptions(options), status: "stopped" })
+      : queue.shift(),
+  );
+}
+
+interface MockCreateOptions {
+  name: string;
+  source?: { snapshotId?: string; type: string };
+  tags?: Record<string, string>;
+}
+
+/** What a sandbox created with `options` reports, like the SDK: its name, tags and source snapshot. */
+function mockFromCreateOptions(options: MockCreateOptions) {
+  return {
+    name: options.name,
+    sourceSnapshotId: options.source?.type === "snapshot" ? options.source.snapshotId : undefined,
+    tags: options.tags,
+  };
+}
+
+const TEMPLATE_POINTER_NAME = /^eve-sbx-tpl-vercel-[0-9a-f]{32}$/u;
+
+/**
+ * A Sandbox API stand-in that keeps sandboxes by name and snapshots by ID the
+ * way the real one does: a taken name rejects `create` with 400, `delete`
+ * removes whatever holds the name, and a snapshot outlives its sandbox.
+ * `create` hands out `presets` in order before making fresh mocks.
+ */
+function createFakeVercelProvider(...presets: ReadonlyArray<ReturnType<typeof createMockSandbox>>) {
+  const sandboxes = new Map<string, ReturnType<typeof createMockSandbox>>();
+  const snapshots = new Set<string>();
+  const queue = [...presets];
+  const missing = () => Object.assign(new Error("Not found"), { response: { status: 404 } });
+  function add(sandbox: ReturnType<typeof createMockSandbox>) {
+    const name = sandbox.name;
+    sandboxes.set(name, sandbox);
+    sandbox.delete.mockImplementation(async () => {
+      if (!sandboxes.delete(name)) throw missing();
+    });
+    // Stopping a sandbox someone else deleted fails like the real API: 404.
+    sandbox.stop.mockImplementation(async () => {
+      if (sandboxes.get(name) !== sandbox) throw missing();
+    });
+    sandbox.snapshot.mockImplementation(async () => {
+      snapshots.add(`${name}-snapshot`);
+      return { snapshotId: `${name}-snapshot` };
+    });
+    return sandbox;
+  }
+  const sandboxModule = {
+    Sandbox: {
+      create: vi.fn(async (options: MockCreateOptions) => {
+        if (sandboxes.has(options.name)) {
+          throw Object.assign(
+            new Error(`A sandbox with the name '${options.name}' already exists for this project.`),
+            { response: { status: 400 } },
+          );
+        }
+        const preset = TEMPLATE_POINTER_NAME.test(options.name) ? undefined : queue.shift();
+        const sandbox = preset ?? createMockSandbox(mockFromCreateOptions(options));
+        sandbox.name = options.name;
+        return add(sandbox);
+      }),
+      get: vi.fn(async (options: { name: string }) => sandboxes.get(options.name) ?? null),
+    },
+    Snapshot: {
+      get: vi.fn(async (options: { snapshotId: string }) => {
+        if (!snapshots.has(options.snapshotId)) throw missing();
+        return { snapshotId: options.snapshotId, status: "created" };
+      }),
+    },
+  };
+  /** Puts a sandbox under the template key before any build runs. */
+  function seedTemplate(name: string, sandbox: ReturnType<typeof createMockSandbox>) {
+    sandbox.name = name;
+    add(sandbox);
+  }
+  const pointer = () =>
+    [...sandboxes.values()].find((sandbox) => TEMPLATE_POINTER_NAME.test(sandbox.name));
+  return { pointer, sandboxModule, sandboxes, seedTemplate, snapshots };
+}
+
+/** The template key a build of this provider configuration uses. */
+async function templateKeyOf(build: (module: object) => Promise<unknown>): Promise<string> {
+  const fake = createFakeVercelProvider();
+  await build(fake.sandboxModule);
+  const name = fake.pointer()?.name;
+  if (name === undefined) throw new Error("build published no template");
+  return name;
 }
 
 function createVercelSandbox(input: Parameters<typeof createVercelImplementation>[0] = {}) {
@@ -112,7 +218,7 @@ async function createTestVercelSession() {
   const sessionSandbox = createMockSandbox({ name: "session" });
   const sandboxModule = {
     Sandbox: {
-      create: vi.fn().mockResolvedValueOnce(templateSandbox).mockResolvedValueOnce(sessionSandbox),
+      create: createSandboxesInOrder(templateSandbox, sessionSandbox),
       get: vi.fn().mockResolvedValue(null),
     },
   };
@@ -187,6 +293,45 @@ describe("createVercelSandbox", () => {
     );
   });
 
+  it("creates sandboxes with Vercel API credentials from the environment", async () => {
+    vi.stubEnv("VERCEL_TEAM_ID", "team_env");
+    vi.stubEnv("VERCEL_PROJECT_ID", "prj_env");
+    vi.stubEnv("VERCEL_TOKEN", "token_env");
+    const sandboxModule = {
+      Sandbox: {
+        create: createSandboxesInOrder(
+          createMockSandbox({ name: "template" }),
+          createMockSandbox({ name: "session" }),
+        ),
+        get: vi.fn().mockResolvedValue(null),
+      },
+    };
+    const provider = createVercelSandbox({
+      loadSandboxModule: async () => sandboxModule as never,
+    });
+
+    await provider.prepare({ appRoot: "/tmp/test-app-root", seedFiles: [] });
+    await provider.openSession({
+      appRoot: "/tmp/test-app-root",
+      prepared: { snapshotId: "prepared-snapshot" },
+      sandboxName: "session-key",
+    });
+
+    const credentials = { projectId: "prj_env", teamId: "team_env", token: "token_env" };
+    expect(sandboxModule.Sandbox.create.mock.calls.map(([options]) => options)).toEqual([
+      expect.objectContaining({ ...credentials, image: VERCEL_EVE_SANDBOX_IMAGE }),
+      // The template pointer, then the session.
+      expect.objectContaining({
+        ...credentials,
+        source: expect.objectContaining({ type: "snapshot" }),
+      }),
+      expect.objectContaining({
+        ...credentials,
+        source: expect.objectContaining({ type: "snapshot" }),
+      }),
+    ]);
+  });
+
   it("reuses template identity until authored source or resources change", async () => {
     async function prepareName(input: {
       createOptions?: NonNullable<
@@ -204,7 +349,8 @@ describe("createVercelSandbox", () => {
           ({ Sandbox: { create, get: vi.fn().mockResolvedValue(null) } }) as never,
       });
       await provider.prepare({ appRoot: "/tmp/test-app-root", ...input });
-      return create.mock.calls[0]?.[0].name;
+      return create.mock.calls.find(([options]) => TEMPLATE_POINTER_NAME.test(options.name))?.[0]
+        .name;
     }
 
     const first = await prepareName({ sourceRevision: "revision-a" });
@@ -229,7 +375,7 @@ describe("createVercelSandbox", () => {
     const templateSandbox = createMockSandbox({ name: "template-key" });
     const sandboxModule = {
       Sandbox: {
-        create: vi.fn().mockResolvedValueOnce(templateSandbox),
+        create: createSandboxesInOrder(templateSandbox),
         get: vi.fn().mockResolvedValueOnce(null),
       },
     };
@@ -253,7 +399,7 @@ describe("createVercelSandbox", () => {
     const templateSandbox = createMockSandbox({ name: "template-key" });
     const sandboxModule = {
       Sandbox: {
-        create: vi.fn().mockResolvedValueOnce(templateSandbox),
+        create: createSandboxesInOrder(templateSandbox),
         get: vi.fn().mockResolvedValueOnce(null),
       },
     };
@@ -344,19 +490,7 @@ describe("createVercelSandbox", () => {
             ]) as never)
           : createMockCommandResult(),
     );
-    const sandboxModule = {
-      Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
-        get: vi
-          .fn()
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(null),
-      },
-    };
+    const { sandboxModule } = createFakeVercelProvider(templateSandbox, sessionSandbox);
 
     const provider = createTestVercelSandbox({
       loadSandboxModule: async () => sandboxModule as never,
@@ -408,10 +542,7 @@ describe("createVercelSandbox", () => {
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
       Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
+        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -443,10 +574,7 @@ describe("createVercelSandbox", () => {
   it("applies a 30-minute default timeout to Sandbox.create", async () => {
     const templateSandbox = createMockSandbox({ name: "template" });
     const sessionSandbox = createMockSandbox({ name: "session" });
-    const create = vi
-      .fn()
-      .mockResolvedValueOnce(templateSandbox)
-      .mockResolvedValueOnce(sessionSandbox);
+    const create = createSandboxesInOrder(templateSandbox, sessionSandbox);
     const sandboxModule = {
       Sandbox: {
         create,
@@ -468,8 +596,9 @@ describe("createVercelSandbox", () => {
       sandboxName: "session-key",
     });
 
-    expect(create).toHaveBeenCalledTimes(2);
-    const [templateArgs, sessionArgs] = create.mock.calls;
+    // The template, its pointer, then the session.
+    expect(create).toHaveBeenCalledTimes(3);
+    const [templateArgs, , sessionArgs] = create.mock.calls;
     expect(templateArgs?.[0]).toMatchObject({ timeout: 30 * 60 * 1_000 });
     expect(sessionArgs?.[0]).toMatchObject({ timeout: 30 * 60 * 1_000 });
   });
@@ -493,6 +622,48 @@ describe("createVercelSandbox", () => {
         mounts: { "/workspace/repos": { drive: "team-drive", mode: "read-write" } },
       }),
     );
+  });
+
+  describe("session identity and cleanup", () => {
+    function session() {
+      const fake = createFakeVercelProvider();
+      const provider = createTestVercelSandbox({
+        loadDeleteSandboxModule: async () => fake.sandboxModule as never,
+        loadSandboxModule: async () => fake.sandboxModule as never,
+      });
+      const start = (
+        input: { readonly networkPolicy?: "deny-all"; readonly snapshotId?: string } = {},
+      ) =>
+        provider.start({
+          appRoot: "/tmp/test-app-root",
+          options: input.networkPolicy === undefined ? {} : { networkPolicy: input.networkPolicy },
+          prepared: { snapshotId: input.snapshotId ?? "snapshot-a" },
+          sandboxName: "session-key",
+        });
+      const end = (state: { readonly sandboxName: string; readonly version: 3 } | null) =>
+        provider.endSession({ appRoot: "/tmp/test-app-root", sandboxName: "session-key", state });
+      return { end, fake, start };
+    }
+
+    it("keeps one sandbox per session key across concurrent starts, open options, and deployments", async () => {
+      const { fake, start } = session();
+
+      const [first, second] = await Promise.all([start(), start()]);
+      const later = await start({ networkPolicy: "deny-all", snapshotId: "snapshot-b" });
+
+      expect(fake.sandboxes.size).toBe(1);
+      expect(second.state).toEqual(first.state);
+      expect(later.state).toEqual(first.state);
+    });
+
+    it("deletes the session's sandbox by key when no state was recorded, and succeeds once it is gone", async () => {
+      const { end, fake, start } = session();
+      await start();
+
+      await end(null);
+      expect(fake.sandboxes.size).toBe(0);
+      await expect(end(null)).resolves.toBeUndefined();
+    });
   });
 
   describe("tool sessions", () => {
@@ -664,6 +835,253 @@ describe("createVercelSandbox", () => {
     });
   });
 
+  describe("shared templates", () => {
+    const buildWith = (prepare?: () => Promise<void> | void) => async (sandboxModule: object) =>
+      await createTestVercelSandbox({
+        loadSandboxModule: async () => sandboxModule as never,
+        prepare,
+      }).prepare({ appRoot: "/tmp/test-app-root", seedFiles: [] });
+
+    /** The build-private sandboxes: everything a build created except the template pointer. */
+    const privateSandboxes = (fake: ReturnType<typeof createFakeVercelProvider>) =>
+      fake.sandboxModule.Sandbox.create.mock.results
+        .map((result) => result.value as Promise<ReturnType<typeof createMockSandbox>>)
+        .filter((_, index) => {
+          const name = fake.sandboxModule.Sandbox.create.mock.calls[index]?.[0].name ?? "";
+          return !TEMPLATE_POINTER_NAME.test(name);
+        });
+
+    it("lets two builds that look the template up at once both succeed", async () => {
+      const fake = createFakeVercelProvider();
+      let lookups = 0;
+      let releaseLookups!: () => void;
+      const bothLookedUp = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      // Both builds look the template up before either one publishes it.
+      fake.sandboxModule.Sandbox.get.mockImplementation(async (options: { name: string }) => {
+        const found = fake.sandboxes.get(options.name) ?? null;
+        if (++lookups === 2) releaseLookups();
+        await bothLookedUp;
+        return found;
+      });
+      const build = buildWith();
+
+      const results = await Promise.allSettled([
+        build(fake.sandboxModule),
+        build(fake.sandboxModule),
+      ]);
+
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+      for (const result of results) {
+        if (result.status !== "fulfilled") continue;
+        expect(fake.snapshots.has(result.value.snapshotId ?? "")).toBe(true);
+      }
+      for (const sandbox of await Promise.all(privateSandboxes(fake))) {
+        expect(sandbox.snapshot).toHaveBeenCalledTimes(1);
+      }
+      // Only the pointer remains: each build deleted the sandbox it prepared in.
+      expect([...fake.sandboxes.keys()]).toEqual([fake.pointer()?.name]);
+    });
+
+    it("never prepares one sandbox for two builds", async () => {
+      const fake = createFakeVercelProvider();
+      let finishFirst!: () => void;
+      const firstFinished = new Promise<void>((resolve) => {
+        finishFirst = resolve;
+      });
+      const prepare = vi
+        .fn<() => Promise<void>>()
+        .mockImplementationOnce(async () => await firstFinished)
+        .mockResolvedValue(undefined);
+      const build = buildWith(prepare);
+
+      const first = build(fake.sandboxModule);
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+      // The second build starts while the first is still preparing, and doesn't wait for it.
+      const second = await build(fake.sandboxModule);
+      finishFirst();
+      const firstResult = await first;
+
+      const [firstSandbox, secondSandbox] = await Promise.all(privateSandboxes(fake));
+      expect(firstResult).toEqual({ snapshotId: `${firstSandbox?.name}-snapshot` });
+      expect(second).toEqual({ snapshotId: `${secondSandbox?.name}-snapshot` });
+      expect(firstSandbox?.snapshot).toHaveBeenCalledTimes(1);
+      expect(secondSandbox?.snapshot).toHaveBeenCalledTimes(1);
+      // The first build to finish published the template; the other kept its own snapshot.
+      expect(fake.pointer()?.sourceSnapshotId).toBe(second.snapshotId);
+    });
+
+    it("reuses a published template without preparing again", async () => {
+      const fake = createFakeVercelProvider();
+      const prepare = vi.fn();
+      const build = buildWith(prepare);
+
+      const first = await build(fake.sandboxModule);
+      const creates = fake.sandboxModule.Sandbox.create.mock.calls.length;
+      const second = await build(fake.sandboxModule);
+
+      expect(second).toEqual(first);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(fake.sandboxModule.Sandbox.create).toHaveBeenCalledTimes(creates);
+    });
+
+    it("leaves no template behind when preparation fails, so the next build prepares", async () => {
+      const fake = createFakeVercelProvider();
+      const prepare = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("prepare failed"))
+        .mockResolvedValue(undefined);
+      const build = buildWith(prepare);
+
+      await expect(build(fake.sandboxModule)).rejects.toThrow(/prepare failed/);
+      expect(fake.sandboxes.size).toBe(0);
+
+      const next = await build(fake.sandboxModule);
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(fake.pointer()?.sourceSnapshotId).toBe(next.snapshotId);
+    });
+
+    it("ignores the automatic snapshot of a template whose build was abandoned", async () => {
+      const templateKey = await templateKeyOf(buildWith());
+      const fake = createFakeVercelProvider();
+      // A persistent template sandbox Vercel snapshotted when its timeout stopped it mid-preparation.
+      const abandoned = createMockSandbox({
+        name: templateKey,
+        snapshotId: "abandoned-auto-snapshot",
+        status: "stopped",
+      });
+      fake.seedTemplate(templateKey, abandoned);
+      fake.snapshots.add("abandoned-auto-snapshot");
+      const prepare = vi.fn();
+
+      const result = await buildWith(prepare)(fake.sandboxModule);
+
+      expect(result.snapshotId).not.toBe("abandoned-auto-snapshot");
+      expect(fake.snapshots.has(result.snapshotId ?? "")).toBe(true);
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(abandoned.snapshot).not.toHaveBeenCalled();
+      expect(fake.pointer()?.sourceSnapshotId).toBe(result.snapshotId);
+    });
+
+    it("lets two builds replace the same stale template without deleting each other's work", async () => {
+      const templateKey = await templateKeyOf(buildWith());
+      const fake = createFakeVercelProvider();
+      // A pointer to a snapshot that has since expired.
+      fake.seedTemplate(
+        templateKey,
+        createMockSandbox({
+          name: templateKey,
+          sourceSnapshotId: "expired",
+          status: "stopped",
+        }),
+      );
+      let lookups = 0;
+      let releaseLookups!: () => void;
+      const bothLookedUp = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      fake.sandboxModule.Sandbox.get.mockImplementation(async (options: { name: string }) => {
+        const found = fake.sandboxes.get(options.name) ?? null;
+        if (++lookups === 2) releaseLookups();
+        await bothLookedUp;
+        return found;
+      });
+      const build = buildWith();
+
+      const results = await Promise.all([build(fake.sandboxModule), build(fake.sandboxModule)]);
+
+      const snapshotIds = results.map((result) => result.snapshotId ?? "");
+      expect(new Set(snapshotIds).size).toBe(2);
+      for (const snapshotId of snapshotIds) expect(fake.snapshots.has(snapshotId)).toBe(true);
+      for (const sandbox of await Promise.all(privateSandboxes(fake))) {
+        expect(sandbox.snapshot).toHaveBeenCalledTimes(1);
+        expect(sandbox.delete).toHaveBeenCalledTimes(1);
+      }
+      expect(snapshotIds).toContain(fake.pointer()?.sourceSnapshotId);
+    });
+
+    it("keeps a build's snapshot when another build deletes its new pointer mid-publish", async () => {
+      const templateKey = await templateKeyOf(buildWith());
+      const fake = createFakeVercelProvider();
+      const stale = createMockSandbox({
+        name: templateKey,
+        sourceSnapshotId: "expired",
+        status: "stopped",
+      });
+      fake.seedTemplate(templateKey, stale);
+      let lookups = 0;
+      let releaseLookups!: () => void;
+      const bothLookedUp = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      fake.sandboxModule.Sandbox.get.mockImplementation(async (options: { name: string }) => {
+        const found = fake.sandboxes.get(options.name) ?? null;
+        if (++lookups === 2) releaseLookups();
+        await bothLookedUp;
+        return found;
+      });
+      /*
+       * A deletes the stale pointer and creates its own; before A stops it,
+       * B's delete of the stale pointer it saw removes A's new one by name.
+       */
+      let pointerCreated!: () => void;
+      const firstPointerCreated = new Promise<void>((resolve) => {
+        pointerCreated = resolve;
+      });
+      let staleDeletedTwice!: () => void;
+      const secondStaleDelete = new Promise<void>((resolve) => {
+        staleDeletedTwice = resolve;
+      });
+      const deleteByName = stale.delete.getMockImplementation();
+      stale.delete.mockImplementation(async () => {
+        if (stale.delete.mock.calls.length === 1) return await deleteByName?.();
+        await firstPointerCreated;
+        await deleteByName?.();
+        staleDeletedTwice();
+      });
+      const create = fake.sandboxModule.Sandbox.create.getMockImplementation();
+      let pointers = 0;
+      fake.sandboxModule.Sandbox.create.mockImplementation(async (options: MockCreateOptions) => {
+        const sandbox = await create!(options);
+        if (TEMPLATE_POINTER_NAME.test(options.name) && ++pointers === 1) {
+          const stop = sandbox.stop.getMockImplementation();
+          sandbox.stop.mockImplementation(async () => {
+            pointerCreated();
+            await secondStaleDelete;
+            await stop?.();
+          });
+        }
+        return sandbox;
+      });
+      const build = buildWith();
+
+      const results = await Promise.allSettled([
+        build(fake.sandboxModule),
+        build(fake.sandboxModule),
+      ]);
+
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+      for (const result of results) {
+        if (result.status !== "fulfilled") continue;
+        expect(fake.snapshots.has(result.value.snapshotId ?? "")).toBe(true);
+      }
+      // The second build's pointer replaced the one it deleted.
+      expect(pointers).toBe(2);
+    });
+
+    it("keeps the author's tags on the published template", async () => {
+      const fake = createFakeVercelProvider();
+
+      await createTestVercelSandbox({
+        createOptions: { tags: { team: "x" } },
+        loadSandboxModule: async () => fake.sandboxModule as never,
+      }).prepare({ appRoot: "/tmp/test-app-root", seedFiles: [] });
+
+      expect(fake.pointer()?.tags).toEqual({ team: "x" });
+    });
+  });
+
   it("forwards author source to template create as the base layer", async () => {
     /*
      * The real Vercel SDK pre-populates `currentSnapshotId` on a
@@ -681,10 +1099,7 @@ describe("createVercelSandbox", () => {
       snapshotId: "author-snap",
     });
     const sessionSandbox = createMockSandbox({ name: "session" });
-    const create = vi
-      .fn()
-      .mockResolvedValueOnce(templateSandbox)
-      .mockResolvedValueOnce(sessionSandbox);
+    const create = createSandboxesInOrder(templateSandbox, sessionSandbox);
     const sandboxModule = {
       Sandbox: {
         create,
@@ -707,8 +1122,9 @@ describe("createVercelSandbox", () => {
       sandboxName: "session-key",
     });
 
-    expect(create).toHaveBeenCalledTimes(2);
-    const [templateArgs, sessionArgs] = create.mock.calls;
+    // The template, its pointer, then the session.
+    expect(create).toHaveBeenCalledTimes(3);
+    const [templateArgs, , sessionArgs] = create.mock.calls;
     expect(templateArgs?.[0]).toMatchObject({
       source: { snapshotId: "author-snap", type: "snapshot" },
     });
@@ -791,10 +1207,7 @@ describe("createVercelSandbox", () => {
     });
     const sandboxModule = {
       Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
+        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -832,10 +1245,7 @@ describe("createVercelSandbox", () => {
     const sessionSandbox = createMockSandbox({ name: "session", status: "stopped" });
     const sandboxModule = {
       Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
+        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -916,10 +1326,7 @@ describe("createVercelSandbox", () => {
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
       Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
+        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -937,6 +1344,8 @@ describe("createVercelSandbox", () => {
       appRoot: "/tmp/test-app-root",
       sandboxName: "session-key",
     });
+
+    expect(handle.sandbox.name).toBe("session");
 
     await handle.sandbox.setNetworkPolicy({
       allow: {
@@ -961,10 +1370,7 @@ describe("createVercelSandbox", () => {
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
       Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
+        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -1045,15 +1451,12 @@ describe("createVercelSandbox", () => {
     );
   });
 
-  it("forwards env to runCommand when spawning a process", async () => {
+  it("creates with the AI_AGENT default and forwards per-command env when spawning a process", async () => {
     const templateSandbox = createMockSandbox({ name: "template" });
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
       Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
+        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -1074,6 +1477,9 @@ describe("createVercelSandbox", () => {
     vi.mocked(sessionSandbox.runCommand).mockResolvedValue(createMockDetachedCommand() as never);
     vi.mocked(sessionSandbox.runCommand).mockClear();
 
+    expect(sandboxModule.Sandbox.create).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { AI_AGENT: "eve" } }),
+    );
     await handle.sandbox.spawn({
       command: "printenv DEPLOY_ENV",
       env: { DEPLOY_ENV: "staging" },
@@ -1089,48 +1495,79 @@ describe("createVercelSandbox", () => {
     );
   });
 
-  it("forwards env to runCommand when running a command", async () => {
-    const templateSandbox = createMockSandbox({ name: "template" });
-    const sessionSandbox = createMockSandbox({ name: "session" });
-    const sandboxModule = {
-      Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
-        get: vi.fn().mockResolvedValue(null),
-      },
-    };
-
+  it("keeps native env, mounts, and network options when reopening a key with changed options", async () => {
+    const fake = createFakeVercelProvider();
     const provider = createTestVercelSandbox({
-      loadSandboxModule: async () => sandboxModule as never,
+      loadSandboxModule: async () => fake.sandboxModule as never,
     });
-
-    await provider.prepare({
+    const first = await provider.start({
       appRoot: "/tmp/test-app-root",
-      seedFiles: [],
+      sandboxName: "immutable-options",
+      prepared: {},
+      options: {
+        env: { AI_AGENT: "alice-bot", REVIEW_VALUE: "initial" },
+        mounts: { "/workspace/data": { drive: "initial-drive", mode: "read-write" } },
+        networkPolicy: "deny-all",
+      },
     });
-    const handle = await provider.openSession({
-      appRoot: "/tmp/test-app-root",
-      sandboxName: "session-key",
-    });
-
-    vi.mocked(sessionSandbox.runCommand).mockResolvedValue(createMockDetachedCommand() as never);
-    vi.mocked(sessionSandbox.runCommand).mockClear();
-
-    await handle.sandbox.run({
-      command: "printenv DEPLOY_ENV",
-      env: { DEPLOY_ENV: "production" },
-    });
-
-    expect(sessionSandbox.runCommand).toHaveBeenCalledTimes(1);
-    expect(sessionSandbox.runCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: ["-lc", "printenv DEPLOY_ENV"],
-        cmd: "bash",
-        env: { DEPLOY_ENV: "production" },
-      }),
+    const created = fake.sandboxModule.Sandbox.create.mock.calls[0]![0] as MockCreateOptions & {
+      env: Record<string, string>;
+      mounts: object;
+    };
+    const sandbox = [...fake.sandboxes.values()][0]!;
+    // The native sandbox keeps create-time env. Commands may override individual
+    // variables, but reconnecting does not change those native defaults.
+    sandbox.runCommand.mockImplementation(
+      async (command: { detached?: boolean; env?: Record<string, string> }) =>
+        command.detached
+          ? (createMockDetachedCommand([
+              {
+                data: JSON.stringify({ ...created.env, ...command.env }),
+                stream: "stdout",
+              },
+            ]) as never)
+          : createMockCommandResult(),
     );
+    const readEnv = async (handle: typeof first.handle) =>
+      JSON.parse((await handle.sandbox.run({ command: "env" })).stdout);
+    expect(await readEnv(first.handle)).toEqual({ AI_AGENT: "alice-bot", REVIEW_VALUE: "initial" });
+
+    const reopened = await provider.start({
+      appRoot: "/tmp/test-app-root",
+      sandboxName: "immutable-options",
+      prepared: { snapshotId: "new-deployment-template" },
+      options: {
+        env: { AI_AGENT: "bob-bot", REVIEW_VALUE: "changed" },
+        mounts: { "/workspace/data": { drive: "changed-drive", mode: "snapshot" } },
+        networkPolicy: "allow-all",
+      },
+    });
+    const resumed = await provider.openSession({
+      appRoot: "/tmp/test-app-root",
+      sandboxName: "immutable-options",
+      prepared: {},
+      existing: first.state,
+    });
+    expect(await readEnv(reopened.handle)).toEqual({
+      AI_AGENT: "alice-bot",
+      REVIEW_VALUE: "initial",
+    });
+    expect(await readEnv(resumed)).toEqual({ AI_AGENT: "alice-bot", REVIEW_VALUE: "initial" });
+    const overridden = await resumed.sandbox.run({
+      command: "env",
+      env: { REVIEW_VALUE: "per-command" },
+    });
+    expect(JSON.parse(overridden.stdout)).toEqual({
+      AI_AGENT: "alice-bot",
+      REVIEW_VALUE: "per-command",
+    });
+    expect(fake.sandboxModule.Sandbox.create).toHaveBeenCalledTimes(1);
+    expect(created.mounts).toEqual({
+      "/workspace/data": { drive: "initial-drive", mode: "read-write" },
+    });
+    expect(sandbox.update.mock.calls.filter(([update]) => "networkPolicy" in update)).toEqual([
+      [{ networkPolicy: "deny-all" }],
+    ]);
   });
 
   it("prepares the base runtime during sandbox init", async () => {
@@ -1138,10 +1575,7 @@ describe("createVercelSandbox", () => {
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
       Sandbox: {
-        create: vi
-          .fn()
-          .mockResolvedValueOnce(templateSandbox)
-          .mockResolvedValueOnce(sessionSandbox),
+        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -1199,7 +1633,7 @@ describe("createVercelSandbox", () => {
 
     const sandboxModule = {
       Sandbox: {
-        create: vi.fn().mockResolvedValueOnce(templateSandbox),
+        create: createSandboxesInOrder(templateSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };
@@ -1241,7 +1675,7 @@ describe("createVercelSandbox", () => {
 
     const sandboxModule = {
       Sandbox: {
-        create: vi.fn().mockResolvedValueOnce(templateSandbox),
+        create: createSandboxesInOrder(templateSandbox),
         get: vi.fn().mockResolvedValue(null),
       },
     };

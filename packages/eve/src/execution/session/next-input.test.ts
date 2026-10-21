@@ -29,6 +29,7 @@ function createMockInbox(reads: readonly ScriptedRead[]): SessionInbox {
 
   return {
     claimedTokens: [],
+    takeLeading: () => [],
     async claimSessionHook() {},
     async claimSessionHooks() {},
     drain() {
@@ -91,7 +92,7 @@ function waitInput(inbox: SessionInbox): WaitInput {
     hasWorkingTasks: () => false,
     inbox: inbox,
     cursor,
-    queue: new SessionInputQueue(),
+    queue: new SessionInputQueue([]),
   };
 }
 
@@ -109,7 +110,7 @@ function createCursor(
 }
 
 function queueOf(...deliveries: DeliverHookPayload[]): SessionInputQueue {
-  const queue = new SessionInputQueue();
+  const queue = new SessionInputQueue([]);
   for (const delivery of deliveries) queue.enqueueDelivery(delivery);
   return queue;
 }

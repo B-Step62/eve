@@ -6,7 +6,10 @@ import {
   getApprovalAuditState,
   markApprovalCandidateAuthorizationRequired,
 } from "#harness/hitl/candidates.js";
-import { setPendingAuthorization } from "#harness/authorization.js";
+
+import { withSignIns } from "#harness/hitl/sign-ins.js";
+import { readHitlState, writeHitlState } from "#harness/hitl/requests.js";
+
 import { z } from "zod";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { SessionKey } from "#context/keys.js";
@@ -57,7 +60,6 @@ function fixture(
     continuationToken: name,
     sessionId: name,
     history: [],
-    limits: outputLimit === undefined ? undefined : { maxOutputTokensPerSession: outputLimit },
     outputSchema,
   };
   const model = new MockLanguageModelV4({
@@ -175,6 +177,8 @@ function fixture(
     capabilities: { requestInput: true },
     tools,
     resolveModel: async () => model,
+    sessionUsageLimit:
+      outputLimit === undefined ? undefined : ({ window }) => window.outputTokens >= outputLimit,
     handleEvent: async (event) => {
       events.push(event);
       recorder.record(event);
@@ -402,12 +406,8 @@ it("keeps a message waiting behind a budget prompt and runs it after the grant",
 
   const waitingStart = f.events.length;
   expect((await f.drive({ message: "Also say goodbye." })).held).toEqual({ kind: "request" });
-  // The message is received into a turn that holds on the prompt; the grant resumes it.
-  expect(f.events.slice(waitingStart).map((event) => event.type)).toEqual([
-    "turn.started",
-    "message.received",
-    "turn.waiting",
-  ]);
+  // The message waits for the grant in the held turn.
+  expect(f.events.slice(waitingStart).map((event) => event.type)).toEqual(["turn.waiting"]);
   expect(f.pending().map((r) => r.kind)).toEqual(["session-limit"]);
 
   f.script.push(calls("read"), "FINAL");
@@ -447,7 +447,8 @@ it("reaches the next budget prompt after a grant without an older approval [cont
   await f.drive(f.respond("session_limit_continuation", "continue"));
   expect(f.executions).toEqual(["read"]);
   expect(f.pending().map((r) => r.kind)).toEqual(["session-limit"]);
-  expect(f.pending()[0]?.requestId).toContain(":output:2");
+  // The grant started the second usage window.
+  expect(f.pending()[0]?.requestId).toMatch(/:limit:usage:1$/u);
 });
 
 for (const pending of [true, false]) {
@@ -615,17 +616,15 @@ it("keeps the turn held while a responder signs in, and fails the sign-in on exp
       challenge: { url: "https://example.com/sign-in" },
     },
   ];
-  f.updateSession((session) => ({
-    ...session,
-    state: setPendingAuthorization(
-      markApprovalCandidateAuthorizationRequired({
-        state: session.state,
-        candidateId: candidate.candidateId,
-        authorizationChallenges: challenges,
-      }),
-      { challenges },
-    ),
-  }));
+  f.updateSession((session) => {
+    const state = markApprovalCandidateAuthorizationRequired({
+      state: session.state,
+      candidateId: candidate.candidateId,
+      authorizationChallenges: challenges,
+    });
+    const signIns = withSignIns(readHitlState(state).signIns, challenges);
+    return { ...session, state: writeHitlState({ state }, { signIns }).state };
+  });
   f.record(
     createAuthorizationRequiredEvent({
       attemptId: "notes-attempt",

@@ -32,17 +32,24 @@ import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { bindSessionInstrumentation } from "#instrumentation/runtime.js";
 import { RuntimeActionSettlementTimesKey } from "#harness/runtime-action-settlement-state.js";
-import * as agentTraceState from "#tracing/agent-trace-context-store.js";
+import { readPendingHistory, withoutPendingHistory } from "#execution/session/pending-history.js";
+import * as agentTraceState from "#tracing/eve/agent-trace-context-store.js";
 import { matchAuthorizationCallbacks } from "#execution/authorization-callback-match.js";
 import { isTurnCancellation, throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import { setChannelContext } from "#execution/channel-context.js";
-import { activeTurnId, isBetweenTurns, turnPosition } from "#harness/session-machine/view.js";
+import {
+  activeTurnId,
+  isBetweenTurns,
+  storedProjection,
+  turnPosition,
+} from "#harness/session-machine/view.js";
 import {
   currentProjection,
   enterSessionProjection,
   saveSessionProjection,
 } from "#harness/session-machine/current.js";
-import { dropClosedRecords } from "#harness/session-machine/commit.js";
+import { saveTransition, dropClosedRecords, sessionView } from "#harness/session-machine/commit.js";
+import { matchSignIns } from "#harness/session-machine/transitions.js";
 import {
   sessionStartedForResolvers,
   turnStartedForResolvers,
@@ -60,12 +67,8 @@ import { withSessionStateDelta } from "#execution/session/state-delta.js";
 import { openSessionEventPublisher } from "#execution/publish-session-events.js";
 import { createTurnEventHandler } from "#execution/session/turn-event-handler.js";
 import { derivePendingState } from "#execution/session/pending-turn-state.js";
-import {
-  CallbackBaseUrlKey,
-  clearPendingAuthorization,
-  getPendingAuthorization,
-  PendingAuthorizationResultKey,
-} from "#harness/authorization.js";
+import { CallbackBaseUrlKey, PendingAuthorizationResultKey } from "#harness/authorization.js";
+import { readHitlState } from "#harness/hitl/index.js";
 import { resolveWorkflowCallbackBaseUrl } from "#execution/workflow-callback-url.js";
 import { countRunUsage } from "#execution/agent-sessions/usage.js";
 import {
@@ -73,7 +76,10 @@ import {
   readDurableSession,
 } from "#execution/durable-session-store.js";
 import { buildRuntimeIdentity, createExecutionNodeStep } from "#execution/node-step.js";
-import { resolveEffectiveAgentRuntime } from "#execution/effective-agent-config.js";
+import {
+  resolveEffectiveAgentRuntime,
+  resolveSessionUsageLimit,
+} from "#execution/effective-agent-config.js";
 import { reconcileSessionContinuationToken } from "#execution/reconcile-session-continuation-token.js";
 import { hydrateDurableSession, refreshSessionFromTurnAgent } from "#execution/session.js";
 import { createExecutionHistoryView } from "#execution/history-view.js";
@@ -152,22 +158,20 @@ async function runSessionStepBody(
     // Outside a workflow context (e.g. tests) — getHookUrl will return undefined.
   }
 
-  const pendingAuth = getPendingAuthorization(durableSession.state);
+  const { signIns } = readHitlState(durableSession.state);
   let completedAuths: ReturnType<typeof matchAuthorizationCallbacks>["matches"] | undefined;
-  if (pendingAuth && delivery !== undefined) {
-    const { matches, remainingPayloads } = matchAuthorizationCallbacks(
-      pendingAuth,
-      delivery.payloads,
-    );
+  if (signIns.length > 0 && delivery !== undefined) {
+    const { matches, remainingPayloads } = matchAuthorizationCallbacks(signIns, delivery.payloads);
     delivery = { ...delivery, payloads: remainingPayloads };
     if (matches.length > 0) {
       const matchedAttemptIds = matches.map((match) => match.result.attemptId);
       const authResults = matches.map((match) => match.result);
       ctx.set(PendingAuthorizationResultKey, authResults);
-      durableSession = {
-        ...durableSession,
-        state: clearPendingAuthorization(durableSession.state, matchedAttemptIds),
-      };
+      // The session stops waiting on them; the turn they resume reports their completion.
+      const view = sessionView(storedProjection(durableSession.state), durableSession.state);
+      const transition = matchSignIns(view, { attemptIds: matchedAttemptIds });
+      if (transition.events.length !== 0) throw new Error("matchSignIns must not emit events.");
+      durableSession = saveTransition(durableSession, transition);
       completedAuths = matches;
       if (remainingPayloads.length === 0) delivery = undefined;
     }
@@ -205,14 +209,21 @@ async function runSessionStepBody(
           .requester
       : undefined;
   if (requester !== undefined) ctx.set(AuthKey, requester);
-  const initialSession: HarnessSession = {
-    ...hydrateDurableSession({
-      compactionOverrides: {
-        thresholdPercent: effectiveAgent.thresholdPercent,
-      },
-      durable: durableSession,
-      turnAgent: effectiveAgent.turnAgent,
-    }),
+  // History left by `create()` joins the first message's turn. It leaves state only once a
+  // deliver result carries it, so a dropped first message does not lose it.
+  const pendingHistory =
+    delivery?.payloads.some((payload) => payload.message !== undefined) === true
+      ? readPendingHistory(durableSession.state)
+      : [];
+  const hydrated = hydrateDurableSession({
+    compactionOverrides: {
+      thresholdPercent: effectiveAgent.thresholdPercent,
+    },
+    durable: durableSession,
+    turnAgent: effectiveAgent.turnAgent,
+  });
+  let initialSession: HarnessSession = {
+    ...hydrated,
     history: validateHarnessModelMessages(input.history),
   };
   const history = createExecutionHistoryView(initialSession);
@@ -288,6 +299,7 @@ async function runSessionStepBody(
   try {
     const dynamicConnections = bindDynamicConnections(ctx, bundle.resolvedAgent);
     const effectiveNode = { ...bundle.graph.root, turnAgent: effectiveAgent.turnAgent };
+    const sessionUsageLimit = resolveSessionUsageLimit(bundle);
     let compacted = false;
     const emitTurnEvent = createTurnEventHandler({
       abortSignal,
@@ -321,12 +333,20 @@ async function runSessionStepBody(
             : defaultDeliverResult(payload);
 
           if (result !== undefined && result !== null) {
-            results.push(result);
+            // `history` is framework-owned, so a channel's deliver hook cannot drop or rewrite it.
+            const history = [
+              ...(results.length === 0 ? pendingHistory : []),
+              ...(payload.history ?? []),
+            ];
+            results.push(history.length === 0 ? result : { ...result, history });
           }
         }
       } catch (error) {
         await failChannelDeliveries(error);
         throw error;
+      }
+      if (results.length > 0 && pendingHistory.length > 0) {
+        initialSession = { ...initialSession, state: withoutPendingHistory(initialSession.state) };
       }
       resolved = results.length === 0 ? undefined : results.reduce(coalesceTurnInputs);
     }
@@ -501,6 +521,7 @@ async function runSessionStepBody(
           nodeId: bundle.nodeId,
         },
         node: effectiveNode,
+        sessionUsageLimit,
         titleAttributeWrite: pendingAttributes.title,
       });
       return step(modelSession, stepInput);

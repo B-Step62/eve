@@ -163,11 +163,47 @@ An existing workflow whose inbox is not yet available returns `409 session_not_r
 A session that another eve version built returns `409 session_stranded` with the `eveVersion`
 that built it.
 
+### Send files
+
+A message can mix text and file parts. A file part's `data` is base64, a `data:` URL, or a URL:
+
+```bash
+curl -X POST https://<deployment>/eve/v1/session/wrun_A \
+  -H "Content-Type: application/json" \
+  -d '{"message":[{"type":"text","text":"Summarize this report."},{"type":"file","mediaType":"application/pdf","filename":"report.pdf","data":"data:application/pdf;base64,JVBERi0xLjQK..."}]}'
+```
+
+`uploadPolicy` sets the size cap and allowed media types, 25 MB and every type by default. A request whose inline file breaks the policy returns `413` for size or `415` for type. Inline bytes also count toward the request body limit of the platform that serves the channel. On Vercel Functions that limit is 4.5 MB, so a base64 file stops at about 3.3 MB.
+
+For larger files, upload them from the browser to your own storage and send the URL in the file part. Add `fetchFile` to load the URLs you own inside the workflow step, so the bytes never pass through the request or the workflow start payload:
+
+```ts title="agent/channels/eve.ts"
+import { eveChannel } from "eve/channels/eve";
+import { localDev, vercelOidc } from "eve/channels/auth";
+
+export default eveChannel({
+  auth: [vercelOidc(), localDev()],
+  uploadPolicy: { maxBytes: 100 * 1024 * 1024 },
+  async fetchFile(url) {
+    if (!url.startsWith("https://uploads.example.com/")) return null;
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${process.env.UPLOADS_TOKEN}` },
+    });
+    if (!response.ok) throw new Error(`Upload fetch returned HTTP ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  },
+});
+```
+
+`fetchFile` follows the [custom channel contract](./custom#file-uploads): return bytes to stage the file, or `null` for a URL that isn't yours. eve then downloads a public `https:` URL itself, and any other URL reaches the model as a note. `uploadPolicy` covers every file eve stages for the channel, including URLs that `fetchFile` loads and URLs eve downloads itself. eve checks the final bytes and the media type they prove, so a file over the cap, or one whose bytes are a disallowed type, reaches the model as a note instead of failing the request. See [Inbound attachments](../sandbox#inbound-attachments) for how eve stores files and shows them to the model.
+
 ### Stream events
 
 Stream a session as newline-delimited JSON from `GET /eve/v1/session/:sessionId/stream`. The [session protocol](../concepts/sessions-runs-and-streaming#stream-a-session) defines the event set, envelopes, cursors, and reconnection behavior.
 
 Following a stranded session's stream returns `409 session_stranded`, just like a send. The TypeScript client reports `ClientSessionStrandedError` without retrying. Pass `follow=false` to read the recorded history instead: the response ends at the durable tail, carries the `x-eve-stream-tail-index` header, and never inspects or changes the session, so it works before a reset. A reset attempts to append `session.failed` with code `session_stranded` and close the stream. Existing readers finish when they receive that terminal event.
+
+After a session ends, the World keeps its stream only for its retention period. Reading a stream past that point returns `410 session_expired`. The history is gone, so the TypeScript client fails on the first response with a `ClientError` whose `code` is `"session_expired"`, without retrying.
 
 ### Cancel a turn
 
@@ -304,6 +340,79 @@ export default eveChannel({
 ```
 
 `onMessage` must return an auth result. Return `title` alongside `auth` to set the title when the dispatch creates a session or sends the first message to a prewarmed session. A successful canonical eve HTTP message always dispatches and therefore always produces or continues a session.
+
+### Turn context
+
+`context` strings become user messages in durable session history. For context that applies to one turn only, return `clientContext` instead. It replaces the request's [`clientContext`](../guides/client/messages) for that turn: it reaches every model call in the turn and is not kept in session history.
+
+`ctx.eve.clientContext` holds the request's `clientContext` exactly as the client sent it, or `undefined` when it sent none. Use it to check or correct client-supplied state before the model sees it:
+
+```ts title="agent/channels/eve.ts"
+import { eveChannel, defaultEveAuth } from "eve/channels/eve";
+import { vercelOidc } from "eve/channels/auth";
+
+import { getVerifiedPlan } from "../lib/billing";
+
+export default eveChannel({
+  auth: [vercelOidc()],
+  async onMessage(ctx) {
+    const auth = defaultEveAuth(ctx);
+    const plan = await getVerifiedPlan(auth);
+    return { auth, clientContext: [`The user's plan is ${plan}.`] };
+  },
+});
+```
+
+- Omit `clientContext` to keep the request's context. Return `[]` to drop it.
+- The returned value takes the same shape as request `clientContext` (`ClientContextValue`, exported from `eve/channels/eve`): a string, an array of strings, or a JSON object. eve turns it into model messages the same way.
+- eve labels client-supplied entries `Client context:` for the model. Returned context is sent without the label.
+- `onMessage` runs only for requests with a message. An input response keeps the context its request sent.
+
+### Start from prior history
+
+Pass `history` to bring in conversation eve did not produce, such as a transcript your app stored, a conversation moving from another system, or a branch of an earlier exchange. The model sees each entry as a real user or assistant turn, not as a transcript inside one message.
+
+Create a session that starts from stored history and waits for its first message with `create()` on a channel address. No turn runs until a message arrives:
+
+```ts title="agent/channels/app.ts"
+import { defineChannel, POST } from "eve/channels";
+
+export default defineChannel({
+  routes: [
+    POST("/conversations/:id/session", async (req, { from, params }) => {
+      const auth = await authenticate(req);
+      // Load only conversations this caller may read.
+      const conversation = await db.conversations.findForUser(params.id!, auth);
+      const { created, session } = await from(`conversation:${conversation.id}`).create({
+        auth,
+        history: conversation.messages.map((message) => ({
+          id: message.id,
+          role: message.role, // "user" | "assistant"
+          text: message.body,
+        })),
+      });
+      if (!created) {
+        return Response.json({ error: "Conversation already has a session." }, { status: 409 });
+      }
+      return Response.json({ sessionId: session.id });
+    }),
+  ],
+});
+```
+
+The client then resumes that session by id, for example with `useEveAgent({ initialSession: { sessionId, streamIndex: 0 }, resume: true })`. `created` is `false` when a session already owned the address, or another `create()` or `send()` claimed it first. That session comes back unchanged and your `history` was not added, so check `created` before treating the session as seeded. Use a new address for each new conversation or branch.
+
+When the session at the address is [stranded](../guides/deployment/self-hosting#recover-a-stranded-session), `create()` throws `SessionStrandedError` instead of replacing it, because that session may hold the conversation you meant to import. Call `reset()` on the address, then `create()` again.
+
+`create()` returns once the new session claims its address, so a `send()` right after it reaches that session. It throws if no session claims the address within 15 seconds.
+
+`send()` accepts the same `history` option. The entries are added right before that message and its `context`, whether the send creates the session or continues it. The eve channel's `onMessage` can return `history` the same way. It applies to every message it is returned for, so return it only when the message should carry those turns.
+
+Each entry has a `role` of `"user"` or `"assistant"`, non-empty `text`, and an optional `id` that is unique within the call. Invalid history throws an `InvalidSessionHistoryError`, exported from `eve/channels`, that names the entry and the rule it broke. eve doesn't cap how many entries or how much text one call carries. Your route decides how much stored conversation to load, so trim long conversations there, for example to the newest messages. Tool calls, files, and reasoning are not supported.
+
+eve never accepts `history` from a client request body. Resolve it on the server and authorize the caller against the stored conversation.
+
+The stream publishes added entries in `history.imported`, right before the `message.received` of the turn they join. Each event message has the same `role`, `text`, and `id` you passed. `transcriptReducer()` from `eve/client` includes them, so its `{ role, text }` messages can be passed straight back as `history` to branch a session. The default client reducer renders them ahead of that turn's message with `metadata.imported` set and your `id` in `metadata.historyId`, so you can rejoin your own annotations. Message ids stay unique even when a later call reuses an `id`. After that, the entries are ordinary history: compaction, `clear()`, and handoffs treat them like any other turn.
 
 ## Clients
 

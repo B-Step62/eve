@@ -1,7 +1,11 @@
 import type { FilePart, UserContent } from "ai";
 import { REMOTE_AGENT_PROTOCOL_VERSION } from "#protocol/remote-agent-protocol.js";
 import { describe, expect, it, vi } from "vitest";
-import { WorkflowRunNotFoundError } from "#compiled/@workflow/errors/index.js";
+import {
+  RunExpiredError,
+  StreamExpiredError,
+  WorkflowRunNotFoundError,
+} from "#compiled/@workflow/errors/index.js";
 
 import { buildAdapterContext } from "#channel/adapter-context.js";
 import { callAdapterEventHandler, type ChannelAdapter } from "#channel/adapter.js";
@@ -14,6 +18,7 @@ import {
   eveChannel,
   defaultEveAuth,
   type EveChannelInput,
+  type EveMessageContext,
   type ForwardedAssertion,
   type TrustedForwarders,
 } from "#public/channels/eve.js";
@@ -488,6 +493,25 @@ describe("eveChannel — events", () => {
     });
   });
 
+  it("hands staging its fetchFile and the upload policy it holds every file to", async () => {
+    const fetchFile = vi.fn(async (url: string) =>
+      url.startsWith("https://uploads.example.com/") ? Buffer.from("ok") : null,
+    );
+    const adapter = getEveAdapter({
+      auth: none(),
+      fetchFile,
+      uploadPolicy: { allowedMediaTypes: ["image/*"], maxBytes: 4 },
+    });
+
+    await expect(adapter.fetchFile!("https://uploads.example.com/a")).resolves.toEqual(
+      Buffer.from("ok"),
+    );
+    await expect(adapter.fetchFile!("https://elsewhere.example.com/a")).resolves.toBeNull();
+    expect(adapter.uploadPolicy).toEqual({ allowedMediaTypes: ["image/*"], maxBytes: 4 });
+    // Without either option the channel keeps the framework's HTTP adapter.
+    expect(getEveAdapter({ auth: none() }).kind).toBe("http");
+  });
+
   it("passes configured event handlers through with session context", async () => {
     const observed: string[] = [];
     const adapter = getEveAdapter({
@@ -625,6 +649,19 @@ describe("eveChannel — stream cursor", () => {
     expect(await response.json()).toEqual({ error: "Session not found.", ok: false });
   });
 
+  it.each([
+    ["stream", new StreamExpiredError("Stream expired.", "test-session-id")],
+    ["run", new RunExpiredError("Run expired.", "test-session-id")],
+  ])("returns a terminal 410 when the session %s passed retention", async (_, error) => {
+    const handler = createEveStreamHandler({ auth: none() });
+    handler.getStreamTailIndex.mockRejectedValueOnce(error);
+
+    const response = await handler.fetch("https://eve.test/eve/v1/session/test-session-id/stream");
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ code: "session_expired", ok: false });
+  });
+
   it("cancels the early-opened event stream when the tail lookup fails", async () => {
     const handler = createEveStreamHandler({ auth: none() });
     const cancelled = vi.fn();
@@ -743,6 +780,82 @@ describe("eveChannel — onMessage", () => {
     const options = handler.send.mock.calls[0]?.[1] as MockSendOptions;
     expect(options.auth).toEqual(ACCEPTED_AUTH);
     expect(options.title).toBe("HTTP run");
+  });
+
+  it("shows onMessage the client's context and lets it replace that context for the turn", async () => {
+    const onMessage = vi.fn((ctx: EveMessageContext) => {
+      expect(ctx.eve.clientContext).toEqual({ plan: "pro" });
+      return { auth: defaultEveAuth(ctx), clientContext: ["Verified plan: hobby"] };
+    });
+    const handler = createEveCreateHandler({ auth: () => ACCEPTED_AUTH, onMessage });
+
+    const response = await handler.fetch(
+      createJsonMessageRequest({ clientContext: { plan: "pro" }, message: "What plan am I on?" }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    const payload = handler.send.mock.calls[0]?.[0] as SendPayload;
+    expect(payload).toMatchObject({ message: "What plan am I on?" });
+    expect(payload.context).toBeUndefined();
+    expect(readClientContext(payload)).toEqual(["Verified plan: hobby"]);
+  });
+
+  it("serializes an object returned from onMessage the same way as client objects", async () => {
+    const handler = createEveCreateHandler({
+      auth: () => ACCEPTED_AUTH,
+      onMessage: (ctx) => ({ auth: defaultEveAuth(ctx), clientContext: { plan: "hobby" } }),
+    });
+
+    const response = await handler.fetch(
+      createJsonMessageRequest({ clientContext: "plan: pro", message: "What plan am I on?" }),
+    );
+
+    expect(response.status).toBe(202);
+    const payload = handler.send.mock.calls[0]?.[0] as SendPayload;
+    expect(readClientContext(payload)).toEqual(['{"plan":"hobby"}']);
+  });
+
+  it("shows onMessage no client context when the request sent none", async () => {
+    const onMessage = vi.fn((ctx: EveMessageContext) => {
+      expect(ctx.eve.clientContext).toBeUndefined();
+      return { auth: defaultEveAuth(ctx) };
+    });
+    const handler = createEveCreateHandler({ auth: () => ACCEPTED_AUTH, onMessage });
+
+    expect((await handler.fetch(createJsonMessageRequest({ message: "hi" }))).status).toBe(202);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(readClientContext(handler.send.mock.calls[0]?.[0] as SendPayload)).toBeUndefined();
+  });
+
+  it("replaces the client's context on continue requests", async () => {
+    const handler = createEveContinueHandler({
+      auth: () => ACCEPTED_AUTH,
+      onMessage: (ctx) => ({ auth: defaultEveAuth(ctx), clientContext: ["Verified team: acme"] }),
+    });
+
+    const response = await handler.fetch(
+      createJsonMessageRequest({ clientContext: "team: other", message: "Hello" }),
+    );
+
+    expect(response.status).toBe(202);
+    const options = handler.send.mock.calls[0]?.[1] as object;
+    expect(readClientContext(options)).toEqual(["Verified team: acme"]);
+  });
+
+  it("drops the client's context when onMessage returns an empty clientContext", async () => {
+    const handler = createEveContinueHandler({
+      auth: () => ACCEPTED_AUTH,
+      onMessage: (ctx) => ({ auth: defaultEveAuth(ctx), clientContext: [] }),
+    });
+
+    const response = await handler.fetch(
+      createJsonMessageRequest({ clientContext: "team: other", message: "Hello" }),
+    );
+
+    expect(response.status).toBe(202);
+    const options = handler.send.mock.calls[0]?.[1] as object;
+    expect(readClientContext(options)).toBeUndefined();
   });
 
   it("passes first-message auth, context, and title to a prewarmed session", async () => {
@@ -991,6 +1104,77 @@ describe("eveChannel — onMessage", () => {
 });
 
 describe("eveChannel — create session idempotency", () => {
+  it.each([true, false])(
+    "accepts library handoff only with trusted forwarded provenance (%s)",
+    async (trusted) => {
+      const { AsyncLocalStorageContextManager } =
+        await import("@opentelemetry/context-async-hooks");
+      const { context } = await import("@opentelemetry/api");
+      const manager = new AsyncLocalStorageContextManager().enable();
+      context.setGlobalContextManager(manager);
+      try {
+        const handler = createEveCreateHandler({
+          auth: () => ACCEPTED_AUTH,
+          trustedForwarders: () => trusted,
+        });
+        const request = createJsonMessageRequest({
+          callback: {
+            callId: "call-1",
+            subagentName: "research",
+            token: "tok123",
+            url: "https://caller.example.com/eve/v1/callback/tok123",
+          },
+          message: "hi",
+          protocolVersion: REMOTE_AGENT_PROTOCOL_VERSION,
+          ...(trusted
+            ? {
+                forwardedPrincipal: {
+                  current: {
+                    attributes: {},
+                    authenticator: "api-key",
+                    principalId: "user",
+                    principalType: "user",
+                  },
+                },
+              }
+            : {}),
+        });
+        request.headers.set("traceparent", `00-${"a".repeat(32)}-${"b".repeat(16)}-01`);
+        request.headers.set(
+          "baggage",
+          writeForwardedParentSessionBaggage(undefined, {
+            callId: "call-1",
+            rootSessionId: "root",
+            sessionId: "parent",
+            turn: { id: "turn", sequence: 0 },
+          })!,
+        );
+        request.headers.set(
+          "x-agent-tracing",
+          JSON.stringify({
+            caller: { traceId: "a".repeat(32), spanId: "b".repeat(16), traceFlags: 1 },
+            conversationId: "handoff-conversation",
+            parentRunId: "parent",
+            parentCallId: "call-1",
+            agentName: "research",
+            capture: { emit: true, recordInputs: false, recordOutputs: false },
+          }),
+        );
+        expect((await handler.fetch(request)).status).toBe(202);
+        const options = handler.createSession.mock.calls[0]?.[0];
+        expect(options?.conversationId).toBe(trusted ? "handoff-conversation" : undefined);
+        if (trusted)
+          expect(options?.parentTraceContext?.decision).toEqual({
+            action: "record",
+            recordInputs: false,
+            recordOutputs: false,
+          });
+      } finally {
+        context.disable();
+        manager.disable();
+      }
+    },
+  );
   it("creates once for an operation id and uses it as the continuation token", async () => {
     const handler = createEveCreateHandler({ auth: () => ACCEPTED_AUTH });
 

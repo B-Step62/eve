@@ -193,7 +193,7 @@ describe.skipIf(process.platform === "win32")("connectMicrosandbox", () => {
     expect(metadataState.writeSessionMetadata).toHaveBeenLastCalledWith(
       "/tmp/eve-microsandbox-session/metadata.json",
       expect.objectContaining({
-        sandboxName: expect.stringMatching(/^eve-sbx-ses-/u),
+        sandboxName: runtime.createdSandboxName,
         stateSnapshotName: "eve-sbx-state-existing",
       }),
     );
@@ -293,6 +293,43 @@ describe.skipIf(process.platform === "win32")("MicrosandboxVm", () => {
 
     await expect(vm.shutdown()).resolves.toBeUndefined();
     expect(sandbox.detach).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { callEnv: undefined, env: undefined, expected: "eve" },
+    { callEnv: undefined, env: { AI_AGENT: "alice-bot" }, expected: "alice-bot" },
+    { callEnv: { AI_AGENT: "bob-bot" }, env: { AI_AGENT: "alice-bot" }, expected: "bob-bot" },
+  ])("sets AI_AGENT=$expected beneath environment and per-call env", async (row) => {
+    let envs: Record<string, string> | undefined;
+    const builder = {
+      args: () => builder,
+      cwd: () => builder,
+      envs: (value: Record<string, string>) => {
+        envs = value;
+        return builder;
+      },
+      user: () => builder,
+    };
+    const sandbox = {
+      async execStreamWith(_command: string, configure: (value: typeof builder) => unknown) {
+        configure(builder);
+        return createHangingExecHandleAfterExit([{ code: 0, kind: "exited" }]);
+      },
+    };
+    const vm = new MicrosandboxVm(
+      {
+        module: {} as never,
+        options: resolveMicrosandboxOptions({ env: row.env, image: MICROSANDBOX_DEFAULT_IMAGE }),
+        sessionKey: "session-key",
+      },
+      sandbox as never,
+      "sandbox-name",
+      undefined,
+    );
+
+    await vm.spawn({ command: "vercel whoami", env: row.callEnv });
+
+    expect(envs?.AI_AGENT).toBe(row.expected);
   });
 
   it("finishes streamed commands when the exec handle emits an exit event", async () => {
@@ -608,6 +645,7 @@ function createMockMicrosandboxModule(
   options: { readonly snapshots?: readonly string[]; readonly status?: string } = {},
 ) {
   let createdFromSnapshot = "";
+  let createdSandboxName = "";
   const removedSnapshots: string[] = [];
   const oldHandle = {
     status: options.status ?? "running",
@@ -626,10 +664,12 @@ function createMockMicrosandboxModule(
   const module = {
     MicrosandboxError: class extends Error {},
     Sandbox: {
-      async get() {
+      async get(name: string) {
+        if (name !== "eve-sbx-ses-old") throw new Error(`sandbox ${name} not found`);
         return oldHandle;
       },
-      builder() {
+      builder(name: string) {
+        createdSandboxName = name;
         return createMockSandboxBuilder((fromSnapshot) => {
           createdFromSnapshot = fromSnapshot;
           return createMockMicrosandbox();
@@ -639,7 +679,7 @@ function createMockMicrosandboxModule(
     Snapshot: {
       async get(snapshotName: string) {
         if (!snapshots.has(snapshotName)) {
-          throw new Error(`snapshot store unavailable for ${snapshotName}`);
+          throw new Error(`snapshot not found: ${snapshotName}`);
         }
         return {};
       },
@@ -652,6 +692,9 @@ function createMockMicrosandboxModule(
   return {
     get createdFromSnapshot() {
       return createdFromSnapshot;
+    },
+    get createdSandboxName() {
+      return createdSandboxName;
     },
     module: module as never,
     removedSnapshots,

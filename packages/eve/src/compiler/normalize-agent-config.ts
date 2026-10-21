@@ -5,6 +5,7 @@ import { normalizeLogicalPath } from "#discover/filesystem.js";
 import { normalizeAgentDefinition } from "#internal/authored-definition/core.js";
 import { formatLanguageModelGatewayId } from "#internal/runtime-model.js";
 import { classifyModelRouting } from "#internal/classify-model-routing.js";
+import { isMockModel } from "#internal/mock-model-identity.js";
 import { isChatGptModelRouting } from "#shared/chatgpt-model.js";
 import { toErrorMessage } from "#shared/errors.js";
 import { parseJsonObject, type JsonObject } from "#shared/json.js";
@@ -143,10 +144,8 @@ export async function compileAgentConfig(
 
   if (definition.limits !== undefined) {
     compiledConfig.limits = {
-      maxInputTokensPerSession: definition.limits.maxInputTokensPerSession,
-      maxOutputTokensPerSession: definition.limits.maxOutputTokensPerSession,
-      maxTokenCostUsdPerSession: definition.limits.maxTokenCostUsdPerSession,
       sessionTimeoutMs: definition.limits.sessionTimeoutMs,
+      sessionUsage: definition.limits.sessionUsage === undefined ? undefined : true,
     };
   }
 
@@ -274,6 +273,14 @@ async function normalizeAuthoredModelReference(input: {
       return {
         ...sourceBackedModel,
         contextWindowTokens: 200_000,
+      };
+    }
+
+    // Mock models have no catalog entry or real limit; a large window keeps compaction opt-in.
+    if (isMockModel(languageModel)) {
+      return {
+        ...sourceBackedModel,
+        contextWindowTokens: 1_000_000,
       };
     }
 

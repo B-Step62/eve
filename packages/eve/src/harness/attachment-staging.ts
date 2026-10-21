@@ -10,10 +10,17 @@ import { contextStorage, loadContext } from "#context/container.js";
 import { SandboxKey } from "#context/keys.js";
 import { createFrameworkUserMessage } from "#harness/messages.js";
 import { ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
-import { fileDataToBytes } from "#internal/attachments/data.js";
+import { isUnresolvedFileData, readFileData } from "#internal/attachments/data.js";
 import { EveAttachmentError } from "#internal/attachments/errors.js";
 import { createLogger } from "#internal/logging.js";
-import { readMediaMetadata } from "#internal/attachments/media-metadata.js";
+import { maxBytesOf } from "#internal/attachments/limited-read.js";
+import { readMediaMetadata, verifyMediaType } from "#internal/attachments/media-metadata.js";
+import {
+  DEFAULT_UPLOAD_POLICY,
+  isMediaTypeAllowed,
+  type UploadPolicy,
+} from "#public/channels/upload-policy.js";
+import { createPublicDownloads, type PublicDownloads } from "#internal/attachments/public-link.js";
 import { deserializeUrlFilePart, isSerializedUrlFilePart } from "#internal/attachments/url-refs.js";
 import {
   decodeSandboxRef,
@@ -23,6 +30,7 @@ import {
   type SandboxRef,
 } from "#internal/attachments/sandbox-refs.js";
 import type { SandboxSession } from "#public/definitions/sandbox.js";
+import type { SandboxAccess } from "#sandbox/state.js";
 
 /**
  * Sandbox directory where eve stages message attachments and tool-result
@@ -55,10 +63,10 @@ type ToolOutputFilePart = Extract<ToolOutputContentPart, { type: "file" }>;
 
 /**
  * Writes inbound `FilePart` bytes into the sandbox and rewrites each
- * staged part to a compact `eve-sandbox:` ref.
- *
- * Remote HTTP URLs pass through for provider-side fetches; existing
- * `eve-sandbox:` refs pass through so staging is idempotent.
+ * staged part to a compact `eve-sandbox:` ref. Links resolve through the
+ * channel's `fetchFile` or eve's public download; a file eve can't stage
+ * becomes a note. Existing `eve-sandbox:` refs pass through so staging is
+ * idempotent.
  */
 export async function stageAttachmentsForAdapter(
   content: string | UserContent,
@@ -70,11 +78,13 @@ export async function stageAttachmentsForAdapter(
   }
 
   const reconstituted = reconstitueFilePartUrls(content);
+  const policy = adapterCtx.ctx.get(ChannelKey)?.uploadPolicy;
+  const downloads = createPublicDownloads(maxBytesOf(policy ?? DEFAULT_UPLOAD_POLICY));
 
   return Promise.all(
     reconstituted.map(async (part) => {
       if (part.type === "file") {
-        return stageFilePart(part, sandbox, adapterCtx);
+        return stageFilePart(part, sandbox, adapterCtx, downloads, policy);
       }
       return part;
     }),
@@ -82,8 +92,9 @@ export async function stageAttachmentsForAdapter(
 }
 
 /**
- * Context-bound variant of {@link stageAttachmentsForAdapter}. Returns
- * the input unchanged when there is no active sandbox or no file parts.
+ * Context-bound variant of {@link stageAttachmentsForAdapter}. Without an
+ * active sandbox, every file part becomes a note: history never keeps an
+ * attachment eve did not stage.
  */
 export async function stageAttachmentsToSandbox(
   message: string | UserContent,
@@ -99,14 +110,15 @@ export async function stageAttachmentsToSandbox(
   }
 
   const container = loadContext();
-  const sandboxAccess = container.get(SandboxKey);
-  if (sandboxAccess === undefined) {
-    return message;
-  }
-
-  const sandbox = await sandboxAccess.get();
+  const sandbox = await activeSandbox(container.get(SandboxKey));
   if (sandbox === null) {
-    return message;
+    return message.map((part) =>
+      part.type === "file" &&
+      !isSandboxRefUrl(part.data) &&
+      readFileData(part.data).kind !== "reference"
+        ? attachmentNote(part, "could not be stored: no sandbox is available.")
+        : part,
+    );
   }
 
   // Build the adapter context once up front. When an adapter is bound,
@@ -131,8 +143,8 @@ export async function stageAttachmentsToSandbox(
  * Moves inline file payloads in `content` tool outputs into the sandbox and
  * leaves `eve-sandbox:` refs in their place, so durable history never
  * carries tool-result bytes. {@link hydrateSandboxAttachments} restores the
- * bytes on every model call. Without an active sandbox, messages pass
- * through unchanged.
+ * bytes on every model call. Without an active sandbox, each file becomes a
+ * note instead.
  */
 export async function stageToolResultMedia<T extends ModelMessage>(
   messages: readonly T[],
@@ -140,10 +152,7 @@ export async function stageToolResultMedia<T extends ModelMessage>(
   if (!messages.some(hasInlineToolResultFile)) {
     return [...messages];
   }
-  const sandbox = await contextStorage.getStore()?.get(SandboxKey)?.get();
-  if (sandbox === undefined || sandbox === null) {
-    return [...messages];
-  }
+  const sandbox = await activeSandbox(contextStorage.getStore()?.get(SandboxKey));
   return Promise.all(
     messages.map(async (message) => {
       if (message.role !== "tool" || !hasInlineToolResultFile(message)) {
@@ -164,18 +173,19 @@ export async function stageToolResultMedia<T extends ModelMessage>(
 /**
  * Hydrates `eve-sandbox:` file refs for a single model call.
  *
- * Tool-result refs always hydrate as bytes: the tool chose to show them to
- * the model. Inbound attachments inline small images and PDFs; larger or
- * unsupported files become text references to their sandbox path. Every
+ * Every attachment, inbound or returned by a tool, renders as a label naming
+ * its sandbox path. Small verified images and PDFs follow their label as
+ * bytes; anything else stays a label the agent can open with tools. Every
  * decision is pure in the ref, so each message renders identically on every
  * call and the provider's prompt cache stays valid. The returned messages
  * must not be written back to session history, which stays ref-only.
  */
 export async function hydrateSandboxAttachments(
-  messages: readonly ModelMessage[],
+  input: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
+  const messages = replaceUnresolvedFileParts(input);
   if (!messagesContainSandboxRef(messages)) {
-    return messages as ModelMessage[];
+    return messages;
   }
 
   const sandboxAccess = loadContext().get(SandboxKey);
@@ -186,13 +196,7 @@ export async function hydrateSandboxAttachments(
     );
   }
 
-  const sandbox = await sandboxAccess.get();
-  if (sandbox === null) {
-    throw new Error(
-      "Cannot hydrate sandbox-ref FilePart: SandboxKey is bound but no active sandbox session is available.",
-    );
-  }
-
+  const sandbox = await activeSandbox(sandboxAccess);
   return Promise.all(
     messages.map(async (message) => {
       if (!messageContainsSandboxRef(message)) {
@@ -202,6 +206,45 @@ export async function hydrateSandboxAttachments(
       return { ...message, content } as ModelMessage;
     }),
   );
+}
+
+/**
+ * The session's sandbox for attachment staging and hydration, or `null` when
+ * there is none or it can't be resumed (another replica, a restart, an
+ * expired provider sandbox). Attachments then degrade to notes and labels so
+ * the step survives; tools still see the resume error through `get()`.
+ */
+async function activeSandbox(access: SandboxAccess | undefined): Promise<SandboxSession | null> {
+  if (access === undefined) return null;
+  try {
+    return await access.get();
+  } catch (error) {
+    log.warn("session sandbox unavailable, degrading attachments to text", { error });
+    return null;
+  }
+}
+
+/**
+ * History written before eve resolved every attachment can still hold a link
+ * or an `eve-url:` marker that a provider would try to fetch on every call.
+ * Each renders as a note, so such a session recovers.
+ */
+function replaceUnresolvedFileParts(messages: readonly ModelMessage[]): ModelMessage[] {
+  let changed = false;
+  const result = messages.map((message) => {
+    if (message.role !== "user" || !Array.isArray(message.content)) return message;
+    if (!message.content.some(isUnresolvedFilePart)) return message;
+    changed = true;
+    const content = message.content.map((part) =>
+      isUnresolvedFilePart(part) ? attachmentNote(part, "could not be retrieved.") : part,
+    );
+    return { ...message, content };
+  });
+  return changed ? result : (messages as ModelMessage[]);
+}
+
+function isUnresolvedFilePart(part: Exclude<UserContent, string>[number]): part is FilePart {
+  return part.type === "file" && !isSandboxRefUrl(part.data) && isUnresolvedFileData(part.data);
 }
 
 function hasFileParts(content: Exclude<UserContent, string>): boolean {
@@ -262,18 +305,28 @@ function isToolOutputRefFile(part: ToolOutputContentPart): part is ToolOutputFil
 
 async function stageToolOutputFiles(
   output: ToolResultOutput,
-  sandbox: SandboxSession,
+  sandbox: SandboxSession | null,
 ): Promise<ToolResultOutput> {
   if (output.type !== "content" || !output.value.some(isInlineToolOutputFile)) {
     return output;
   }
   const value = await Promise.all(
-    output.value.map(async (part) => {
+    output.value.map(async (part): Promise<ToolOutputContentPart> => {
       if (!isInlineToolOutputFile(part) || part.data.type !== "data") return part;
-      const bytes = await fileDataToBytes(part.data.data);
-      if (bytes === null) return part;
-      const ref = await writeSandboxRef(bytes, part.mediaType, part.filename, sandbox);
-      return { ...part, data: { type: "url" as const, url: encodeSandboxRef(ref) } };
+      const data = readFileData(part.data.data);
+      if (data.kind === "link") return part;
+      if (sandbox === null || data.kind !== "bytes") {
+        return {
+          text: `Returned file ${part.filename ?? "file"} (${part.mediaType}) could not be stored.`,
+          type: "text",
+        };
+      }
+      const ref = await writeSandboxRef(data.bytes, part.mediaType, part.filename, sandbox);
+      return {
+        ...part,
+        data: { type: "url" as const, url: encodeSandboxRef(ref) },
+        mediaType: ref.mediaType,
+      };
     }),
   );
   return { ...output, value };
@@ -297,57 +350,65 @@ function isSandboxRefFilePart(part: unknown): part is FilePart {
   );
 }
 
-async function hydrateMessageContent(content: unknown, sandbox: SandboxSession): Promise<unknown> {
+async function hydrateMessageContent(
+  content: unknown,
+  sandbox: SandboxSession | null,
+): Promise<unknown> {
   if (!Array.isArray(content)) {
     return content;
   }
-  return Promise.all(
-    content.map(async (part) => {
+  const hydrated = await Promise.all(
+    content.map(async (part): Promise<unknown[]> => {
       if (isSandboxRefFilePart(part)) {
         const ref = decodeSandboxRef(part.data as URL);
+        const label = renderSandboxRefAsTextPart(ref);
         if (!inlinesSandboxRefAsBytes(ref)) {
-          return renderSandboxRefAsTextPart(ref);
+          return [label];
         }
         const bytes = await readSandboxRefBytes(ref, sandbox);
         return bytes === null
-          ? renderMissingSandboxRef(ref)
-          : { ...part, data: bytes, mediaType: ref.mediaType };
+          ? [renderMissingSandboxRef(ref)]
+          : [label, { ...part, data: bytes, mediaType: ref.mediaType }];
       }
       if ((part as { type?: unknown }).type === "tool-result") {
         const toolResult = part as ToolResultPart;
-        return { ...toolResult, output: await hydrateToolOutput(toolResult.output, sandbox) };
+        return [{ ...toolResult, output: await hydrateToolOutput(toolResult.output, sandbox) }];
       }
-      return part;
+      return [part];
     }),
   );
+  return hydrated.flat();
 }
 
 async function hydrateToolOutput(
   output: ToolResultOutput,
-  sandbox: SandboxSession,
+  sandbox: SandboxSession | null,
 ): Promise<ToolResultOutput> {
   if (output.type !== "content" || !output.value.some(isToolOutputRefFile)) {
     return output;
   }
   const value = await Promise.all(
-    output.value.map(async (part): Promise<ToolOutputContentPart> => {
-      if (!isToolOutputRefFile(part) || part.data.type !== "url") return part;
+    output.value.map(async (part): Promise<ToolOutputContentPart[]> => {
+      if (!isToolOutputRefFile(part) || part.data.type !== "url") return [part];
       const ref = decodeSandboxRef(part.data.url);
+      const label = renderSandboxRefAsTextPart(ref);
+      if (!inlinesSandboxRefAsBytes(ref)) return [label];
       const bytes = await readSandboxRefBytes(ref, sandbox);
-      if (bytes === null) return renderMissingSandboxRef(ref);
-      return {
-        ...part,
-        data: { data: Buffer.from(bytes).toString("base64"), type: "data" },
-      };
+      if (bytes === null) return [renderMissingSandboxRef(ref)];
+      return [
+        label,
+        { ...part, data: { data: Buffer.from(bytes).toString("base64"), type: "data" } },
+      ];
     }),
   );
-  return { ...output, value };
+  return { ...output, value: value.flat() };
 }
 
 async function readSandboxRefBytes(
   ref: SandboxRef,
-  sandbox: SandboxSession,
+  sandbox: SandboxSession | null,
 ): Promise<Uint8Array | null> {
+  if (sandbox === null) return null;
   const bytes = await sandbox.readBinaryFile({ path: ref.path });
   if (bytes === null) {
     // #325: sandbox snapshots can change during a session lifecycle
@@ -428,8 +489,9 @@ function createReturnedFilesMessage(files: readonly FilePart[]): ModelMessage {
 }
 
 /**
- * Renders a sandbox-resident attachment as a {@link TextPart} the model
- * can use to reach the payload through filesystem tools.
+ * Labels a sandbox-resident attachment with a {@link TextPart} the model can
+ * use to reach the payload through filesystem tools, whether or not the
+ * bytes follow.
  *
  * Matches the text shape produced by the compaction summarizer for
  * `FilePart`s so the model sees one consistent surface for "there is a
@@ -444,100 +506,145 @@ async function stageFilePart(
   part: FilePart,
   sandbox: SandboxSession,
   adapterCtx: ChannelAdapterContext,
+  downloads: PublicDownloads,
+  policy: UploadPolicy | undefined,
 ): Promise<FilePart | TextPart> {
   if (isSandboxRefUrl(part.data)) {
     return part;
   }
 
-  // URL objects (including reconstituted ones) → try fetchFile
-  if (part.data instanceof URL && part.data.protocol !== "data:") {
-    let resolved: FetchFileResult | null;
-    try {
-      resolved = await tryFetchFile(part.data.href, adapterCtx);
-    } catch (error) {
-      if (!(error instanceof EveAttachmentError)) throw error;
-      const filename = part.filename?.trim() || "file";
-      log.warn("attachment resolver failed — degrading to text part", {
-        adapterKind: error.adapterKind,
-        error: error.cause,
-        filename,
-        kind: error.kind,
-      });
-      return {
-        text: `Attachment ${filename} could not be retrieved: ${error.message}`,
-        type: "text",
-      };
-    }
-    if (resolved === null) {
-      return part;
-    }
-    return stageResolvedBytes(part, resolved, sandbox);
+  const data = readFileData(part.data);
+  if (data.kind === "bytes") {
+    return stageResolvedBytes(part, { bytes: data.bytes }, sandbox, policy);
   }
-
-  // Inline data (Buffer, base64, data URL) → stage directly
-  const bytes = await fileDataToBytes(part.data);
-  if (bytes === null) {
+  // The provider already holds a referenced file.
+  if (data.kind === "reference") {
     return part;
   }
-  return stageResolvedBytes(part, { bytes }, sandbox);
+  if (data.kind === "unreadable") {
+    log.warn("attachment data is not bytes, base64, or a URL — degrading to text part", {
+      filename: part.filename,
+      mediaType: part.mediaType,
+    });
+    return attachmentNote(part, "could not be read.");
+  }
+
+  let resolved: FetchFileResult;
+  try {
+    resolved = await resolveLink(data.url, adapterCtx, downloads);
+  } catch (error) {
+    if (!(error instanceof EveAttachmentError)) throw error;
+    log.warn("attachment resolver failed — degrading to text part", {
+      adapterKind: error.adapterKind,
+      error: error.cause,
+      filename: part.filename,
+      kind: error.kind,
+    });
+    return attachmentNote(part, `could not be retrieved: ${error.message}`);
+  }
+  return stageResolvedBytes(part, resolved, sandbox, policy);
 }
 
+/** A model-visible note that stands in for an attachment eve could not stage. */
+function attachmentNote(part: FilePart, outcome: string): TextPart {
+  return { text: `Attachment ${part.filename?.trim() || "file"} ${outcome}`, type: "text" };
+}
+
+/**
+ * Stages resolved bytes, or a note when they break the channel's upload
+ * policy. A link's size is unknown until it downloads, and only the bytes
+ * prove the media type, so the policy runs here as well as at the route.
+ */
 async function stageResolvedBytes(
   part: FilePart,
   resolved: FetchFileResult,
   sandbox: SandboxSession,
-): Promise<FilePart> {
-  const mediaType = resolved.mediaType ?? part.mediaType ?? DEFAULT_MEDIA_TYPE;
+  policy: UploadPolicy | undefined,
+): Promise<FilePart | TextPart> {
+  const mediaType = verifyMediaType(
+    resolved.bytes,
+    resolved.mediaType ?? part.mediaType ?? DEFAULT_MEDIA_TYPE,
+  );
+  if (policy !== undefined) {
+    const limit = maxBytesOf(policy);
+    if (resolved.bytes.byteLength > limit) {
+      return attachmentNote(
+        part,
+        `was not accepted: it is ${resolved.bytes.byteLength} bytes, over this channel's ${limit}-byte upload limit.`,
+      );
+    }
+    if (!isMediaTypeAllowed(mediaType, policy)) {
+      return attachmentNote(
+        part,
+        `was not accepted: this channel doesn't accept ${mediaType} files.`,
+      );
+    }
+  }
   const ref = await writeSandboxRef(
     resolved.bytes,
     mediaType,
     resolved.filename ?? part.filename,
     sandbox,
   );
-  return { ...part, data: encodeSandboxRef(ref), filename: ref.path, mediaType };
+  return { ...part, data: encodeSandboxRef(ref), filename: ref.path, mediaType: ref.mediaType };
 }
 
-/** Writes content-addressed bytes under {@link ATTACHMENTS_ROOT} and describes them as a ref. */
+/**
+ * Writes content-addressed bytes under {@link ATTACHMENTS_ROOT} and describes
+ * them as a ref whose media type the bytes confirm.
+ */
 async function writeSandboxRef(
   bytes: Buffer,
-  mediaType: string,
+  declaredMediaType: string,
   filename: string | undefined,
   sandbox: SandboxSession,
 ): Promise<SandboxRef> {
+  const mediaType = verifyMediaType(bytes, declaredMediaType);
   const sha = sha256Prefix(bytes);
   const authored = `${ATTACHMENTS_ROOT}/${sha}/${safeFilename(filename, sha, mediaType)}`;
   await sandbox.writeBinaryFile({ content: bytes, path: authored });
   return { ...readMediaMetadata(bytes, mediaType), path: sandbox.resolvePath(authored) };
 }
 
-async function tryFetchFile(
-  url: string,
+/**
+ * Resolves a link through the channel's `fetchFile`. When the channel has none
+ * or returns `null`, eve downloads a public `https:` link itself; a provider
+ * never fetches an attachment.
+ */
+async function resolveLink(
+  url: URL,
   adapterCtx: ChannelAdapterContext,
-): Promise<FetchFileResult | null> {
+  downloads: PublicDownloads,
+): Promise<FetchFileResult> {
   const adapter = adapterCtx.ctx.get(ChannelKey);
-  if (adapter?.fetchFile === undefined) {
-    return null;
-  }
+  const adapterKind = adapter === undefined ? "none" : getAdapterKind(adapter);
 
-  const adapterKind = getAdapterKind(adapter);
-
-  try {
-    const result = await adapter.fetchFile(url, adapterCtx);
-    if (result === null) {
-      return null;
+  if (adapter?.fetchFile !== undefined) {
+    let result: Awaited<ReturnType<NonNullable<typeof adapter.fetchFile>>>;
+    try {
+      result = await adapter.fetchFile(url.href, adapterCtx);
+    } catch (cause) {
+      if (cause instanceof EveAttachmentError) {
+        // Operator logs name the channel that ran the resolver, not one it claims.
+        throw new EveAttachmentError({
+          adapterKind,
+          cause: cause.cause,
+          kind: cause.kind,
+          message: cause.message,
+        });
+      }
+      throw new EveAttachmentError({
+        adapterKind,
+        cause,
+        kind: "resolver-threw",
+        message: `Attachment retrieval failed in the "${adapterKind}" channel.`,
+      });
     }
-    return Buffer.isBuffer(result) ? { bytes: result } : result;
-  } catch (cause) {
-    if (cause instanceof EveAttachmentError) {
-      throw cause;
+    if (result !== null) {
+      return Buffer.isBuffer(result) ? { bytes: result } : result;
     }
-    throw new EveAttachmentError({
-      adapterKind,
-      cause,
-      kind: "resolver-threw",
-      message: `Attachment retrieval failed in the "${adapterKind}" channel.`,
-    });
   }
+  return downloads(url, adapterKind);
 }
 
 /**

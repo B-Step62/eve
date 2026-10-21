@@ -1,6 +1,7 @@
 import { InvalidToolStubTargetError } from "#tool-stubs/validate-targets.js";
 import { readStubFailure, readMatchedStubRules } from "#execution/tool-stubs/steps.js";
 import { getRun } from "#internal/workflow/runtime.js";
+import { proxyStreamHeaders } from "#eve-channel/stream-headers.js";
 import { handleExpiredLegacyAuthorization } from "#execution/legacy-session/authorization.js";
 import { EVE_ROUTE_PREFIX } from "#protocol/routes.js";
 import type { SessionAuthContext, SessionParent, SessionTraceContext } from "#channel/types.js";
@@ -18,13 +19,7 @@ import {
   readRemoteAgentStreamHeadersResolver,
   readRouteSessionCreator,
 } from "#internal/nitro/routes/channel-route-context.js";
-import {
-  EVE_SESSION_ID_HEADER,
-  EVE_STREAM_CONTROL_VERSION_QUERY,
-  EVE_STREAM_FORMAT_HEADER,
-  EVE_STREAM_TAIL_INDEX_HEADER,
-  EVE_STREAM_VERSION_HEADER,
-} from "#protocol/message.js";
+import { EVE_SESSION_ID_HEADER, EVE_STREAM_CONTROL_VERSION_QUERY } from "#protocol/message.js";
 import { legacyTaskInputRoute } from "#execution/legacy-remote-agent/protocol.js";
 import {
   EVE_CALLBACK_ROUTE_PATTERN,
@@ -52,7 +47,7 @@ import {
   readForwardedAudienceBaggage,
   readForwardedParentSessionBaggage,
 } from "#protocol/baggage.js";
-import { readConversationBaggage } from "#tracing/conversation-context.js";
+import { agentDelegation } from "#tracing/eve/delegation.js";
 import {
   FAIL_CLOSED_FORWARDED_TRACE_ASSERTION,
   formatTraceContentCeiling,
@@ -79,6 +74,7 @@ import {
   requireSessionId,
 } from "#eve-channel/request.js";
 import { attachClientContext } from "#internal/client-context.js";
+import { type SessionHistoryMessage, validateSessionHistory } from "#shared/session-history.js";
 import type { ParsedCreateBody } from "#eve-channel/create-request.js";
 import {
   findRemoteAgentBinding,
@@ -86,6 +82,7 @@ import {
   type RemoteAgentBinding,
   normalizeEveCors,
   resolveOnMessage,
+  resolveTurnClientContext,
   strandedSessionResponse,
 } from "#eve-channel/support.js";
 import type { EveChannel, EveChannelInput, EveEventContext } from "#eve-channel/types.js";
@@ -314,9 +311,13 @@ export function eveChannel(input: EveChannelInput): EveChannel {
 
         const messageResult =
           body.message === undefined
-            ? { auth: forwarded.auth }
+            ? {
+                auth: forwarded.auth,
+                clientContext: resolveTurnClientContext(undefined, body.context),
+              }
             : await resolveOnMessage({
                 auth: forwarded.auth,
+                clientContext: body.context,
                 config: input,
                 invocation:
                   parent === undefined || body.operationId === undefined
@@ -336,40 +337,52 @@ export function eveChannel(input: EveChannelInput): EveChannel {
 
         let handle: Awaited<ReturnType<typeof createSession>>;
         try {
-          handle = await createSession({
-            audienceAuth: auth,
-            toolStubs:
-              body.stubs === undefined
-                ? undefined
-                : {
-                    rules: body.stubs,
-                    token: crypto.randomUUID(),
+          handle = await agentDelegation.receive(
+            {
+              headers: req.headers,
+              delegated: body.callback !== undefined,
+              trusted: forwarded.accepted,
+              parent,
+              callerTrace: parsedParentTraceContext,
+              parentTraceContext,
+            },
+            ({ conversationId, parentTraceContext: inheritedTrace }) => {
+              return createSession({
+                audienceAuth: auth,
+                toolStubs:
+                  body.stubs === undefined
+                    ? undefined
+                    : {
+                        rules: body.stubs,
+                        token: crypto.randomUUID(),
+                      },
+                auth: messageResult.auth,
+                capabilities: body.capabilities ?? { requestInput: true },
+                callback: body.callback,
+                legacyRemoteAgentCaller: body.legacyRemoteAgentCaller,
+                continuationToken: operationToken,
+                initiatorAuth: forwarded.accepted ? forwarded.initiatorAuth : undefined,
+                input: attachClientContext(
+                  {
+                    message: body.message,
+                    context: messageResult.context,
+                    history: validateSessionHistory(
+                      "history" in messageResult ? messageResult.history : undefined,
+                    ),
+                    outputSchema: body.outputSchema,
                   },
-            auth: messageResult.auth,
-            capabilities: body.capabilities ?? { requestInput: true },
-            callback: body.callback,
-            legacyRemoteAgentCaller: body.legacyRemoteAgentCaller,
-            continuationToken: operationToken,
-            initiatorAuth: forwarded.accepted ? forwarded.initiatorAuth : undefined,
-            input: attachClientContext(
-              {
-                message: body.message,
-                context: messageResult.context,
-                outputSchema: body.outputSchema,
-              },
-              body.context,
-            ),
-            conversationId:
-              body.callback === undefined
-                ? undefined
-                : readConversationBaggage(req.headers.get("baggage")),
-            parent,
-            parentTraceContext,
-            // A remote agent's spans form their own session in this
-            // deployment; its lineage still names the caller's root.
-            traceRoot: parent === undefined ? undefined : { kind: "own" },
-            title: messageResult.title,
-          });
+                  messageResult.clientContext,
+                ),
+                conversationId,
+                parent,
+                parentTraceContext: inheritedTrace,
+                // A remote agent's spans form their own session in this
+                // deployment; its lineage still names the caller's root.
+                traceRoot: parent === undefined ? undefined : { kind: "own" },
+                title: messageResult.title,
+              });
+            },
+          );
         } catch (error) {
           if (error instanceof InvalidToolStubTargetError) {
             return Response.json({ error: error.message, ok: false }, { status: 400 });
@@ -410,19 +423,24 @@ export function eveChannel(input: EveChannelInput): EveChannel {
         const policyRejection = checkUploadPolicy(body, uploadPolicy);
         if (policyRejection !== null) return policyRejection;
 
+        let clientContext = resolveTurnClientContext(undefined, body.context);
         let context: readonly string[] | undefined;
+        let history: readonly SessionHistoryMessage[] | undefined;
         let title: string | undefined;
         let dispatchAuth: SessionAuthContext | null = forwarded.auth;
         if (body.message !== undefined) {
           const messageResult = await resolveOnMessage({
             auth: forwarded.auth,
+            clientContext: body.context,
             config: input,
             message: body.message,
             request: req,
             sessionId,
           });
           if (messageResult instanceof Response) return messageResult;
+          clientContext = messageResult.clientContext;
           context = messageResult.context;
+          history = messageResult.history;
           title = messageResult.title;
           dispatchAuth = messageResult.auth;
         }
@@ -435,11 +453,12 @@ export function eveChannel(input: EveChannelInput): EveChannel {
               auth: dispatchAuth,
               callback: body.callback,
               context,
+              history,
               outputSchema: body.outputSchema,
               turnPolicy: body.turnPolicy,
               title,
             },
-            body.context,
+            clientContext,
           );
           result =
             body.inputResponses === undefined
@@ -723,19 +742,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
           redirect: "manual",
           signal: req.signal,
         });
-        const responseHeaders = new Headers();
-        for (const name of [
-          "cache-control",
-          "content-type",
-          "x-accel-buffering",
-          EVE_SESSION_ID_HEADER,
-          EVE_STREAM_FORMAT_HEADER,
-          EVE_STREAM_TAIL_INDEX_HEADER,
-          EVE_STREAM_VERSION_HEADER,
-        ]) {
-          const value = upstream.headers.get(name);
-          if (value !== null) responseHeaders.set(name, value);
-        }
+        const responseHeaders = proxyStreamHeaders(upstream.headers);
         return new Response(upstream.body, {
           headers: responseHeaders,
           status: upstream.status,
@@ -744,5 +751,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
       }),
     ],
     events: input.events,
+    fetchFile: input.fetchFile,
+    uploadPolicy: input.uploadPolicy,
   });
 }

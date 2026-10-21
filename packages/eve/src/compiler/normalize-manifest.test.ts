@@ -424,13 +424,14 @@ describe("compileAgentManifest source graph", () => {
             inputSchema: z.object({ task: z.string() }),
             auth: () => null,
             run: async () => {},
+            tool: "deferred",
           }),
         }),
       },
     ]);
     const compiled = await compileAgentManifest(manifest(), { sourceRegistries: [sourceRegistry] });
     expect(compiled.scheduleCollections).toContainEqual(
-      expect.objectContaining({ name: "billing/requests" }),
+      expect.objectContaining({ name: "billing/requests", tools: "deferred" }),
     );
     const wrapper = compiled.dynamicTools.find(
       (tool) => tool.logicalPath === "tools/schedule__billing-requests.ts",
@@ -455,6 +456,7 @@ describe("compileAgentManifest source graph", () => {
       ),
     );
     const entries = tools as Record<string, import("#tools/dynamic.js").DynamicToolEntry>;
+    expect(Object.values(entries).every((entry) => entry.deferred)).toBe(true);
     expect(
       entries["schedule__billing-requests__create"]!.label?.start({ name: "daily-digest" }),
     ).toBe("Create schedule: daily-digest");
@@ -654,7 +656,8 @@ describe("compileAgentManifest source graph", () => {
       sourceRegistries: [sourceRegistry],
     });
 
-    expect(toolSourceIterations).toBe(1);
+    // One read lists the module graph's entries; the other is the projection.
+    expect(toolSourceIterations).toBe(2);
     expect(compiled.config.build?.externalDependencies).toEqual(["sharp"]);
   });
 
@@ -1006,7 +1009,8 @@ describe("compileAgentManifest source graph", () => {
       }),
     ).rejects.toThrow('Subagent "subagents/child" must define a non-empty description.');
 
-    expect(toolSourceIterations).toBe(1);
+    // One read lists the module graph's entries; the other is the projection.
+    expect(toolSourceIterations).toBe(2);
   });
 
   it("disables a lower-precedence framework slot without retaining a binding", async () => {
@@ -1381,4 +1385,63 @@ describe("compileAgentManifest source graph", () => {
     expect(loader).toHaveBeenCalledTimes(1);
     expect(binding.backing.kind).toBe("programmatic");
   });
+});
+
+it("rejects subagent event connections whose receiver cannot resolve their scope", async () => {
+  const root = manifest();
+  const child = createAgentSourceManifest({
+    agentId: "child",
+    agentRoot: `${root.agentRoot}/subagents/child`,
+    appRoot: root.appRoot,
+  });
+  root.subagents.push(
+    createLocalSubagentSourceRef({
+      entryPath: child.agentRoot,
+      logicalPath: "subagents/child",
+      manifest: child,
+      rootPath: child.agentRoot,
+      subagentId: "child",
+    }),
+  );
+  const source = defineProgrammaticAgentSource({
+    id: "test:events",
+    revision: "v1",
+    modules: [
+      {
+        logicalPath: "connections/issues.ts",
+        loadNamespace: async () => ({
+          default: defineMcpClientConnection({
+            url: "https://issues.example/mcp",
+            description: "Issues",
+            auth: {
+              getToken: async () => ({ token: "credential" }),
+              vercelConnect: {
+                connector: "oauth/issues",
+                experimental_events: {
+                  createAdapter: vi.fn(),
+                  verify: vi.fn(),
+                },
+              },
+            },
+            experimental_events: { onEvent() {} },
+          }),
+        }),
+      },
+    ],
+  });
+  await expect(
+    compileAgentManifest(root, {
+      sourceRegistries: [
+        registry([
+          {
+            logicalPath: "agent.ts",
+            loadNamespace: async () => ({
+              default: defineAgent({ model: "openai/gpt-5.4" }),
+            }),
+          },
+        ]),
+        createAgentSourceRegistry([{ applyTo: "all-local-nodes", source }]),
+      ],
+    }),
+  ).rejects.toThrow("root-agent connection");
 });

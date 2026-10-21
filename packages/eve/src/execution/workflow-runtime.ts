@@ -1,4 +1,5 @@
 import { validateToolStubTargets } from "#tool-stubs/validate-targets.js";
+import { validateDeliveryIdempotencyKey } from "#channel/delivery-idempotency.js";
 import { context, trace } from "#compiled/@opentelemetry/api/index.js";
 import {
   EntityConflictError,
@@ -8,8 +9,6 @@ import {
 } from "#compiled/@workflow/errors/index.js";
 
 import type {
-  CancelTurnInput,
-  CancelTurnResult,
   DispatchContinuationInput,
   DispatchSessionInput,
   GetEventStreamOptions,
@@ -51,16 +50,10 @@ import {
   readSessionEventStream,
   readSessionStreamTailIndex,
 } from "#execution/session-event-stream.js";
-import {
-  SESSION_HANDOFF_VERSION,
-  type HandoffWorkflowEntryInput,
-  type InitialWorkflowEntryInput,
-  type SessionHandoffStart,
-} from "#execution/session/entry-input.js";
-import type { SessionCheckpoint } from "#execution/session/handoff.js";
+import type { InitialWorkflowEntryInput } from "#execution/session/entry-input.js";
 import { walkCauseChain } from "#shared/errors.js";
 import { buildInvocationAttributes } from "#internal/invocation/metadata.js";
-import { isAgentTraceContext } from "#tracing/agent-trace-context.js";
+import { isAgentTraceContext } from "#tracing/eve/agent-trace-context.js";
 import {
   sessionCommandHookToken,
   sessionInboxHookToken,
@@ -80,15 +73,19 @@ import {
 } from "#execution/session-inbox/resume.js";
 import {
   assertRunnableSessionInbox,
+  findSessionHookHolder,
   StrandedSessionOwnerError,
 } from "#execution/session-inbox/owner.js";
 import { describeStrandedSession, SessionStrandedError } from "#channel/session-stranded-error.js";
+import type { AgentSessionRuntimeOverrides } from "#execution/agent-sessions/runtime-overrides.js";
 import type { DynamicSubagentAgentConfig } from "#runtime/subagents/dynamic-agent-config.js";
 import { initializeSessionInstrumentation } from "#instrumentation/runtime.js";
 import {
   SESSION_TIMEOUT_WORKFLOW_NAME,
   WORKFLOW_TOOL_RUN_WORKFLOW_NAME,
   WORKFLOW_ENTRY_NAME,
+  CONNECTION_EVENT_WORKFLOW_NAME,
+  CONNECTION_EVENT_DELIVERY_WORKFLOW_NAME,
 } from "#execution/stable-workflow-names.js";
 const EVE_PACKAGE_INFO = resolveInstalledPackageInfo();
 
@@ -124,11 +121,20 @@ export const workflowToolRunWorkflowReference = {
   workflowId: `workflow//${STABLE_ID_BASE}//${WORKFLOW_TOOL_RUN_WORKFLOW_NAME}`,
 };
 
+export const connectionEventWorkflowReference = {
+  workflowId: `workflow//${STABLE_ID_BASE}//${CONNECTION_EVENT_WORKFLOW_NAME}`,
+};
+
+export const connectionEventDeliveryWorkflowReference = {
+  workflowId: `workflow//${STABLE_ID_BASE}//${CONNECTION_EVENT_DELIVERY_WORKFLOW_NAME}`,
+};
+
 /**
  * Creates a workflow-backed runtime whose current owner executes turns and
  * whose original run retains the public event stream across owner handoffs.
  */
 export function createWorkflowRuntime(config: {
+  readonly agentSessionRuntimeOverrides?: AgentSessionRuntimeOverrides;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly dynamicSubagentAgentConfig?: DynamicSubagentAgentConfig;
   readonly nodeId?: string;
@@ -138,6 +144,7 @@ export function createWorkflowRuntime(config: {
     input: RunInput,
     predecessor?: SessionPredecessor,
   ): Promise<RunHandle> => {
+    validateDeliveryIdempotencyKey(input.idempotencyKey);
     const bundle = await getCompiledRuntimeAgentBundle({
       compiledArtifactsSource: config.compiledArtifactsSource,
       nodeId: config.nodeId,
@@ -146,31 +153,37 @@ export function createWorkflowRuntime(config: {
       validateToolStubTargets(input.toolStubs.rules, bundle.graph);
     }
     const ctx = buildRunContext({
+      agentSessionRuntimeOverrides: config.agentSessionRuntimeOverrides,
       bundle,
       dynamicSubagentAgentConfig: config.dynamicSubagentAgentConfig,
       run: input,
     });
     if (predecessor !== undefined) ctx.set(SessionPredecessorKey, predecessor);
     const effectiveAgent = resolveEffectiveAgentRuntime(bundle, ctx);
-    initializeSessionInstrumentation({
+    const traceDecision = initializeSessionInstrumentation({
       agentName: effectiveAgent.turnAgent.id,
       ctx,
     });
     const sessionTimeoutMs = effectiveAgent.limits?.sessionTimeoutMs;
-    // Retention is always the authored value: `experimental` cannot be
-    // selected by a dynamic subagent config, so there is nothing to resolve.
-    const retention = bundle.resolvedAgent.config?.experimental?.workflow?.retention;
+    // Workflow cannot purge inputs and outputs independently.
+    const retention =
+      bundle.resolvedAgent.config?.experimental?.workflow?.retention ??
+      (traceDecision.action === "record" &&
+      traceDecision.recordInputs &&
+      traceDecision.recordOutputs
+        ? undefined
+        : 0);
     const serializedContext = serializeContext(ctx);
     const parentLineage = readParentLineage(serializedContext);
     const workflowInput: {
       -readonly [K in keyof InitialWorkflowEntryInput]: InitialWorkflowEntryInput[K];
     } = {
+      idempotencyKey: input.idempotencyKey,
       kind: "initial",
       input: input.input,
       ownerDeploymentId: await resolveCurrentWorkflowDeploymentId(),
       serializedContext,
     };
-    if (input.limits !== undefined) workflowInput.limits = input.limits;
     if (input.continuationConflictCommand !== undefined) {
       workflowInput.continuationConflictCommand = input.continuationConflictCommand;
     }
@@ -220,9 +233,23 @@ export function createWorkflowRuntime(config: {
       throw error;
     }
 
+    let sessionId = run.runId;
+    if (input.idempotencyKey !== undefined && input.continuationToken !== undefined) {
+      // Keyed contenders must return the winning session, not their discarded candidate.
+      const owner = await pollUntil(
+        () => resolveContinuation(input.continuationToken!),
+        SESSION_HOOK_HANDOVER_TIMEOUT_MS,
+      );
+      if (owner === undefined) {
+        throw new Error(
+          "Delivery accepted, but its session identity is not ready. Retry with the same idempotencyKey.",
+        );
+      }
+      sessionId = owner.sessionId;
+    }
     let events: ReadableStream<MessageStreamEvent> | undefined;
     const getEvents = () => {
-      events ??= readSessionEventStream(run.runId);
+      events ??= readSessionEventStream(sessionId);
       return events;
     };
 
@@ -230,7 +257,7 @@ export function createWorkflowRuntime(config: {
       get events() {
         return getEvents();
       },
-      sessionId: run.runId,
+      sessionId,
     };
   };
 
@@ -293,58 +320,8 @@ export function createWorkflowRuntime(config: {
       return await readSessionStreamTailIndex(sessionId);
     },
 
-    async resolveContinuation(
-      continuationToken: string,
-    ): Promise<{ sessionId: string } | undefined> {
-      try {
-        return await resolveSessionInbox(continuationToken);
-      } catch (error) {
-        if (HookNotFoundError.is(error)) {
-          return undefined;
-        }
-        logError(log, "failed to resolve session by continuation token", error, {
-          continuationToken,
-        });
-        throw error;
-      }
-    },
+    resolveContinuation,
   };
-}
-
-export type SessionOwnerStartInput = SessionHandoffStart & {
-  readonly activationToken: string;
-  /** Original run whose stream stays the public session stream. */
-  readonly anchorRunId: string;
-  readonly checkpoint: SessionCheckpoint;
-  readonly targetDeploymentId: string;
-};
-
-/** Starts a successor owner and binds its output to the original session stream. */
-export async function startSessionOwnerStep(input: SessionOwnerStartInput): Promise<void> {
-  "use step";
-  const { activationToken, anchorRunId, checkpoint, targetDeploymentId, ...start } = input;
-  const workflowInput: HandoffWorkflowEntryInput = {
-    ...start,
-    activationToken,
-    checkpoint,
-    handoffVersion: SESSION_HANDOFF_VERSION,
-    kind: "handoff",
-    ownerDeploymentId: targetDeploymentId,
-    sessionWritable: getRun(anchorRunId).getWritable<Uint8Array>(),
-    sessionId: anchorRunId,
-  };
-  // The successor is stamped with this eve version at start, because the
-  // queue guard runs before it boots. Single-build Worlds share this version;
-  // deployment-affine Worlds bypass the guard and the successor records its
-  // own version at boot.
-  await startWorkflowOnDeployment(
-    workflowEntryReference,
-    [workflowInput],
-    targetDeploymentId,
-    checkpoint.retention === undefined
-      ? undefined
-      : { experimental_retention: checkpoint.retention },
-  );
 }
 
 async function dispatchWorkflowCommand<TCommand extends SessionCommand>(
@@ -383,7 +360,7 @@ async function dispatchWorkflowCommand<TCommand extends SessionCommand>(
   if (command.kind === "reset") {
     await waitForSessionHooksRelease(
       [sessionCommandHookToken(hook.sessionId), logicalSessionToken(token)],
-      hook.runId,
+      { ownerRunId: hook.runId, sessionId: hook.sessionId },
     );
   }
 
@@ -465,15 +442,6 @@ export async function dispatchWorkflowSessionCommand<TCommand extends SessionCom
   }
 }
 
-/** Requests cancellation through a session's stable command inbox. */
-export async function requestWorkflowTurnCancellation(
-  input: CancelTurnInput,
-): Promise<CancelTurnResult> {
-  const command: { kind: "cancel"; turnId?: string } = { kind: "cancel" };
-  if (input.turnId !== undefined) command.turnId = input.turnId;
-  return await dispatchWorkflowSessionCommand({ command, sessionId: input.sessionId });
-}
-
 async function isRunActive(runId: string): Promise<boolean> {
   try {
     const status = await getRun(runId).status;
@@ -499,20 +467,99 @@ function isInactiveCommandTarget(error: unknown): boolean {
   return false;
 }
 
+/** The session holding a continuation token's inbox, if any does. */
+export async function resolveContinuation(
+  continuationToken: string,
+  options?: { readonly runnable?: boolean },
+): Promise<{ sessionId: string } | undefined> {
+  let owner: { sessionId: string };
+  try {
+    owner = await resolveSessionInbox(continuationToken);
+  } catch (error) {
+    if (HookNotFoundError.is(error)) {
+      return undefined;
+    }
+    logError(log, "failed to resolve session by continuation token", error, {
+      continuationToken,
+    });
+    throw error;
+  }
+  if (options?.runnable !== true) return owner;
+  try {
+    await assertRunnableSessionInbox(
+      sessionInboxHookToken(sessionCommandHookToken(owner.sessionId)),
+    );
+  } catch (error) {
+    if (error instanceof StrandedSessionOwnerError) throw sessionStrandedError(error);
+    throw error;
+  }
+  return owner;
+}
+
 /**
  * Resolves hook ownership for replay-idempotent work already running inside a
  * durable step. Request handlers must return from start/resume acceptance and
  * leave ownership arbitration to the workflow.
  */
 export async function waitForCommandHookOwner(token: string): Promise<WorkflowHookRecord> {
-  const deadline = Date.now() + SESSION_HOOK_HANDOVER_TIMEOUT_MS;
-  while (true) {
+  const owner = await pollUntil(async () => {
     try {
       return normalizeWorkflowHook(await getHookByToken(token));
     } catch (error) {
-      if (!HookNotFoundError.is(error) || Date.now() >= deadline) throw error;
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      if (!HookNotFoundError.is(error)) throw error;
+      return undefined;
     }
+  }, SESSION_HOOK_HANDOVER_TIMEOUT_MS);
+  if (owner === undefined) throw new HookNotFoundError(token);
+  return owner;
+}
+
+/**
+ * Waits until a started session claims its inbox, which it does when its run
+ * first suspends. Resolves `false` when the run ended without an inbox, so
+ * there is nothing left to command.
+ */
+export async function waitForSessionInbox(sessionId: string): Promise<boolean> {
+  const token = sessionInboxHookToken(sessionCommandHookToken(sessionId));
+  const opened = await pollUntil(async () => {
+    if ((await findSessionHookHolder(token)) !== undefined) return true;
+    return (await hasRunEnded(sessionId)) ? false : undefined;
+  }, SESSION_HOOK_HANDOVER_TIMEOUT_MS);
+  if (opened === undefined) {
+    throw new Error(
+      `Session "${sessionId}" did not start taking commands within ${SESSION_HOOK_HANDOVER_TIMEOUT_MS / 1000} seconds.`,
+    );
+  }
+  return opened;
+}
+
+/**
+ * Calls `check` until it returns a value, backing off from 20 ms to 200 ms
+ * between calls, and resolves `undefined` once `timeoutMs` passes without one.
+ */
+export async function pollUntil<T>(
+  check: () => Promise<T | undefined>,
+  timeoutMs: number,
+): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  for (let delayMs = 20; ; delayMs = Math.min(delayMs * 2, 200)) {
+    const value = await check();
+    if (value !== undefined || Date.now() >= deadline) return value;
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
+/** A run `start()` accepted may not be readable yet, which is not an ended run. */
+export async function hasRunEnded(runId: string): Promise<boolean> {
+  try {
+    const status = await getRun(runId).status;
+    return status !== "pending" && status !== "running";
+  } catch (error) {
+    for (const cause of walkCauseChain(error)) {
+      if (WorkflowRunNotFoundError.is(cause)) return false;
+    }
+    if (isInactiveCommandTarget(error)) return true;
+    throw error;
   }
 }
 
@@ -535,7 +582,7 @@ export async function startWorkflowOnCurrentDeployment<TArgs extends unknown[], 
  * version that started it: ingress and the stranded replay guard read it to
  * decide whether this build can still execute the run.
  */
-async function startWorkflowOnDeployment<TArgs extends unknown[], TResult>(
+export async function startWorkflowOnDeployment<TArgs extends unknown[], TResult>(
   workflow: WorkflowFunction<TArgs, TResult> | WorkflowMetadata,
   args: TArgs,
   deploymentId: string,

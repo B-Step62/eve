@@ -1,5 +1,201 @@
 # eve
 
+## 0.82.0
+
+### Minor Changes
+
+- c543585: Breaking: replace `limits.maxInputTokensPerSession`, `limits.maxOutputTokensPerSession` and `limits.maxTokenCostUsdPerSession` with one `limits.sessionUsage` function. It receives the session's `total` usage and its `window` since the last approved continuation, and returns `true` when the limit is reached; Continue starts a new window. The default is 40M new input tokens (input minus cache reads) per window. Subagents now check their own window with their own `sessionUsage` or the root agent's instead of receiving a share of the parent's remaining quota. Sessions that can't ask now fail with `SESSION_USAGE_LIMIT_REACHED`, replacing `SESSION_TOKEN_LIMIT_REACHED` and `SESSION_TOKEN_COST_LIMIT_REACHED`.
+
+### Patch Changes
+
+- baf3030: Attach the agent trace session ID to auto-instrumented child spans on Vercel so Agent Runs can include network and other third-party spans in a session trace.
+- 91b3183: The session input-token limit now counts only new input (uncached input plus cache writes). Cache reads no longer count toward the limit, the grant after Continue, or the quota shared with subagents, so long cache-heavy sessions stop hitting continuation prompts for replaying their own history. Usage telemetry still reports raw input and cache totals. Providers that report no cache details count exactly as before.
+- 8aba0f6: Allow authored workflow tools to select an AI Gateway model when they open a local session with `ctx.agent()`. The child keeps the target agent's other configuration, and the selected model applies for the session's lifetime.
+- 0aea7fc: `eve eval` now runs while an `eve dev` session for the same agent is open, instead of failing with "A dev server is already running for this eve agent." The eval server keeps its runtime generations, local Workflow data, and server record in a per-run directory under `.eve/eval-servers/`, so it never swaps or prunes the dev session's state.
+- a9f5065: Channel and session sends and responses now accept `idempotencyKey` to ignore retries across replay and owner handoffs. Photon supplies message IDs automatically; deduplication requires a shared Workflow World and only covers keys in the session's recent-key window.
+- 6752c95: Fix a workflow tool task running twice when the session was interrupted while publishing `task.started`, for example during a slow `task.started` hook. The session now records each task's run before it publishes the event, so a retry only publishes `task.started` again and never starts a second run.
+- 964a41f: `limits.sessionTimeoutMs` is now an idle timeout: the window restarts each time a turn settles, so a session in active use no longer ends 30 days after it was created. Idle sessions still complete when the window elapses, and the next channel message at their address starts a fresh session as before.
+- dd8c231: Linq and Photon iMessage channels now tell the model when a message is a reply, and include the text of the message it quotes.
+- cf824a8: The Photon and Linq channels can now pass tapbacks to the agent with a new `onTapback` hook, which can also answer the approval or question posted in the message the tapback is on, for example approving with a like. `channel.tapbackTool()` gives the model a tool that reacts to the latest message with a standard tapback or any emoji. Tapbacks stay ignored unless you opt in.
+- 743b498: `eve start --no-schedules` and `EVE_SCHEDULES_DISABLED=1` start a server that does not fire authored cron schedules, so only one process runs them when you scale out.
+- b34844b: Channel `send()`, channel message hooks, and a new `create()` on channel addresses accept `history` to add prior user and assistant messages, such as a stored transcript, as real turns. `create()` starts a session that waits for its first message and reports with `created` whether it did. A new `history.imported` stream event publishes added messages; the default client reducer renders them, and `transcriptReducer()` includes them. Slack `threadContext` now adds earlier replies as history when a message starts the thread's session; later messages keep the existing transcript.
+- e40d7d7: `eve build` and `eve dev` now evaluate a module shared by several tools, channels, or other authored files once per compile instead of once per importing file. Compile memory now grows with the code an agent actually has, not with the number of files that import it, so agents with many tools over a shared SDK or workspace package no longer run out of memory on smaller build machines. Authored modules transpiled to CommonJS with an `__esModule` marker, such as a `tools/*.cjs` file with `exports.default = …`, now also compile and run correctly instead of resolving to the whole `exports` object. On Windows, CommonJS authored modules can now `require()` eve and other external packages.
+- 62d3227: Skip the final Slack reply when the message that started the turn was deleted, instead of letting Slack post it as a top-level channel message.
+- ee5e8e9: Self-hosted `eve build` output now carries a build identity derived from its contents. eve exposes it to Workflow Worlds as `WORKFLOW_DEPLOYMENT_ID` unless that variable is already set, and records it in `eve build --profile` reports.
+- 7b8a520: Fix unnecessary `eve dev` runtime-generation changes when Nitro installs newer Rolldown versions. No-op rebuilds and environment-only reloads now keep the active runtime snapshot unchanged instead of treating bundler debug comments as runtime changes.
+
+## 0.81.1
+
+### Patch Changes
+
+- e4e0cd1: Fix activation trace-content markers to respect the resolved session policy, provider capture settings, and live audience ceiling. Metadata-only sessions now report withheld content accurately without removing content allowed by an explicit trace policy.
+- 54d63fd: A session keeps accepting messages during a deployment or compaction handoff, so the first message after a handoff reaches the model sooner and messages sent mid-handoff no longer retry or return `409 session_not_ready`; messages already waiting when a compaction finishes now run before the session moves. Sessions started on an earlier eve release still move to this release: their first move uses the previous handoff, and every move after it uses the new one. On Workflow worlds without hook force-claim support, sessions no longer move between runs, so their run history keeps growing for as long as the session lives.
+- fc4dbd0: Cancelling a turn while the model is responding no longer marks its `agent.step` span as an error, so user-initiated stops stop showing up as failures in error tracking.
+- 299db19: Connections now accept the documented `auth.displayName` field instead of failing validation with `Unknown key "displayName"`.
+- 09b423a: `agent.step` spans for AI Gateway model calls now record the Gateway's session affinity report: the session ID, where that ID came from, the affinity outcome, and the pinned and displaced providers. Use these attributes to match a step to its session in the AI Gateway logs Sessions view.
+- f9ea546: The eve channel's `onMessage` can now read the request's `clientContext` as `ctx.eve.clientContext` and return its own `clientContext` to replace it for that turn, so the model sees server-checked context without it being kept in session history.
+- 4d9fc9f: iMessage voice notes now reach Photon agents. Photon's webhook leaves out a voice note's attachment id, so eve refetches the message by id to download it. Across Chat SDK channels, an attachment the platform gives no way to download now reaches the agent as a short note instead of being dropped, so an attachment-only message still gets a reply.
+- 02bb7c4: `ctx.thread.postEphemeral()` on a fresh top-level Slack message now posts to the channel instead of an empty thread, where Slack hid it. Replies inside an existing thread stay threaded.
+
+## 0.81.0
+
+### Minor Changes
+
+- e3d1497: Add `github.attribution(ctx)` to `eve/extensions/git` and the deprecated `code({ github })` config. When it returns a `{ name, email }` co-author, the `gh` tool ends every `gh-signed-commit` message and `gh pr create` body with that person's `Co-authored-by` trailer.
+
+### Patch Changes
+
+- 5c53f1f: An approval answer that is neither Approve nor Cancel now gets feedback instead of being dropped, and a repeated answer to an approval that was already decided is discarded before the requester check, so it no longer warns whoever's delivery carried it.
+- 4bc7106: Stop reading the parent session's event stream once the remote subagent stream route finds the child's `agent.started` binding. Opening a remote subagent stream no longer replays the rest of a long parent session on every request and retry.
+- 932a561: MCP connections close their remote session when the step that opened it ends, instead of leaking one session per step until the process exits. A step that ends while its connection is still connecting, or a sign-in that finishes after its step, can still leave one session open. HTTP MCP connections keep at most one inbound SSE stream per session: the stream opens only after the session exists, and reconnecting never opens a second one while a stream is attached, so servers that allow a single stream no longer answer `409`. Ending a session is bounded best effort: its `DELETE` gives up after 5 seconds, so a server that stops answering doesn't stall the step.
+- 5c53f1f: The first answer to a tool approval now decides it. A repeated answer, for example from a double click, no longer leaves the session waiting when the tool has an approval response policy, and no longer overrides an earlier answer when it doesn't: Cancel followed by Approve stays cancelled. The note sent with the deciding answer, such as why it was cancelled, still reaches the model. An unauthenticated answer to a call that has a requester is rejected with feedback instead of settling it, so it can't pre-empt the requester's own answer. When the call has no requester, an unauthenticated answer is recorded as the anonymous principal that `none()` gives unauthenticated callers.
+- 86b9c42: Resolve MCP credentials before each request so live clients use refreshed tokens after expiry. Retry a rejected bearer once through the token provider before requesting sign-in, while preserving existing permission errors.
+- 0d45099: Pressing a human-in-the-loop button whose session is no longer active, for example after its run was cancelled outside eve, now retires the prompt the same way on Slack, Teams, Telegram, Discord, and Chat SDK: its buttons are replaced with `No longer active`, as a resolved prompt reads, and the person who pressed is told to send a new message: privately on Slack, Discord, Chat SDK and Telegram, and on Teams by the retired card itself, or the reply to an invoke. Before, the press was only logged (or, on Chat SDK, thrown) and the prompt stayed live.
+- c1a6fb1: A sign-in that fails with `retryable: false` now stops the turn from starting the same sign-in again. A later tool call in the same turn that needs the same grant for the same principal gets that failure back instead of a new `authorization.required`, and the next turn asks again. `authorization.required` and `authorization.completed` now carry `grant` and the connection principal's identity (no attributes), and a `failed` `authorization.completed` carries `retryable`. A failure without `retryable`, from an older eve, is treated as retryable.
+- 6210b1d: A call a sign-in stopped now waits in its step and runs itself once the sign-in calls back, instead of the model being asked again. `authorization.completed` is reported by that call's outcome, just before its `action.result`: `authorized` when the call returns, `failed` (with the error's `reason`, such as `access_denied`) when it throws. Steering a held turn fails the waiting call and declines its sign-in, and cancel stops it with the turn. A turn needing a sign-in now makes one model call fewer. A session already waiting on a sign-in when this ships keeps reporting `authorized` when its callback arrives.
+- b05d8e5: Connections or tools that share a `toolResultFrom` fallback identity, such as two MCP connections with the same URL and description, no longer log the "could not assign a unique toolResultFrom identity" warning at startup. eve now warns once, only when a `toolResultFrom` lookup actually needs that ambiguous fallback.
+- 63b1daa: Concurrent builds that need the same new Vercel sandbox template no longer fail with a 400 "sandbox with the name already exists" error. Each build now prepares its template in a private, non-persistent sandbox and records the finished snapshot under the shared template name only after the snapshot exists, so a build that fails, is killed, or times out never leaves half-prepared work where another build would reuse it.
+
+## 0.80.1
+
+### Patch Changes
+
+- a3654ef: Compaction now keeps the start and end of an oversized tool result instead of only its start, so failures, errors, and the `bash` exit code at the end of the output survive.
+- 5666d2f: Hosted builds now fail with a clear error when the build output imports a `build.externalDependencies` package, or a subpath of one, that Node's ESM resolver does not resolve to a file inside the output. Previously the build succeeded and the deployed function crashed at boot with `ERR_MODULE_NOT_FOUND` (for example when only a workspace package installed the dependency) or `ERR_PACKAGE_PATH_NOT_EXPORTED` (when the copied version does not export the imported subpath). The error names the import and the app `package.json` to add the package to.
+- c1b079c: Publish framework-neutral tracing as `@vercel/agent-runs` with singular `createAgentRun` and `AgentRun` APIs; eve still bundles it without a new runtime dependency. Also fix a development-server build failure in npm-installed apps when generating source maps.
+- 0857ff4: Reject OpenAPI path parameter values equal to `.` or `..` before sending requests, so URL normalization cannot change the intended route. This validation also applies to application-provided arguments.
+
+## 0.80.0
+
+### Minor Changes
+
+- 4210766: `git({ github })` accepts an optional `authorize` callback that runs once per `gh` tool invocation with the caller, declared repository, and repository-scoped token; returning `false` blocks the command. It gates caller/repository access, not individual API requests or operations, and allowed commands use the app token's permissions rather than the caller's GitHub permissions.
+- 3fea287: Dropped traces and policies excluding either content direction now request Workflow data deletion when the run ends; set `experimental.workflow.retention: "default"` to retain completed transcripts independently of tracing. Expired session-history reads return `410 session_expired` before streaming, including when the World retains purged chunk records.
+
+### Patch Changes
+
+- a5e33ec: Root sessions now accept empty model responses with `finishReason: "stop"` without retrying them or reporting a model-call failure. Recovery for delegated sessions, incomplete streams, and empty non-`stop` responses is unchanged.
+- aa3d3fc: Scheduled sessions and their locally delegated tasks can now use dynamic scheduling tools and the schedule client to manage schedules, including conditional updates or disabling future occurrences. Collection scope authorization and tool approval policies still apply.
+- b1de5d3: eve now vendors chat 4.42.0 and requires the optional `chat` peer at `^4.42.0`. chat 4.41 broke Workflow DevKit workflows in host apps (vercel/chat#969).
+- 1f410e9: Dynamic schedule collections can defer their generated management tools to the catalog with `tool: "deferred"`, keeping them out of the model's initial tool list while still making them searchable and callable.
+- a475f2d: Dynamic tools now capture locals bound by an array rest element (`const [first, ...rest] = ...`) or a rest parameter (`(...args) =>`). Before, the hoisted callback threw `ReferenceError` and the resolver's tools were dropped.
+- 6d67e9a: Add experimental MCP connection event callback definitions and preserve the Connect runtime events bridge while keeping compiler metadata serializable.
+- 3aa7dc5: Add experimental Connect-managed event subscriptions and per-connection webhook receivers. Durable event handlers run independently of conversation sessions; only an explicit `attachSession(...).send(...)` enters a session. Each watch saves its binding before subscribing, and each delivery runs independently under that binding. Subscribe with `ttlMs` in milliseconds or `null` to watch until stopped; `expiresAt` is returned as the calculated deadline. Requires `@vercel/connect@2.5.2` or later.
+  
+  Return immediately from the durable sleep tool when steering has already interrupted its execution.
+- 6d67e9a: Keep a session's deadline stable across workflow replay and compaction handoffs.
+- 5243d1d: `web_fetch` now converts HTML pages served without a `Content-Type` header instead of returning truncated raw source.
+
+## 0.79.2
+
+### Patch Changes
+
+- 910705c: An agent or `serve` tool call with an empty `taskId` now starts a new task instead of failing with `UNKNOWN_TASK`. Some models send `""` for the optional `taskId` rather than omitting it.
+- 3ac1bd0: `eve start` no longer keeps the server's stdout and stderr in memory after startup. Output is still forwarded, and an unexpected exit no longer repeats the full log history in its error.
+- 4c8ffa6: Keep successful tool calls completed when their output includes `code` and `message` fields.
+- ee0c6c0: `ctx.cancel()` in a `message.received` hook now cancels the turn when the message is a plain-text answer to a pending `ask_question` or `ctx.ask()` question. The question resolves as `cancelled` and the tool call never receives the text. Before, eve logged a warning and delivered the answer. `ctx.cancel()` in an `action.partial` hook for a workflow tool's report now cancels the turn waiting on that tool too.
+- bc4edd9: Attachments no longer fail a step when the session's sandbox cannot be resumed, for example when a follow-up lands on another replica. Earlier attachments and tool-result files in history reach the model as a "FileNotFound" note, and new inbound attachments and tool-returned files become a "could not be stored" note. Tools that use the sandbox still report the resume error.
+- 2de4011: Fail fast with an actionable error when the project has an unsupported `microsandbox` version (such as 0.7), instead of every sandbox operation throwing `isInstalled is not a function`.
+- 394ed22: Start built, managed eve agents when a local production Next.js server loads its configuration, so `next start` can serve eve routes.
+- f6bf73e: Keep every property name in `eve__search` tool signatures that run past the length cap. A long signature now drops its property descriptions before any property name, so the model no longer misses fields a large MCP tool such as Linear's `save_issue` supports.
+- b382594: Compaction no longer re-caps a tool result it already capped. A capped result now fits the size limit it was measured against, so later compactions leave it as it is instead of nesting another truncation notice and keeping less of the original content. A summary written after a cap also sees the whole content the capped result kept.
+- a1c18f5: Teams group chats and channels no longer show connection sign-in links or confirmation codes in the shared thread. The card now has a **Sign in** button, and Teams shows the link only to the person who has to sign in, so another member can't connect their own account under the requester's identity.
+- 9f3a634: Snapshot retained tracing arguments and errors so later mutations cannot introduce private content into telemetry or checkpoints. Apply accepted delegation capture ceilings when re-entering durable turns, including through `resume()`.
+- ec2862e: When a tool throws, the error on its `tool.call.failed` instrumentation event now keeps the thrown error's `name`, such as `QuotaError`, instead of always reading `Error`. The `action.result` stream event reports the same name as `error.name`.
+- c1880f4: Parse a workflow tool's result as JSON when its run completes, the way a local tool's result already is. A tool that returns `ctx.ask()`'s answer directly, after the person picked an option, no longer fails the turn with `Cannot convert undefined or null to object`: undefined properties are omitted, a tool that returns nothing reports `null`, and the same applies to `ctx.reply()` in `serve` tools. A result JSON can't carry, such as a `Date` or `Map`, now fails the call with a serialization error instead of reaching the model as `{}`.
+
+## 0.79.1
+
+### Patch Changes
+
+- 68b9d58: Approved `defineTool` calls can read who approved them: `ctx.approval.responder` is the approver and `ctx.approval.responder.getToken(provider)` resolves their token, while the call still runs as the requester.
+- 620022b: The Braintrust eval reporter no longer aborts the run when an eval produces no agent output. Those evals are now logged with an empty output.
+- 2e45423: Allow `eve/client` to use an `AbortSignal` that does not implement `throwIfAborted`, including the signal provided by React Native.
+- afa7741: Sync dynamic skill files to the sandbox about 7× faster by writing them concurrently.
+- 70f75ed: Connection sign-in callback URLs no longer include `VERCEL_AUTOMATION_BYPASS_SECRET`, so the secret stays out of the links shown to users and the `redirect_uri` sent to providers. On a deployment behind Deployment Protection, the person signing in now passes protection on their own, for example through Vercel Authentication or a Deployment Protection Exception.
+- 4c6fc60: Record `agent.input.messages.omitted` on model spans when the oldest prompt messages are dropped to fit the 32 KB content cap, so a long conversation no longer looks like it starts partway through.
+- 7f5a5e6: Reading a session stream whose history passed the World's retention now returns `410` with `code: "session_expired"` instead of a retryable `503` or `404`. The TypeScript client fails on the first response instead of retrying for about 38 seconds.
+- 624be47: Pass `followIdle: false` to `useEveAgent()` (React, Vue, and Svelte) or `EveAgentStore` to close the session stream while the session is idle instead of reconnecting it indefinitely. The stream reopens from its cursor on the next send, answer, or resume, and a prewarmed session opens no stream until its first message.
+- 4bf1efa: Propagate configured trace context at each AI Gateway model request.
+- 7921fb0: Self-modification now rejects target branch names Git rejects: path components starting with `.` (such as `.hidden` or `feature/.hidden`) and names containing the DEL character.
+- 71479ce: Let a message sent with `turnPolicy: "queue"` right after a tool approval or sign-in appears steer the held turn again. A message that arrived while the step raising the request was still finishing was treated as sent before the request, so it stayed queued behind a turn that could not end until the person acted.
+- 0fd4240: Honor explicit OpenTelemetry trace policies that enable inputs or outputs for DMs, private channels, and unknown audiences. Default capture remains audience-aware, and inherited capture limits and destination redaction still apply.
+- 3aa9a3a: Expose the live Vercel Sandbox name on `VercelSandboxSession` so tools can create Vercel git-credential-broker grants scoped to their session sandbox.
+- 9d046f8: Memory provider tools are now offered on a turn whose message carries a file attachment. Before, the agent lost its memory tools on exactly that turn.
+- 8d5b75f: `eve build` now works for apps with mounted extensions on filesystems without hard-link support, such as some NFS and FUSE mounts. It no longer fails with `Unknown system error -524` while writing the authored module map.
+- d8414ad: OpenAPI connections whose operation names collide at 64 characters now keep the suffixed tool names within the 64-character provider limit.
+- 8f336b8: Prewarm new Web Chat sessions when the user starts typing, so durable session startup overlaps with composing the first message.
+- 0dea0de: Keep a message sent with `turnPolicy: "queue"` before a tool approval or sign-in was requested in the queue, so it can no longer answer a prompt the person had not seen. Messages sent after the prompt still steer the held turn.
+- d7fef87: Import skills with structured or non-string metadata without failing, treating metadata outside eve's modeled shape like other unmodeled frontmatter.
+- f2e0f67: Vercel sandbox creation now reads `VERCEL_TOKEN`, `VERCEL_TEAM_ID`/`VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID` from the environment, like sandbox lookup and deletion already do. A CI runner without a linked project can now create sandboxes.
+- a4af301: Labeled assertions now report to Braintrust and Datadog under their label, so `t.score(x).label("grounding")` logs as `grounding` instead of `score [grounding]` or `score_grounding`. Display names in the console and run artifacts are unchanged, and labeled metrics start a new series under the bare label.
+- d91d27c: Keep the answer a turn already wrote when it waits on tasks and resumes without new text, so `MessageResponse` results, `eve invoke`, and eval turns no longer report an empty message.
+- 57d4272: Connections that share a host, such as Jira and Confluence on one Atlassian domain, no longer trigger the "could not assign a unique toolResultFrom identity" warning, and `toolResultFrom` now accepts OpenAPI connections, including ones without a `baseUrl`.
+- 0e6bc96: `eve build` now reports why an extension mount failed to resolve, for example an extension that requires an unsupported tool contract or a package that isn't installed. Before, the build stopped with `Selected module binding "extensions/<name>.ts" has no compile or runtime usage.` and hid the cause.
+
+## 0.79.0
+
+### Minor Changes
+
+- bc2be45: Adds `t.score(evaluation)` for recording a score from 0 to 1, named with `.label(key)` and gated with `.gate()` or `.atLeast()`. `AssertionResult` gains `key`, and `score`, `threshold`, and `passed` are now optional: `score` is absent when the scorer threw, and `threshold` and `passed` are absent when no rule applies, so custom reporters should treat `passed === false` as the failure signal. `eve eval` warns when soft assertions in one eval share a name with different scores.
+
+### Patch Changes
+
+- 76f6854: eve's agent spans now come from the shared tracing library, and durable turns recover from one checkpoint per turn. Each tool call is still one `execute_tool` span, a local subagent's first turn still nests under its caller, and trace schema version 4 is unchanged.
+- f5e5183: Connection approval policies now receive `toolAnnotations`, the hints an MCP server declared for the called tool (such as `readOnlyHint` and `destructiveHint`), so a policy can skip approval for read-only tools. It is `undefined` when the server declares none.
+- 302a4d3: Tools can now define `approval.prompt` to show a human-readable, input-aware summary in approval requests. Slack keeps the complete tool input available in a collapsed block below the approval card.
+- 422b628: Extract reusable agent tracing with wrapped execution, model stream completion, remote delegation, and durable turns that save and resume themselves through a checkpointer. Preserve trace schema version 4 while sharing one span lifecycle with eve.
+- 485d0f5: The agent tracing library now writes schema 4's `agent.action.kind`, `agent.action.name`, and `agent.action.outcome` on tool and approval spans itself, so hosts other than eve render correctly in Agent Runs. eve's trace output is unchanged.
+
+## 0.78.0
+
+### Minor Changes
+
+- 9559de8: Approved calls now always run as the requester. This closes a privilege escalation: when another person approved a call, it ran with the approver's identity and credentials, so a requester could get a tool to act with access they don't have. The call now keeps the identity and credentials of the person whose turn requested it, and approved workflow and agent calls are rechecked before dispatch. This reverses the execution-identity rule from #4368. Tools that should only proceed for certain approvers can still check `response.principal` in their `approval.response` policy.
+
+### Patch Changes
+
+- db71190: A dynamic resolver no longer adds the catalog tools (`eve__search`, `eve__tool`, and `eve__skill`) on its own. eve adds the catalog tools once a session reaches something they find, call, or load, such as a deferred entry a resolver returns, and keeps them for the rest of the session. Agents whose resolvers return only listed tools no longer see these tools or spend steps searching.
+- 4ef1ad9: Workflow tools and the agents they open start faster. Tasks begin work sooner, `ctx.agent().send()` no longer waits for the agent's session to boot, a model step that starts several workflow tool runs starts them in parallel, and a fan-out's agent starts, progress, and results reach the session in batches instead of one at a time.
+- f3dbd0c: Keep an over-budget turn waiting for input until its continuation question is answered. Continue resumes the same turn, queued messages wait for the answer, and cancellation withdraws the question.
+- 7f87e28: Emit sign-in requests for executing tools even when a sibling call in the same model step needs approval.
+- 3e7bbb2: Emit `turn.waiting` with `on: "tasks"` when a model step parks on blocking workflow execute calls, including calls dispatched after approval. Task and agent receipt dispatches do not emit a wait; their actual task waits report the park.
+- 3445e89: Sandbox commands now run with `AI_AGENT=eve` by default, so agent-aware CLIs such as `vercel` switch to their non-interactive agent mode. Set `AI_AGENT` in the environment's `env` option, or in the `env` of one `run()` or `spawn()` call, to override it.
+- db71190: `eve__search` results now include `searched`, the number of entries the query covered, and `remaining`, the number of matches past `limit`, so the model can tell after one search how much is left to find. Its description now tells the model to search only when nothing in its tool list fits the request.
+
+## 0.77.0
+
+### Minor Changes
+
+- 0248e69: eve now downloads attachment links itself instead of handing them to the model provider. When a channel's `fetchFile` returns `null`, or the channel has none, eve fetches a public `https:` link with the 25 MB upload cap and a 30-second timeout, at most 10 links per message and one at a time, and any other link or failed download reaches the model as a note. A private or expired link, such as a Google Drive file shared in Slack, no longer fails every later model call, and sessions that already hold such a link recover.
+- 0248e69: `read_file` now shows PDFs up to 20 MiB to the model as files, so the agent can reopen an attached PDF after compaction, or read one that a tool or `bash` wrote to the sandbox. Its output's `image` field is now `file` and carries `pages` for PDFs. `read_file` also refuses images over 8000 pixels per side, which providers reject.
+
+### Patch Changes
+
+- b6b353f: A custom channel's `fetchFile` can throw `attachmentError(message)` from `eve/channels` to tell the model why a file didn't arrive, such as a size limit, while the original error stays in operator logs. `fetchFile` now types the `session` it already receives, and `eve/channels` exports the `FetchFileFunction`, `FetchFileContext`, and `FetchFileResult` types for resolvers written in their own module.
+- 0248e69: Every attachment now reaches the model with a label that names its sandbox path, including images and PDFs that also arrive as bytes, so the agent can pass a visible file to `bash` or open it again. eve checks image and PDF media types against the file's bytes. Only PNG, JPEG, GIF, and WebP images up to 3 MiB and 8000 pixels per side, and PDFs up to 20 MiB, go to the model as bytes, and tool results follow the same rule. A HEIC photo, an oversized screenshot, or a mislabeled file renders as its label instead of failing the model call. Live sessions pay one prompt-cache rewrite after upgrading.
+- 0248e69: A turn cancelled before its first model call now stages its attachments, so a photo sent just before a follow-up message no longer breaks every later turn. File parts eve can't stage become a note instead of entering session history. Byte-valued file parts cross the queue as `data:` URLs, a string with any URL scheme reaches the channel's `fetchFile` instead of being decoded as base64, and `message.received` reports an inline file's size instead of echoing its `data:` URL.
+- caf61ff: `cancel()` from `useEveAgent()` and `EveAgentStore` now stops a turn that an approval or other input answer resumed. Previously it sent no cancel request and the resumed turn ran to completion. `MessageResponse.cancel()` on a `ClientSession.respond()` response now targets that resumed turn too.
+- 351f66d: Memory recalled on `compaction.completed` during a turn now joins history before the turn's latest user message, where `turn.started` recall goes, instead of after it. The question stays the last user message the model reads, with client context between the recalled memory and the question. Compaction between turns still appends the recall.
+- 8f50d9d: A connection tool call no longer fails with `Unrecognized key` when the model sends a key the connection supplies through `toolCall.providedArguments`. eve drops the model's value and the provided value is used, as documented.
+- b6b353f: `eveChannel()` accepts `fetchFile`, so a web client can upload a large file to its own storage and send only the URL. eve loads the file inside the workflow step, past the platform's request body limit. `defineChannel` and `eveChannel` take an `uploadPolicy` that eve now applies to every staged file, including URLs it downloads itself, on the final bytes and their verified media type. Slack, Telegram, and Teams apply their own `uploadPolicy` the same way. A file over the cap or of a disallowed type reaches the model as a note. An `eveChannel` with `uploadPolicy` or `fetchFile` reports its instrumentation kind as `channel:eve` instead of `http`, as one with `events` already does.
+- 66ed5f9: Importing `eve/next` from a `node -e` script, such as the loader `vercel dev` uses for `next.config.*`, no longer throws `ERR_INVALID_ARG_VALUE` for `"[eval]"`.
+- 15177c6: Fix a second, never-settling `web_search` part under AI Gateway. eve no longer streams input for provider tools such as `web_search`, so each search shows up once, under the call id it runs and settles with.
+- 2eb861a: `eve/vue` and `eve/svelte` no longer export the internal session projection types `SessionAuthorization`, `SessionCall`, `SessionCallStatus`, and `SessionProjection`, matching `eve/react`. Use `ToolCallStatus` and `toolCallState()` to read a tool call's status.
+- 88edd75: just-bash sandboxes now start when the app runs from a different path than the one it was built in. The prepared artifact stores the template key, and eve resolves it under the runtime sandbox cache, so copying `.output` and `.eve/sandbox-cache` to a new root no longer fails with `SandboxTemplateNotProvisionedError`.
+- dd4374e: Agents that use `mockModel` from `eve/evals` now compile without `modelContextWindowTokens`. Before, the documented one-line `mockModel` example failed with a missing AI Gateway context window error; mock models now default to a 1,000,000-token window.
+- 85d1fcb: Slack now removes the buttons from every settled tool-approval card when one step posts many approvals. Before, a grouped message could grow past Slack's 50-block limit as cards settled, Slack rejected the update, and settled cards kept their Approve and Cancel buttons. A settled card now shows the outcome and who answered on the card itself instead of in extra lines below it.
+- 13998d2: The Slack channel now collects every file posted in a thread since the previous mention of the app, up to 10 messages back, instead of only the newest message's files, so a file shared before a follow-up question reaches the agent. It skips Google Drive, Dropbox, and other remote files, whose links stay in the message text, keeps audio and video attachments, and stops a file download after 30 seconds.
+- b56b4ff: A model stream that stops sending output without closing no longer holds the turn forever. After 10 minutes without output eve abandons the stream and retries the model call, and the turn fails normally once retries run out. Time spent running tools does not count toward the timeout. eve now requires `ai` 7.0.137 or later.
+- 5d37843: When a failed turn ends the session, built-in channels now post one notice telling the person to start over, instead of a "please try again" notice followed by a "start a new session" notice for the same error. `turn.failed` events now carry `terminal: true` when `session.failed` follows (and `false` when the session waits for the next message), so custom channel handlers can make the same choice.
+- 11392bd: `eve link --non-interactive --project <name>` and `eve deploy --non-interactive --yes --project <name>` now link a multi-agent workspace from its root instead of failing with "No eve agent in this directory", so a fresh CI checkout can link and deploy every agent without a prompt.
+
+## 0.76.3
+
+### Patch Changes
+
+- 592f773: Fix `eve build` failing with "Identifier has already been declared" when a tool callback's destructured parameter or local declaration shadows a variable from an enclosing scope. This also fixes building agents that mount `eve/extensions/git`.
+
 ## 0.76.2
 
 ### Patch Changes

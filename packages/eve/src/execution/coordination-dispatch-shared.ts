@@ -1,4 +1,3 @@
-import type { SessionAuthContext } from "#channel/types.js";
 /** Shared owner-side dispatch context preparation. */
 
 import { buildAdapterContext } from "#channel/adapter-context.js";
@@ -29,6 +28,7 @@ import {
   storedProjection,
   turnPosition,
 } from "#harness/session-machine/view.js";
+import type { TaskStartedStreamEvent } from "#protocol/message.js";
 import type { RuntimeActionResult, RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { SessionParent, SessionTraceRoot } from "#channel/types.js";
 import type { ContextReader } from "#context/key.js";
@@ -46,7 +46,6 @@ import type { WorkflowAgentMetadata } from "#tools/workflow-definition.js";
 /** Input shared by direct and Workflow-originated owner-side dispatch. */
 export interface CoordinationDispatchInput {
   readonly workflowToolRunOwner: WorkflowToolRunOwner;
-  readonly sessionWritable: WritableStream<Uint8Array>;
   readonly serializedContext: Record<string, unknown>;
   readonly sessionState: DurableSessionState;
 }
@@ -56,6 +55,8 @@ export interface CoordinationDispatchResult {
   readonly results: readonly RuntimeActionResult[];
   readonly serializedContext: Record<string, unknown>;
   readonly sessionState: DurableSessionState;
+  /** The tasks the dispatch started or sent to, for the step that publishes `task.started`. */
+  readonly started: readonly TaskStartedStreamEvent["data"][];
 }
 
 /** Everything preflight produces before either step's dispatch loop runs. */
@@ -88,10 +89,8 @@ export interface PreparedCoordinationDispatch<PlanEntry = RuntimeWorkflowTaskReq
 
 /**
  * Runs every dispatch precondition that may throw — durable reads, context
- * deserialization, handle-store validation, and batch planning — before
- * the caller acquires the parent stream writer, so a preflight failure
- * never leaks the writer lock. Returns undefined when no actions are
- * pending.
+ * deserialization, handle-store validation, and batch planning — before any
+ * run starts. Returns undefined when no actions are pending.
  */
 export async function prepareCoordinationDispatch(input: {
   readonly serializedContext: Record<string, unknown>;
@@ -106,7 +105,7 @@ export async function prepareCoordinationDispatch(input: {
     waiting.event.turnId || activeTurnId(turnPosition(storedProjection(durableSession.state)));
   const ctx = await deserializeContext(input.serializedContext);
   const prepared = await prepareActionDispatch({
-    batch: { approvers: waiting.approvers, event: { ...waiting.event, turnId }, requests },
+    batch: { event: { ...waiting.event, turnId }, requests },
     ctx,
     durableSession,
     plan: () => requests,
@@ -116,7 +115,6 @@ export async function prepareCoordinationDispatch(input: {
 }
 
 interface DispatchBatch {
-  readonly approvers?: Readonly<Record<string, SessionAuthContext>>;
   readonly event: {
     readonly sequence: number;
     readonly stepIndex: number;

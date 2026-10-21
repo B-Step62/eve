@@ -7,15 +7,14 @@ import {
   approvedCalls,
   completeSignIn,
   hold,
+  runnableCalls,
   settle,
 } from "#harness/session-machine/transitions.js";
-import type { SuspendedStep } from "#harness/session-machine/view.js";
-import { validateHarnessModelMessages } from "#harness/messages.js";
-import { openTurn, type Step } from "#harness/step/context.js";
-import { prepareTurnInput } from "#harness/step/intake.js";
-import { placeTurnInput } from "#harness/step/prompt.js";
+import type { SessionView, SuspendedStep } from "#harness/session-machine/view.js";
+import { signInAttemptKey } from "#harness/hitl/sign-ins.js";
+import type { Step } from "#harness/step/context.js";
 import { SessionLimitDeclinedError, throwIfTurnAborted } from "#harness/turn-cancellation.js";
-import { bumpSessionRuntimeUsageLimits } from "#harness/turn-tag-state.js";
+import { resetSessionUsageWindow } from "#harness/turn-tag-state.js";
 import type { HarnessToolLookup, StepInput, StepResult } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import {
@@ -28,12 +27,12 @@ import {
   stepForRequest,
   withdrawSignIns,
 } from "./approvals.js";
-import { runApprovedCalls } from "./approved-calls.js";
-import { getApprovalAuditState, retireActiveCandidates } from "./candidates.js";
+import { rejectApprovedCall, runApprovedCalls, type ApprovedCallResult } from "./approved-calls.js";
+import { getApprovalAuditState, responderOfRequest, retireActiveCandidates } from "./candidates.js";
 import { coordinateApprovalDelivery } from "./coordinator.js";
 import { deliver, resolveTypedApproval, turnInputOnly, withoutTurnInput } from "./delivery.js";
-import { approversOf, setApprovedCallCallers } from "./approved-call-callers.js";
-import type { InputRequest } from "#shared/input.js";
+import { recheckApprovedCall } from "#harness/tools.js";
+import type { ApprovedCall } from "#harness/session-machine/state.js";
 import type { InstrumentationAttempt } from "#instrumentation/runtime.js";
 import { activeTurnId } from "#harness/session-machine/view.js";
 
@@ -178,34 +177,14 @@ export async function acceptHumanInput(
         }),
       );
       return stop(held(step));
-    case "defer-message": {
-      // Approved calls wait behind the budget prompt, and the message waits behind them.
-      if (approvedCalls(step.view().turn).length > 0) {
-        const deferred = turnInputOnly(decision.input);
-        if (deferred !== undefined) await step.apply(deferInput(step.view(), deferred));
-        return stop({ next: null, session: step.session });
-      }
-      // The message is received now, into a turn that holds for the budget prompt: the grant
-      // resumes that turn, and the model reads the message from history.
-      const turn = await prepareTurnInput(step, decision.input, { consumedMessage: false });
-      const failed = await openTurn(step, {
-        input: [...turn.ephemeral, ...turn.messages],
-        message: delivered.displayMessage ?? decision.input?.message,
-      });
-      if (failed !== undefined) return stop(failed);
-      step.session = {
-        ...step.session,
-        history: validateHarnessModelMessages(placeTurnInput(step, step.session.history, turn)),
-      };
-      return stop(await holdForInput(step));
-    }
     case "continue":
       break;
   }
   // Approved calls run with the tools of the step that asked, including calls approved by an
   // earlier delivery whose turn the budget stopped.
-  for (const parked of step.view().turn.suspended) {
-    if ((parked.approved?.length ?? 0) > 0) await restoreTools(parked);
+  const view = step.view();
+  for (const parked of view.turn.suspended) {
+    if (runnableCalls(view, parked).length > 0) await restoreTools(parked);
   }
   // What the answers resolved comes before the delivery's own input, as with the AI SDK: the model
   // reads the approved calls' results and the denials first, and the input waits a step. A
@@ -216,7 +195,7 @@ export async function acceptHumanInput(
       batch.inputs.every((entry) => entry.response !== undefined),
   );
   const deferred =
-    answeredApprovals || approvedCalls(step.view().turn).length > 0
+    answeredApprovals || approvedCalls(step.view()).length > 0
       ? turnInputOnly(decision.input)
       : undefined;
   if (deferred !== undefined) await step.apply(deferInput(step.view(), deferred));
@@ -234,20 +213,20 @@ export async function acceptHumanInput(
 }
 
 /**
- * Admits what a delivery decided before its turn calls the model: a session-limit answer grants a
- * fresh budget or ends the turn tree, and a step its answers completed, as denials do, commits.
+ * Admits what a delivery decided before its turn calls the model: a session-limit answer starts a
+ * new usage window or ends the turn tree, and a step its answers completed, as denials do, commits.
  */
 export async function admitApprovedWork(step: Step, work: ApprovedWork): Promise<void> {
   if (work.limit !== undefined) {
     if (!work.limit.granted) throw new SessionLimitDeclinedError();
-    step.session = bumpSessionRuntimeUsageLimits(step.session);
+    step.session = resetSessionUsageWindow(step.session);
   }
   await step.apply(settle(step.view(), { results: [] }));
 }
 
 /** Whether a suspended step holds approved calls that haven't run. */
 export function hasApprovedWork(step: Step): boolean {
-  return approvedCalls(step.view().turn).length > 0;
+  return approvedCalls(step.view()).length > 0;
 }
 
 /**
@@ -257,14 +236,34 @@ export function hasApprovedWork(step: Step): boolean {
  */
 export async function dispatchApprovedWorkflows(step: Step, work: ApprovedWork): Promise<boolean> {
   const tasks: RuntimeWorkflowTaskRequest[] = [];
-  const approved: InputRequest[] = [];
-  for (const parked of step.view().turn.suspended) {
+  const denied: ApprovedCallResult[] = [];
+  const view = step.view();
+  for (const parked of view.turn.suspended) {
     const tools = work.toolsOf(parked);
-    const requests = (parked.approved ?? []).filter(
-      (request) => tools.get(request.action.toolName)?.workflowId !== undefined,
-    );
+    const requests: ApprovedCall[] = [];
+    for (const request of runnableCalls(view, parked)) {
+      const tool = tools.get(request.action.toolName);
+      if (tool?.workflowId === undefined) continue;
+      const recheck = await recheckApprovedCall(tool, {
+        abortSignal: step.config.abortSignal,
+        callId: request.action.callId,
+        input: request.action.input,
+        approvedTools: grantedApprovalKeys(step.view(), (approved) =>
+          tools.get(approved.action.toolName)?.approvalKey?.(approved.action.input),
+        ),
+      });
+      if (recheck.denied) {
+        denied.push(
+          await rejectApprovedCall({
+            request,
+            reason: recheck.reason,
+            position: step.position(),
+            publish: step.publish,
+          }),
+        );
+      } else requests.push(request);
+    }
     if (requests.length === 0) continue;
-    approved.push(...requests);
     const dispatched = collectWorkflowCalls({
       session: step.session,
       toolCalls: requests.map(({ action }) => ({
@@ -278,17 +277,35 @@ export async function dispatchApprovedWorkflows(step: Step, work: ApprovedWork):
     step.session = dispatched.session;
     tasks.push(...dispatched.workflowRequests);
   }
+  if (denied.length > 0) await step.apply(settle(step.view(), { results: denied }));
   if (tasks.length === 0) return false;
-  await step.apply(
-    dispatch(step.view(), { approvers: approversOf(approved, step.session.state), tasks }),
-  );
+  await step.apply(dispatch(step.view(), { tasks }));
+  if (tasks.some((task) => task.entry.entryPoint === "execute")) {
+    await step.apply(hold(step.view(), { on: "tasks" }));
+  }
   return true;
+}
+
+/**
+ * Calls a sign-in stopped can share it, and it reports once: with the first call to run it, unless
+ * a call that ran earlier reported it (the event log says it is no longer required). `claimed`
+ * holds the sign-ins the calls in this batch already took.
+ */
+function reportingOnce(view: SessionView, call: ApprovedCall, claimed: Set<string>): ApprovedCall {
+  const signIns = (call.signIns ?? []).filter((challenge) => {
+    const key = signInAttemptKey(challenge);
+    const required = view.projection.authorizations[challenge.attemptId ?? challenge.name]?.status;
+    if (claimed.has(key) || required !== "required") return false;
+    claimed.add(key);
+    return true;
+  });
+  return { ...call, signIns };
 }
 
 /**
  * Runs approved local calls once the step has started and its budget allows it, as the AI SDK ran
  * them before the model read their results: each with the tools of the step that asked, as
- * whoever approved it, and in the step's first attempt. A call that needs a sign-in holds the
+ * the turn's requester, and in the step's first attempt. A call that needs a sign-in holds the
  * turn.
  */
 export async function runApprovedLocalCalls(
@@ -296,11 +313,13 @@ export async function runApprovedLocalCalls(
   work: ApprovedWork,
   setAttemptScope: (scope: InstrumentationAttempt | undefined) => void,
 ): Promise<StepResult | undefined> {
-  const local = step.view().turn.suspended.map((parked) => {
+  const view = step.view();
+  const claimed = new Set<string>();
+  const local = view.turn.suspended.map((parked) => {
     const tools = work.toolsOf(parked);
-    const requests = (parked.approved ?? []).filter(
-      (request) => tools.get(request.action.toolName)?.workflowId === undefined,
-    );
+    const requests = runnableCalls(view, parked)
+      .filter((request) => tools.get(request.action.toolName)?.workflowId === undefined)
+      .map((request) => reportingOnce(view, request, claimed));
     return { requests, tools };
   });
   const approved = local.flatMap(({ requests }) => requests);
@@ -311,7 +330,6 @@ export async function runApprovedLocalCalls(
         .filter((name) => tools.get(name)?.frameworkTool === true),
     ),
   );
-  setApprovedCallCallers(approved, step.session.state);
   const position = step.position();
   const attempt =
     approved.length === 0
@@ -335,6 +353,7 @@ export async function runApprovedLocalCalls(
         position: step.position(),
         publish: step.publish,
         requests,
+        responderOf: (request) => responderOfRequest(step.session.state, request.requestId),
         telemetry: attempt?.telemetry,
         tools,
       });
@@ -344,13 +363,12 @@ export async function runApprovedLocalCalls(
   // A cancellation ends the turn once the calls it cut short have their results.
   throwIfTurnAborted(step.config.abortSignal);
   const signIn = resolveInlineAuthorizationInterrupt({
-    messages: [],
     toolResults: executed.flatMap((run) => run.toolResults),
   });
   if (signIn === undefined) return undefined;
   await step.apply(
     requireSignIn(step.view(), {
-      callIdsByName: signIn.callIdsByName,
+      calls: signIn.calls,
       challenges: signIn.challenges,
     }),
     step.session.history,

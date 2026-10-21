@@ -1,3 +1,4 @@
+import { AgentSpanIdGenerator } from "#compiled/@vercel/agent-runs/index.js";
 import { context as otelContext, trace } from "#compiled/@opentelemetry/api/index.js";
 import {
   type FilePart,
@@ -40,6 +41,7 @@ import { defineInstructions } from "#public/definitions/instructions.js";
 import type { ResolvedDynamicInstructionsResolver } from "#runtime/types.js";
 import type { DynamicResolveContext } from "#dynamic/definition.js";
 import { registerDurableDynamicCallback } from "#tools/durable-callbacks.js";
+import type { SessionUsageLimit } from "#shared/agent-definition.js";
 import type { ChannelAudience } from "#shared/channel-audience.js";
 import {
   ConversationContextKey,
@@ -53,16 +55,15 @@ import {
   createUserMessage,
   type HarnessModelMessage,
 } from "#harness/messages.js";
-import {
-  getPendingAuthorization,
-  modelFacingAuthorizationOutput,
-  requestAuthorization,
-} from "#harness/authorization.js";
+
+import { readHitlState } from "#harness/hitl/requests.js";
+
+import { modelFacingAuthorizationOutput, requestAuthorization } from "#harness/authorization.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
 import { requireSignIn } from "#harness/hitl/approvals.js";
 import { createAuthorizationRequiredEvent } from "#protocol/message.js";
-import { ownOpenRequestIds } from "#harness/session-machine/transitions.js";
-import { runtimeWait, storedProjection } from "#harness/session-machine/view.js";
+import { finishTurn, ownOpenRequestIds } from "#harness/session-machine/transitions.js";
+import { answeredCallIds, runtimeWait, storedProjection } from "#harness/session-machine/view.js";
 import {
   foldingHandler,
   parkedSteps,
@@ -77,8 +78,9 @@ import { createToolLoopHarness } from "#harness/tool-loop.js";
 import { createTask, writeTaskTable } from "#execution/tasks/table.js";
 import { SessionLimitDeclinedError, TurnCancelledError } from "#harness/turn-cancellation.js";
 import {
-  getSessionUsageLimitViolation,
   getSessionTokenUsage,
+  getSessionUsage,
+  getSessionUsageWindow,
   setTurnUsageState,
 } from "#harness/turn-tag-state.js";
 import type { HarnessEmitFn, HarnessSession, ToolLoopHarnessConfig } from "#harness/types.js";
@@ -91,7 +93,7 @@ import {
   type InstrumentationRuntime,
   type SessionInstrumentation,
 } from "#instrumentation/runtime.js";
-import type { RuntimeContextResolver } from "#tracing/otel-declaration.js";
+import type { RuntimeContextResolver } from "#tracing/eve/otel-declaration.js";
 import { captureLogRecords } from "#internal/testing/log-records.js";
 import { countRunUsage } from "#execution/agent-sessions/usage.js";
 
@@ -195,6 +197,7 @@ function declareTelemetry(
       ? undefined
       : {
           forceFlush: async () => undefined,
+          idGenerator: new AgentSpanIdGenerator(),
           hooks: createInstrumentationHooks([]),
           otelSettings: {
             ...config,
@@ -226,6 +229,7 @@ function bindHookInstrumentation(
   return bindInstrumentationRuntime(
     {
       forceFlush: async () => undefined,
+      idGenerator: new AgentSpanIdGenerator(),
       hooks,
       otelSettings: useDeclaredRuntime ? declaredRuntime?.otelSettings : undefined,
       runtimeContextResolvers: useDeclaredRuntime
@@ -1486,6 +1490,71 @@ describe("createToolLoopHarness", () => {
     ).rejects.toThrow(/Dynamic model selection is required/);
   });
 
+  it("adds delivered history before each turn's context and message", async () => {
+    setupMockAgent({
+      finishReason: "stop",
+      response: { messages: [{ content: "ok", role: "assistant" }] },
+      text: "ok",
+      toolCalls: [],
+      toolResults: [],
+    });
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(createTestConfig(emit));
+
+    const first = await runStep(createTestSession(), {
+      context: ["Current context"],
+      history: [
+        { id: "m1", role: "user", text: "What is the code word?" },
+        { role: "assistant", text: "It is heron." },
+      ],
+      message: "Repeat it.",
+    });
+    await runStep(first.session, {
+      history: [{ role: "user", text: "Bob: it changed to egret." }],
+      message: "And now?",
+    });
+
+    const agents = vi
+      .mocked(ToolLoopAgent)
+      .mock.results.map((result) => result.value as { stream: ReturnType<typeof vi.fn> });
+    expect(agents[0]?.stream.mock.calls[0]?.[0].messages).toEqual([
+      {
+        content: "What is the code word?",
+        kind: "user",
+        metadata: { "eve.imported": true },
+        role: "user",
+      },
+      { content: "It is heron.", role: "assistant" },
+      { content: "Current context", kind: "context.instruction", role: "user" },
+      { content: "Repeat it.", kind: "user", role: "user" },
+    ]);
+    expect(agents[1]?.stream.mock.calls[0]?.[0].messages.slice(-3)).toEqual([
+      { content: "ok", role: "assistant" },
+      {
+        content: "Bob: it changed to egret.",
+        kind: "user",
+        metadata: { "eve.imported": true },
+        role: "user",
+      },
+      { content: "And now?", kind: "user", role: "user" },
+    ]);
+    const received = events.filter(
+      (event) => event.type === "history.imported" || event.type === "message.received",
+    );
+    expect(received.map((event) => [event.type, event.data.turnId])).toEqual([
+      ["history.imported", "turn_0"],
+      ["message.received", "turn_0"],
+      ["history.imported", "turn_1"],
+      ["message.received", "turn_1"],
+    ]);
+    expect(received[0]?.data).toMatchObject({
+      messages: [
+        { id: "m1", role: "user", text: "What is the code word?" },
+        { role: "assistant", text: "It is heron." },
+      ],
+    });
+  });
+
   it("passes projected history and incoming input to turn.started on every turn", async () => {
     setupMockAgent({
       finishReason: "stop",
@@ -1686,6 +1755,82 @@ describe("createToolLoopHarness", () => {
     ]);
   });
 
+  it("approval, execute, and sign-in siblings emit one input wait for the park", async () => {
+    const signal = requestAuthorization([
+      {
+        attemptId: "sibling-attempt",
+        name: "probe",
+        challenge: {
+          url: "https://idp.example/auth",
+          instructions: "Sign in",
+          userCode: "ABC",
+        },
+        hookUrl: "https://app.example/callback",
+        principal: { type: "app" },
+        resume: { nonce: "n1" },
+      },
+    ]);
+    const output = modelFacingAuthorizationOutput(signal);
+    const gate = { type: "tool-call" as const, toolCallId: "gate-1", toolName: "add", input: {} };
+    const work = {
+      type: "tool-call" as const,
+      toolCallId: "delegate-1",
+      toolName: "delegate",
+      input: { message: "probe" },
+    };
+    const auth = {
+      type: "tool-call" as const,
+      toolCallId: "probe-1",
+      toolName: "probe",
+      input: {},
+    };
+    const approval = {
+      approvalId: "approval-gate",
+      toolCallId: "gate-1",
+      type: "tool-approval-request" as const,
+    };
+    const authResult = {
+      type: "tool-result" as const,
+      toolCallId: "probe-1",
+      toolName: "probe",
+      output,
+    };
+    setupMockAgent({
+      content: [gate, approval, work, auth],
+      finishReason: "tool-calls",
+      response: {
+        messages: [
+          { role: "assistant", content: [gate, approval, work, auth] },
+          { role: "tool", content: [authResult] },
+        ],
+      },
+      text: "",
+      toolCalls: [gate, work, auth],
+      toolResults: [authResult],
+    });
+    const tools = new Map(withBash(createDelegationToolMap()));
+    tools.set("probe", {
+      name: "probe",
+      description: "Probe",
+      inputSchema: jsonSchema({ type: "object" }),
+      execute: vi.fn(),
+    });
+    const { emit, events } = createEventCollector();
+    const run = createToolLoopHarness(createTestConfig(emit, { tools }));
+    const ctx = new ContextContainer();
+    stashToolInterrupt(ctx, "probe-1", signal);
+    const result = await contextStorage.run(ctx, () =>
+      run(createPendingBashApprovalSession(), {
+        inputResponses: [{ optionId: "approve", requestId: "approval-1" }],
+      }),
+    );
+    expect(runtimeWait(result.session.state)?.tasks[0]?.entry.entryPoint).toBe("execute");
+    expect(events.filter((event) => event.type === "authorization.required")).toHaveLength(1);
+    const waits = events.filter((event) => event.type === "turn.waiting");
+    expect(waits).toHaveLength(1);
+    expect(waits[0]?.data.on).toBe("input");
+  });
+
   it("parks on both batches when one step carries a workflow task and an approval", async () => {
     mockApprovalAlongsideWorkflowTask();
 
@@ -1841,110 +1986,99 @@ describe("createToolLoopHarness", () => {
     });
   });
 
-  it.each([
-    {
-      details: {
-        inputTokens: 12,
-        kind: "input",
-        limit: 12,
-        outputTokens: 3,
-        usedTokens: 12,
-      },
-      message: "The session reached its configured input token limit.",
-      limits: {
-        maxInputTokensPerSession: 12,
-      },
-      usage: {
-        cacheReadTokens: 2,
-        cacheWriteTokens: 1,
-        costUsd: 0,
-        inputTokens: 12,
-        outputTokens: 3,
-        sawCost: false,
-      },
-      errorCode: "SESSION_TOKEN_LIMIT_REACHED",
-      tokenKind: "input",
-    },
-    {
-      details: {
-        inputTokens: 7,
-        kind: "output",
-        limit: 3,
-        outputTokens: 3,
-        usedTokens: 3,
-      },
-      message: "The session reached its configured output token limit.",
-      limits: {
-        maxOutputTokensPerSession: 3,
-      },
-      usage: {
-        cacheReadTokens: 2,
-        cacheWriteTokens: 1,
-        costUsd: 0,
-        inputTokens: 7,
-        outputTokens: 3,
-        sawCost: false,
-      },
-      errorCode: "SESSION_TOKEN_LIMIT_REACHED",
-      tokenKind: "output",
-    },
-    {
-      details: {
-        costUsd: 1.51,
-        kind: "token-cost",
-        limitUsd: 1.5,
-        usedCostUsd: 1.51,
-      },
-      message: "The session reached its configured model token-cost limit.",
-      limits: {
-        maxTokenCostUsdPerSession: 1.5,
-      },
-      usage: {
-        cacheReadTokens: 2,
-        cacheWriteTokens: 1,
-        costUsd: 1.51,
-        inputTokens: 7,
-        outputTokens: 3,
-        sawCost: true,
-      },
-      errorCode: "SESSION_TOKEN_COST_LIMIT_REACHED",
-      tokenKind: "model token-cost",
-    },
-  ])(
-    "fails fast after the $tokenKind limit when the session cannot request input",
-    async (testCase) => {
-      const { emit, events } = createEventCollector();
-      const runStep = createToolLoopHarness(createTestConfig(emit, { capabilities: undefined }));
-      const session = setTurnUsageState(createTestSession({ limits: testCase.limits }), {
-        turnId: "turn_previous",
-        ...testCase.usage,
-        session: testCase.usage,
-      });
+  // A limit that trips once the window holds 12 new input tokens (cache reads excluded).
+  const TWELVE_NEW_INPUT_TOKENS: SessionUsageLimit = ({ window }) =>
+    window.inputTokens - window.cacheReadTokens >= 12;
 
-      const result = await runStep(session, { message: "Hi again" });
+  it("fails fast past the usage limit when the session cannot request input", async () => {
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(
+      createTestConfig(emit, {
+        capabilities: undefined,
+        sessionUsageLimit: TWELVE_NEW_INPUT_TOKENS,
+      }),
+    );
+    // 14 input tokens of which 2 are cache reads: 12 new input tokens.
+    const usage = {
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      costUsd: 0,
+      inputTokens: 14,
+      outputTokens: 3,
+      sawCost: false,
+    };
+    const session = setTurnUsageState(createTestSession(), {
+      turnId: "turn_previous",
+      ...usage,
+      session: usage,
+    });
 
-      expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
-      expect(result.next).toEqual({ done: true, output: "" });
-      expect(events.map((event) => event.type)).toEqual([
-        "session.started",
-        "turn.started",
-        "message.received",
-        "step.started",
-        "step.failed",
-        "turn.failed",
-        "session.failed",
-      ]);
-      expect(events.find((event) => event.type === "step.failed")?.data).toMatchObject({
-        code: testCase.errorCode,
-        details: testCase.details,
-        message: testCase.message,
-      });
-    },
-  );
+    const result = await runStep(session, { message: "Hi again" });
+
+    expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
+    expect(result.next).toEqual({ done: true, output: "" });
+    expect(events.map((event) => event.type)).toEqual([
+      "session.started",
+      "turn.started",
+      "message.received",
+      "step.started",
+      "step.failed",
+      "turn.failed",
+      "session.failed",
+    ]);
+    // Details keep the raw totals; an unreported cost is left out.
+    const reported = { cacheReadTokens: 2, cacheWriteTokens: 1, inputTokens: 14, outputTokens: 3 };
+    expect(events.find((event) => event.type === "step.failed")?.data).toMatchObject({
+      code: "SESSION_USAGE_LIMIT_REACHED",
+      details: { total: reported, window: reported },
+      message: "The session reached its usage limit.",
+    });
+    expect(
+      events.find((event) => event.type === "step.failed")?.data.details?.total,
+    ).not.toHaveProperty("costUsd");
+  });
+
+  it("hands the limit the session total and the usage window", async () => {
+    const { emit } = createEventCollector();
+    const sessionUsageLimit = vi.fn<SessionUsageLimit>(() => false);
+    const runStep = createToolLoopHarness(createTestConfig(emit, { sessionUsageLimit }));
+    setupMockAgent({
+      finishReason: "stop",
+      response: { messages: [{ content: "Hello!", role: "assistant" }] },
+      text: "Hello!",
+      toolCalls: [],
+      toolResults: [],
+    });
+    const usage = {
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      costUsd: 0.5,
+      inputTokens: 14,
+      outputTokens: 3,
+      sawCost: true,
+    };
+    const session = setTurnUsageState(createTestSession(), {
+      turnId: "turn_previous",
+      ...usage,
+      session: usage,
+    });
+
+    await runStep(session, { message: "Hi again" });
+
+    const expected = {
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      costUsd: 0.5,
+      inputTokens: 14,
+      outputTokens: 3,
+    };
+    expect(sessionUsageLimit).toHaveBeenCalledWith({ total: expected, window: expected });
+    expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
+  });
 
   // Session state with 12 input tokens already spent against a 12-token
-  // budget: the next model call is over the limit. The matching continuation
-  // request id is `test-session:limit:input:12` (absolute total = 12).
+  // window: the next model call is over the limit. The matching continuation
+  // request id is `test-session:0:limit:usage:0` (the first usage window).
   function createLimitReachedSession(): HarnessSession {
     const usage = {
       cacheReadTokens: 0,
@@ -1954,18 +2088,25 @@ describe("createToolLoopHarness", () => {
       outputTokens: 3,
       sawCost: false,
     };
-    return setTurnUsageState(createTestSession({ limits: { maxInputTokensPerSession: 12 } }), {
+    return setTurnUsageState(createTestSession(), {
       turnId: "turn_previous",
       ...usage,
       session: usage,
     });
   }
 
-  const LIMIT_REQUEST_ID = "test-session:0:limit:input:12";
+  function createLimitedConfig(emit?: HarnessEmitFn): ToolLoopHarnessConfig {
+    return createTestConfig(emit, { sessionUsageLimit: TWELVE_NEW_INPUT_TOKENS });
+  }
 
-  it("parks on a deterministic continuation prompt when the session reaches its token limit", async () => {
+  const LIMIT_REQUEST_ID = "test-session:0:limit:usage:0";
+  const LIMIT_PROMPT =
+    "This session has hit its usage limit. This is a guardrail against defective " +
+    "long-running sessions. If session activity looks fine, just approve to keep going.";
+
+  it("parks on a deterministic continuation prompt when the session reaches its usage limit", async () => {
     const { emit, events } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
+    const runStep = createToolLoopHarness(createLimitedConfig(emit));
 
     const result = await runStep(createLimitReachedSession(), { message: "Hi again" });
 
@@ -1978,16 +2119,16 @@ describe("createToolLoopHarness", () => {
       "message.received",
       "step.started",
       "input.requested",
-      "turn.completed",
-      "session.waiting",
+      "turn.waiting",
     ]);
     const requested = events.find((event) => event.type === "input.requested");
+    const reported = { cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 12, outputTokens: 3 };
     expect(requested?.data).toMatchObject({
       requests: [
         {
           action: {
             callId: LIMIT_REQUEST_ID,
-            input: { kind: "input", limit: 12, usedTokens: 12 },
+            input: { total: reported, window: reported },
             kind: "tool-call",
             toolName: "session_limit_continuation",
           },
@@ -1998,13 +2139,14 @@ describe("createToolLoopHarness", () => {
             { id: "continue", label: "Approve", style: "primary" },
             { id: "stop", label: "Stop", style: "danger" },
           ],
+          prompt: LIMIT_PROMPT,
           requestId: LIMIT_REQUEST_ID,
         },
       ],
     });
   });
 
-  it("parks and grants a fresh model token-cost budget", async () => {
+  it("parks on a cost limit and starts a new window on continue", async () => {
     const usage = {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
@@ -2013,22 +2155,25 @@ describe("createToolLoopHarness", () => {
       outputTokens: 3,
       sawCost: true,
     };
-    const reached = setTurnUsageState(
-      createTestSession({ limits: { maxTokenCostUsdPerSession: 1.5 } }),
-      { turnId: "turn_previous", ...usage, session: usage },
-    );
+    const reached = setTurnUsageState(createTestSession(), {
+      turnId: "turn_previous",
+      ...usage,
+      session: usage,
+    });
     const { emit, events } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
+    const runStep = createToolLoopHarness(
+      createTestConfig(emit, { sessionUsageLimit: ({ window }) => (window.costUsd ?? 0) >= 1.5 }),
+    );
 
     const parked = await runStep(reached, { message: "Hi again" });
     expect(events.find((event) => event.type === "input.requested")?.data).toMatchObject({
       requests: [
         {
           action: {
-            input: { kind: "token-cost", limitUsd: 1.5, usedCostUsd: 1.51 },
+            input: { total: { costUsd: 1.51 }, window: { costUsd: 1.51 } },
           },
-          prompt: expect.stringContaining("$1.5 model token-cost limit"),
-          requestId: "test-session:0:limit:token-cost:1.51",
+          prompt: LIMIT_PROMPT,
+          requestId: LIMIT_REQUEST_ID,
         },
       ],
     });
@@ -2041,14 +2186,16 @@ describe("createToolLoopHarness", () => {
       toolResults: [],
     });
     const resumed = await runStep(parked.session, {
-      inputResponses: [{ optionId: "continue", requestId: "test-session:0:limit:token-cost:1.51" }],
+      inputResponses: [{ optionId: "continue", requestId: LIMIT_REQUEST_ID }],
     });
 
     expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
-    expect(getSessionUsageLimitViolation(resumed.session)).toBeNull();
+    // The total keeps the spend; the window restarted at the grant.
+    expect(getSessionUsage(resumed.session)).toMatchObject({ costUsd: 1.51, inputTokens: 12 });
+    expect(getSessionUsageWindow(resumed.session)).toMatchObject({ costUsd: 0, inputTokens: 0 });
   });
 
-  it("grants a fresh token budget when the user continues past the limit prompt", async () => {
+  it("starts a new usage window when the user continues past the limit prompt", async () => {
     setupMockAgent({
       finishReason: "stop",
       response: { messages: [{ content: "Hello!", role: "assistant" }] },
@@ -2058,7 +2205,7 @@ describe("createToolLoopHarness", () => {
       usage: { inputTokens: 7, outputTokens: 3 },
     });
     const { emit, events } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
+    const runStep = createToolLoopHarness(createLimitedConfig(emit));
 
     const parked = await runStep(createLimitReachedSession(), { message: "Hi again" });
     expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
@@ -2069,7 +2216,12 @@ describe("createToolLoopHarness", () => {
 
     expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
     expect(resumed.next).toBeNull();
-    expect(getSessionUsageLimitViolation(resumed.session)).toBeNull();
+    // The window holds only the resumed call's spend; the total has both.
+    expect(getSessionUsageWindow(resumed.session)).toMatchObject({
+      inputTokens: 7,
+      outputTokens: 3,
+    });
+    expect(getSessionUsage(resumed.session)).toMatchObject({ inputTokens: 19, outputTokens: 6 });
     // The parked user message survives into model history for the resumed call.
     expect(resumed.session.history).toContainEqual({
       content: "Hi again",
@@ -2096,7 +2248,7 @@ describe("createToolLoopHarness", () => {
     ).toBeGreaterThan(resolutionIndex);
   });
 
-  it("grants the budget when the user types the continue option as plain text", async () => {
+  it("starts a new window when the user types the continue option as plain text", async () => {
     setupMockAgent({
       finishReason: "stop",
       response: { messages: [{ content: "Hello!", role: "assistant" }] },
@@ -2106,7 +2258,7 @@ describe("createToolLoopHarness", () => {
       usage: { inputTokens: 7, outputTokens: 3 },
     });
     const { emit } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
+    const runStep = createToolLoopHarness(createLimitedConfig(emit));
 
     const parked = await runStep(createLimitReachedSession(), { message: "Hi again" });
 
@@ -2116,12 +2268,12 @@ describe("createToolLoopHarness", () => {
 
     expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
     expect(resumed.next).toBeNull();
-    expect(getSessionUsageLimitViolation(resumed.session)).toBeNull();
+    expect(getSessionUsageWindow(resumed.session)).toMatchObject({ inputTokens: 7 });
   });
 
   it("cancels the turn when the user declines the limit continuation prompt", async () => {
     const { emit, events } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
+    const runStep = createToolLoopHarness(createLimitedConfig(emit));
 
     const parked = await runStep(createLimitReachedSession(), { message: "Hi again" });
     const declined = runStep(parked.session, {
@@ -2139,15 +2291,25 @@ describe("createToolLoopHarness", () => {
     expect(events.some((event) => event.type === "session.completed")).toBe(false);
   });
 
-  it("fails a zero-budget session instead of raising a continuation that cannot grant tokens", async () => {
+  it("does not consult the limit before the session spent anything", async () => {
+    setupMockAgent({
+      finishReason: "stop",
+      response: { messages: [{ content: "Hello!", role: "assistant" }] },
+      text: "Hello!",
+      toolCalls: [],
+      toolResults: [],
+      usage: { inputTokens: 7, outputTokens: 3 },
+    });
     const { emit, events } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
-    const session = createTestSession({ limits: { maxInputTokensPerSession: 0 } });
+    const sessionUsageLimit = vi.fn<SessionUsageLimit>(() => true);
+    const runStep = createToolLoopHarness(createTestConfig(emit, { sessionUsageLimit }));
 
-    const result = await runStep(session, { message: "Hi again" });
+    // An empty window has nothing to judge, and approving could only start another empty one.
+    const result = await runStep(createTestSession(), { message: "Hi again" });
 
-    expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
-    expect(result.next).toEqual({ done: true, output: "" });
+    expect(sessionUsageLimit).not.toHaveBeenCalled();
+    expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
+    expect(result.next).toBeNull();
     expect(events.some((event) => event.type === "input.requested")).toBe(false);
   });
 
@@ -2161,18 +2323,14 @@ describe("createToolLoopHarness", () => {
       usage: { inputTokens: 7, outputTokens: 3 },
     });
     const { emit, events } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
+    const runStep = createToolLoopHarness(createLimitedConfig(emit));
 
     const parked = await runStep(createLimitReachedSession(), { message: "Hi again" });
     const beforeQueued = events.length;
     const reparked = await runStep(parked.session, { message: "also do this other thing" });
 
-    // The message is received into a real turn, which holds for the prompt.
-    expect(events.slice(beforeQueued).map((event) => event.type)).toEqual([
-      "turn.started",
-      "message.received",
-      "turn.waiting",
-    ]);
+    // The message waits behind the question without starting another turn.
+    expect(events.slice(beforeQueued).map((event) => event.type)).toEqual(["turn.waiting"]);
     const waiting = events.at(-1);
     expect(waiting).toMatchObject({ data: { on: "input" }, type: "turn.waiting" });
     const turnId = waiting?.type === "turn.waiting" ? waiting.data.turnId : undefined;
@@ -2181,21 +2339,77 @@ describe("createToolLoopHarness", () => {
     expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
     expect(events.filter((event) => event.type === "input.requested")).toHaveLength(1);
     const asked = { content: "also do this other thing", kind: "user" as const, role: "user" };
-    expect(reparked.session.history).toContainEqual(asked);
+    expect(reparked.session.history).not.toContainEqual(asked);
 
     const beforeGrant = events.length;
     const resumed = await runStep(reparked.session, {
       inputResponses: [{ optionId: "continue", requestId: LIMIT_REQUEST_ID }],
     });
 
-    // The grant resumes that turn; the message was received once, and the model reads it once.
+    // The grant resumes that turn and receives the queued message once.
     const resumedEvents = events.slice(beforeGrant);
     expect(resumedEvents.some((event) => event.type === "turn.started")).toBe(false);
-    expect(resumedEvents.some((event) => event.type === "message.received")).toBe(false);
+    expect(resumedEvents.filter((event) => event.type === "message.received")).toHaveLength(1);
     expect(resumedEvents.find((event) => event.type === "step.started")?.data.turnId).toBe(turnId);
     expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
     expect(
       resumed.session.history.filter((message) => message.content === asked.content),
+    ).toHaveLength(1);
+  });
+
+  it("continues a persisted pre-upgrade budget prompt after a new message", async () => {
+    setupMockAgent({
+      finishReason: "stop",
+      response: { messages: [{ content: "Hello!", role: "assistant" }] },
+      text: "Hello!",
+      toolCalls: [],
+      toolResults: [],
+      usage: { inputTokens: 7, outputTokens: 3 },
+    });
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(createLimitedConfig(emit));
+    const parked = await runStep(createLimitReachedSession(), { message: "Hi again" });
+
+    // Before this change requestLimit published input.requested followed by
+    // finishTurn: turn.completed and session.waiting, retaining an open prompt.
+    const oldSession = withPublished(
+      parked.session,
+      finishTurn(sessionView(storedProjection(parked.session.state), parked.session.state)).events,
+    );
+    const restored: HarnessSession = JSON.parse(JSON.stringify(oldSession));
+    const projection = storedProjection(restored.state);
+    expect(projection.activeTurnId).toBeUndefined();
+    expect(projection.inputs[LIMIT_REQUEST_ID]?.status).toBe("open");
+
+    const beforeMessage = events.length;
+    const queued = await runStep(restored, { message: "also do this other thing" });
+    const messageEvents = events.slice(beforeMessage);
+    // The old turn is already closed: queuing emits no event until the grant.
+    expect(messageEvents.map((event) => event.type)).toEqual([]);
+    expect(queued.held).toBeUndefined();
+    expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
+    const turnId = storedProjection(queued.session.state).activeTurnId;
+    expect(turnId).toBeUndefined();
+
+    const beforeGrant = events.length;
+    const resumed = await runStep(queued.session, {
+      inputResponses: [{ optionId: "continue", requestId: LIMIT_REQUEST_ID }],
+    });
+    const resumedEvents = events.slice(beforeGrant);
+    expect(resumedEvents.filter((event) => event.type === "turn.started")).toHaveLength(1);
+    expect(resumedEvents.filter((event) => event.type === "message.received")).toHaveLength(1);
+    expect(resumedEvents.find((event) => event.type === "step.started")?.data.turnId).toBe(
+      resumedEvents.find((event) => event.type === "turn.started")?.data.turnId,
+    );
+    expect(events.filter((event) => event.type === "input.requested")).toHaveLength(1);
+    expect(storedProjection(resumed.session.state).inputs[LIMIT_REQUEST_ID]).toBeUndefined();
+    expect(resumedEvents.find((event) => event.type === "input.resolved")).toMatchObject({
+      data: { resolutions: [{ requestId: LIMIT_REQUEST_ID, outcome: "answered" }] },
+    });
+    expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
+    expect(getSessionUsageWindow(resumed.session)).toMatchObject({ inputTokens: 7 });
+    expect(
+      resumed.session.history.filter((message) => message.content === "also do this other thing"),
     ).toHaveLength(1);
   });
 
@@ -5312,8 +5526,6 @@ describe("createToolLoopHarness", () => {
     const emptyStopResult: Record<string, unknown> = {
       ...emptyResult,
       finishReason: "stop",
-      response: { messages: [{ content: " \n", role: "assistant" }] },
-      text: " \n",
     };
 
     /**
@@ -5589,23 +5801,54 @@ describe("createToolLoopHarness", () => {
       }
     });
 
-    it("reissues a blank 'stop' response instead of treating it as intentional silence", async () => {
-      setupFirstThenAgent(emptyStopResult, successResult);
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const runStep = createToolLoopHarness(createTestConfig());
+    it("accepts an empty 'stop' response in a root session without retrying or failing the turn", async () => {
+      setupMockAgent(emptyStopResult);
+      const { emit, events } = createEventCollector();
+      const runStep = createToolLoopHarness(createTestConfig(emit));
 
-      try {
-        const result = await runStep(createTestSession(), { message: "Hi" });
+      const result = await runStep(createTestSession(), { message: "Hi" });
 
-        expect(result.next).toBeNull();
-        expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(2);
-        expect(result.session.history).toContainEqual({
-          content: "Here is your answer.",
-          role: "assistant",
-        });
-      } finally {
-        warnSpy.mockRestore();
-      }
+      expect(result.next).toBeNull();
+      expect(result.settledTurn).toEqual({ output: "" });
+      expect(events.map((event) => event.type)).toEqual([
+        "session.started",
+        "turn.started",
+        "message.received",
+        "step.started",
+        "step.completed",
+        "turn.completed",
+        "session.waiting",
+      ]);
+      expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries an empty 'stop' response in a delegated session and reports failure if still empty", async () => {
+      captureLogRecords();
+      setupMockAgent(emptyStopResult);
+      const { emit, events } = createEventCollector();
+      const runStep = createToolLoopHarness(createTestConfig(emit));
+      const ctx = new ContextContainer();
+      setDelegatedParent(ctx);
+
+      const result = await contextStorage.run(ctx, () =>
+        runStep(createTestSession(), { message: "Summarize Alice's report for Bob." }),
+      );
+
+      expect(result.next).toBeNull();
+      expect(result.settledTurn).toEqual({
+        isError: true,
+        output: expect.stringContaining("did not return a response"),
+      });
+      expect(events.map((event) => event.type)).toEqual([
+        "session.started",
+        "turn.started",
+        "message.received",
+        "step.started",
+        "step.failed",
+        "turn.failed",
+        "session.waiting",
+      ]);
+      expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(2);
     });
 
     it("reissues once and recovers when the stream rejects with NoOutputGeneratedError", async () => {
@@ -6237,6 +6480,80 @@ describe("createToolLoopHarness", () => {
       return { full, modelFacing: modelFacingAuthorizationOutput(full) };
     }
 
+    it("emits a sibling sign-in without approval while preserving the parked workflow call", async () => {
+      const { full, modelFacing } = createAuthSignals();
+      const delegateCall = {
+        input: { message: "probe" },
+        toolCallId: "delegate-1",
+        toolName: "delegate",
+        type: "tool-call" as const,
+      };
+      const signInCall = {
+        input: {},
+        toolCallId: "sign-in-1",
+        toolName: "add",
+        type: "tool-call" as const,
+      };
+      const signInResult = {
+        output: modelFacing,
+        toolCallId: signInCall.toolCallId,
+        toolName: signInCall.toolName,
+        type: "tool-result" as const,
+      };
+      setupMockAgent({
+        finishReason: "tool-calls",
+        response: {
+          messages: [
+            { content: [delegateCall, signInCall], role: "assistant" },
+            { content: [signInResult], role: "tool" },
+          ],
+        },
+        text: "",
+        toolCalls: [delegateCall, signInCall],
+        toolResults: [signInResult],
+      });
+      const { emit, events } = createEventCollector();
+      const runStep = createToolLoopHarness(
+        createTestConfig(emit, { tools: createDelegationToolMap() }),
+      );
+      const ctx = new ContextContainer();
+      stashToolInterrupt(ctx, signInCall.toolCallId, full);
+
+      const result = await contextStorage.run(ctx, () =>
+        runStep(createTestSession(), { message: "Delegate and check access." }),
+      );
+
+      expect(result.next).toBeNull();
+      expect(result.settledTurn).toBeUndefined();
+      expect(readHitlState(result.session.state).signIns).toEqual(full.challenges);
+      expect(events.filter((event) => event.type === "authorization.required")).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            attemptId: "attempt-protected-action",
+            authorization: full.challenges[0]!.challenge,
+            name: "protected_action",
+            webhookUrl: "https://app.example/callback",
+          }),
+        }),
+      ]);
+      expect(events.filter((event) => event.type === "input.requested")).toHaveLength(0);
+      expect(events.filter((event) => event.type === "action.result")).toHaveLength(0);
+      expect(runtimeWait(result.session.state)?.tasks).toEqual([
+        expect.objectContaining({ callId: delegateCall.toolCallId, kind: "workflow-task" }),
+      ]);
+      const parked = parkedSteps(result.session);
+      expect(parked).toHaveLength(1);
+      expect(parked[0]?.requests).toEqual([]);
+      // The call the sign-in stopped waits in the step, unanswered, to run once it completes.
+      expect(parked[0]?.messages).toEqual([
+        { content: [delegateCall, signInCall], role: "assistant" },
+      ]);
+      expect(parked[0]?.approved?.map((call) => call.action.callId)).toEqual([
+        signInCall.toolCallId,
+      ]);
+      expect(ToolLoopAgent).toHaveBeenCalledTimes(1);
+    });
+
     it("emits authorization.required and parks when an approved tool returns an auth signal on the inline resume path", async () => {
       const { full, modelFacing } = createAuthSignals();
 
@@ -6323,9 +6640,7 @@ describe("createToolLoopHarness", () => {
 
       expect(result.next).toBeNull();
       expect(result.settledTurn).toBeUndefined();
-      expect(getPendingAuthorization(result.session.state)).toEqual({
-        challenges: full.challenges,
-      });
+      expect(readHitlState(result.session.state).signIns).toEqual(full.challenges);
 
       const authRequired = events.filter((event) => event.type === "authorization.required");
       expect(authRequired).toHaveLength(1);
@@ -6342,42 +6657,11 @@ describe("createToolLoopHarness", () => {
       // A sign-in interrupt is not a tool result on the v26 stream.
       const actionResults = events.filter((event) => event.type === "action.result");
       expect(actionResults).toHaveLength(0);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "tool"
-            ? message.content.filter(
-                (part) => part.type === "tool-result" && part.toolCallId === "call-1",
-              )
-            : [],
-        ),
-      ).toHaveLength(0);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "assistant" && Array.isArray(message.content)
-            ? message.content.filter(
-                (part) => part.type === "tool-call" && part.toolCallId === "call-1",
-              )
-            : [],
-        ),
-      ).toHaveLength(0);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "tool"
-            ? message.content.filter(
-                (part) => part.type === "tool-result" && part.toolCallId === "call-2",
-              )
-            : [],
-        ),
-      ).toHaveLength(1);
-      expect(
-        result.session.history.flatMap((message) =>
-          message.role === "assistant" && Array.isArray(message.content)
-            ? message.content.filter(
-                (part) => part.type === "tool-call" && part.toolCallId === "call-2",
-              )
-            : [],
-        ),
-      ).toHaveLength(1);
+      // The step waits whole: the sign-in's call has no result, so nothing reaches history yet.
+      const [parked] = parkedSteps(result.session);
+      expect(parked?.approved?.map((call) => call.action.callId)).toEqual(["call-1"]);
+      expect(answeredCallIds(parked?.messages ?? [])).toEqual(new Set(["call-2"]));
+      expect(JSON.stringify(result.session.history)).not.toContain("call-");
     });
   });
 
@@ -7188,9 +7472,11 @@ describe("createToolLoopHarness", () => {
           error: {
             code: "ACTION_RESULT_FAILED",
             message: "Search failed",
+            name: "Error",
           },
           result: {
             callId: toolCallId,
+            errorName: "Error",
             isError: true,
             kind: "tool-result",
             output: "Search failed",
@@ -8090,7 +8376,6 @@ describe("createToolLoopHarness", () => {
       }),
     );
     const state = { retained: "yes" };
-    const limits = { maxInputTokensPerSession: 1_000 };
     const outputSchema = { type: "string" };
     const session = createTestSession({
       compaction: {
@@ -8104,7 +8389,6 @@ describe("createToolLoopHarness", () => {
         { content: "Dynamic user instructions.", kind: "user" as const, role: "user" },
         { content: "old reply", role: "assistant" },
       ],
-      limits,
       outputSchema,
       state,
     });
@@ -8117,7 +8401,6 @@ describe("createToolLoopHarness", () => {
       compaction: { recentWindowSize: 10, threshold: 100_000 },
       continuationToken: session.continuationToken,
       history: [],
-      limits,
       outputSchema,
       sessionId: session.sessionId,
       state,
@@ -9969,6 +10252,7 @@ describe("createToolLoopHarness", () => {
       };
       const authoredSpan = trace.wrapSpanContext(authoredTrace);
       const getTracerSpy = vi.spyOn(trace, "getTracer").mockReturnValue({
+        startActiveSpan: vi.fn(),
         startSpan: vi.fn(() => authoredSpan),
       } as ReturnType<typeof trace.getTracer>);
       setupMockAgent({
@@ -10085,6 +10369,46 @@ describe("createToolLoopHarness", () => {
           scope: expect.objectContaining({ attemptIndex: 0 }),
           type: "step.attempt.completed",
         }),
+        expect.anything(),
+      );
+    });
+
+    it("completes rather than fails the attempt when the turn is cancelled mid-call", async () => {
+      const abortController = new AbortController();
+      vi.mocked(ToolLoopAgent).mockImplementation(function (this: ToolLoopAgent) {
+        this.stream = vi.fn().mockImplementation(async () => {
+          // A cancellation can reach the step without its reason, so the stream
+          // rejects with the platform's plain AbortError.
+          abortController.abort();
+          throw abortController.signal.reason;
+        });
+        return this;
+      } as MockAgentConstructor);
+      const attemptCompleted = vi.fn();
+      const attemptFailed = vi.fn();
+      const hooks = createInstrumentationHooks([
+        {
+          events: {
+            "step.attempt.completed": attemptCompleted,
+            "step.attempt.failed": attemptFailed,
+          },
+          name: "attempt",
+        },
+      ]);
+      const runStep = createToolLoopHarness(
+        createTestConfig(undefined, {
+          abortSignal: abortController.signal,
+          instrumentation: bindHookInstrumentation(hooks),
+        }),
+      );
+
+      await expect(runStep(createTestSession(), { message: "hi" })).rejects.toBeInstanceOf(
+        TurnCancelledError,
+      );
+
+      expect(attemptFailed).not.toHaveBeenCalled();
+      expect(attemptCompleted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ type: "step.attempt.completed" }),
         expect.anything(),
       );
     });
@@ -10482,9 +10806,9 @@ describe("createToolLoopHarness", () => {
         toolResults: [],
       });
 
-      // Small PNG-like payload — under the 3 MiB image inline cap so
-      // the hydration pass substitutes bytes (not a text reference).
-      const imageBytes = Buffer.alloc(1024, 0x89);
+      // A small PNG under the 3 MiB image inline cap, so the hydration pass
+      // adds its bytes after the label.
+      const imageBytes = pngBytes(64, 64, 1024);
       const userContent: UserContent = [
         { type: "text", text: "describe the image" },
         { data: imageBytes, filename: "logo.png", mediaType: "image/png", type: "file" },
@@ -10618,7 +10942,21 @@ describe("createToolLoopHarness", () => {
       expect(laterCalls).toHaveLength(2);
       for (const call of laterCalls) {
         expect(call.messages.find((message) => message.role === "tool")?.content).toEqual([
-          toolResult,
+          {
+            ...toolResult,
+            output: {
+              type: "content",
+              value: [
+                {
+                  text: expect.stringMatching(
+                    /^Attached file \/workspace\/\.eve\/attachments\/[0-9a-f]{16}\/chart\.png \(image\/png\)$/,
+                  ),
+                  type: "text",
+                },
+                file,
+              ],
+            },
+          },
         ]);
       }
     });

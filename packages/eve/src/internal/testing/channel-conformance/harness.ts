@@ -11,7 +11,7 @@ import { attachRouteSessionCreator } from "#internal/nitro/routes/channel-route-
 import type { SessionAuthContext } from "#channel/types.js";
 import { eveChannel } from "#public/channels/eve.js";
 import { z } from "#compiled/zod/index.js";
-import type { ApprovalResponsePolicy } from "#approval/definition.js";
+import type { ApprovalPrompt, ApprovalResponsePolicy } from "#approval/definition.js";
 import { always } from "#tools/approval/policies.js";
 import { defineTool } from "#tools/definition.js";
 import { askQuestion } from "#tools/provided/ask-question.js";
@@ -20,7 +20,7 @@ import {
   askDayAndTimeWorkflow,
   askRetroDayWorkflow,
 } from "#internal/testing/channel-conformance/question-workflows.js";
-import { getWorld } from "#internal/workflow/runtime.js";
+import { getRun, getWorld } from "#internal/workflow/runtime.js";
 import type { MessageStreamEvent } from "#protocol/message.js";
 import {
   type ConnectionAuthorizationChallenge,
@@ -163,6 +163,11 @@ export interface ChannelDriver {
    * {@link postedText}.
    */
   shownMessage?(call: PlatformCall): ShownMessage | undefined;
+  /**
+   * The message a webhook's JSON answer shows the person who sent it, such as
+   * the card Teams shows only whoever pressed an `Action.Execute` button.
+   */
+  shownReply?(body: unknown): ShownMessage | undefined;
   /** How the person driving the conversation appears in the platform's text, in any form. */
   readonly personShownAs?: readonly string[];
   /**
@@ -226,6 +231,8 @@ export interface ChannelConversation {
   waitForShown(pattern: string | RegExp): Promise<string>;
   /** Everything the bot has shown that everyone in the conversation sees, joined. */
   sharedText(): Promise<string>;
+  /** Every message the bot has shown anyone, privately or not. */
+  shownTexts(): Promise<readonly string[]>;
   /** Every choice the bot's messages let a person press now, newest message first. */
   shownOptions(): Promise<readonly RenderedOption[]>;
   /** Waits for the turn to hold for a sign-in, however the channel shows it. */
@@ -239,6 +246,11 @@ export interface ChannelConversation {
   waitForToolOutcome(tool: string): Promise<ToolOutcome>;
   /** Waits until every session has stopped working and waits only on a person. */
   waitForRest(): Promise<void>;
+  /**
+   * Cancels every session's workflow run through the workflow world, as an
+   * operator would, so no eve code runs for those sessions again.
+   */
+  cancelRunsInWorld(): Promise<void>;
   /** How many times a gated tool actually executed, as its side effect would show. */
   runsOf(tool: GatedTool): number;
   /**
@@ -332,8 +344,16 @@ const WAIT_TIMEOUT_MS = 30_000;
 /** Stand-in origin for the agent a {@link ClientDriver} talks to. */
 const CLIENT_HOST = "https://agent.example.com";
 
-/** The test agent's tool that always needs a person's approval before it runs. */
+/**
+ * The test agent's tool that always needs a person's approval before it runs.
+ * Its approval prompt is built from the call's input, as {@link deployPrompt}.
+ */
 export const GATED_TOOL = "deploy_release";
+
+/** The approval prompt {@link GATED_TOOL} shows for `release`. */
+export function deployPrompt(release: string): string {
+  return `Deploy release ${release} to production?`;
+}
 
 /** A second always-gated tool, so two approvals can be pending at once. */
 export const SECOND_GATED_TOOL = "publish_notes";
@@ -499,12 +519,25 @@ function webhookView(
   dispatch: Dispatch,
   wait: Wait,
 ): ClientView {
+  /** What webhook answers showed the person who sent each request. */
+  const answered: ShownMessage[] = [];
+  const describe = () =>
+    `Platform calls:\n${JSON.stringify(calls, null, 2)}\nWebhook answers:\n${JSON.stringify(answered, null, 2)}`;
   async function post(request: Request): Promise<void> {
     const { response, settled } = await dispatch(request);
     await settled;
     if (!response.ok) throw new Error(`${driver.name} webhook answered ${response.status}.`);
+    if (driver.shownReply === undefined) return;
+    const text = await response.text();
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return;
+    }
+    const shown = driver.shownReply(body);
+    if (shown !== undefined) answered.push(shown);
   }
-  const describe = () => `Platform calls:\n${JSON.stringify(calls, null, 2)}`;
   /** Where each prompt may next appear: after the call it was last found in. */
   const promptsFrom = new Map<string, number>();
 
@@ -550,19 +583,23 @@ function webhookView(
     personShownAs: driver.personShownAs ?? [],
     personId: driver.personId,
     nextAddress: driver.nextAddress?.bind(driver),
-    shown: () =>
-      calls.flatMap((call) => {
+    shown: () => [
+      ...calls.flatMap((call) => {
         const shown = driver.shownMessage?.(call);
-        if (shown !== undefined) {
-          const text = [shown.text, ...(shown.links ?? [])].join("\n");
-          return [{ onlyPerson: shown.onlyPerson === true, options: shown.options, text }];
-        }
+        if (shown !== undefined) return [shownText(shown)];
         const text = driver.postedText(call);
         return text === undefined ? [] : [{ onlyPerson: false, options: [], text }];
       }),
+      ...answered.map(shownText),
+    ],
     describe,
     close: async () => {},
   };
+}
+
+function shownText(shown: ShownMessage): ShownText {
+  const text = [shown.text, ...(shown.links ?? [])].join("\n");
+  return { onlyPerson: shown.onlyPerson === true, options: shown.options, text };
 }
 
 /** Starts `driver`'s client with the client host's `fetch` routed to the channel until it closes. */
@@ -676,10 +713,16 @@ async function converse(
         logicalPath: "tools/ask_question.ts",
         loadNamespace: async () => ({ default: askQuestion() }),
       },
-      gatedTool(GATED_TOOL, "Deploys a release.", () => {
-        runs[GATED_TOOL] += 1;
-        return { deployed: true };
-      }),
+      gatedTool(
+        GATED_TOOL,
+        "Deploys a release.",
+        () => {
+          runs[GATED_TOOL] += 1;
+          return { deployed: true };
+        },
+        undefined,
+        ({ input }) => deployPrompt(input.release ?? "unknown"),
+      ),
       gatedTool(SECOND_GATED_TOOL, "Publishes release notes.", () => {
         runs[SECOND_GATED_TOOL] += 1;
         return { published: true };
@@ -754,6 +797,8 @@ async function converse(
     });
     const sessions = new Map<string, Session>();
     const background: Promise<unknown>[] = [];
+    // A cancelled run's hooks are gone, so its address is never claimed again.
+    let runsCancelledInWorld = false;
 
     function track(session: Session): Session {
       sessions.set(session.id, session);
@@ -772,7 +817,7 @@ async function converse(
               ...source,
               send: async (...sendArgs) => track(await source.send(...sendArgs)),
               respond: async (...respondArgs) => {
-                await waitForAddress(address);
+                if (!runsCancelledInWorld) await waitForAddress(address);
                 return track(await source.respond(...respondArgs));
               },
             };
@@ -897,6 +942,7 @@ async function converse(
           view.describe,
         ),
       shownOptions: async () => (await view.shown()).toReversed().flatMap(({ options }) => options),
+      shownTexts: async () => (await view.shown()).map(({ text }) => text),
       sharedText: async () =>
         (await view.shown())
           .filter((shown) => !shown.onlyPerson)
@@ -925,6 +971,13 @@ async function converse(
       runsOf: (tool) => runs[tool],
       callersOf: () => callers,
       waitForRest: () => waitForRest([...sessions.values()], wait),
+      async cancelRunsInWorld() {
+        await waitForStepsToFinish([...sessions.values()], wait);
+        await Promise.all([...sessions.keys()].map((runId) => getRun(runId).cancel()));
+        runsCancelledInWorld = true;
+        // A cancelled run never rests, so there is nothing left to settle.
+        sessions.clear();
+      },
       async shownPrompt(prompt) {
         if (view.shownPrompt === undefined) throw new Error(`${label} cannot read shown messages.`);
         return await view.shownPrompt(prompt);
@@ -1177,12 +1230,16 @@ function gatedTool(
   description: string,
   execute: () => unknown,
   response?: ApprovalResponsePolicy,
+  prompt?: ApprovalPrompt<{ readonly release?: string }>,
 ) {
   return {
     logicalPath: `tools/${name}.ts`,
     loadNamespace: async () => ({
       default: defineTool({
-        approval: response === undefined ? always() : { request: always(), response },
+        approval:
+          response === undefined && prompt === undefined
+            ? always()
+            : { request: always(), prompt, response },
         description: `${description} Only call when asked to use ${name}.`,
         execute: async () => execute(),
         inputSchema: z.object({ release: z.string().optional() }),

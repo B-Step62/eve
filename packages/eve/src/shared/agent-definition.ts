@@ -1,6 +1,7 @@
 import type { CallSettings, LanguageModel } from "ai";
 import type { JsonObject } from "#shared/json.js";
 import type { ModuleSourceRef } from "#shared/source-ref.js";
+import type { TokenUsage } from "#shared/token-usage.js";
 import {
   isDynamicSentinel,
   type DynamicResolveContext,
@@ -45,8 +46,9 @@ export const ANTHROPIC_PROMPT_CACHE_TTLS: readonly AnthropicPromptCacheTtl[] = [
 
 /**
  * Provider-agnostic reasoning effort forwarded to the AI SDK model call.
+ * The AI SDK's `max` level is not supported yet: eve's manifest and agent info list the levels.
  */
-export type AgentReasoningDefinition = NonNullable<CallSettings["reasoning"]>;
+export type AgentReasoningDefinition = Exclude<NonNullable<CallSettings["reasoning"]>, "max">;
 
 /**
  * How an agent's model is reached at runtime, decided at compile time from the
@@ -171,12 +173,11 @@ export interface PublicAgentCompactionDefinition {
  */
 export interface AgentLimitsDefinition {
   /**
-   * Session lifetime from creation or the latest ownership handoff, in milliseconds.
+   * How long a session may sit idle before eve completes it, in milliseconds.
    *
-   * A successful deployment handoff or legacy-session import restarts the
-   * original configured duration. Process restarts and failed or skipped
-   * handoffs preserve the deadline. If it elapses during an active turn, eve lets
-   * that turn settle before completing the session normally.
+   * The idle window starts at creation and restarts each time a turn settles.
+   * A session never expires while a turn is open, including a turn held open
+   * for working tasks or human input.
    *
    * `false` disables the timeout.
    *
@@ -184,46 +185,28 @@ export interface AgentLimitsDefinition {
    */
   readonly sessionTimeoutMs?: number | false;
   /**
-   * Maximum provider-reported input tokens accumulated by one durable session.
+   * Decides whether a session has reached its usage limit. eve calls it before
+   * each model call; returning `true` pauses the turn on a continuation prompt,
+   * or fails it when nobody can answer. Approving starts a new window.
    *
-   * eve checks this before starting each model call. The model call that crosses
-   * the limit is allowed to finish because providers only report exact usage
-   * after the call completes; later model calls in the same session are blocked.
+   * Subagent sessions without their own `sessionUsage` use the root agent's.
+   * Set `sessionUsage: () => false` to leave sessions uncapped.
    *
-   * `false` disables the limit: the session is uncapped.
-   *
-   * Delegated subagent sessions default to the delegating parent's remaining
-   * quota at dispatch time, and the parent's remaining quota always caps an
-   * authored child limit — a child can never outspend its parent's budget.
-   *
-   * @default 40_000_000 for root sessions; the parent's remaining quota for delegated subagent sessions
+   * @default ({ window }) => window.inputTokens - window.cacheReadTokens >= 40_000_000
    */
-  readonly maxInputTokensPerSession?: number | false;
-  /**
-   * Maximum provider-reported output tokens accumulated by one durable session.
-   *
-   * eve checks this before starting each model call. The model call that crosses
-   * the limit is allowed to finish because providers only report exact usage
-   * after the call completes; later model calls in the same session are blocked.
-   *
-   * `false` disables the limit. Unset by default; delegated subagent sessions
-   * inherit the parent's remaining output quota when the parent has one.
-   */
-  readonly maxOutputTokensPerSession?: number | false;
-  /**
-   * Maximum provider-reported model token cost accumulated by one durable
-   * session, in US dollars.
-   *
-   * eve checks this before starting each model call. The model call that
-   * crosses the limit is allowed to finish because providers report cost only
-   * after the call completes; later model calls in the same session are
-   * blocked.
-   *
-   * `false` disables the limit. Unset by default; delegated subagent sessions
-   * inherit the parent's remaining token-cost quota when the parent has one.
-   */
-  readonly maxTokenCostUsdPerSession?: number | false;
+  readonly sessionUsage?: SessionUsageLimit;
 }
+
+/**
+ * Usage limit check for one session. `inputTokens` includes cache reads and
+ * writes. Usage counts what the session's subagents spent once they reply.
+ */
+export type SessionUsageLimit = (usage: {
+  /** Everything the session has spent. */
+  readonly total: TokenUsage;
+  /** What the session has spent since the last approved continuation. */
+  readonly window: TokenUsage;
+}) => boolean;
 
 /**
  * Experimental, opt-in agent capabilities authored in `agent.ts`.
@@ -301,20 +284,28 @@ export interface AgentWorkflowDefinition {
    * Applied to every run that owns the session, including successors created
    * by deployment handoff.
    *
-   * - `"default"`: same as omission. The Workflow SDK World decides.
+   * When omitted, eve uses the session's resolved OTel trace decision: full
+   * input and output capture keeps the World's default; dropped traces or
+   * either excluded content direction request `0`. Destination export filters
+   * and lifecycle-provider policies do not affect this choice.
+   *
+   * An explicit value overrides this automatic choice:
+   * - `"default"`: the Workflow SDK World decides, regardless of tracing.
    *   On Vercel this follows your team's plan.
    * - `0`: the world deletes run payloads and stream chunks as soon as the run
    *   completes or fails. Metadata such as run IDs, status, and timestamps may
    *   persist up to the default period.
    *
-   * The World you are using with the Workflow SDK might not support every
-   * option. A World that does not recognize the value keeps the data.
+   * The World enforces deletion. Worlds older than spec version 4 reject `0`;
+   * spec version 4 Worlds without retention support keep the data. Run, step,
+   * and event metadata and attributes remain for the default period. Exported
+   * traces are not deleted.
    *
    * Note that with retention set to `0`, data deletion can race reads of a finished
    * run, so results and transcripts of completed sessions generally become
    * unreadable. Persist anything you need to keep from inside a tool.
    *
-   * @default "default"
+   * @default Derived from the session's resolved trace policy.
    */
   readonly retention?: AgentWorkflowRetentionDefinition;
   /**
@@ -346,8 +337,17 @@ export type InternalAgentDefinition = {
   reasoning?: AgentReasoningDefinition;
   source?: ModuleSourceRef;
   tool?: AgentToolExposure;
-  limits?: AgentLimitsDefinition;
+  limits?: CompiledAgentLimitsDefinition;
 };
+
+/**
+ * Compiled `limits`. `sessionUsage` is a function, so the manifest only marks that the agent
+ * config module authors one; the runtime loads it from `source`.
+ */
+export interface CompiledAgentLimitsDefinition {
+  readonly sessionTimeoutMs?: number | false;
+  readonly sessionUsage?: true;
+}
 
 /**
  * Shared public definition for an agent.

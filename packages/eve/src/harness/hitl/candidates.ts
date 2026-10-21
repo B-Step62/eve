@@ -2,7 +2,7 @@ import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionStateMap } from "#harness/types.js";
 
-const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
+import { readApprovalState, writeApprovalState } from "./requests.js";
 
 type ApprovalCandidateStatus =
   | "pending"
@@ -37,13 +37,18 @@ export interface ApprovalResponderIdentity {
 
 export interface ApprovalSettlementAuditRecord {
   readonly actor: ApprovalResponderIdentity;
-  /** The approver's full auth, which the approved call runs as. Present only when allowed. */
-  readonly approver?: SessionAuthContext;
+  /**
+   * The full auth of the person who approved, present only when allowed. The approved call reads
+   * it as `ctx.approval.responder`; it never runs as it.
+   */
+  readonly responder?: SessionAuthContext;
   /** `unavailable`: the request's entry was gone, so its call is reported unavailable, never run. */
   readonly outcome: "allowed" | "cancelled" | "unavailable";
   readonly requestId: string;
   readonly settledAt: number;
   readonly candidateId?: string;
+  /** What the settling responder wrote with their answer, such as why they cancelled. */
+  readonly text?: string;
 }
 
 export interface ActiveApprovalCandidate {
@@ -55,9 +60,11 @@ export interface ActiveApprovalCandidate {
   readonly createdAt: number;
   readonly expiresAt: number;
   readonly authorizationChallenges?: readonly AuthorizationChallenge[];
+  /** What the responder wrote with their answer; the settlement keeps it once allowed. */
+  readonly text?: string;
 }
 
-interface DurableApprovalState {
+export interface DurableApprovalState {
   readonly activeCandidates: Readonly<Record<string, ActiveApprovalCandidate>>;
   readonly nextCandidateSequence: number;
   readonly candidateHistory: readonly ApprovalCandidateAuditRecord[];
@@ -78,6 +85,7 @@ export function createApprovalCandidate(input: {
   readonly requestId: string;
   readonly responder: SessionAuthContext;
   readonly state: SessionStateMap | undefined;
+  readonly text?: string;
 }): ApprovalStateTransition {
   const expiredState = expireApprovalCandidates({ now: input.createdAt, state: input.state });
   const approvalState = readApprovalState(expiredState);
@@ -120,6 +128,7 @@ export function createApprovalCandidate(input: {
     requestId: input.requestId,
     responder,
     status: "pending",
+    ...(input.text !== undefined && { text: input.text }),
   };
   const next: DurableApprovalState = {
     ...approvalState,
@@ -227,6 +236,7 @@ export function settleAllowedCandidate(input: {
     responder: candidate.responder,
     settledAt: input.settledAt,
     state: expiredState,
+    text: candidate.text,
   });
 }
 
@@ -254,13 +264,14 @@ export function settleUnavailableCandidate(input: {
   });
 }
 
-/** Atomically settles a direct authenticated approval response. */
+/** Atomically settles a direct approval response. */
 export function settleDirectApprovalResponse(input: {
   readonly actor: SessionAuthContext;
   readonly outcome: "allowed" | "cancelled";
   readonly requestId: string;
   readonly settledAt: number;
   readonly state: SessionStateMap | undefined;
+  readonly text?: string;
 }): ApprovalStateTransition {
   const state = expireApprovalCandidates({ now: input.settledAt, state: input.state });
   return settleRequest({
@@ -269,6 +280,7 @@ export function settleDirectApprovalResponse(input: {
     responder: input.actor,
     settledAt: input.settledAt,
     state,
+    text: input.text,
   });
 }
 
@@ -303,6 +315,7 @@ function settleRequest(input: {
   readonly responder: SessionAuthContext;
   readonly settledAt: number;
   readonly state: SessionStateMap | undefined;
+  readonly text?: string;
 }): ApprovalStateTransition {
   const approvalState = readApprovalState(input.state);
   const existing = approvalState.settlements[input.requestId];
@@ -312,11 +325,12 @@ function settleRequest(input: {
 
   const settlement: ApprovalSettlementAuditRecord = {
     actor: projectResponder(input.responder),
-    ...(input.outcome === "allowed" && { approver: input.responder }),
+    ...(input.outcome === "allowed" && { responder: input.responder }),
     candidateId: input.candidateId,
     outcome: input.outcome,
     requestId: input.requestId,
     settledAt: input.settledAt,
+    ...(input.text !== undefined && { text: input.text }),
   };
   const activeCandidates: Record<string, ActiveApprovalCandidate> = {};
   const candidateHistory = [...approvalState.candidateHistory];
@@ -353,6 +367,7 @@ function toCandidateAuditRecord(input: {
   const {
     authorizationChallenges: _authorizationChallenges,
     responder,
+    text: _text,
     ...candidate
   } = input.candidate;
   return {
@@ -386,66 +401,6 @@ export function sameResponder(
 }
 
 /**
- * A candidate is an Approve unless it records Cancel: candidates persisted
- * before Cancel was authorized carry no decision, and their responder pressed
- * Approve.
- */
-function readActiveCandidates(
-  candidates: Readonly<Record<string, ActiveApprovalCandidate>>,
-): Readonly<Record<string, ActiveApprovalCandidate>> {
-  return Object.fromEntries(
-    Object.entries(candidates).map(([candidateId, candidate]) => [
-      candidateId,
-      { ...candidate, decision: candidate.decision === "cancel" ? "cancel" : "approve" },
-    ]),
-  );
-}
-
-function readApprovalState(state: SessionStateMap | undefined): DurableApprovalState {
-  const value = state?.[APPROVAL_STATE_KEY];
-  if (typeof value !== "object" || value === null) {
-    return {
-      activeCandidates: {},
-      candidateHistory: [],
-      nextCandidateSequence: 0,
-      settlements: {},
-    };
-  }
-  const candidate = value as Partial<DurableApprovalState>;
-  return {
-    activeCandidates:
-      typeof candidate.activeCandidates === "object" && candidate.activeCandidates !== null
-        ? readActiveCandidates(candidate.activeCandidates)
-        : {},
-    candidateHistory: Array.isArray(candidate.candidateHistory) ? candidate.candidateHistory : [],
-    nextCandidateSequence:
-      typeof candidate.nextCandidateSequence === "number" &&
-      Number.isSafeInteger(candidate.nextCandidateSequence) &&
-      candidate.nextCandidateSequence >= 0
-        ? candidate.nextCandidateSequence
-        : deriveNextCandidateSequence(candidate),
-    settlements:
-      typeof candidate.settlements === "object" && candidate.settlements !== null
-        ? candidate.settlements
-        : {},
-  };
-}
-
-function deriveNextCandidateSequence(state: Partial<DurableApprovalState>): number {
-  return (
-    Object.keys(state.activeCandidates ?? {}).length +
-    (Array.isArray(state.candidateHistory) ? state.candidateHistory.length : 0)
-  );
-}
-
-function writeApprovalState(
-  state: SessionStateMap | undefined,
-  approvalState: DurableApprovalState,
-): SessionStateMap {
-  return { ...state, [APPROVAL_STATE_KEY]: approvalState };
-}
-
-/**
  * The held turn moved on, steered or cancelled: the responders still checking one of its
  * approvals stop, their candidates stale.
  */
@@ -466,10 +421,10 @@ export function retireActiveCandidates(
   return next;
 }
 
-/** The full auth of whoever approved `requestId`, when it was allowed. */
-export function approverOfRequest(
+/** The full auth of whoever approved `requestId`, when a person allowed it. */
+export function responderOfRequest(
   state: SessionStateMap | undefined,
   requestId: string,
 ): SessionAuthContext | undefined {
-  return readApprovalState(state).settlements[requestId]?.approver;
+  return readApprovalState(state).settlements[requestId]?.responder;
 }

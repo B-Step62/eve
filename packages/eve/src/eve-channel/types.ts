@@ -4,6 +4,8 @@ import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { TrustedForwarders } from "#channel/forwarded-principal.js";
 import type { AuthFn } from "#public/channels/auth.js";
 import type { UploadPolicyInput } from "#public/channels/upload-policy.js";
+import type { FetchFileFunction } from "#shared/channel-definition.js";
+import type { JsonObject } from "#shared/json.js";
 import type {
   AudienceContext,
   Channel,
@@ -12,6 +14,7 @@ import type {
   ChannelMethod,
 } from "#public/definitions/channel.js";
 import type { ChannelAudience } from "#shared/channel-audience.js";
+import type { SessionHistoryMessage } from "#shared/session-history.js";
 
 export type { ForwardedAssertion, TrustedForwarders } from "#channel/forwarded-principal.js";
 
@@ -51,10 +54,18 @@ export interface EveChannelCorsOptions {
  */
 export type EveChannelCors = boolean | EveChannelCorsOptions;
 
+/**
+ * Turn-scoped context: a string, an array of strings, or a JSON object. The same
+ * shape the eve client sends as `clientContext`.
+ */
+export type ClientContextValue = string | readonly string[] | JsonObject;
+
 /** Low-level eve HTTP handle exposed to `eveChannel({ onMessage })`. */
 export interface EveHandle {
   /** Route-auth result for the request; `onMessage` chooses session auth by returning `{ auth }`. */
   readonly caller: SessionAuthContext | null;
+  /** The request's `clientContext`, exactly as the client sent it. `undefined` when it sent none. */
+  readonly clientContext?: ClientContextValue;
   /** Replay-stable identity of a trusted remote-subagent create operation. */
   readonly invocation?: { readonly operationId: string };
   readonly request: Request;
@@ -73,7 +84,23 @@ export interface EveMessageContext {
  */
 export type EveMessageResult = {
   readonly auth: SessionAuthContext | null;
+  /** Context strings prepended as user messages and kept in session history. */
   readonly context?: readonly string[];
+  /**
+   * Context for this turn only, replacing the request's `clientContext`. Like
+   * request `clientContext`, it reaches every model call in the turn and is not
+   * kept in session history. It takes the same shape as request `clientContext`
+   * and becomes model messages the same way, without the `Client context:` label
+   * eve adds to client-supplied entries. Return `[]` to drop the request's
+   * context; omit it to keep the request's context.
+   */
+  readonly clientContext?: ClientContextValue;
+  /**
+   * Prior conversation added as user and assistant turns before this message.
+   * Resolve it on the server and authorize the caller against the stored
+   * conversation.
+   */
+  readonly history?: readonly SessionHistoryMessage[];
   /** Sets the title when creating a workflow or sending its first message after prewarming. */
   readonly title?: string;
 };
@@ -144,9 +171,21 @@ export interface EveChannelInput {
   readonly trustedForwarders?: TrustedForwarders;
   /**
    * Attachment policy for inbound file parts. Omit for the framework default (25 MB cap, all media
-   * types); `"disabled"` rejects every attachment; a partial config is merged onto the default. Violations reject with 413 (too large) or 415 (bad type).
+   * types); `"disabled"` rejects every attachment; a partial config is merged onto the default. Violations in the
+   * request reject with 413 (too large) or 415 (bad type). eve also checks every file it stages, including URLs, on
+   * its final bytes and verified media type; a file that breaks the policy there reaches the model as a note.
    */
   readonly uploadPolicy?: UploadPolicyInput;
+  /**
+   * Loads a file part whose `data` is a URL, such as a browser upload that went
+   * to your own storage first. The bytes then skip the request body limit and
+   * the workflow start payload, and load inside the workflow step.
+   *
+   * Return bytes or `{ bytes, mediaType?, filename? }` to stage the file, or
+   * `null` when the URL is not yours: eve then downloads a public `https:` URL
+   * itself. Fetched bytes must pass {@link uploadPolicy}.
+   */
+  readonly fetchFile?: FetchFileFunction;
   /**
    * Browser CORS policy for the eve HTTP routes. Omit or pass `false` to leave
    * CORS untouched, pass `true` for fully permissive CORS, or pass an options

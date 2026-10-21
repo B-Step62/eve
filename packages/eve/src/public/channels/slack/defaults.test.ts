@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import { defaultInputRequestedHandler } from "#public/channels/slack/approval-cards.js";
 import { defaultEvents } from "#public/channels/slack/defaults.js";
+import { SLACK_MAX_BLOCKS_PER_MESSAGE } from "#public/channels/slack/limits.js";
 import type { SlackChannelState, SlackEventContext } from "#public/channels/slack/slackChannel.js";
 import { captureLogRecords } from "#internal/testing/log-records.js";
 
@@ -341,7 +342,7 @@ describe("defaultInputRequestedHandler private input requests", () => {
       "chat.update",
       expect.objectContaining({
         channel: "C123",
-        text: "Answered: No longer needed",
+        text: "No longer needed",
         ts: "card-ts",
       }),
     );
@@ -350,6 +351,38 @@ describe("defaultInputRequestedHandler private input requests", () => {
     expect(logs.records).toContainEqual(
       expect.objectContaining({ level: "error", message: "failed to retire approval message" }),
     );
+  });
+
+  it("announces an approval answered by an unmapped responder as answered, crediting nobody", async () => {
+    const { channel, post, request } = buildChannelStub();
+    post
+      .mockResolvedValueOnce({ id: "details-ts", raw: { ok: true } })
+      .mockResolvedValueOnce({ id: "card-ts", raw: { ok: true } });
+
+    await defaultInputRequestedHandler()(
+      { requests: [approvalRequest()], sequence: 1, stepIndex: 0, turnId: "turn-1" },
+      channel,
+      sessionCtx,
+    );
+    await defaultEvents["approval.settled"]!(
+      {
+        outcome: "approved",
+        requestId: "approval-1",
+        responderPrincipalId: "custom:unmapped",
+        sequence: 2,
+        stepIndex: 0,
+        turnId: "turn-1",
+      },
+      channel,
+      sessionCtx,
+    );
+
+    const update = request.mock.calls.find(([method]) => method === "chat.update")?.[1] as {
+      blocks?: unknown[];
+      text?: string;
+    };
+    expect(update.text).toBe("Answered: Approve");
+    expect(JSON.stringify(update.blocks)).not.toContain("<@");
   });
 });
 
@@ -485,6 +518,70 @@ describe("defaultEvents approval lifecycle", () => {
       }
     }
   });
+
+  it.each([
+    { count: 50, settledBy: "approval.settled" },
+    { count: 50, settledBy: "input.resolved" },
+    { count: 87, settledBy: "approval.settled" },
+    { count: 87, settledBy: "input.resolved" },
+  ] as const)(
+    "retires every card of $count grouped approvals settled by $settledBy",
+    async ({ count, settledBy }) => {
+      const { channel, post, request } = buildChannelStub({
+        slackUsersByPrincipal: { "slack:T1:U777": "U777" },
+      });
+      const messages = new Map<string, readonly unknown[]>();
+      post.mockImplementation(async (message: { blocks: unknown[] }) => {
+        const ts = `ts${messages.size + 1}`;
+        messages.set(ts, message.blocks);
+        return { id: ts, raw: { ok: true } };
+      });
+      let rejectedUpdates = 0;
+      request.mockImplementation(async (operation: string, body: unknown) => {
+        const { blocks, ts } = body as { blocks?: unknown[]; ts: string };
+        if (operation === "chat.update" && blocks !== undefined) {
+          // Slack rejects the whole update when a message exceeds its block cap.
+          if (blocks.length > SLACK_MAX_BLOCKS_PER_MESSAGE) {
+            rejectedUpdates += 1;
+            return { error: "invalid_blocks", ok: false };
+          }
+          messages.set(ts, blocks);
+        }
+        if (operation === "chat.delete") messages.delete(ts);
+        return { ok: true };
+      });
+      const requests = Array.from({ length: count }, (_, index) =>
+        approvalRequest(`approval-${index}`),
+      );
+
+      await defaultInputRequestedHandler()(
+        { requests, sequence: 1, stepIndex: 0, turnId: "turn-1" },
+        channel,
+        sessionCtx,
+      );
+      for (const [index, { requestId }] of requests.entries()) {
+        const step = { sequence: index + 2, stepIndex: index + 1, turnId: "turn-1" };
+        if (settledBy === "approval.settled") {
+          await defaultEvents["approval.settled"]!(
+            { outcome: "approved", requestId, responderPrincipalId: "slack:T1:U777", ...step },
+            channel,
+            sessionCtx,
+          );
+        } else {
+          await defaultEvents["input.resolved"]!(
+            { resolutions: [{ kind: "tool-approval", outcome: "approved", requestId }], ...step },
+            channel,
+            sessionCtx,
+          );
+        }
+      }
+
+      const liveCards = [...messages.values()]
+        .flat()
+        .filter((block) => (block as { actions?: unknown }).actions !== undefined).length;
+      expect({ liveCards, rejectedUpdates }).toEqual({ liveCards: 0, rejectedUpdates: 0 });
+    },
+  );
 });
 
 describe("defaultEvents authorization.required", () => {

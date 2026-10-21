@@ -26,6 +26,8 @@ export {
   type ChannelReceiveContext,
   type ChannelResolveSession,
   type ChannelRespondOptions,
+  type ChannelCreateOptions,
+  type ChannelCreateResult,
   type ChannelSendOptions,
   type ChannelSource,
   type ChannelCors,
@@ -60,6 +62,13 @@ export {
   type WebSocketUpgradeResult,
   isDisabledRouteSentinel,
 } from "#public/definitions/channel.js";
+export { attachmentError } from "#public/channels/attachment-error.js";
+export type {
+  FetchFileContext,
+  FetchFileFunction,
+  FetchFileResult,
+} from "#shared/channel-definition.js";
+export { InvalidSessionHistoryError, type SessionHistoryMessage } from "#shared/session-history.js";
 export {
   createWebSocketUpgradeServer,
   type WebSocketUpgradeServerBridge,
