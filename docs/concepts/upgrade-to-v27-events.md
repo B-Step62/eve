@@ -70,7 +70,7 @@ answer, control, and callback), `model.requested`, `model.retried`, `call.starte
 `response.admitted`, and `usage.recorded`.
 
 A turn that waits on its own work, such as a task it started, doesn't pause: it stays running
-until the work reports back. Only a turn waiting on a person (an approval, a question, a sign-in,
+until the work reports back. Only a turn waiting on an interaction (an approval, a question, a sign-in,
 or the budget prompt) pauses, and nothing announces that it resumed: the next fact under the turn
 says so.
 
@@ -202,7 +202,7 @@ Slack renderers take `(event, ctx, next)`, with Slack's handles on `ctx.channel.
 A Slack renderer's `taskCard(card, next)` receives a `TaskCard` instead of a `TaskCardView`:
 the card's calls as immutable `CallObservation` values, with an opaque `view`, in place of
 `tasks` and `actions`. Read a call's `taskId`, `state`, and `label`, and
-`waiting(card.view, { callId })` for what it's blocked on.
+`openInteractions(card.view, { about: { callId } })` for the interactions holding it up.
 `TaskCardTask`, `TaskCardAction`, `TaskCardBlocker` and `TaskCardStatus` are gone.
 
 A channel that keeps something in step with the session can handle `committed`, once per
@@ -410,11 +410,11 @@ with a compatible Vercel Connect release, never as an eve-only runtime rename.
 - **Identity is `meta.position`.** `meta.id` is gone. Deduplicate on `(line, index)`.
 - **Responses end on their delivery.** A message's response ends when its `delivery.settled`
   arrives, finishing that line. `result().status` is `awaiting-input`, `completed`, `failed`, or
-  `cancelled`. The live `requestStatus` query also has `working`. **`completed` has changed meaning:**
+  `cancelled`. For live state, read `delivery(view, deliveryId)` and its turn with `turn(view, turnId)`. **`completed` has changed meaning:**
   it means the request completed, not that the session ended. Replace old `completed` checks for
   session termination with `sessionEnded`; old `waiting` comparisons no longer typecheck. Read text
-  from `reply`, not `message`. `requestStatus(view, deliveryId)` from `eve/events` applies the same rule.
-- **Interactions.** Every interaction a person is asked, sign-ins included, is in one list:
+  from `reply`, not `message`. `waiting(view, turnId)` returns `{ on: "session" }` while the session can make progress, `{ on: "interaction", interactions }` while input is needed, or `{ on: "work", calls, tasks }` while work runs; it is `undefined` only for an absent or settled turn.
+- **Interactions.** Every open question, approval, and sign-in is in one list:
   `interactions(view)`, a response's `interactions`, `openInteractions(view)`. Filter
   by `request.kind`. An approval or a question about a call shows on its call's tool part
   (`part.interaction`); every other interaction, such as a sign-in or the budget prompt, is an
@@ -432,8 +432,8 @@ with a compatible Vercel Connect release, never as an eve-only runtime rename.
 - **Use the shared fold.** `eve/events` exports the catalog, the fold that builds opaque snapshots,
   and queries such as `activeTurn`, `reply`, `openInteractions`, `waiting`, and `idle`, so a
   client doesn't need its own reducer for session state. `callState(view, callId)` says where a
-  call stands for a display, `callLabel(observation)` how to name it, and `waiting(view, { taskId })` or
-  `waiting(view, { callId })` who a task's or call's work waits on.
+  call stands for a display, `callLabel(observation)` how to name it, and
+  `openInteractions(view, { about: { callId } })` (or `{ about: { taskId } }`) lists its open interactions.
   Public folding returns a new snapshot: `view = foldEvents(view, events)`. It preserves the
   previous view and holds unfinished commits privately. Persist events/cursors, not the backing view.
 - **Distinguish local and server resets.** Call `newSession()` to clear local frontend state and

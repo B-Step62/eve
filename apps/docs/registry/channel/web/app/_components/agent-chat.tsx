@@ -78,7 +78,7 @@ export function AgentChat({
   // Show what the agent is doing until its message has something to show, unless it waits on you.
   const showPendingThinking =
     isBusy &&
-    now.kind !== "waiting-on-person" &&
+    now.kind !== "waiting-on-interaction" &&
     (lastMessage?.role !== "assistant" || isPendingAssistantShell);
   const failed =
     isBusy || isResuming ? undefined : failure(agent.view, turns(agent.view).at(-1)?.turnId);

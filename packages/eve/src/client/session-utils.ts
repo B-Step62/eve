@@ -20,7 +20,7 @@ interface TurnEventSummary {
   readonly message: string | undefined;
   /** The value of the latest `result` part, whatever its phase. */
   readonly result: unknown;
-  readonly status: RequestStatus;
+  readonly status: RequestStatus | "working";
   readonly outcome: DeliveryOutcome | undefined;
   readonly sessionEnded: boolean;
 }

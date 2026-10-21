@@ -7,6 +7,7 @@ import {
   callLabel,
   callState,
   callOutputSource,
+  openInteractions,
   waiting,
 } from "#protocol/session-projection/selectors.js";
 import { callPlace, interaction, runPlace } from "#protocol/session-projection/reader.js";
@@ -98,17 +99,16 @@ describe("where a call stands", () => {
   it("waits on its own approval until it settles, then starts and ends", () => {
     const open = viewOf(started, [...asked, runSettled("run_0", "turn_0"), approval("i_0", "c_0")]);
     expect(callState(open, "c_0")).toBe("approval");
-    expect(waiting(open, { callId: "c_0" })).toMatchObject({
-      interactions: [{ interactionId: "i_0" }],
-      on: "person",
-    });
+    expect(openInteractions(open, { about: { callId: "c_0" } })).toMatchObject([
+      { interactionId: "i_0" },
+    ]);
     const declined = viewOf(
       started,
       [...asked, runSettled("run_0", "turn_0"), approval("i_0", "c_0")],
       [{ data: { interactionId: "i_0", outcome: "declined" }, type: "interaction.settled" }],
     );
     expect(callState(declined, "c_0")).toBe("requested");
-    expect(waiting(declined, { callId: "c_0" })).toBeUndefined();
+    expect(openInteractions(declined, { about: { callId: "c_0" } })).toEqual([]);
     const ended = (outcome: string) =>
       callState(
         viewOf(started, [
@@ -145,14 +145,60 @@ describe("where a call stands", () => {
     };
     const blocked = viewOf(started, [...task, question]);
     expect(callState(blocked, "c_0")).toBe("blocked");
-    expect(waiting(blocked, { taskId: "t_0" })).toEqual(waiting(blocked, { callId: "c_0" }));
-    expect(waiting(blocked, { taskId: "t_0" })?.on).toBe("person");
+    expect(openInteractions(blocked, { about: { taskId: "t_0" } })).toEqual(
+      openInteractions(blocked, { about: { callId: "c_0" } }),
+    );
     const answered = viewOf(started, [
       ...task,
       question,
       { data: { interactionId: "i_1", outcome: "accepted" }, type: "interaction.settled" },
     ]);
     expect(callState(answered, "c_0")).toBe("running");
+  });
+
+  it("finds relayed questions and task interactions through a call, but matches turn subjects exactly", () => {
+    const task = [
+      ...asked,
+      {
+        data: { kind: "agent", name: "helper", startedBy: { callId: "c_0" }, taskId: "t_0" },
+        type: "task.started",
+      },
+      { data: { callId: "c_0", taskId: "t_0" }, type: "call.started" },
+    ];
+    const blocked = viewOf(started, [
+      ...task,
+      {
+        type: "interaction.opened",
+        data: {
+          interactionId: "relayed",
+          subject: { callId: "c_0" },
+          origin: {
+            call: { callId: "c_0", name: "helper" },
+            interactionId: "child",
+            sessionId: "child",
+          },
+          request: { kind: "question", prompt: "Which repo?" },
+        },
+      },
+      {
+        type: "interaction.opened",
+        data: {
+          interactionId: "task",
+          subject: { taskId: "t_0" },
+          request: { kind: "question", prompt: "Which branch?" },
+        },
+      },
+    ]);
+    expect(
+      openInteractions(blocked, { about: { callId: "c_0" } }).map((row) => row.interactionId),
+    ).toEqual(["relayed", "task"]);
+    expect(
+      openInteractions(blocked, { about: { taskId: "t_0" } }).map((row) => row.interactionId),
+    ).toEqual(["relayed", "task"]);
+    expect(openInteractions(blocked, { about: { turnId: "turn_0" } })).toEqual([]);
+    expect(openInteractions(blocked, { kind: "question", about: { callId: "c_0" } })).toHaveLength(
+      2,
+    );
   });
 
   it("labels a call by its tool's label, its progress while running, then its name", () => {
@@ -312,6 +358,6 @@ describe("activity", () => {
       [turn("turn_0"), run("run_0", "turn_0"), call("c_1", "run_0"), runSettled("run_0", "turn_0")],
       [approval("i_1", "c_1")],
     );
-    expect(activity(asked)).toMatchObject({ kind: "waiting-on-person" });
+    expect(activity(asked)).toMatchObject({ kind: "waiting-on-interaction" });
   });
 });

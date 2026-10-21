@@ -22,7 +22,7 @@ export interface EveEvalAssertionSubject {
   readonly derived: import("#evals/types.js").EveEvalDerivedFacts;
   readonly events: readonly SessionStreamEvent[];
   readonly output: unknown;
-  readonly status: RequestStatus;
+  readonly status: RequestStatus | "working";
 }
 
 const PASS: AssertionOutcome = { score: 1 };

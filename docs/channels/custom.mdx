@@ -114,7 +114,7 @@ import { activity } from "eve/events";
 events: {
   async committed(_line, { channel, view }) {
     const now = activity(view);
-    const status = now.kind === "waiting-on-person" ? "Waiting for you" : now.kind;
+    const status = now.kind === "waiting-on-interaction" ? "Waiting for input" : now.kind;
     if (status === channel.state.status) return;
     channel.state.status = status;
     await channel.setStatus(status);

@@ -1,8 +1,8 @@
 // A turn's task cards, read from the session's tables. A card shows the turn's own calls, eve's
 // task controls and calls a tool makes on the model's behalf left out; a renderer reads each
-// call's row with the same selectors every reader uses (`callState`, `callLabel`, `waiting`).
+// call's row with the same selectors every reader uses (`callState`, `callLabel`, `openInteractions`).
 
-import { callTurn, waiting } from "#protocol/session-projection/selectors.js";
+import { callTurn, openInteractions } from "#protocol/session-projection/selectors.js";
 import type { CallRow, SessionView as SessionTables } from "#protocol/session-projection/tables.js";
 import { snapshotOf, type SessionView } from "#protocol/session-projection/session-view.js";
 import { call, type CallObservation } from "#protocol/session-projection/public-view.js";
@@ -20,7 +20,7 @@ export interface TaskCard {
   /** Where the card begins on the stream: `0` for a turn's first card. */
   readonly since: number;
   /**
-   * `blocked` while any of its tasks waits on a person, `working` while one works, or, for the
+   * `blocked` while any of its tasks waits on an interaction, `working` while one works, or, for the
    * turn's latest card, while the turn does; then `finished`.
    */
   readonly state: "working" | "blocked" | "finished";
@@ -65,7 +65,9 @@ export function taskCards(
     const shown = bounded(calls.filter((row) => cardOf(row) === index));
     const tasks = shown.filter((row) => row.taskId !== undefined && row.status !== "settled");
     const latest = index === starts.length - 1;
-    const state = tasks.some((row) => waiting(view, { callId: row.callId }) !== undefined)
+    const state = tasks.some(
+      (row) => openInteractions(view, { about: { callId: row.callId } }).length > 0,
+    )
       ? "blocked"
       : tasks.length > 0 || (latest && turnWorks)
         ? "working"

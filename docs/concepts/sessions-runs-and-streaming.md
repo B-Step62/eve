@@ -146,14 +146,14 @@ Spend is recorded on `usage.recorded`, once per model run (`owner: { runId }`), 
 
 Everything that reaches a session arrives as a delivery: a message, an answer, a control such as `cancel` or `reset`, or a sign-in callback. `delivery.admitted` records it, with the sender's `principal` and its `source`. A message that a turn takes in is `delivery.consumed`, with the `parts` it received: text, plus file metadata without raw bytes or internal sandbox paths. A delivery that brought [prior history](../channels/eve#start-from-prior-history) also carries it there, in `history`. Every delivery ends with exactly one `delivery.settled`:
 
-| Outcome          | Meaning                                                                                       |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| `handled`        | The turn that consumed it settled.                                                            |
-| `awaiting-input` | The turn paused on a person. The delivery's answer is the pause; the answer resumes the turn. |
-| `applied`        | A control or answer took effect.                                                              |
-| `ignored`        | It had nothing to act on, such as a cancel with no active turn.                               |
-| `refused`        | Its sender may not do what it asked; `reason` says why.                                       |
-| `failed`         | It couldn't be handled, such as when the session ended first.                                 |
+| Outcome          | Meaning                                                                                             |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `handled`        | The turn that consumed it settled.                                                                  |
+| `awaiting-input` | The turn paused on an interaction. The delivery's answer is the pause; the answer resumes the turn. |
+| `applied`        | A control or answer took effect.                                                                    |
+| `ignored`        | It had nothing to act on, such as a cancel with no active turn.                                     |
+| `refused`        | Its sender may not do what it asked; `reason` says why.                                             |
+| `failed`         | It couldn't be handled, such as when the session ended first.                                       |
 
 `POST /eve/v1/session/:sessionId` returns the message's `deliveryId`, so a client resuming from an old cursor knows which `delivery.settled` ends its response. Steering and coalesced messages each keep their own delivery. The id is assigned before dispatch,
 not derived from stream position. An answer's response also stops on its own `delivery.settled`.
@@ -162,7 +162,7 @@ A stranded reset records its control's admission and settlement before ending th
 
 ### Turns and people
 
-A turn doesn't end while it waits on a person; it pauses. `turn.paused.data.awaiting` names the interactions it waits on, as `{ interactionId }`. Nothing announces the turn resuming: the next fact under it, such as its next `model.requested`, shows it's running again, and only `turn.settled` ends it. A turn waiting on its own work, such as its tasks, stays running without pausing.
+A turn doesn't end while it waits on an interaction; it pauses. `turn.paused.data.awaiting` names the interactions it waits on, as `{ interactionId }`. Nothing announces the turn resuming: the next fact under it, such as its next `model.requested`, shows it's running again, and only `turn.settled` ends it. A turn waiting on its own work, such as its tasks, stays running without pausing.
 
 A question or sign-in from inside a running call does not end the turn either. This covers a workflow tool's `ctx.ask()`, including the built-in `ask_question` tool, and a delegated subagent's question or sign-in. The stream emits `interaction.opened`, then `turn.paused` awaiting it, committed with `delivery.settled` (`awaiting-input`) for the deliveries the turn was answering. An answer arrives as a new delivery with a `response.submitted` for each answer it carries, and `interaction.settled` once the interaction is decided. A request relayed from a subagent or a workflow tool run carries `origin` naming the session and request that asked, and `origin.call` naming the asker's call. A subagent's tool approval stays open until the subagent settles it, and the session relays that settlement.
 
@@ -211,13 +211,24 @@ if (observed?.state === "failed") console.error(observed.error.message);
 Calls include their resolved `turnId`, `runId`, and `taskId` when known, so applications do not
 join calls to runs to find their turn. `turns`, `deliveries`, `tasks`, `runs`, `parts`, and
 `children` return curated observations. Identity lookups include `turn`,
-`delivery`, `task`, and `interaction`. `waiting`, `activity`, `reply`, and `requestStatus` answer
+`delivery`, `task`, and `interaction`. `waiting`, `activity`, and `reply` answer
 the same lifecycle questions used by built-in clients and channels. These queries are
 synchronous and perform no I/O; referenced payloads remain references until explicitly read.
 
+`waiting(view, turnId)` returns `{ on: "session" }` while the session can make progress,
+`{ on: "interaction", interactions }` when answers are needed, or
+`{ on: "work", calls, tasks }` when calls or tasks hold the turn. It returns `undefined` only
+when the turn is absent or settled. `openInteractions(view, { about: { callId } })` includes the
+call's approval, questions relayed through it, and interactions belonging to its task;
+`{ about: { taskId } }` includes that task's interactions. A turn or response `about` filter
+matches its subject exactly. Read `interaction.subject` to match the subject itself. A response
+already answered but still being weighed by a response policy remains open and appears in
+`openInteractions` until it settles; `callState(view, callId)` distinguishes `approval` and
+`blocked` from running work. Both selectors return immutable observations.
+
 The public view contains no tables or preview dictionaries. Query results cannot mutate the
 fold, and a snapshot you retain stays unchanged when later events arrive. Interactions omit
-private sign-in callback URLs, including when returned by `waiting` or `activity`. Use
+private sign-in callback URLs, including when returned by `waiting`, `activity`, or `openInteractions`. Use
 `callPreview(view, callId)` and `contentPreviews(view)` for transient progress held by a client
 or a custom fold; committed values remain separate. Hook and channel snapshots describe the
 whole committed line, never half of it.

@@ -33,6 +33,6 @@ export type DeliveryResult<TOutput = unknown> = {
   readonly data: TOutput | undefined;
   readonly interactions: readonly Interaction[];
 } & (
-  | { readonly status: Exclude<RequestStatus, "working" | "failed">; readonly error?: never }
+  | { readonly status: Exclude<RequestStatus, "failed">; readonly error?: never }
   | { readonly status: "failed"; readonly error: ErrorInfo }
 );

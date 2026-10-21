@@ -56,7 +56,7 @@ if (result.status === "failed") console.error(result.error.code, result.error.me
 This reads until the message's delivery settles (`delivery.settled` for its
 `deliveryId`), finishing that line. A stream that ends without the accepted delivery's settlement
 rejects the read, including when only a session terminal was observed. A delivery settles when the
-turn that consumed it settles (`handled`), or when the turn pauses on a person
+turn that consumed it settles (`handled`), or when the turn pauses on an interaction
 (`awaiting-input`), such as for an approval, question, or sign-in. See
 [authorization pauses](#authorization-pauses).
 
@@ -69,7 +69,7 @@ with `respond()`, which keeps reading the same turn. A question stays pending un
 tool's question.
 
 `result().status` describes the settled request: `awaiting-input`, `completed`, `failed`, or
-`cancelled`. The live `requestStatus(view, deliveryId)` query can also return `working`.
+`cancelled`. To inspect live progress, use `delivery(view, deliveryId)` and, when it has a `turnId`, `turn(view, turnId)` from `eve/events`.
 A completed request can leave its session open. Read `result().sessionEnded` to check whether
 the session itself ended, and `outcome` to distinguish an applied control from an ignored one.
 
@@ -128,7 +128,7 @@ function handleEvent(event: SessionStreamEvent) {
   console.log(event.meta.position, event.meta.at);
 
   if (endsTurn(event)) {
-    console.log("turn ended or paused on a person:", event.type);
+    console.log("turn ended or paused on an interaction:", event.type);
   }
 }
 ```

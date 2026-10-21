@@ -171,7 +171,7 @@ export interface EveEvalTaskResult {
   /**
    * The last observed request's status, independent of whether its session ended.
    */
-  readonly status: RequestStatus;
+  readonly status: RequestStatus | "working";
   /** The captured stream events from the run. */
   readonly events: readonly SessionStreamEvent[];
   /** Lines written through `t.log` while the eval ran. */
@@ -435,7 +435,7 @@ export interface EveEvalTurn extends EveEvalAssertions, EveEvalOutputAssertions 
   /** Session that owns this turn; use it for follow-up messages. */
   readonly session: EveEvalSession;
   readonly sessionId: string;
-  readonly status: RequestStatus;
+  readonly status: RequestStatus | "working";
   readonly toolCalls: readonly EveEvalToolCall[];
   /** Require exactly one matching tool call, record a gate, and return it for dependent checks. */
   requireToolCall(

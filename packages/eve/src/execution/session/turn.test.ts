@@ -843,7 +843,11 @@ describe("SessionExecution checkpoints", () => {
         .mockImplementation(
           turnStepWork(async (input) => ({
             action: "paused",
-            ...({ attemptIds: [], on: "person", requestIds: ["request_1"] } satisfies TurnPause),
+            ...({
+              attemptIds: [],
+              on: "interaction",
+              requestIds: ["request_1"],
+            } satisfies TurnPause),
             serializedContext: input.serializedContext,
             sessionState: input.sessionState,
           })),
@@ -901,7 +905,7 @@ describe("SessionExecution checkpoints", () => {
         .mockImplementation(
           turnStepWork(async (input) => ({
             action: "paused",
-            ...({ on: "person", ...pause } satisfies TurnPause),
+            ...({ on: "interaction", ...pause } satisfies TurnPause),
             serializedContext: input.serializedContext,
             sessionState: input.sessionState,
           })),

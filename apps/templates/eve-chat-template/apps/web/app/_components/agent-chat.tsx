@@ -231,7 +231,7 @@ export function AgentChatSession({
     )
       return;
     if (
-      activity(snapshot.view).kind !== "waiting-on-person" &&
+      activity(snapshot.view).kind !== "waiting-on-interaction" &&
       snapshot.status !== "idle" &&
       snapshot.error === undefined
     )
@@ -241,7 +241,7 @@ export function AgentChatSession({
   const isBusy =
     isResuming ||
     hasLocalPendingUserMessage ||
-    (currentActivity.kind !== "waiting-on-person" && agent.status === "busy");
+    (currentActivity.kind !== "waiting-on-interaction" && agent.status === "busy");
   const isTurnBlocked = isBusy;
   const pendingMessage = pendingUserMessage
     ? createPendingUserMessage(displayChatId, pendingUserMessage)
@@ -260,7 +260,7 @@ export function AgentChatSession({
   const isChatRoute = Boolean(shellActiveChatId || chatId);
   const showThinking =
     !isWaitingForAuthorization &&
-    currentActivity.kind !== "waiting-on-person" &&
+    currentActivity.kind !== "waiting-on-interaction" &&
     (Boolean(pendingMessage || localPendingMessage) || isTurnBlocked);
   const thinkingPresence = useThinkingPresence(showThinking);
   const displayError = clientError ?? agent.error?.message ?? null;

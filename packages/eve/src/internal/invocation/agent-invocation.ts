@@ -43,7 +43,7 @@ export type AgentInvocation =
     })
   | (AgentInvocationBase & { readonly status: "cancelled" });
 
-export type AgentInvocationStatus = RequestStatus;
+export type AgentInvocationStatus = RequestStatus | "working";
 
 export type AgentInvocationMutationResult =
   | { readonly type: "success"; readonly invocation: AgentInvocation }

@@ -5,7 +5,6 @@ import {
   type ReceivedEvent,
 } from "./fold.js";
 import * as selectors from "./selectors.js";
-import { requestStatus as statusOf, type RequestStatus } from "./request-status.js";
 import {
   interaction as showInteraction,
   type Interaction,
@@ -184,7 +183,7 @@ export function interactions(view: SessionView): readonly Interaction[] {
 
 export function openInteractions(
   view: SessionView,
-  filter: { readonly kind?: string; readonly subject?: InteractionSubject } = {},
+  filter: { readonly kind?: string; readonly about?: InteractionSubject } = {},
 ): readonly Interaction[] {
   return frozen(
     selectors
@@ -342,38 +341,25 @@ export function idle(view: SessionView): boolean {
   return selectors.idle(sessionTables(view));
 }
 
-export function requestStatus(view: SessionView, deliveryId: string): RequestStatus {
-  return statusOf(sessionTables(view), deliveryId);
-}
-
-export function waiting(view: SessionView, turnId: string): Waiting | undefined;
-export function waiting(
-  view: SessionView,
-  of: { readonly taskId: string } | { readonly callId: string },
-): Extract<Waiting, { readonly on: "person" }> | undefined;
-export function waiting(
-  view: SessionView,
-  of: string | { readonly taskId: string } | { readonly callId: string },
-): Waiting | undefined {
-  const tables = sessionTables(view);
-  const found =
-    typeof of === "string" ? selectors.waiting(tables, of) : selectors.waiting(tables, of);
+export function waiting(view: SessionView, turnId: string): Waiting | undefined {
+  const found = selectors.waiting(sessionTables(view), turnId);
   if (found === undefined) return undefined;
-  return frozen(
-    found.on === "person"
-      ? {
-          on: "person",
-          interactions: found.interactions.flatMap(
-            (row) => interaction(view, row.interactionId) ?? [],
-          ),
-        }
-      : { on: "work", calls: found.calls.flatMap((row) => call(view, row.callId) ?? []) },
-  );
+  if (found.on === "session") return frozen({ on: "session" });
+  if (found.on === "interaction")
+    return frozen({
+      on: "interaction",
+      interactions: found.interactions.flatMap((row) => interaction(view, row.interactionId) ?? []),
+    });
+  return frozen({
+    on: "work",
+    calls: found.calls.flatMap((row) => call(view, row.callId) ?? []),
+    tasks: found.tasks.flatMap((row) => task(view, row.taskId) ?? []),
+  });
 }
 
 export function activity(view: SessionView, filter: { readonly turnId?: string } = {}): Activity {
   const found = selectors.activity(sessionTables(view), filter);
-  if (found.kind === "waiting-on-person")
+  if (found.kind === "waiting-on-interaction")
     return frozen({
       ...found,
       interactions: found.interactions.flatMap((row) => interaction(view, row.interactionId) ?? []),

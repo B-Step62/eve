@@ -670,7 +670,7 @@ export function turnActivity(view: AgentTUIConversationView, tasks: readonly Tas
       return "Compacting";
     case "waiting-on-tasks":
       return waitingLabel(tasks);
-    case "waiting-on-person": {
+    case "waiting-on-interaction": {
       const signIns = current.interactions.flatMap((row) =>
         row.request.signIn === undefined ? [] : [row.request.signIn],
       );

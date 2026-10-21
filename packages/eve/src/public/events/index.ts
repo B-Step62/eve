@@ -212,7 +212,6 @@ export {
   delivery,
   deliveries,
   queue,
-  requestStatus,
   task,
   tasks,
   runs,

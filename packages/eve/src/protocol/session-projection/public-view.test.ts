@@ -87,19 +87,6 @@ it("publishes complete commits and retains partial lines across replay overlap",
   expect(events.session(pending).status).toBe("new");
 });
 
-it("treats an unfamiliar delivery settlement as failed rather than returning an invalid status", () => {
-  const admitted = stampTestEvents([{ type: "delivery.admitted", data: { deliveryId: "d" } }])[0]!;
-  const view = events.foldEvents(events.emptySessionView(), [
-    admitted,
-    {
-      type: "delivery.settled",
-      data: { deliveryId: "d", outcome: "future-outcome" },
-      meta: { ...admitted.meta, position: { line: 1, index: 0 } },
-    },
-  ]);
-  expect(events.requestStatus(view, "d")).toBe("failed");
-});
-
 it("projects interactions without exposing callback URLs through waiting or activity", () => {
   const view = events.foldEvents(
     events.emptySessionView(),
@@ -126,8 +113,13 @@ it("projects interactions without exposing callback URLs through waiting or acti
     ]),
   );
   expect(events.openInteractions(view)).toHaveLength(1);
-  expect(events.waiting(view, "turn_0")?.on).toBe("person");
-  expect(events.activity(view).kind).toBe("waiting-on-person");
+  const aboutTurn = events.openInteractions(view, { about: { turnId: "turn_0" } });
+  expect(aboutTurn.map((row) => row.interactionId)).toEqual(["i"]);
+  expect(Object.isFrozen(aboutTurn)).toBe(true);
+  expect(Object.isFrozen(aboutTurn[0])).toBe(true);
+  expect(events.openInteractions(view, { about: { responseId: "missing" } })).toEqual([]);
+  expect(events.waiting(view, "turn_0")?.on).toBe("interaction");
+  expect(events.activity(view).kind).toBe("waiting-on-interaction");
   expect(
     JSON.stringify([
       events.openInteractions(view),

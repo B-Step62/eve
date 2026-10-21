@@ -380,7 +380,7 @@ export class EvalSessionDriver implements EveEvalSession {
     readonly message: string | undefined;
     readonly sessionId: string;
     readonly sessionEnded: boolean;
-    readonly status: RequestStatus;
+    readonly status: RequestStatus | "working";
   }): EveEvalTurn {
     this.#events.push(...input.events);
     const view = this.view;
@@ -647,7 +647,7 @@ class EvalTurn implements EveEvalTurn {
   readonly reply: string | undefined;
   readonly session: EveEvalSession;
   readonly sessionId: string;
-  readonly status: RequestStatus;
+  readonly status: RequestStatus | "working";
   readonly toolCalls: readonly EveEvalToolCall[];
   readonly #collector: AssertionCollector;
   readonly #derived: EveEvalDerivedFacts;
@@ -665,7 +665,7 @@ class EvalTurn implements EveEvalTurn {
     readonly message: string | undefined;
     readonly session: EveEvalSession;
     readonly sessionId: string;
-    readonly status: RequestStatus;
+    readonly status: RequestStatus | "working";
     readonly toolCalls: readonly EveEvalToolCall[];
   }) {
     this.data = input.data;

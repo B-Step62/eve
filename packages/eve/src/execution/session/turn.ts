@@ -261,7 +261,7 @@ export class SessionExecution {
   /**
    * Waits for what a paused turn awaits, and returns the input its next step reads:
    *
-   * - a person's answer, a sign-in callback, or the turn's own person steering it, for the
+   * - an interaction's answer, a sign-in callback, or the turn's own requester steering it, for the
    *   requests and sign-ins it raised. Anyone else's message queues behind the turn, as does a
    *   message admitted before the step that raised the request (`heldSince`): it was sent
    *   before the request existed;
@@ -274,28 +274,28 @@ export class SessionExecution {
     heldSince: number,
   ): Promise<TurnStepPayload | undefined | "cancelled"> {
     const earlierCaller = earlierRemoteCaller(this.input.cursor.serializedContext);
-    if (paused.on === "person" && earlierCaller !== undefined) {
+    if (paused.on === "interaction" && earlierCaller !== undefined) {
       throw new Error(formatEarlierRemoteCallerInputError(earlierCaller));
     }
     if (
-      paused.on === "person" &&
+      paused.on === "interaction" &&
       paused.requestIds.length > 0 &&
       this.input.capabilities?.requestInput !== true &&
       !hasDelegatedCallerContext(this.input.cursor.serializedContext)
     ) {
       throw new Error(NO_INPUT_CAPABILITY_ERROR_MESSAGE);
     }
-    const person =
-      paused.on === "person"
+    const pendingInteraction =
+      paused.on === "interaction"
         ? { attemptIds: new Set(paused.attemptIds), requestIds: new Set(paused.requestIds) }
         : undefined;
     const calls = paused.on === "calls" ? await this.startCallWait(paused) : undefined;
     let interrupted = false;
     while (true) {
-      if (person !== undefined) {
-        const callbacks = this.input.queue.takeAuthorizations(person.attemptIds);
+      if (pendingInteraction !== undefined) {
+        const callbacks = this.input.queue.takeAuthorizations(pendingInteraction.attemptIds);
         if (callbacks !== undefined) return { delivery: { kind: "deliver", payloads: callbacks } };
-        const answer = await turn.takeAnswers(person.requestIds);
+        const answer = await turn.takeAnswers(pendingInteraction.requestIds);
         if (answer !== undefined) return { delivery: answer };
         const steering = await turn.takeSteering({ heldSince });
         if (steering !== undefined) return { delivery: steering };

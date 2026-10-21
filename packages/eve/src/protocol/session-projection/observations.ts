@@ -147,11 +147,16 @@ export interface ContentPreviewObservation {
 }
 
 export type Waiting =
-  | { readonly on: "person"; readonly interactions: readonly Interaction[] }
-  | { readonly on: "work"; readonly calls: readonly CallObservation[] };
+  | { readonly on: "session" }
+  | { readonly on: "interaction"; readonly interactions: readonly Interaction[] }
+  | {
+      readonly on: "work";
+      readonly calls: readonly CallObservation[];
+      readonly tasks: readonly TaskObservation[];
+    };
 
 export type Activity =
   | { readonly kind: "idle" | "thinking" | "compacting" }
   | { readonly kind: "calling"; readonly names: readonly string[] }
-  | { readonly kind: "waiting-on-person"; readonly interactions: readonly Interaction[] }
+  | { readonly kind: "waiting-on-interaction"; readonly interactions: readonly Interaction[] }
   | { readonly kind: "waiting-on-tasks"; readonly tasks: readonly TaskObservation[] };

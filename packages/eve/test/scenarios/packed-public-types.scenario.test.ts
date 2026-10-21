@@ -104,7 +104,7 @@ delivery.status;
 delivery.stream({ signal: new AbortController().signal });
 async function result() {
   const result = await delivery.result();
-  const status: Exclude<RequestStatus, "working"> = result.status;
+  const status: RequestStatus = result.status;
   if (result.status === "failed") { const message: string = result.error.message; }
   const ok: boolean | undefined = result.data?.ok;
   // @ts-expect-error Ordinary results do not retain event logs.
