@@ -49,6 +49,6 @@ export default defineEval({
       status: "completed",
     });
 
-    t.noFailedActions();
+    t.noFailedCalls();
   },
 });
