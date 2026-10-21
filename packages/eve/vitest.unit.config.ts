@@ -40,7 +40,11 @@ export default defineConfig({
       "test/framework-fixtures/**",
       "test/scenarios/**",
     ],
-    include: ["src/**/*.test.ts", "test/**/*.test.ts"],
+    include: [
+      "src/**/*.test.ts",
+      "test/**/*.test.ts",
+      "../../e2e/fixtures/agent-basic-runtime/evals/lib/fetch-interceptor.test.ts",
+    ],
     setupFiles: ["./src/internal/testing/unit-guard.ts", "./test/setup/mock-ai-gateway.ts"],
     testTimeout: 5_000,
   },

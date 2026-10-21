@@ -27,7 +27,8 @@ export type { PrepareSend };
 
 /**
  * Local activity of the session: `"idle"` (nothing pending), `"resuming"` (catching up on an
- * attached session), or `"busy"` (a send is in flight, or a turn, task, or sign-in is pending).
+ * attached session), or `"busy"` (a send or followed receipt is pending, or a turn, task, or
+ * sign-in is pending).
  * Failures are reported separately in `error`.
  */
 export type UseEveAgentStatus = EveAgentStoreStatus;
@@ -58,7 +59,9 @@ export interface UseEveAgentReturn {
   readonly view: EveAgentStoreSnapshot["view"];
   /** Raw server events received during this session (authoritative stream). */
   readonly events: readonly SessionStreamEvent[];
-  /** Resolves at the durable tail; the session stream keeps following afterward. */
+  /** Follow a same-session delivery receipt until settlement. */
+  readonly follow: (receipt: Pick<Delivery, "sessionId" | "deliveryId">) => void;
+  /** Resolves at the durable tail; subsequent following obeys `followWhile`. */
   readonly resume: () => Promise<void>;
   /** Create the session without starting its first turn. */
   readonly prewarm: () => Promise<void>;
@@ -134,12 +137,8 @@ export interface UseEveAgentOptions extends EveAgentStoreCallbacks {
   readonly optimistic?: boolean;
   /** Follow each subagent call's session into `agents` while mounted. @default false */
   readonly followAgents?: boolean;
-  /**
-   * Keep the session stream open between turns to show events that arrive from schedules,
-   * channels, or other clients. Set to false to close it once the session is idle and reopen it
-   * on the next send, answer, or resume. @default true
-   */
-  readonly followIdle?: boolean;
+  /** Keep following while the committed view matches; local obligations take priority. @default () => true */
+  readonly followWhile?: (view: EveAgentStoreSnapshot["view"]) => boolean;
   /** Prewarm an owned session on mount and after reset. @default false */
   readonly prewarm?: boolean;
   /** Replay the attached durable session after mount. Requires `initialSession` or `session`. */
@@ -207,6 +206,10 @@ class SvelteEveAgent implements UseEveAgentReturn {
     return this.#snapshot.status;
   }
 
+  follow = (receipt: Pick<Delivery, "sessionId" | "deliveryId">): void => {
+    this.#store.follow(receipt);
+  };
+
   cancel = (): Promise<Delivery> => {
     return this.#store.cancel();
   };
@@ -261,7 +264,7 @@ export function useEveAgent(options: UseEveAgentOptions = {}): UseEveAgentReturn
     initialSession: options.initialSession,
     optimistic: options.optimistic,
     followAgents: options.followAgents,
-    followIdle: options.followIdle,
+    followWhile: (view) => options.followWhile?.(view) ?? true,
     prewarm: options.prewarm,
     session: options.session,
   });
