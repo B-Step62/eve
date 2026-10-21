@@ -28,8 +28,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   tool: {
-    current: 102,
-    supported: [102],
+    current: 103,
+    supported: [103],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -132,11 +132,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       99: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       100: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
       101: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
+      102: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
   dynamicTool: {
-    current: 93,
-    supported: [93],
+    current: 94,
+    supported: [94],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -230,11 +231,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       90: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       91: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
       92: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
+      93: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
   channel: {
-    current: 70,
-    supported: [70],
+    current: 71,
+    supported: [71],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -305,11 +307,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       67: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       68: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       69: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
+      70: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
   schedule: {
-    current: 39,
-    supported: [39],
+    current: 40,
+    supported: [40],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -349,6 +352,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       36: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       37: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       38: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
+      39: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
   subagent: {
@@ -401,8 +405,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 59,
-    supported: [59],
+    current: 60,
+    supported: [60],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -462,11 +466,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       56: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       57: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       58: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
+      59: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
   hook: {
-    current: 52,
-    supported: [52],
+    current: 53,
+    supported: [53],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -519,12 +524,21 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       49: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       50: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
       51: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
+      52: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
-  skill: { current: 3, supported: [1, 2, 3], dropped: {} },
+  skill: {
+    current: 4,
+    supported: [4],
+    dropped: {
+      1: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      2: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      3: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+    },
+  },
   dynamicSkill: {
-    current: 43,
-    supported: [43],
+    current: 44,
+    supported: [44],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -568,12 +582,20 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       41: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       42: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
+      43: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
-  instructions: { current: 2, supported: [1, 2], dropped: {} },
+  instructions: {
+    current: 3,
+    supported: [3],
+    dropped: {
+      1: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+      2: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
+    },
+  },
   dynamicInstructions: {
-    current: 44,
-    supported: [44],
+    current: 45,
+    supported: [45],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -618,6 +640,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       41: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       42: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       43: "Scoped callback contexts changes the authoring contract; rebuild the extension.",
+      44: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
   config: {
@@ -628,8 +651,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   state: {
-    current: 15,
-    supported: [15],
+    current: 16,
+    supported: [16],
     dropped: {
       1: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       2: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
@@ -645,6 +668,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       12: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       13: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       14: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      15: "Canonical public names and peer-stable declarations changes the authoring contract; rebuild the extension.",
     },
   },
 } as const satisfies Record<string, ExtensionCapabilityContract>;

@@ -109,7 +109,7 @@ function makeSkill(
   markdown = description,
   files?: Record<string, string>,
 ): SkillPackageDefinition {
-  return defineSkill({ description, files, markdown });
+  return defineSkill({ description, files, content: markdown });
 }
 
 async function dispatch(ctx: ContextContainer, ...resolvers: ResolvedDynamicSkillResolver[]) {
@@ -128,7 +128,7 @@ describe("resolveDynamicSkills", () => {
       createResolver("tenant", () => makeSkill("Tenant", "---\nname: tenant\n---\n# Body\n")),
     );
 
-    expect(ctx.get(DynamicSkillManifestKey)?.tenant?.[0]?.markdown).toBe(
+    expect(ctx.get(DynamicSkillManifestKey)?.tenant?.[0]?.content).toBe(
       "---\nname: tenant\n---\n# Body\n",
     );
   });
@@ -143,7 +143,7 @@ describe("resolveDynamicSkills", () => {
     );
 
     expect(ctx.get(DynamicSkillManifestKey)).toEqual({
-      custom: [{ description: "Talk like a dog", markdown: "Woof.", name: "talk-like-a-dog" }],
+      custom: [{ description: "Talk like a dog", content: "Woof.", name: "talk-like-a-dog" }],
     });
   });
 
@@ -213,7 +213,7 @@ describe("resolveDynamicSkills", () => {
     );
 
     expect(ctx.get(DynamicSkillManifestKey)).toEqual({
-      support: [{ description: "Support policy", markdown: "Support policy", name: "support" }],
+      support: [{ description: "Support policy", content: "Support policy", name: "support" }],
     });
     expect(logs.records).toContainEqual(
       expect.objectContaining({
@@ -240,7 +240,7 @@ describe("resolveDynamicSkills", () => {
 
     expect(ctx.get(DynamicSkillManifestKey)).toEqual({
       crm__playbooks: [
-        { description: "Triage an account", markdown: "Triage.", name: "crm__triage" },
+        { description: "Triage an account", content: "Triage.", name: "crm__triage" },
       ],
     });
   });
@@ -256,7 +256,7 @@ describe("resolveDynamicSkills", () => {
 
     expect(ctx.get(DynamicSkillManifestKey)?.custom?.[0]).toMatchObject({
       description: "Dynamic override",
-      markdown: "Woof.",
+      content: "Woof.",
       name: "talk-like-a-dog",
     });
     expect(writtenPaths(sandbox)).toEqual([
@@ -273,7 +273,7 @@ describe("resolveDynamicSkills", () => {
     );
 
     expect(ctx.get(DynamicSkillManifestKey)).toEqual({
-      tenant: [{ description: "Tenant policy", markdown: "Tenant policy", name: "tenant" }],
+      tenant: [{ description: "Tenant policy", content: "Tenant policy", name: "tenant" }],
     });
   });
 

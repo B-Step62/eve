@@ -86,7 +86,7 @@ export type ScheduleDefinition = GenericScheduleDefinition<ScheduleHandlerArgs>;
  *   // The real value is "asterisk-slash-5 * * * *" (every 5 minutes). The
  *   // space below is only here so the literal stays inside this block comment.
  *   cron: "* / 5 * * * *",
- *   markdown: "Sync open Linear issues to the metrics dashboard.",
+ *   content: "Sync open Linear issues to the metrics dashboard.",
  * });
  * ```
  */
