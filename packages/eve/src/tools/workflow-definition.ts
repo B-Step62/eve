@@ -5,7 +5,7 @@ import type {
 import type { ToolApproval } from "#approval/definition.js";
 import type { ChannelReference } from "#channel/compiled-channel.js";
 import type { InferReceiveTarget } from "#channel/receive-target.js";
-import type { SessionAuthContext } from "#channel/types.js";
+import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import type { MessageResult, SendTurnOptions } from "#client/types.js";
 import type {
   AgentModelOptionsDefinition,
@@ -100,7 +100,7 @@ export interface AgentSession {
   ): Promise<AgentResponse<TOutput>>;
 }
 
-/** Options for {@link WorkflowChannel.send}. */
+/** Options for {@link WorkflowSharedContext.sendToChannel}. */
 export interface WorkflowChannelSendOptions<TTarget = Record<string, unknown>> {
   /** Where on the channel the message goes, as the channel's `receive()` hook accepts it. */
   readonly target: TTarget;
@@ -108,24 +108,8 @@ export interface WorkflowChannelSendOptions<TTarget = Record<string, unknown>> {
   readonly auth: SessionAuthContext | null;
   /** Prior conversation added before the message. */
   readonly history?: readonly SessionHistoryMessage[];
-}
-
-/**
- * One of the agent's channels, selected with `ctx.channel()`. Each `send`
- * runs as a step through the channel's `receive()` hook. The session belongs
- * to the channel: it has no parent and outlives the workflow run.
- */
-export interface WorkflowChannel<TChannel extends ChannelReference<unknown> = ChannelReference> {
-  /**
-   * Starts a session at `target`, or continues the one that owns it. Each call
-   * resolves its target on its own, so two sends to a target the channel gives
-   * a new address each time start two sessions. A step that fails after
-   * delivering retries, so the message may arrive twice.
-   */
-  send(
-    message: string,
-    options: WorkflowChannelSendOptions<InferReceiveTarget<TChannel>>,
-  ): Promise<{ readonly sessionId: string }>;
+  /** How the message treats a running turn, as on route `to().send()`. Defaults to the channel's. */
+  readonly turnPolicy?: TurnPolicy;
 }
 
 /** Members the context of every workflow tool entry point shares. */
@@ -147,14 +131,22 @@ export type WorkflowSharedContext = Pick<
    */
   ask(request: ToolInputRequest, options?: ToolInputRequestOptions): PromiseLike<ToolInputResponse>;
   /**
-   * Returns one of the agent's channels, named by its path
-   * (`agent/channels/slack.ts` is `"slack"`). Type its targets with a
-   * type-only import: `ctx.channel<typeof slack>("slack")`. Only tools on the
-   * root agent can call it; it throws in a subagent's tool.
+   * Sends a message to one of the agent's channels, named by its path
+   * (`agent/channels/slack.ts` is `"slack"`). It runs as a step through the
+   * channel's `receive()` hook, which starts a session at `target` or continues
+   * the one that owns it. The session belongs to the channel: it has no parent
+   * and outlives the workflow run. Each call resolves `target` on its own, and a
+   * step that fails after delivering retries, so the message may arrive twice.
+   *
+   * Type the target with a type-only import:
+   * `ctx.sendToChannel<typeof slack>("slack", message, { target, auth })`.
+   * Only tools on the root agent can call it; it throws in a subagent's tool.
    */
-  channel<TChannel extends ChannelReference<unknown> = ChannelReference>(
+  sendToChannel<TChannel extends ChannelReference<unknown> = ChannelReference>(
     name: string,
-  ): WorkflowChannel<TChannel>;
+    message: string,
+    options: WorkflowChannelSendOptions<InferReceiveTarget<TChannel>>,
+  ): Promise<{ readonly sessionId: string }>;
 };
 
 /**

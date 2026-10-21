@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineWorkflowTool } from "#public/tools/index.js";
 
-// Epoch 96 workflow tools had no `ctx.channel()`; epoch 97 adds it, which is additive.
+// Epoch 96 workflow tools had no `ctx.sendToChannel()`; epoch 97 adds it, which is additive.
 export default defineWorkflowTool({
   description: "Report the calling session.",
   inputSchema: z.object({}),

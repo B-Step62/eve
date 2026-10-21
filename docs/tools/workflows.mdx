@@ -19,7 +19,7 @@ between them and for what the model sees while tasks work.
 
 Workflow tools use the [Workflow SDK](https://workflow-sdk.dev): `"use workflow"`, `"use step"`, `createHook`,
 `createWebhook`, `sleep`, retries, and replay. eve provides `ctx.ask` for questions answered through
-the session's channel, `ctx.agents` for effective callable-agent descriptions, `ctx.agent` for sessions with other agents, and `ctx.channel` for sessions on the agent's channels. Use `yield` to report
+the session's channel, `ctx.agents` for effective callable-agent descriptions, `ctx.agent` for sessions with other agents, and `ctx.sendToChannel` for sessions on the agent's channels. Use `yield` to report
 progress and `await` on a workflow operation to wait durably. Values needed after a durable wait
 stay in local variables in the workflow body.
 
@@ -91,12 +91,12 @@ or days later, the run resumes, deploys, and returns. The model sees one tool re
   `abortSignal`.
   A `"use step"` helper that receives `ctx` directly gets a restricted `WorkflowStepToolContext` with
   `session`, `callId`, `toolName`, `abortSignal`, `getToken`, and `requireAuth`. Read `ctx.agents`, and call
-  `ctx.agent()`, `ctx.ask()`, and `ctx.channel()` in the workflow body; pass only the serializable values the step needs.
+  `ctx.agent()`, `ctx.ask()`, and `ctx.sendToChannel()` in the workflow body; pass only the serializable values the step needs.
   `getSandbox` remains unavailable.
 - The tool's input must be a JSON object. Workflow bodies are for static tools under `agent/tools/`,
   not tools returned from `defineDynamic` resolvers.
 
-`ctx.agent`, `ctx.agents`, `ctx.ask`, and `ctx.channel` are available only on `WorkflowToolContext` and
+`ctx.agent`, `ctx.agents`, `ctx.ask`, and `ctx.sendToChannel` are available only on `WorkflowToolContext` and
 `WorkflowServeContext` in the workflow body.
 Ordinary tools, channel handlers, schedule handlers, and workflow steps do not receive these methods. Type
 step helpers with `WorkflowStepToolContext` from `eve/tools` when they need step-safe context capabilities.
@@ -699,9 +699,9 @@ When an authored tool accepts a JSON Schema supplied by the model, represent tha
 
 This pattern controls specialist selection, not whether the parent model delegates at all. Route before the parent model runs if every incoming request must go through Jev.
 
-## Start channel sessions: `ctx.channel`
+## Start channel sessions: `ctx.sendToChannel`
 
-`ctx.channel(name).send(message, { target, auth })` reaches a session on one of the agent's
+`ctx.sendToChannel(name, message, { target, auth })` reaches a session on one of the agent's
 channels through the same `receive` hook as a route handler's
 [`ctx.to(...)`](/docs/channels/custom#cross-channel-hand-off). Use it when the model decides that
 work should continue somewhere people can follow it, such as a new Slack channel. Name the channel
@@ -719,13 +719,15 @@ export default defineWorkflowTool({
   async task({ title, summary }, ctx) {
     "use workflow";
     const channelId = await openChannel(title);
-    const { sessionId } = await ctx
-      .channel<typeof slack>("slack")
-      .send("Continue the investigation in this channel.", {
+    const { sessionId } = await ctx.sendToChannel<typeof slack>(
+      "slack",
+      "Continue the investigation in this channel.",
+      {
         target: { channelId },
         auth: ctx.session.auth.current,
         history: [{ role: "user", text: summary }],
-      });
+      },
+    );
     return { channelId, sessionId };
   },
 });
@@ -739,29 +741,30 @@ async function openChannel(title: string) {
 The workflow body can't import the channel module, because the body runs in the workflow
 sandbox. The `import type` above only types the target.
 
-`send(message, { target, auth, history? })` runs as a step through the channel's `receive` hook,
-which maps the target to the channel's session address. When no session owns that address, `send` starts one
-from `history` and runs the turn. When a session owns it, `send` adds `history` and the message to
-that session. It returns `{ sessionId }`.
+Each call runs as a step through the channel's `receive` hook, which maps the target to the
+channel's session address. When no session owns that address, the call starts one from `history`
+and runs the turn. When a session owns it, the call adds `history` and the message to that session,
+following `turnPolicy` (`"steer"` or `"queue"`, defaulting to the channel's) if a turn is running.
+It returns `{ sessionId }`.
 
-Each `send` resolves its target on its own. On a target the channel gives a new address each time,
-such as a Slack target with only a `channelId`, two sends start two sessions. A step that fails
-after `send` delivered retries the delivery, so the message can arrive twice, or start a second
-session on such a target.
+Each call resolves its target on its own. On a target the channel gives a new address each time,
+such as a Slack target with only a `channelId`, two calls start two sessions. A step that fails
+after delivering retries the delivery, so the message can arrive twice, or start a second session
+on such a target.
 
-`ctx.channel` differs from `ctx.agent`:
+`ctx.sendToChannel` differs from `ctx.agent`:
 
 - The session belongs to the channel. People on that channel continue it, and it has no parent.
 - It keeps running after the workflow run finishes. The run never sees its replies.
 - It runs the root agent, because channels belong to the root agent. Only workflow tools on the
-  root agent can call `ctx.channel`; in a subagent's tool it throws.
+  root agent can call `ctx.sendToChannel`; in a subagent's tool it throws.
 - `auth` is required. Pass `ctx.session.auth.current` to start the session as the caller.
 
 An unknown channel name, or a channel without a `receive` hook, fails the step with an error that
 lists the channel names.
 
 See [Fork conversations into a new thread](/docs/patterns/fork-conversations-into-new-threads)
-for a tool that copies the current conversation into a new Slack or Teams thread with `ctx.channel`.
+for a tool that copies the current conversation into a new Slack or Teams thread with `ctx.sendToChannel`.
 
 ## Report progress: `yield`
 

@@ -19,7 +19,7 @@ new session must live at a channel address, answer people there, and outlive the
 Routes and schedules already reach channels with `ctx.to(channel, target).send()`, which goes
 through the target channel's `receive()` hook. This proposal:
 
-1. Adds `ctx.channel(name).send(message, { target, auth })` to workflow tool bodies, run as a
+1. Adds `ctx.sendToChannel(name, message, { target, auth })` to workflow tool bodies, run as a
    durable step.
 2. Adds `history` to `to().send()`, so a handoff can carry prior conversation.
 
@@ -39,7 +39,7 @@ export default defineWorkflowTool({
     "use workflow";
     const channelId = await openDirectMessage(ctx.session.auth.current); // "use step"
     const history = await readTranscript(ctx.session.id); // "use step"
-    return await ctx.channel<typeof slack>("slack").send("Continue here.", {
+    return await ctx.sendToChannel<typeof slack>("slack", "Continue here.", {
       target: { channelId },
       auth: ctx.session.auth.current,
       history,
@@ -52,21 +52,24 @@ The workflow body names the channel by its path-derived name (`agent/channels/sl
 `"slack"`), as `ctx.agent()` names agents. Importing a channel module into a workflow body would
 evaluate the channel in the workflow sandbox. A type-only import keeps the target typed.
 
-`send()` starts a session seeded with `history` when the target address is free, and adds
-`history` and the message to the owning session otherwise. It returns `{ sessionId }`, since
-session handles cannot cross the step boundary.
+`sendToChannel()` starts a session seeded with `history` when the target address is free, and adds
+`history` and the message to the owning session otherwise, following `turnPolicy` as route
+`to().send()` does. It returns `{ sessionId }`, since session handles cannot cross the step
+boundary.
 
 ### Why not `ctx.to()`
 
 Routes and schedules use `ctx.to(channel, target).send()`, but a workflow body can't share that
 contract: it names the channel by string, returns `{ sessionId }` instead of a `Session`, and each
-`send` is a retried step. Sharing the name would suggest the same behavior. `ctx.channel(name)`
-reads as a sibling of `ctx.agent(name)`, which is also looked up by string and run by the
-workflow.
+`send` is a retried step. Sharing the name would suggest the same behavior.
 
-The target goes on each `send`, not on the handle, because each call resolves its address on its
-own: two sends to a Slack target with only a `channelId` start two threads. This matches the Slack
-`onEvent` hook's `ctx.send(message, { target, auth })`.
+It is one call rather than a handle. `ctx.channel(name)` would read like `ctx.agent(name)`, whose
+handle is a session, but each call here resolves its target on its own: two sends to a Slack target
+with only a `channelId` start two threads. `ctx.channel` also already names the session's channel
+in hooks and dynamic resolvers. The verb leaves room for a `startInChannel()` once a step-derived
+key exists (see [Non-goals](#non-goals)), and for a stateful handle later that sends follow-ups to
+the session by id instead of running `receive()` again. The target goes in the options, as in the
+Slack `onEvent` hook's `ctx.send(message, { target, auth })`.
 
 ## Semantics
 
@@ -88,24 +91,27 @@ session's context. Replay reuses the recorded result.
   `ctx.agent()`.
 - **Auth.** `auth` is required and explicit, as in routes. Pass `ctx.session.auth.current` to act
   as the caller.
-- **Subagents.** Only workflow tools on the root agent can use `ctx.channel()`; it throws in a
-  subagent's tool. Channels belong to the root agent, so the session runs the root agent with all its tools, and
-  a subagent must not reach tools its parent withheld from it.
-- **Retries.** `send()` delivers at least once: a step that fails after delivering retries the
+- **Subagents.** Only workflow tools on the root agent can use `ctx.sendToChannel()`; it throws
+  in a subagent's tool. Channels belong to the root agent, so the session runs the root agent with
+  all its tools, and a subagent must not reach tools its parent withheld from it.
+- **Retries.** `sendToChannel()` delivers at least once: a step that fails after delivering retries the
   delivery.
 - **Errors.** An unknown channel name, or a channel without `receive()`, throws in the step with the
   channel names available.
 
-`ctx.channel()` exists only on workflow tool bodies. Ordinary tools run inside the turn's step, where a
-retried call could deliver again with no recorded result to reuse.
+`ctx.sendToChannel()` exists only on workflow tool bodies. Ordinary tools run inside the turn's
+step, where a retried call could deliver again with no recorded result to reuse.
 
 ## Non-goals
 
-- A `create()` or `start()` verb that starts a session only when the target is free. Without an
+- A `startInChannel()` that starts a session only when the target is free. Without an
   idempotency key, its `created` flag would change on retry: a retried step can't tell its own
   earlier session from someone else's. It should follow a step-derived key that `receive()` hooks
   use to pick a stable address.
 - Lineage (`forkedFrom`) on the new session. #5092 proposes it separately.
-- `ctx.channel()` in ordinary tools, hooks, or channel events.
+- A stateful handle that remembers the session after its first send, for `ctx.agent`-like
+  follow-ups.
+- `title` on the send. Route `to().send()` and `receive()` input have none; it should land on both.
+- `ctx.sendToChannel()` in ordinary tools, hooks, or channel events.
 - Reading another session's history. Workflow tools use `sessions.attach()` with
   `transcriptReducer()` in a step.

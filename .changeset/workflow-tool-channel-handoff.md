@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Workflow tools can start or reach sessions on the agent's channels with `ctx.channel(name).send(message, { target, auth })`, such as forking a conversation into a new Slack or Teams thread. Cross-channel `to().send()` also accepts `history`, which eve adds to the destination session. Teams' default auth now includes the conversation's `service_url`, so a tool can address the current Teams conversation.
+Workflow tools can start or reach sessions on the agent's channels with `ctx.sendToChannel(name, message, { target, auth })`, such as forking a conversation into a new Slack or Teams thread. Cross-channel `to().send()` also accepts `history`, which eve adds to the destination session. Teams' default auth now includes the conversation's `service_url`, so a tool can address the current Teams conversation.

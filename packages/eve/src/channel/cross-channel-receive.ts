@@ -89,23 +89,30 @@ export function createCrossChannelToFn(
 
 /**
  * Sends to a channel found by its path-derived name, as workflow tool bodies
- * address channels with `ctx.channel()`.
+ * address channels with `ctx.sendToChannel()`.
  */
 export async function sendToNamedChannel(
   runtime: Runtime,
   channels: readonly CrossChannelTarget[],
   name: string,
   input: InvokeChannelReceiveInput["input"],
+  turnPolicy?: TurnPolicy,
 ): Promise<Session> {
   const channel = channels.find((candidate) => candidate.name === name);
   if (channel === undefined) {
     const available = channels.map((candidate) => `"${candidate.name}"`).join(", ");
     throw new Error(
-      `ctx.channel(): no channel named "${name}". Pass the path-derived name of a file in agent/channels/` +
+      `ctx.sendToChannel(): no channel named "${name}". Pass the path-derived name of a file in agent/channels/` +
         (available === "" ? "; this agent has no channels." : `: ${available}.`),
     );
   }
-  return await invokeChannelReceive({ caller: "ctx.channel()", input, runtime, target: channel });
+  return await invokeChannelReceive({
+    caller: "ctx.sendToChannel()",
+    input,
+    runtime,
+    target: channel,
+    turnPolicy,
+  });
 }
 
 function createCrossChannelTargetHandle(

@@ -243,6 +243,25 @@ describe("cross-channel handoff delivery", () => {
     );
   });
 
+  it("delivers with the sender's turnPolicy over the channel's default", async () => {
+    const runtime = makeRuntime();
+    vi.mocked(runtime.dispatchContinuation).mockResolvedValue({
+      sessionId: "sess_owner",
+      status: "accepted",
+    });
+    await sendToNamedChannel(
+      runtime,
+      [inboxChannel()],
+      "inbox",
+      { auth: null, message: "Continue.", target: { ref: 1 } },
+      "queue",
+    );
+
+    expect(runtime.dispatchContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({ command: expect.objectContaining({ turnPolicy: "queue" }) }),
+    );
+  });
+
   it("names the available channels when a name matches none", async () => {
     await expect(
       sendToNamedChannel(makeRuntime(), [inboxChannel()], "slack", {

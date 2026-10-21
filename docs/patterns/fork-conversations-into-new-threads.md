@@ -29,7 +29,7 @@ tool runs three steps:
 2. **Decide what context to seed the new session with.** Fold the session's stream with
    `transcriptReducer()` and select the messages the new session should have access to.
 3. **Start the forked session.** Call
-   [`ctx.channel(name).send(...)`](../tools/workflows#start-channel-sessions-ctxchannel) with a
+   [`ctx.sendToChannel(...)`](../tools/workflows#start-channel-sessions-ctxsendtochannel) with a
    target, a first message, and the selected messages as `history`. The channel's `receive` hook
    maps the target to a new thread and session, and the message runs the fork's first turn.
 
@@ -55,9 +55,11 @@ export default defineWorkflowTool({
       return { forked: false, reason: "This conversation is not in Slack." };
 
     const history = await readTranscript(ctx.session.id);
-    const { sessionId } = await ctx
-      .channel<typeof slack>("slack")
-      .send("Continue this conversation here.", { target: { channelId }, auth, history });
+    const { sessionId } = await ctx.sendToChannel<typeof slack>(
+      "slack",
+      "Continue this conversation here.",
+      { target: { channelId }, auth, history },
+    );
     return { forked: true, sessionId };
   },
 });
@@ -146,9 +148,10 @@ export default defineWorkflowTool({
       return { forked: false, reason: "This conversation is not in a Teams channel." };
 
     const history = await readTranscript(ctx.session.id);
-    const { sessionId } = await ctx
-      .channel<typeof teams>("teams")
-      .send("Continue this conversation here.", {
+    const { sessionId } = await ctx.sendToChannel<typeof teams>(
+      "teams",
+      "Continue this conversation here.",
+      {
         target: {
           // Drop the current thread so the fork gets its own.
           conversationId: conversation_id.split(";messageid=")[0],
@@ -159,7 +162,8 @@ export default defineWorkflowTool({
         },
         auth,
         history,
-      });
+      },
+    );
     return { forked: true, sessionId };
   },
 });

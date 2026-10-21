@@ -1,4 +1,4 @@
-import type { SessionAuthContext } from "#channel/types.js";
+import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import { sendToNamedChannel, toCrossChannelTargets } from "#channel/cross-channel-receive.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
@@ -15,6 +15,7 @@ export interface ChannelHandoffInput {
   readonly localDevRequest?: AgentSessionContext["localDevRequest"];
   readonly message: string;
   readonly target: Readonly<Record<string, unknown>>;
+  readonly turnPolicy?: TurnPolicy;
 }
 
 /** Runs the channel's `receive()` against the root agent, outside the calling session's context. */
@@ -38,6 +39,7 @@ export async function sendToChannelStep(
           message: input.message,
           target: input.target,
         },
+        input.turnPolicy,
       ),
   );
   return { sessionId: session.id };

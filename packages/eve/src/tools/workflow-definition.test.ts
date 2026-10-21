@@ -37,10 +37,15 @@ describe("defineWorkflowTool", () => {
             reasoning: "high",
           },
         });
-        const slack = ctx.channel<SlackChannel>("slack");
-        void slack.send("Continue here.", { auth: null, target: { channelId: "C123" } });
-        // @ts-expect-error A Slack target needs a channelId.
-        void slack.send("Continue here.", { auth: null, target: { userId: "U123" } });
+        void ctx.sendToChannel<SlackChannel>("slack", "Continue here.", {
+          auth: null,
+          target: { channelId: "C123" },
+        });
+        void ctx.sendToChannel<SlackChannel>("slack", "Continue here.", {
+          auth: null,
+          // @ts-expect-error A Slack target needs a channelId.
+          target: { userId: "U123" },
+        });
         // @ts-expect-error The message is sent with send(), not passed to ctx.agent().
         void ctx.agent("researcher", { message: "Review the deployment." });
         // Token capabilities are available when this context is passed into a step.

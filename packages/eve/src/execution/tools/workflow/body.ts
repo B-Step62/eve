@@ -6,14 +6,9 @@ import { callToolStubStep } from "#execution/tool-stubs/steps.js";
 import type { SessionContext } from "#context/session-context.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
 import { createAgentSessions } from "#execution/agent-sessions/session.js";
-import { createWorkflowChannel } from "#execution/tools/workflow/channel-handoff.js";
+import { sendToChannel } from "#execution/tools/workflow/channel-handoff.js";
 import { createRunUsageTally, type RunUsageTally } from "#execution/agent-sessions/usage.js";
-import type { ChannelReference } from "#channel/compiled-channel.js";
-import type {
-  WorkflowChannel,
-  WorkflowSharedContext,
-  WorkflowToolContext,
-} from "#tools/workflow-definition.js";
+import type { WorkflowSharedContext, WorkflowToolContext } from "#tools/workflow-definition.js";
 import {
   ask,
   attachWorkflowToolRunContext,
@@ -289,9 +284,6 @@ export function createSharedContext(
   return {
     agent,
     ask: askPerson,
-    // The target type is author-facing only; `receive()` validates it at runtime.
-    channel: <TChannel extends ChannelReference<unknown>>(name: string) =>
-      createWorkflowChannel(input.agentContext, name) as WorkflowChannel<TChannel>,
     getSandbox: () => unavailable("getSandbox()", "the session sandbox belongs to the turn"),
     getToken: () =>
       unavailable("getToken()", 'pass ctx directly to a "use step" helper to resolve credentials'),
@@ -300,6 +292,8 @@ export function createSharedContext(
         "requireAuth()",
         'pass ctx directly to a "use step" helper to request authorization',
       ),
+    sendToChannel: async (name, message, options) =>
+      await sendToChannel(input.agentContext, name, message, options),
     toolName: input.toolName,
   };
 }
