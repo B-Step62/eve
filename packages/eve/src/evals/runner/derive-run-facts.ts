@@ -269,13 +269,30 @@ export function createEmptyDerivedFacts(): EveEvalDerivedFacts {
 }
 
 /**
- * Input requests raised in `events` that no later event settles. A partial
- * answer settles only the requests it answers; the rest stay open.
+ * Input requests the last started turn raised that nobody has answered yet. A
+ * partial answer settles only the requests it answers; the rest stay open.
+ *
+ * An eval may watch how a request ends outside the session (for example
+ * through `t.target`), so two kinds of open request don't count: ones from
+ * earlier turns, which the runtime withdraws before a new turn starts, and
+ * answered ones whose responder still has to sign in.
  */
 export function openInputRequests(events: readonly MessageStreamEvent[]): InputRequest[] {
   let projection = initialSessionProjection();
-  for (const event of events) projection = foldSession(projection, event);
-  return openInputs(projection).map((input) => input.request);
+  let lastTurnId: string | undefined;
+  for (const event of events) {
+    projection = foldSession(projection, event);
+    if (event.type === "turn.started") lastTurnId = event.data.turnId;
+  }
+  const awaitingSignIn = new Set(
+    Object.values(projection.candidates)
+      .filter((candidate) => candidate.outcome === "pending")
+      .map((candidate) => candidate.requestId),
+  );
+  return openInputs(projection)
+    .filter((input) => lastTurnId === undefined || input.turnId === lastTurnId)
+    .filter((input) => !awaitingSignIn.has(input.request.requestId))
+    .map((input) => input.request);
 }
 
 /**
