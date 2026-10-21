@@ -22,8 +22,8 @@ interface ExtensionCapabilityContract {
 const EXTENSION_CAPABILITY_CONTRACTS = {
   extension: { current: 1, supported: [1], dropped: {} },
   tool: {
-    current: 100,
-    supported: [100],
+    current: 101,
+    supported: [101],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -124,11 +124,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       97: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
       98: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       99: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      100: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
     },
   },
   dynamicTool: {
-    current: 91,
-    supported: [91],
+    current: 92,
+    supported: [92],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -220,6 +221,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       88: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       89: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
       90: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      91: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
     },
   },
   channel: {
@@ -339,8 +341,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   subagent: {
-    current: 42,
-    supported: [42],
+    current: 43,
+    supported: [43],
     dropped: {
       1: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
       2: "Persistent subagent sessions are now the default and the experimental opt-in was removed",
@@ -383,6 +385,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       39: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       40: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       41: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      42: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
     },
   },
   connection: {
