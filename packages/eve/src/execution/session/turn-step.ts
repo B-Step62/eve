@@ -1,12 +1,16 @@
 import { bindTurnCallerContext } from "#subagents/parent-notification.js";
 import type { HandleEventFn } from "#harness/types.js";
-import { bindSessionParticipants } from "#execution/participants.js";
+import { bindSessionParticipants, rehydrateSessionConnections } from "#execution/participants.js";
 import { recoverDynamicConnectionRehydration } from "#execution/dynamic-connection-recovery.js";
 import { deriveSessionTitle } from "#execution/eve-workflow-attributes.js";
 import { setEveAttributes } from "#runtime/attributes/emit.js";
 import { defaultDeliverResult } from "#channel/adapter.js";
 import { contextStorage } from "#context/container.js";
-import { runStep } from "#context/run-step.js";
+import { runStep, withContextScope } from "#context/run-step.js";
+import { replaceSessionHistory } from "#harness/compaction/step.js";
+import { discardClearedHumanInput } from "#harness/hitl/index.js";
+import { clearMemorySessionState } from "#shared/memory-state.js";
+import { StepInterruptedError } from "#execution/step-interrupted-error.js";
 import { sessionProvider } from "#context/providers/session.js";
 import { ConnectionRegistryKey, connectionProvider } from "#context/providers/connection.js";
 import { sandboxProvider } from "#context/providers/sandbox.js";
@@ -24,6 +28,7 @@ import {
   ParentSessionKey,
   SandboxKey,
   SessionPredecessorKey,
+  SessionCallbackKey,
   SessionKey,
   CapabilitiesKey,
   ChannelDeliveryKey,
@@ -54,8 +59,16 @@ import {
 } from "#harness/session-machine/current.js";
 import { saveTransition, dropClosedRecords, sessionView } from "#harness/session-machine/commit.js";
 import { matchSignIns, receive } from "#harness/session-machine/transitions.js";
+import { withResult } from "#harness/session-machine/suspended-steps.js";
 import type { DeliverPayload } from "#channel/types.js";
-import { coalesceTurnInputs, validateHarnessModelMessages } from "#harness/messages.js";
+import { answeredCallIds } from "#harness/session-machine/view.js";
+import {
+  coalesceTurnInputs,
+  createFrameworkUserMessage,
+  createImportedHistoryMessages,
+  createUserMessage,
+  validateHarnessModelMessages,
+} from "#harness/messages.js";
 import type { HarnessSession, HarnessStepInput, StepInput, StepResult } from "#harness/types.js";
 import { attributeAnswers } from "#execution/session/answer-caller.js";
 import type {
@@ -68,13 +81,16 @@ import { withSessionStateDelta } from "#execution/session/state-delta.js";
 import {
   checksSessionEvents,
   openSessionEventPublisher,
+  hasUncheckpointedSessionLines,
+  reconcilePublishedSessionLines,
 } from "#execution/publish-session-events.js";
 import { stepDisagreement } from "#execution/session/step-decision-check.js";
 import { createLogger } from "#internal/logging.js";
 import { admitDeliveries, type DeliveryAdmission } from "#execution/session/delivery-facts.js";
 import { getAdapterKind } from "#channel/adapter.js";
 import type { SessionEvent } from "#protocol/session-event.js";
-import { fact } from "#harness/facts.js";
+import { reply, replyText } from "#protocol/session-projection/selectors.js";
+import { fact, turnSettled } from "#harness/facts.js";
 import { eventsOf } from "#harness/publication.js";
 import { createTurnEventHandler } from "#execution/session/turn-event-handler.js";
 import { CallbackBaseUrlKey, PendingAuthorizationResultKey } from "#harness/authorization.js";
@@ -218,6 +234,251 @@ async function runSessionStepBody(
     }),
     history: validateHarnessModelMessages(input.history),
   };
+  // The writer's checkpoint can lag its durable stream after a failed attempt. Reconcile
+  // before adapter.deliver, participant restore, model execution or any new publication.
+  // Hooks see the session context they normally receive during publication.
+  const checkpointPosition = currentProjection(ctx).view.position;
+  const consumedMessages: (typeof initialSession.history)[] = [];
+  let recordedClear = false;
+  let recordedCompaction = false;
+  const recoveryCancellation = new AbortController();
+  const recovery = (await hasUncheckpointedSessionLines(ctx, initialSession.sessionId))
+    ? await withContextScope(ctx, initialSession, async (session) => {
+        await rehydrateSessionConnections({ ctx, bundle, effectiveAgent });
+        return {
+          result: await reconcilePublishedSessionLines({
+            ctx,
+            sessionId: session.sessionId,
+            cancelTurn:
+              input.input?.control === undefined ? () => recoveryCancellation.abort() : undefined,
+            onEvent(event) {
+              if (event.type === "context.started" && event.data.kind === "compaction")
+                recordedCompaction = true;
+              if (event.type === "context.settled" && event.data.outcome === "completed") {
+                if (event.data.kind === "clear") recordedClear = true;
+                if (event.data.kind === "compaction") recordedCompaction = true;
+              }
+              if (event.type !== "delivery.consumed") return;
+              const text = event.data.parts
+                .map((part) =>
+                  part.kind === "text" ? part.text : `[Attachment: ${part.filename ?? "file"}]`,
+                )
+                .join("\n");
+              consumedMessages.push([
+                ...createImportedHistoryMessages(event.data.history ?? []),
+                ...(text.length > 0 ? [createUserMessage("user", text)] : []),
+              ]);
+            },
+          }),
+          session,
+        };
+      })
+    : { result: 0, session: initialSession };
+  const recoveredLines = recovery.result;
+  initialSession = recovery.session;
+  if (recordedCompaction) {
+    throw new StepInterruptedError(
+      "Interrupted compaction cannot restore its private history from session events. Start a new session.",
+    );
+  }
+  if (recordedClear) {
+    initialSession = replaceSessionHistory(
+      discardClearedHumanInput({
+        ...initialSession,
+        state: clearMemorySessionState(initialSession.state),
+      }),
+      [],
+    );
+    const projection = currentProjection(ctx);
+    if (!isBetweenTurns(projection))
+      throw new StepInterruptedError("A recorded clear left an open turn. Start a new session.");
+    const turn = sessionView(projection, initialSession.state).turn;
+    const cleared = saveTransition(initialSession, {
+      events: [],
+      turn: { grants: turn.grants, suspended: [] },
+    });
+    return resolveSessionStepResult(
+      {
+        next: null,
+        session: saveSessionProjection(
+          dropClosedRecords({ ...cleared, outputSchema: undefined }, projection),
+          ctx,
+        ),
+      },
+      serializeContext(ctx),
+    );
+  }
+  if (recoveredLines > 0) {
+    const projection = currentProjection(ctx);
+    const recoveredTurnId = turnPosition(projection).turnId || projection.view.session.latestTurnId;
+    const turnState = sessionView(projection, initialSession.state).turn;
+    const stopped = turnState.suspended.filter((step) => step.event.turnId === recoveredTurnId);
+    // The public fold cannot recover private model/tool messages from an uncheckpointed
+    // step. Keep checkpointed withheld responses, seal unanswered calls, and never resume
+    // the closed turn's suspended work.
+    let restoredHistory = validateHarnessModelMessages([
+      ...initialSession.history,
+      ...stopped.flatMap((step) => step.messages),
+    ]);
+    const answered = answeredCallIds(restoredHistory);
+    for (const message of restoredHistory) {
+      if (message.role !== "assistant" || typeof message.content === "string") continue;
+      for (const part of message.content) {
+        if (
+          part.type !== "tool-call" ||
+          part.providerExecuted === true ||
+          answered.has(part.toolCallId)
+        )
+          continue;
+        restoredHistory = validateHarnessModelMessages(
+          withResult(restoredHistory, {
+            type: "tool-result",
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            output: {
+              type: "text",
+              value: "This call was interrupted before its result was saved.",
+            },
+          }),
+        );
+      }
+    }
+    initialSession = {
+      ...saveTransition(initialSession, {
+        events: [],
+        turn: {
+          ...turnState,
+          suspended: turnState.suspended.filter((step) => step.event.turnId !== recoveredTurnId),
+        },
+      }),
+      history: validateHarnessModelMessages([...restoredHistory, ...consumedMessages.flat()]),
+      outputSchema: undefined,
+    };
+    const message =
+      "The previous step was interrupted after publishing session events. Send the message again.";
+    const continuation = () =>
+      createFrameworkUserMessage(
+        "execution.continuation",
+        "The preceding turn was interrupted. Its unsaved model and tool output is unavailable; do not assume it succeeded.",
+      );
+    const publisher = openSessionEventPublisher({
+      ctx,
+      origin: "own",
+      sessionWritable: input.sessionWritable,
+    });
+    try {
+      if (projection.view.session.status === "ended") {
+        const ended = projection.view.session;
+        const delegated = ctx.has(ParentSessionKey) || ctx.has(SessionCallbackKey);
+        const session = saveSessionProjection(dropClosedRecords(initialSession, projection), ctx);
+        const result = resolveSessionStepResult(
+          {
+            next: {
+              done: true,
+              ...(delegated && ended.outcome === "failed" && { isError: true }),
+              output: delegated && ended.outcome === "failed" ? (ended.error?.message ?? "") : "",
+            },
+            session,
+          },
+          serializeContext(ctx),
+        );
+        try {
+          await publisher.writer.close();
+        } catch {
+          // The step's previous attempt may have closed the stream already.
+        }
+        return result;
+      }
+      const latestTurn = projection.view.turns[projection.view.session.latestTurnId ?? ""];
+      if (latestTurn?.closedAt !== undefined && latestTurn.closedAt >= checkpointPosition) {
+        const answer = replyText(projection.view, latestTurn.turnId);
+        const resultPart = reply(projection.view, latestTurn.turnId).find(
+          (part) => part.kind === "result",
+        );
+        const session = saveSessionProjection(
+          dropClosedRecords(
+            {
+              ...initialSession,
+              history: [
+                ...initialSession.history,
+                ...(latestTurn.outcome === "completed" && answer !== undefined
+                  ? [{ role: "assistant" as const, content: answer }]
+                  : []),
+                ...(latestTurn.error?.code === "STEP_INTERRUPTED" ? [continuation()] : []),
+              ],
+            },
+            projection,
+          ),
+          ctx,
+        );
+        return resolveSessionStepResult(
+          {
+            next: null,
+            session,
+            ...(latestTurn.outcome !== "cancelled" && {
+              settledTurn: {
+                isError: latestTurn.outcome === "failed",
+                output:
+                  latestTurn.outcome === "completed"
+                    ? resultPart === undefined
+                      ? answer
+                      : resultPart.value
+                    : (latestTurn.error?.message ?? message),
+              },
+            }),
+          },
+          serializeContext(ctx),
+        );
+      }
+      const cancelled = recoveryCancellation.signal.aborted;
+      const events = turnSettled(
+        projection,
+        cancelled
+          ? { outcome: "cancelled" }
+          : { outcome: "failed", error: { code: "STEP_INTERRUPTED", message } },
+      );
+      if (events.length > 0) {
+        await publisher.publish(events);
+      } else {
+        const admitted = Object.values(projection.view.deliveries).filter(
+          (delivery) => delivery.status === "admitted",
+        );
+        if (admitted.length > 0) {
+          await publisher.publish(
+            admitted.map((delivery) =>
+              fact("delivery.settled", {
+                deliveryId: delivery.deliveryId,
+                outcome: cancelled ? "ignored" : "failed",
+                reason: cancelled ? "cancelled" : "step-interrupted",
+              }),
+            ),
+          );
+        }
+      }
+      const session = saveSessionProjection(
+        dropClosedRecords(
+          {
+            ...initialSession,
+            history: cancelled
+              ? initialSession.history
+              : [...initialSession.history, continuation()],
+          },
+          currentProjection(ctx),
+        ),
+        ctx,
+      );
+      return resolveSessionStepResult(
+        {
+          next: null,
+          session,
+          ...(!cancelled && { settledTurn: { isError: true, output: message } }),
+        },
+        serializeContext(ctx),
+      );
+    } finally {
+      publisher.writer.release();
+    }
+  }
   const history = createExecutionHistoryView(initialSession);
   const instrumentation = bindSessionInstrumentation({
     agentName: effectiveAgent.turnAgent.id,
