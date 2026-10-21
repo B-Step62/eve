@@ -9,7 +9,6 @@ import { SessionNotActiveError } from "#channel/session-not-active-error.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import { enterSessionProjection, recordPublishedEvent } from "#harness/session-machine/current.js";
 import { fail } from "#harness/session-machine/transitions.js";
-import { SessionKey } from "#context/keys.js";
 import { captureLogRecords } from "#internal/testing/log-records.js";
 import {
   callChannelEvent as callEvent,
