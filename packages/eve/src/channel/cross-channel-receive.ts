@@ -96,7 +96,7 @@ export async function sendToNamedChannel(
   channels: readonly CrossChannelTarget[],
   name: string,
   input: InvokeChannelReceiveInput["input"],
-  turnPolicy?: TurnPolicy,
+  options: Pick<InvokeChannelReceiveInput, "idempotencyKey" | "turnPolicy"> = {},
 ): Promise<Session> {
   const channel = channels.find((candidate) => candidate.name === name);
   if (channel === undefined) {
@@ -108,10 +108,11 @@ export async function sendToNamedChannel(
   }
   return await invokeChannelReceive({
     caller: "ctx.sendToChannel()",
+    idempotencyKey: options.idempotencyKey,
     input,
     runtime,
     target: channel,
-    turnPolicy,
+    turnPolicy: options.turnPolicy,
   });
 }
 
@@ -141,6 +142,12 @@ function createCrossChannelTargetHandle(
 interface InvokeChannelReceiveInput {
   /** The API the author called, named in errors. */
   readonly caller: string;
+  /**
+   * Stable identity for this handoff. Each `from().send()` the channel makes
+   * without its own key derives one from it, so a retried handoff to an address
+   * that already has a session is deduplicated there.
+   */
+  readonly idempotencyKey?: string;
   readonly runtime: Runtime;
   readonly target: Pick<CrossChannelTarget, "name" | "receive" | "adapter" | "turnPolicy">;
   readonly input: {
@@ -175,16 +182,28 @@ async function invokeChannelReceive(args: InvokeChannelReceiveInput): Promise<Se
   });
   return await args.target.receive(
     args.input,
-    withHandoffHistory(channelOperations, args.input.history),
+    withHandoffDefaults(channelOperations, {
+      history: args.input.history,
+      idempotencyKey: args.idempotencyKey,
+    }),
   );
 }
 
-/** The handoff's `history` joins the channel's `send()` unless the channel passed its own. */
-function withHandoffHistory(
+/**
+ * The handoff's `history` and idempotency key join the channel's `send()`
+ * calls unless the channel passed its own.
+ */
+function withHandoffDefaults(
   operations: ChannelReceiveContext,
-  history: readonly SessionHistoryMessage[] | undefined,
+  defaults: {
+    readonly history: readonly SessionHistoryMessage[] | undefined;
+    readonly idempotencyKey: string | undefined;
+  },
 ): ChannelReceiveContext {
-  if (history === undefined) return operations;
+  if (defaults.history === undefined && defaults.idempotencyKey === undefined) return operations;
+  // Numbering keeps two sends from one `receive()` distinct; a deterministic
+  // `receive()` numbers them the same on retry.
+  let sends = 0;
   return {
     ...operations,
     from(address) {
@@ -192,7 +211,16 @@ function withHandoffHistory(
       return {
         ...source,
         async send(message, options) {
-          return await source.send(message, { ...options, history: options.history ?? history });
+          const sendIndex = sends++;
+          return await source.send(message, {
+            ...options,
+            history: options.history ?? defaults.history,
+            idempotencyKey:
+              options.idempotencyKey ??
+              (defaults.idempotencyKey === undefined
+                ? undefined
+                : `${defaults.idempotencyKey}:${sendIndex}`),
+          });
         },
       };
     },

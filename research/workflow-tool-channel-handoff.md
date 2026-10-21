@@ -94,8 +94,12 @@ session's context. Replay reuses the recorded result.
 - **Subagents.** Only workflow tools on the root agent can use `ctx.sendToChannel()`; it throws
   in a subagent's tool. Channels belong to the root agent, so the session runs the root agent with
   all its tools, and a subagent must not reach tools its parent withheld from it.
-- **Retries.** `sendToChannel()` delivers at least once: a step that fails after delivering retries the
-  delivery.
+- **Retries.** Each send carries an idempotency key from the step's `stepId`, which a retry
+  keeps. eve adds it to the channel's `from().send()` calls that pass no key of their own, numbered
+  per call. A retry that maps to the same address is deduplicated by the session there. A target
+  the channel gives a new address each time (a Slack target with only a `channelId`, or an
+  `initialMessage`) mints a new address on retry, so it still starts a second session, and
+  platform posts made by `receive()` repeat.
 - **Errors.** An unknown channel name, or a channel without `receive()`, throws in the step with the
   channel names available.
 
@@ -104,10 +108,9 @@ step, where a retried call could deliver again with no recorded result to reuse.
 
 ## Non-goals
 
-- A `startInChannel()` that starts a session only when the target is free. Without an
-  idempotency key, its `created` flag would change on retry: a retried step can't tell its own
-  earlier session from someone else's. It should follow a step-derived key that `receive()` hooks
-  use to pick a stable address.
+- A `startInChannel()` that starts a session only when the target is free. It needs `receive()`
+  hooks to see the step's key and derive a stable address from it, so a retry finds its own
+  earlier session and `created` stays true instead of reading as someone else's.
 - Lineage (`forkedFrom`) on the new session. #5092 proposes it separately.
 - A stateful handle that remembers the session after its first send, for `ctx.agent`-like
   follow-ups.

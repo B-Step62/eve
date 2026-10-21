@@ -1,3 +1,4 @@
+import { getStepMetadata } from "#compiled/@workflow/core/index.js";
 import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
 import { sendToNamedChannel, toCrossChannelTargets } from "#channel/cross-channel-receive.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
@@ -39,7 +40,12 @@ export async function sendToChannelStep(
           message: input.message,
           target: input.target,
         },
-        input.turnPolicy,
+        {
+          // A retried step keeps its stepId, so a redelivery to an existing
+          // session is deduplicated there.
+          idempotencyKey: `eve-channel-handoff:${getStepMetadata().stepId}`,
+          turnPolicy: input.turnPolicy,
+        },
       ),
   );
   return { sessionId: session.id };

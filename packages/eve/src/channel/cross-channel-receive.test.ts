@@ -254,11 +254,32 @@ describe("cross-channel handoff delivery", () => {
       [inboxChannel()],
       "inbox",
       { auth: null, message: "Continue.", target: { ref: 1 } },
-      "queue",
+      { turnPolicy: "queue" },
     );
 
     expect(runtime.dispatchContinuation).toHaveBeenCalledWith(
       expect.objectContaining({ command: expect.objectContaining({ turnPolicy: "queue" }) }),
+    );
+  });
+
+  it("numbers the handoff's idempotency key per channel send()", async () => {
+    const runtime = makeRuntime();
+    vi.mocked(runtime.dispatchContinuation).mockResolvedValue({
+      sessionId: "sess_owner",
+      status: "accepted",
+    });
+    await sendToNamedChannel(
+      runtime,
+      [inboxChannel()],
+      "inbox",
+      { auth: null, message: "Continue.", target: { ref: 1 } },
+      { idempotencyKey: "handoff" },
+    );
+
+    expect(runtime.dispatchContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ idempotencyKey: "handoff:0" }),
+      }),
     );
   });
 

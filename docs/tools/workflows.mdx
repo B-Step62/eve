@@ -748,9 +748,11 @@ following `turnPolicy` (`"steer"` or `"queue"`, defaulting to the channel's) if 
 It returns `{ sessionId }`.
 
 Each call resolves its target on its own. On a target the channel gives a new address each time,
-such as a Slack target with only a `channelId`, two calls start two sessions. A step that fails
-after delivering retries the delivery, so the message can arrive twice, or start a second session
-on such a target.
+such as a Slack target with only a `channelId`, two calls start two sessions.
+
+A step that fails after delivering retries the delivery with the same idempotency key. When the
+target maps to the same address again, the session there gets the message and `history` once. On
+a target the channel gives a new address each time, the retry starts a second session instead.
 
 `ctx.sendToChannel` differs from `ctx.agent`:
 

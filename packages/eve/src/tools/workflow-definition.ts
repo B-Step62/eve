@@ -135,8 +135,10 @@ export type WorkflowSharedContext = Pick<
    * (`agent/channels/slack.ts` is `"slack"`). It runs as a step through the
    * channel's `receive()` hook, which starts a session at `target` or continues
    * the one that owns it. The session belongs to the channel: it has no parent
-   * and outlives the workflow run. Each call resolves `target` on its own, and a
-   * step that fails after delivering retries, so the message may arrive twice.
+   * and outlives the workflow run. Each call resolves `target` on its own. A
+   * retried step reuses its delivery key, so the session that owns an address
+   * gets the message once; a target the channel gives a new address each time
+   * can start a second session on retry.
    *
    * Type the target with a type-only import:
    * `ctx.sendToChannel<typeof slack>("slack", message, { target, auth })`.

@@ -40,12 +40,14 @@ afterEach(() => {
 });
 
 describe("workflow tool channel handoffs", () => {
-  it("delivers again when a send step retries, but not when the body replays", async () => {
+  it("deduplicates a retried send step at its address, and the body replay sends nothing", async () => {
     const deliveredTo: string[] = [];
+    const { modelInputs, recordModelInputs } = modelInputRecorder();
     const runtime = await createWorkflowToolRuntime({
       agentName: "workflow-tool-channel-retry",
       execute: sendThenSleepWorkflow,
       modules: [
+        recordModelInputs,
         {
           logicalPath: "channels/dm.ts",
           loadNamespace: async () => ({
@@ -68,7 +70,7 @@ describe("workflow tool channel handoffs", () => {
       toolName: "deploy_service",
     });
 
-    const reply = await runtime.run(async () => {
+    await runtime.run(async () => {
       const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
@@ -79,13 +81,23 @@ describe("workflow tool channel handoffs", () => {
           }),
         },
       ]);
-      return String(await readFirstTurnReply(run));
-    });
+      const reply = String(await readFirstTurnReply(run));
+      const { sessionId } = JSON.parse(reply.slice(reply.indexOf("{"))) as { sessionId: string };
+      // The retry reaches the same address; the replay after the sleep reuses the recorded
+      // result and never calls receive() again.
+      expect(deliveredTo).toEqual([sessionId, sessionId]);
 
-    const { sessionId } = JSON.parse(reply.slice(reply.indexOf("{"))) as { sessionId: string };
-    // The retry delivers to the same address again; the replay after the sleep reuses the
-    // recorded result and delivers nothing.
-    expect(deliveredTo).toEqual([sessionId, sessionId]);
+      // The session reads its inbox in order, so by the turn that sees this marker it has
+      // also seen any redelivered summary.
+      await sendToSession(sessionId, "Marker.");
+      await vi.waitFor(() => expect(lastModelInput(modelInputs, sessionId)).toContain("Marker."), {
+        timeout: 15_000,
+      });
+      expect(
+        userMessagesContaining(lastModelInput(modelInputs, sessionId), "Here is the summary."),
+      ).toBe(1);
+      await run.cancel();
+    });
   }, 60_000);
 
   it("runs the fork-to-DM pattern against Slack, opening a new DM thread per fork", async () => {
@@ -287,6 +299,13 @@ function modelInputRecorder() {
     }),
   };
   return { modelInputs, recordModelInputs };
+}
+
+function userMessagesContaining(modelInput: string, text: string): number {
+  const messages = JSON.parse(modelInput) as { readonly content: unknown; readonly role: string }[];
+  return messages.filter(
+    (message) => message.role === "user" && JSON.stringify(message.content).includes(text),
+  ).length;
 }
 
 function lastModelInput(

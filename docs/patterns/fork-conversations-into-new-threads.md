@@ -200,8 +200,9 @@ The fork runs the root agent with the auth you pass, here the caller's.
 
 ## Retries and repeated forks
 
-Each call starts a new thread. A step that fails after `send` delivered retries the delivery, which
-starts a second thread. To stop the model from forking the same conversation twice, say so in the
+Each call starts a new thread. A step that fails after delivering retries the delivery. eve
+deduplicates a retry that reaches the same session, but a fork target gets a new thread each
+time, so the retry starts a second thread. To stop the model from forking the same conversation twice, say so in the
 tool's `description`, or record each fork in your app and check for one before sending.
 
 Each platform call and the transcript read run in a `"use step"` helper, so a replayed workflow
