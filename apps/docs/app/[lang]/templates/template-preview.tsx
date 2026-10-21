@@ -1,10 +1,18 @@
 import { LogoEveSvg } from "@vercel/geistdocs/assets/logos/logo-eve-svg";
-import { ChevronRightIcon, MicIcon, PhoneOffIcon, TerminalIcon, WrenchIcon } from "lucide-react";
+import {
+  ChevronRightIcon,
+  CircleCheckIcon,
+  MicIcon,
+  PhoneOffIcon,
+  TerminalIcon,
+  WrenchIcon,
+} from "lucide-react";
 import { Lato } from "next/font/google";
 import type { ReactNode } from "react";
 import type {
   TemplateIntegration,
   TemplatePreview as TemplatePreviewData,
+  TemplatePreviewAttachment,
   TemplatePreviewMessage,
 } from "@/lib/templates/manifest";
 import { integrationIcons } from "./integration-icons";
@@ -27,7 +35,7 @@ interface TemplatePreviewProps {
 export const TemplatePreview = ({ integrations, preview, title }: TemplatePreviewProps) => (
   <div
     aria-hidden="true"
-    className="relative -mx-4 -mt-4 mb-4 h-44 overflow-hidden rounded-t-lg border-b border-gray-alpha-400 bg-background-200"
+    className="relative -mx-4 -mt-4 mb-4 h-48 overflow-hidden rounded-t-lg border-b border-gray-alpha-400 bg-background-200"
   >
     <DotMatrix seed={title} />
     {preview ? (
@@ -262,9 +270,12 @@ const Slack = ({
           // Slack folds a follow-up from the same sender under the first message's header.
           if (messages[index - 1]?.from === message.from) {
             return (
-              <p className="-mt-2 break-words py-0.5 pr-5 pl-[64px]" key={message.text}>
-                <SlackText text={message.text} />
-              </p>
+              <div className="-mt-2 py-0.5 pr-5 pl-[64px]" key={message.text}>
+                <p className="break-words">
+                  <SlackText text={message.text} />
+                </p>
+                {message.attachment ? <SlackAttachment attachment={message.attachment} /> : null}
+              </div>
             );
           }
           return (
@@ -301,6 +312,7 @@ const Slack = ({
                 <p className="break-words">
                   <SlackText text={message.text} />
                 </p>
+                {message.attachment ? <SlackAttachment attachment={message.attachment} /> : null}
               </div>
             </div>
           );
@@ -309,6 +321,172 @@ const Slack = ({
     </div>
   </div>
 );
+
+const SLACK_BORDER = "border-[rgba(29,28,29,0.13)] dark:border-[#35373b]";
+const SLACK_MUTED = "text-[#616061] dark:text-[#ababad]";
+const SLACK_LINK = "text-[#1264a3] dark:text-[#1d9bd1]";
+
+const SlackAttachment = ({ attachment }: { attachment: TemplatePreviewAttachment }) => {
+  switch (attachment.type) {
+    case "table":
+      return <SlackTable rows={attachment.rows} />;
+    case "chart":
+      return <SlackChart title={attachment.title} values={attachment.values} />;
+    case "tasks":
+      return <SlackTasks tasks={attachment.tasks} title={attachment.title} />;
+    case "link":
+      return (
+        <SlackUnfurl
+          description={attachment.description}
+          site={attachment.site}
+          title={attachment.title}
+        />
+      );
+  }
+};
+
+const NUMERIC = /^[-+$€£]?[\d.,]+[%KMB]?$/;
+
+/** Slack's Markdown table: hairline grid, bold tinted header, numbers right-aligned. */
+const SlackTable = ({ rows }: { rows: string[][] }) => {
+  const [header = [], ...body] = rows;
+  const cell = `border px-2 ${SLACK_BORDER}`;
+  return (
+    <table className="mt-1 border-collapse tabular-nums">
+      <thead>
+        <tr className="bg-[rgba(29,28,29,0.04)] dark:bg-[rgba(232,232,232,0.04)]">
+          {header.map((label) => (
+            <th className={`${cell} text-left font-bold`} key={label}>
+              {label}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {body.map((row) => (
+          <tr key={row.join()}>
+            {row.map((value, index) => (
+              <td
+                className={`${cell} ${NUMERIC.test(value) ? "text-right" : ""}`}
+                key={`${index}${value}`}
+              >
+                {value}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+};
+
+const CHART_WIDTH = 320;
+const CHART_HEIGHT = 36;
+
+/** A native Slack line chart: bordered card, bold title, one series with a soft fill. */
+const SlackChart = ({ title, values }: { title: string; values: number[] }) => {
+  const min = Math.min(...values);
+  const span = Math.max(...values) - min || 1;
+  const points = values.map((value, index) => [
+    (index / Math.max(values.length - 1, 1)) * CHART_WIDTH,
+    CHART_HEIGHT - 4 - ((value - min) / span) * (CHART_HEIGHT - 8),
+  ]);
+  const line = points.map(([x, y]) => `${x},${y}`).join(" ");
+  const [lastX, lastY] = points.at(-1) ?? [0, 0];
+  return (
+    <div className={`mt-1 w-[360px] max-w-full rounded-lg border px-3 pt-2 pb-2.5 ${SLACK_BORDER}`}>
+      <p className="font-bold text-[13px]">{title}</p>
+      <svg
+        aria-hidden="true"
+        className={`mt-1 h-9 w-full overflow-visible ${SLACK_LINK}`}
+        preserveAspectRatio="none"
+        viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
+      >
+        {[0.25, 0.75].map((ratio) => (
+          <line
+            className="stroke-[rgba(29,28,29,0.13)] dark:stroke-[#35373b]"
+            key={ratio}
+            strokeDasharray="3 3"
+            vectorEffect="non-scaling-stroke"
+            x1={0}
+            x2={CHART_WIDTH}
+            y1={CHART_HEIGHT * ratio}
+            y2={CHART_HEIGHT * ratio}
+          />
+        ))}
+        <polygon
+          fill="currentColor"
+          fillOpacity={0.12}
+          points={`0,${CHART_HEIGHT} ${line} ${CHART_WIDTH},${CHART_HEIGHT}`}
+        />
+        <polyline
+          fill="none"
+          points={line}
+          stroke="currentColor"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          vectorEffect="non-scaling-stroke"
+        />
+        <circle cx={lastX} cy={lastY} fill="currentColor" r={3} />
+      </svg>
+    </div>
+  );
+};
+
+/** eve's Slack task card for finished subagent work: a green check per task, with its outcome. */
+const SlackTasks = ({
+  tasks,
+  title,
+}: {
+  tasks: { title: string; output?: string }[];
+  title?: string;
+}) => (
+  <div className={`mt-1 w-[360px] max-w-full rounded-lg border px-3 py-1.5 ${SLACK_BORDER}`}>
+    {title ? <p className="mb-1 font-bold">{title}</p> : null}
+    <div className="flex flex-col gap-1">
+      {tasks.map((task) => (
+        <div className="flex gap-2" key={task.title}>
+          <CircleCheckIcon
+            className="mt-[3px] size-4 shrink-0 fill-[#007a5a] text-white dark:fill-[#2bac76] dark:text-[#1a1d21]"
+            strokeWidth={2.5}
+          />
+          <p className="min-w-0">
+            <span className="font-bold">{task.title}</span>
+            {task.output ? (
+              <span className={`ml-2 text-[13px] ${SLACK_MUTED}`}>{task.output}</span>
+            ) : null}
+          </p>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+/** A link preview Slack unfurls: a rounded grey bar, the site, and a bold linked title. */
+const SlackUnfurl = ({
+  description,
+  site,
+  title,
+}: {
+  description?: string;
+  site: TemplateIntegration;
+  title: string;
+}) => {
+  const Icon = integrationIcons[site];
+  return (
+    <div className="mt-2 flex gap-3">
+      <span className="w-1 shrink-0 rounded-full bg-[#dddddd] dark:bg-[#545454]" />
+      <div className="min-w-0">
+        <p className={`flex items-center gap-1.5 text-[12px] ${SLACK_MUTED}`}>
+          <Icon className="size-3.5" />
+          {site}
+        </p>
+        <p className={`font-bold ${SLACK_LINK}`}>{title}</p>
+        {description ? <p>{description}</p> : null}
+      </div>
+    </div>
+  );
+};
 
 /** `code`, [label](url), and @mentions. The URL is not rendered; the card itself is the link. */
 const SLACK_TOKEN = /(`[^`]+`|\[[^\]]+\]\([^)]*\)|@\w+)/;

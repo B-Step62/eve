@@ -45,5 +45,16 @@ describe("template previews", () => {
   )("%s has no Slack-only formatting", (_slug, entry) => {
     const texts = entry.preview?.messages.map((message) => message.text) ?? [];
     expect(texts.filter((text) => /`|\]\(/.test(text))).toEqual([]);
+    expect(entry.preview?.messages.filter((message) => message.attachment)).toEqual([]);
+  });
+
+  it.each(
+    withPreview
+      .filter((entry) =>
+        entry.preview?.messages.some((message) => message.attachment?.type === "tasks"),
+      )
+      .map((entry) => [entry.slug, entry] as const),
+  )("%s only shows a task card when it has subagents", (_slug, entry) => {
+    expect(entry.files.some((path) => path.startsWith("agent/subagents/"))).toBe(true);
   });
 });

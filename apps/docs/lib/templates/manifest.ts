@@ -31,6 +31,10 @@ export type TemplatePreviewSurface = "imessage" | "slack" | "voice" | "web";
 
 export interface TemplatePreviewMessage {
   from: "agent" | "user";
+  /**
+   * Plain text. On the `slack` surface, `code`, [label](url), and @mentions
+   * render in Slack's styles; other surfaces show text as written.
+   */
   text: string;
   /**
    * Tool or skill names shown as completed calls. Each must match a path in
@@ -38,7 +42,23 @@ export interface TemplatePreviewMessage {
    * iMessage do not show tool calls.
    */
   tools?: string[];
+  /** Slack only: something the agent posts under the text. */
+  attachment?: TemplatePreviewAttachment;
 }
+
+/**
+ * A Slack message part beyond text. Use one only when the template's agent
+ * really posts it: a Markdown table, a native chart, eve's task card for
+ * subagent work, or a link preview Slack unfurls.
+ */
+export type TemplatePreviewAttachment =
+  /** The first row is the header. */
+  | { type: "table"; rows: string[][] }
+  /** A line chart of `values`, oldest first. */
+  | { type: "chart"; title: string; values: number[] }
+  /** eve's task card. One task renders without `title`, as eve does. */
+  | { type: "tasks"; title?: string; tasks: { title: string; output?: string }[] }
+  | { type: "link"; site: TemplateIntegration; title: string; description?: string };
 
 /**
  * A short sample conversation rendered on the gallery card in the style of
@@ -249,7 +269,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@assistant plan a Saturday in Tokyo" },
         {
           from: "agent",
-          text: "Clear and 18°C. Senso-ji in the morning, lunch in Asakusa, then sunset from Shibuya Sky.",
+          text: "Clear and 18°C. Senso-ji in the morning, lunch in Asakusa, then sunset from [Shibuya Sky](https://www.shibuya-scramble-square.com/sky/).",
         },
       ],
     },
@@ -292,7 +312,15 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@brain how many orders did we have in October?" },
         {
           from: "agent",
-          text: "1,284 orders in October 2026, totaling $61.7K. That's up 9% from September.",
+          text: "1,284 orders in October 2026, up 9% from September.",
+          attachment: {
+            type: "table",
+            rows: [
+              ["Month", "Orders", "Revenue"],
+              ["Sep 2026", "1,178", "$56.6K"],
+              ["Oct 2026", "1,284", "$61.7K"],
+            ],
+          },
         },
       ],
     },
@@ -333,10 +361,15 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/coding-agent.svg",
       context: "eng",
       messages: [
-        { from: "user", text: "@coder checkout 500s on an empty cart, can you fix it?" },
+        { from: "user", text: "@coder checkout 500s on empty carts, can you fix it?" },
         {
           from: "agent",
-          text: "Found it: pricing.ts reads the first item of an empty cart. Opened PR #482 with a fix and a test.",
+          text: "Found it: `pricing.ts` reads the first item of an empty cart. Opened [PR #482](https://github.com/acme/shop/pull/482) with a fix and a test.",
+          attachment: {
+            type: "link",
+            site: "GitHub",
+            title: "#482 Fix checkout crash on empty carts",
+          },
         },
       ],
     },
@@ -373,7 +406,12 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@analyst what was our MRR last month?" },
         {
           from: "agent",
-          text: "$48.2K in September, up 6% from August. Chart of the last 12 months below.",
+          text: "$48.2K in September, up 6% from August.",
+          attachment: {
+            type: "chart",
+            title: "MRR, last 12 months",
+            values: [31.0, 32.4, 33.1, 34.8, 35.9, 37.2, 38.8, 40.1, 41.9, 43.6, 45.5, 48.2],
+          },
         },
       ],
     },
@@ -412,7 +450,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@contentful turn this outline into a blog post draft" },
         {
           from: "agent",
-          text: 'Drafted "Spring Launch Recap" in Contentful. Want me to request approval to publish?',
+          text: "Drafted [Spring Launch Recap](https://app.contentful.com) in Contentful. Want me to request approval to publish?",
         },
       ],
     },
@@ -448,7 +486,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@knowledge how much PTO do new hires get?" },
         {
           from: "agent",
-          text: "15 days in year one, accrued monthly. From handbook/time-off.md on the team Drive.",
+          text: "15 days in year one, accrued monthly. From `handbook/time-off.md` on the [team Drive](https://drive.example.com/team).",
         },
       ],
     },
@@ -587,8 +625,18 @@ export const templateManifest: TemplateManifestEntry[] = [
       context: "launch",
       messages: [
         { from: "user", text: "@marketing can you draft Thursday's launch posts?" },
-        { from: "agent", text: "On it. Briefing the social media coordinator." },
-        { from: "agent", text: "Done. Three drafts are waiting in Typefully." },
+        {
+          from: "agent",
+          text: "On it. Briefing the social media coordinator.",
+          attachment: {
+            type: "tasks",
+            tasks: [{ title: "Social media coordinator", output: "Done in 42s" }],
+          },
+        },
+        {
+          from: "agent",
+          text: "Done. Three drafts are waiting in [Typefully](https://typefully.com).",
+        },
       ],
     },
   },
@@ -696,7 +744,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@social turn the v2 launch brief in Notion into an X thread" },
         {
           from: "agent",
-          text: "Drafted a 5-post thread in Typefully, queued for Thursday 9 AM. Want a LinkedIn version too?",
+          text: "Drafted a 5-post thread in [Typefully](https://typefully.com), queued for Thursday 9 AM. Want a LinkedIn version too?",
         },
       ],
     },
@@ -738,7 +786,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@sre checkout 5xx spiked at 14:02, what happened?" },
         {
           from: "agent",
-          text: "A deploy went out at 14:01. All errors come from the new payments client. Rollback is the fastest fix.",
+          text: "A deploy went out at 14:01. All errors come from the new `payments-client`. Rollback is the fastest fix.",
         },
       ],
     },
@@ -778,7 +826,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@sanity which blog posts are missing an SEO description?" },
         {
           from: "agent",
-          text: "12 published posts. Want me to draft descriptions in a new release for review?",
+          text: "12 published posts have no `seo.description`. Want me to draft them in a new release for review?",
         },
       ],
     },
@@ -818,7 +866,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@design what's our minimum tap target on mobile?" },
         {
           from: "agent",
-          text: "44×44px, per the interaction guidelines. Pad small icons instead of scaling them up.",
+          text: "44×44px, per the [interaction guidelines](https://design.example.com/interaction). Pad small icons instead of scaling them up.",
         },
       ],
     },
