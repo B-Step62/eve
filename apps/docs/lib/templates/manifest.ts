@@ -31,10 +31,6 @@ export type TemplatePreviewSurface = "imessage" | "slack" | "voice" | "web";
 
 export interface TemplatePreviewMessage {
   from: "agent" | "user";
-  /**
-   * Plain text. On the `slack` surface, `code`, [label](url), and @mentions
-   * render in Slack's styles; other surfaces show text as written.
-   */
   text: string;
   /**
    * Tool or skill names shown as completed calls. Each must match a path in
@@ -135,7 +131,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         {
           from: "agent",
           tools: ["plan_a_trip", "get_weather"],
-          text: "Sunny and 24°C both days. Saturday: Alfama and the castle in the morning, then sunset at Miradouro da Graça.",
+          text: "Sunny and 24°C both days. Alfama and the castle Saturday, then sunset at Graça.",
         },
       ],
     },
@@ -168,11 +164,11 @@ export const templateManifest: TemplateManifestEntry[] = [
       surface: "web",
       context: "tasks.example.com",
       messages: [
-        { from: "user", text: 'Add "ship v2 docs" and summarize my open tasks' },
+        { from: "user", text: "How's my task list looking?" },
         {
           from: "agent",
-          tools: ["create_task", "compute_stats"],
-          text: "Added. You have 7 open tasks, 3 of them due this week.",
+          tools: ["compute_stats"],
+          text: "7 open, 3 due this week. The oldest is ship v2 docs.",
         },
       ],
     },
@@ -209,11 +205,11 @@ export const templateManifest: TemplateManifestEntry[] = [
       surface: "voice",
       context: "voice.example.com",
       messages: [
-        { from: "user", text: "Remind me to call Mom at 6" },
+        { from: "user", text: "What's the weather in Chicago tonight?" },
         {
           from: "agent",
-          tools: ["create_reminder"],
-          text: "Approve it on screen and I'll remind you at six.",
+          tools: ["get_weather"],
+          text: "Clear and 12°C tonight. Bring a light jacket.",
         },
       ],
     },
@@ -250,10 +246,10 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/slack-assistant.svg",
       context: "general",
       messages: [
-        { from: "user", text: "@assistant what's the weather in Tokyo?" },
+        { from: "user", text: "@assistant plan a Saturday in Tokyo" },
         {
           from: "agent",
-          text: "18°C and clear (sample data). Swap in a real weather API and I'm ready to go.",
+          text: "Clear and 18°C. Senso-ji in the morning, lunch in Asakusa, then sunset from Shibuya Sky.",
         },
       ],
     },
@@ -293,10 +289,10 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/company-brain.svg",
       context: "ask-data",
       messages: [
-        { from: "user", text: "@brain how many orders did we have, and what did they total?" },
+        { from: "user", text: "@brain how many orders did we have in October?" },
         {
           from: "agent",
-          text: "99 orders from Jan 1 to Apr 9, 2018, with AUD 1,672 in recorded payments.",
+          text: "1,284 orders in October 2026, totaling $61.7K. That's up 9% from September.",
         },
       ],
     },
@@ -452,7 +448,7 @@ export const templateManifest: TemplateManifestEntry[] = [
         { from: "user", text: "@knowledge how much PTO do new hires get?" },
         {
           from: "agent",
-          text: "15 days in year one, accrued monthly. From `handbook/time-off.md` on the [team Drive](https://drive.example.com/team).",
+          text: "15 days in year one, accrued monthly. From handbook/time-off.md on the team Drive.",
         },
       ],
     },
@@ -485,10 +481,10 @@ export const templateManifest: TemplateManifestEntry[] = [
       icon: "/templates/icons/memory-agent.svg",
       context: "general",
       messages: [
-        { from: "user", text: "@memory keep my summaries to three bullets from now on" },
+        { from: "user", text: "@memory keep your answers to me short" },
         {
           from: "agent",
-          text: "Saved. Every summary I write for you will be three bullets, in any channel.",
+          text: "Saved to your preferences. Short answers from now on, in every channel.",
         },
       ],
     },
@@ -592,7 +588,7 @@ export const templateManifest: TemplateManifestEntry[] = [
       messages: [
         { from: "user", text: "@marketing can you draft Thursday's launch posts?" },
         { from: "agent", text: "On it. Briefing the social media coordinator." },
-        { from: "agent", text: "Done. X, LinkedIn, and Bluesky drafts are in Typefully." },
+        { from: "agent", text: "Done. Three drafts are waiting in Typefully." },
       ],
     },
   },
