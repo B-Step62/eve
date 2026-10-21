@@ -22,8 +22,8 @@ interface ExtensionCapabilityContract {
 const EXTENSION_CAPABILITY_CONTRACTS = {
   extension: { current: 1, supported: [1], dropped: {} },
   tool: {
-    current: 114,
-    supported: [114],
+    current: 115,
+    supported: [115],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -138,6 +138,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       111: "Corrected public authoring contracts require rebuilding this extension.",
       112: "Corrected public authoring contracts require rebuilding this extension.",
       113: "Corrected public authoring contracts require rebuilding this extension.",
+      114: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   dynamicTool: {
@@ -247,8 +248,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 82,
-    supported: [82],
+    current: 83,
+    supported: [83],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -331,11 +332,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       79: "Corrected public authoring contracts require rebuilding this extension.",
       80: "Corrected public authoring contracts require rebuilding this extension.",
       81: "Corrected public authoring contracts require rebuilding this extension.",
+      82: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   schedule: {
-    current: 42,
-    supported: [42],
+    current: 48,
+    supported: [48],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -378,6 +380,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       39: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       40: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       41: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
+      42: "Corrected public authoring contracts require rebuilding this extension.",
+      43: "Corrected public authoring contracts require rebuilding this extension.",
+      44: "Corrected public authoring contracts require rebuilding this extension.",
+      45: "Corrected public authoring contracts require rebuilding this extension.",
+      46: "Corrected public authoring contracts require rebuilding this extension.",
+      47: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   subagent: {
@@ -431,8 +439,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 71,
-    supported: [71],
+    current: 72,
+    supported: [72],
     dropped: {
       1: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
       2: "v27 committed session facts and authored session usage policies require rebuilding this extension.",
@@ -504,6 +512,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       68: "Corrected public authoring contracts require rebuilding this extension.",
       69: "Corrected public authoring contracts require rebuilding this extension.",
       70: "Corrected public authoring contracts require rebuilding this extension.",
+      71: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
   hook: {
@@ -671,12 +680,28 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
   },
   config: { current: 1, supported: [1], dropped: {} },
   state: {
-    current: 13,
-    supported: [1, 2, 3, 4, 5, 7, 9, 10, 12, 13],
+    current: 20,
+    supported: [20],
     dropped: {
+      1: "Corrected public authoring contracts require rebuilding this extension.",
+      2: "Corrected public authoring contracts require rebuilding this extension.",
+      3: "Corrected public authoring contracts require rebuilding this extension.",
+      4: "Corrected public authoring contracts require rebuilding this extension.",
+      5: "Corrected public authoring contracts require rebuilding this extension.",
       6: "Sandbox sessions no longer expose core identity and mutable networking is provider-specific.",
+      7: "Corrected public authoring contracts require rebuilding this extension.",
       8: "SandboxSession no longer exposes setNetworkPolicy; pass the configured environment to ctx.getSandbox(environment) to access network policy capabilities",
+      9: "Corrected public authoring contracts require rebuilding this extension.",
+      10: "Corrected public authoring contracts require rebuilding this extension.",
       11: "Sandbox provider handle hooks were renamed to onSandboxStop and onSandboxDelete.",
+      12: "Corrected public authoring contracts require rebuilding this extension.",
+      13: "Corrected public authoring contracts require rebuilding this extension.",
+      14: "Corrected public authoring contracts require rebuilding this extension.",
+      15: "Corrected public authoring contracts require rebuilding this extension.",
+      16: "Corrected public authoring contracts require rebuilding this extension.",
+      17: "Corrected public authoring contracts require rebuilding this extension.",
+      18: "Corrected public authoring contracts require rebuilding this extension.",
+      19: "Corrected public authoring contracts require rebuilding this extension.",
     },
   },
 } as const satisfies Record<string, ExtensionCapabilityContract>;
