@@ -174,13 +174,14 @@ model reads which tasks settled and which are still working, for example:
 deploy-4hd8sa completed; its result follows. 1 task is still working: researcher-7k2m9q.
 ```
 
-**`eve__task_cancel({ taskId })`** stops a task's current work and says so. A resumable task's answer
-also tells the model how to give it new work. When the task has no work to stop, because it already
-finished or is an idle resumable task, `eve__task_cancel` says that instead:
+**`eve__task_cancel({ taskId })`** stops a task's current work and says so. A cancelled agent task
+ends; to delegate again, start a new agent task. The task stops reporting immediately; eve asks a local child whose address arrives afterward to end through its own cleanup, without holding the next parent turn. If the child has not booted yet, eve retries that request for a bounded period; a persistently unavailable child may need operator attention. Other resumable tasks stay available, and their
+answer tells the model how to give them new work. When the task has no work to stop, because it
+already finished or is an idle resumable task, `eve__task_cancel` says that instead:
 
 ```text
 Stopped deploy-4hd8sa; it won't report back.
-Stopped researcher-7k2m9q's current work; it won't report back. To give it new work, call researcher again with taskId researcher-7k2m9q.
+Stopped researcher-7k2m9q; it won't report back.
 researcher-7k2m9q had no work to stop.
 ```
 
@@ -216,7 +217,7 @@ appends the results, and calls the model again in the same turn. No result ever 
 its own. An idle resumable task isn't working, so it doesn't hold the turn.
 
 A held turn stays open. While it waits on its tasks, when eve holds it or when `eve__task_wait` has no
-result yet, the turn keeps running: it pauses only for a person. The next `model.requested` for the
+result yet, the turn keeps running: it pauses only for interactions. The next `model.requested` for the
 same `turnId` means the turn took its results, and `turn.settled` comes only when the turn really
 ends. The model's text before the wait depends on the session:
 
@@ -225,14 +226,14 @@ ends. The model's text before the wait depends on the session:
 - **Child sessions and a schedule's sessions:** the held text completes as `phase: "narration"`, so
   channels post only the final reply.
 
-A question or sign-in from a task, such as an agent's question, pauses the turn on the person: the
-stream emits `interaction.opened`, then `turn.paused` awaiting it, and the turn continues once the
-person answers or signs in.
+A question or sign-in from a task, such as an agent's question, pauses the turn on that interaction:
+the stream emits `interaction.opened`, then `turn.paused` awaiting it, and the turn continues once
+the question is answered or sign-in completes.
 
 The TypeScript client's `send(...).result()` and the MCP channel's `agent_get` read past a pause
 on tasks and report the final reply rather than the text written before the wait. `result()` stops
-at a pause only while the turn waits on a person, such as for a question, approval, sign-in, or
-`session-limit` prompt, and returns `status: "awaiting-input"`. Answer with `respond()`; its
+at a pause only while the turn waits on an interaction, such as a question, approval, sign-in, or
+budget prompt, and returns `status: "awaiting-input"`. Answer with `respond()`; its
 delivery's `result()` reads the same turn to its end. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
 Channels such as [Slack](/docs/channels/slack) post a root session's text before the wait as an
 ordinary reply, then post the reply after the results as another message. Slack also shows each
@@ -252,12 +253,14 @@ correct an agent by calling it again with its `taskId`, or stop a task with `eve
 - **A failed turn** cancels every working task.
 - **The end of the session** ends every task.
 
-Cancelled work never reports back. A `task` tool's task is then finished; its run waits up to 30
-seconds for the body to finish unwinding, then ends as cancelled. A `serve` tool's task stays
-available instead: its waiting calls settle as `cancelled`, the stretch's `abortSignal` aborts, and
-the task becomes idle, as long as the body catches that abort and returns to `receive()`. For an
-agent, that cancels the agent's current turn and keeps its conversation, so a later call with the
-same `taskId` continues where it left off. A `serve` body that doesn't return to `receive()` within
+Cancelled agent and `task` tool tasks end immediately. Later reports, questions, and child-open
+notices from their runs do not reach the session stream. If a child opens after its task ended,
+eve stops that child. The parent can start another turn without waiting for the cancelled run to
+finish cleaning up. Usage reports from a cancelled run count against session limits as they
+arrive; its final outcome adds only any remaining spend, without naming the ended task again.
+Other `serve` tools stay available: their waiting calls settle as `cancelled`,
+the stretch's `abortSignal` aborts, and the task becomes idle, as long as the body catches that
+abort and returns to `receive()`. A `serve` body that doesn't return to `receive()` within
 30 seconds of a cancel ends, and the task finishes.
 
 ## Stream events
@@ -267,10 +270,10 @@ same `taskId` continues where it left off. A `serve` body that doesn't return to
 | `task.started` | A call starts a task                                                     | `taskId`, `name`, `kind`, and `startedBy: { callId }`     |
 | `call.started` | A call reaches its task, including a later call to a resumable task      | `callId` and `taskId`                                     |
 | `call.settled` | A reply, return, failure, or cancel settles one call                     | `callId`, `outcome`, and `output`, `outputOf`, or `error` |
-| `task.ended`   | The task's run ends                                                      | `taskId`, `outcome`, and `reason` or `error`              |
+| `task.ended`   | The task ends; agent and one-shot tasks end immediately on cancellation  | `taskId`, `outcome`, and `reason` or `error`              |
 | `child.opened` | A workflow run, including an agent tool's, opens a session with an agent | `sessionId`, `name`, `stream`, and `owner`                |
 
-`task.started` comes once per task, and `task.ended` once when its run ends. Each call the task
+`task.started` comes once per task, and `task.ended` once when it ends. Each call the task
 serves has its own `call.started` with the `taskId` and its own `call.settled`, whose scope names
 that call's turn, which for a resumable task's later call can be a later turn than the one that
 started the task. `kind` is `"agent"` for an agent tool's task and `"tool"` otherwise. A call's

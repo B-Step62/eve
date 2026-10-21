@@ -10,7 +10,12 @@ import { conversationOf } from "#client/conversation.js";
 import type { SessionParent } from "#channel/types.js";
 import type { EveToolPart } from "#client/message-types.js";
 import { defineDynamic } from "#dynamic/definition.js";
+import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
 import { workflowEntry } from "#execution/session/entry.js";
+import {
+  lateAgentSessionRetirementWorkflowReference,
+  workflowToolRunWorkflowReference,
+} from "#execution/workflow-runtime.js";
 import {
   sessionCommandHookToken,
   sessionInboxHookToken,
@@ -29,10 +34,10 @@ import {
 } from "#internal/testing/approval-resume.js";
 import { buildSerializedContext } from "#internal/testing/entry-test-helpers.js";
 import { captureTurnEvents } from "#internal/testing/events.js";
-import { resumeHook } from "#internal/workflow/runtime.js";
+import { getRun, getWorld, resumeHook } from "#internal/workflow/runtime.js";
 import type { SessionStreamEvent } from "#protocol/session-event.js";
 import { readSessionEventHistory } from "#execution/session-event-stream.js";
-import { viewOfEvents } from "#protocol/session-projection/fold.js";
+import { emptySessionView, foldEvents, viewOfEvents } from "#protocol/session-projection/fold.js";
 import { failure } from "#protocol/session-projection/selectors.js";
 import { defineAgent } from "#public/definitions/agent.js";
 import { defineHook, type HookDefinition } from "#public/definitions/hook.js";
@@ -40,6 +45,11 @@ import { defineInstrumentation } from "#public/instrumentation/index.js";
 import { always } from "#tools/approval/policies.js";
 import { defineTool } from "#tools/definition.js";
 import { z } from "zod";
+import {
+  defineWorkflowTool,
+  type WorkflowExecuteToolDefinition,
+} from "#tools/workflow-definition.js";
+import { waitingForCleanupWorkflow } from "#internal/testing/workflow-tool-fixtures.js";
 
 // Sessions driven through their odd paths: tools that fail, approvals that are cancelled,
 // steered, answered twice or for nothing, models that fail mid-response, and controls that
@@ -212,6 +222,7 @@ interface ToolSpec {
   readonly allowOtherResponders?: boolean;
   readonly inputSchema?: z.ZodType;
   readonly execute?: (input: unknown) => unknown;
+  readonly workflow?: boolean;
 }
 
 type Stage = SessionStreamEvent[];
@@ -268,23 +279,31 @@ async function withSession(
       })),
       ...options.tools.map((tool) => ({
         loadNamespace: async () => ({
-          default: defineTool({
-            approval:
-              tool.approval === true
-                ? {
-                    request: always(),
-                    ...(tool.allowOtherResponders && {
-                      response: () => ({ status: "allowed" as const }),
-                    }),
-                  }
-                : undefined,
-            description: `Run ${tool.name}.`,
-            execute: async (input) => {
-              ran.push(tool.name);
-              return tool.execute === undefined ? { ran: tool.name } : await tool.execute(input);
-            },
-            inputSchema: tool.inputSchema ?? z.object({}).passthrough(),
-          }),
+          default: tool.workflow
+            ? defineWorkflowTool({
+                description: `Run ${tool.name}.`,
+                execute: waitingForCleanupWorkflow as WorkflowExecuteToolDefinition["execute"],
+                inputSchema: {},
+              })
+            : defineTool({
+                approval:
+                  tool.approval === true
+                    ? {
+                        request: always(),
+                        ...(tool.allowOtherResponders && {
+                          response: () => ({ status: "allowed" as const }),
+                        }),
+                      }
+                    : undefined,
+                description: `Run ${tool.name}.`,
+                execute: async (input) => {
+                  ran.push(tool.name);
+                  return tool.execute === undefined
+                    ? { ran: tool.name }
+                    : await tool.execute(input);
+                },
+                inputSchema: tool.inputSchema ?? z.object({}).passthrough(),
+              }),
         }),
         logicalPath: `tools/${tool.name}.ts`,
       })),
@@ -1310,6 +1329,331 @@ describe("models that fail", () => {
 });
 
 describe("work delegated to a child session", () => {
+  it("finishes a cancelled task even when its run never reports, then starts the next turn", async () => {
+    const running = gate();
+    const never = gate();
+    let childId: string | undefined;
+    let parentId: string | undefined;
+    const { events } = await withSession(
+      "edge-cancel-hung-task",
+      {
+        message: "Start the slow work, then cancel it.",
+        model: scriptedModel((_prompt, raw) => {
+          const prompt = JSON.stringify(raw);
+          const first = JSON.stringify(raw.find((message) => message.role === "user")?.content);
+          if (first.includes("CHILD: late work")) {
+            if (!prompt.includes('"toolName":"waiting_work"'))
+              return [{ toolName: "waiting_work", toolCallId: "call_owned" }];
+            return heldReply("Late child result.", never.wait);
+          }
+          if (first.includes("CHILD:")) {
+            running.open();
+            return heldReply("Child result.", never.wait);
+          }
+          if (!prompt.includes('"toolName":"agent"'))
+            return [
+              { toolName: "agent", toolCallId: "call_agent", input: { message: "CHILD: work" } },
+            ];
+          if (!prompt.includes('"toolName":"eve__task_cancel"')) {
+            const taskId = /Started task ([\w-]+)/u.exec(prompt)?.[1];
+            if (!taskId) throw new Error("No task id in the model prompt");
+            return [{ toolName: "eve__task_cancel", toolCallId: "call_cancel", input: { taskId } }];
+          }
+          return "Cancelled.";
+        }),
+        tools: [{ name: "waiting_work", workflow: true }],
+        hooks: {
+          childStop: defineHook({
+            events: {
+              "session.started": (_event, ctx) => {
+                if (ctx.session.parent !== undefined) childId ??= ctx.session.id;
+                else parentId = ctx.session.id;
+              },
+            },
+          }),
+        },
+      },
+      async (session) => {
+        await running.wait;
+        await session.until("task started", (event) => event.type === "task.started");
+        await session.next("cancelled task's turn");
+        await session.send("Next turn.");
+        await session.next("next turn");
+        await session.send("One more update.");
+        await session.next("later turn");
+        const projected = emptySessionView();
+        foldEvents(projected, session.events(), { retention: "operational" });
+        const taskId = ofType(session.events(), "task.ended")[0]!.data.taskId;
+        expect(projected.tasks[taskId]).toBeUndefined();
+
+        // A delayed run message crosses the real owner inbox after the task's projection row
+        // has gone. The old guard accepted this question as a new parent interaction.
+        const runs = await (
+          await getWorld()
+        ).runs.list({
+          workflowName: workflowToolRunWorkflowReference.workflowId,
+          pagination: { limit: 100 },
+          resolveData: "none",
+        });
+        expect(runs.data).toHaveLength(1);
+        await vi.waitFor(
+          async () => {
+            expect(await getRun(runs.data[0]!.runId).status).toBe("completed");
+          },
+          { timeout: 5_000 },
+        );
+        await resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
+          kind: "request",
+          from: {
+            callId: "call_agent",
+            input: { message: "CHILD: work" },
+            runId: runs.data[0]!.runId,
+            sequence: 0,
+            stepIndex: 0,
+            taskId,
+            toolName: "agent",
+            turnId: "turn_0",
+          },
+          replyTo: "late-question",
+          request: {
+            kind: "ask",
+            control: "late-control",
+            request: { prompt: "A late question", title: "Late question", options: [] },
+          },
+        });
+        // Fault-inject a late address from the cancelled run through its live owner inbox.
+        // This is a separate real child, not the original run opening another session.
+        const lateChild = await startSessionOwner(workflowEntry, [
+          {
+            kind: "initial",
+            ownerDeploymentId: "dpl_inline",
+            input: { message: "CHILD: late work" },
+            serializedContext: buildSerializedContext({
+              auth: ALICE,
+              channelKind: "subagent",
+              channelState: {
+                callId: "call_agent",
+                parentContinuationToken: "late-child-reply",
+                parentSessionId: parentId!,
+                subagentName: "edge-cancel-hung-task",
+              },
+              continuationToken: "late-child-continuation",
+              parent: {
+                callId: "call_agent",
+                rootSessionId: parentId!,
+                sessionId: parentId!,
+                turn: { id: "turn_0", sequence: 1 },
+              },
+            }),
+          },
+        ]);
+        try {
+          await vi.waitFor(
+            async () => expect(await getRun(lateChild.runId).status).toBe("running"),
+            {
+              timeout: 5_000,
+            },
+          );
+          let nestedRunId: string | undefined;
+          await vi.waitFor(
+            async () => {
+              const ownedRuns = await (
+                await getWorld()
+              ).runs.list({
+                workflowName: workflowToolRunWorkflowReference.workflowId,
+                pagination: { limit: 100 },
+                resolveData: "none",
+              });
+              nestedRunId = ownedRuns.data.find((run) => run.runId !== runs.data[0]!.runId)?.runId;
+              expect(nestedRunId).toBeDefined();
+              expect(await getRun(nestedRunId!).status).toBe("running");
+            },
+            { timeout: 10_000 },
+          );
+          const worldForMiss = await getWorld();
+          const getByToken = worldForMiss.hooks.getByToken.bind(worldForMiss.hooks);
+          let simulatedResetFailure = false;
+          const missSpy = vi
+            .spyOn(worldForMiss.hooks, "getByToken")
+            .mockImplementation(async (token) => {
+              if (
+                !simulatedResetFailure &&
+                token === sessionInboxHookToken(sessionCommandHookToken(lateChild.runId))
+              ) {
+                simulatedResetFailure = true;
+                throw new Error("Transient hook store failure");
+              }
+              return await getByToken(token);
+            });
+          await resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
+            kind: "agent-started",
+            from: {
+              callId: "call_agent",
+              input: { message: "CHILD: work" },
+              runId: runs.data[0]!.runId,
+              sequence: 0,
+              stepIndex: 0,
+              taskId,
+              toolName: "agent",
+              turnId: "turn_0",
+            },
+            session: {
+              continuationToken: "late-child-continuation",
+              kind: "local",
+              name: "edge-cancel-hung-task",
+              nodeId: "root",
+              sessionId: lateChild.runId,
+            },
+            context: { parent: { sessionId: parentId! } } as AgentSessionContext,
+          });
+          await vi.waitFor(() => expect(simulatedResetFailure).toBe(true));
+          await vi.waitFor(async () => {
+            const retirement = await (
+              await getWorld()
+            ).runs.list({
+              workflowName: lateAgentSessionRetirementWorkflowReference.workflowId,
+              pagination: { limit: 100 },
+              resolveData: "none",
+            });
+            expect(retirement.data.length).toBeGreaterThan(0);
+          });
+          missSpy.mockRestore();
+          // Hold the second child's real boot just before it claims its command hook.
+          // A missing hook cannot authorize a destructive cancel: once boot
+          // continues, the child must be allowed to finalize itself.
+          const bootGate = gate();
+          const bootReached = gate();
+          const world = await getWorld();
+          const createEvent = world.events.create.bind(world.events);
+          let gatedRunId: string | undefined;
+          const spy = vi.spyOn(world.events, "create").mockImplementation(async (...args) => {
+            const [runId, event] = args;
+            if (
+              gatedRunId === undefined &&
+              runId !== parentId &&
+              runId !== lateChild.runId &&
+              event.eventType === "run_started"
+            ) {
+              gatedRunId = runId;
+              bootReached.open();
+              await bootGate.wait;
+            }
+            return await createEvent(...args);
+          });
+          const bootingPromise = startSessionOwner(workflowEntry, [
+            {
+              kind: "initial",
+              ownerDeploymentId: "dpl_inline",
+              input: { message: "CHILD: booting work" },
+              serializedContext: buildSerializedContext({
+                auth: ALICE,
+                channelKind: "subagent",
+                channelState: {
+                  callId: "call_agent",
+                  parentContinuationToken: "booting-child-reply",
+                  parentSessionId: parentId!,
+                  subagentName: "edge-cancel-hung-task",
+                },
+                continuationToken: "booting-child-continuation",
+                parent: {
+                  callId: "call_agent",
+                  rootSessionId: parentId!,
+                  sessionId: parentId!,
+                  turn: { id: "turn_0", sequence: 1 },
+                },
+              }),
+            },
+          ]);
+          await bootReached.wait;
+          const bootingId = gatedRunId!;
+          try {
+            await resumeHook(sessionInboxHookToken(`http:edge-cancel-hung-task`), {
+              kind: "agent-started",
+              from: {
+                callId: "call_agent",
+                input: { message: "CHILD: work" },
+                runId: runs.data[0]!.runId,
+                sequence: 0,
+                stepIndex: 0,
+                taskId,
+                toolName: "agent",
+                turnId: "turn_0",
+              },
+              session: {
+                continuationToken: "booting-child-continuation",
+                kind: "local",
+                name: "edge-cancel-hung-task",
+                nodeId: "root",
+                sessionId: bootingId,
+              },
+              context: { parent: { sessionId: parentId! } } as AgentSessionContext,
+            });
+            await session.send("Final update.");
+            await session.next("after late question and child");
+            expect(await getRun(bootingId).status).toBe("pending");
+            bootGate.open();
+            await vi.waitFor(
+              async () =>
+                expect(["completed", "cancelled"]).toContain(await getRun(bootingId).status),
+              { timeout: 40_000 },
+            );
+          } finally {
+            bootGate.open();
+            spy.mockRestore();
+            const booting = await bootingPromise;
+            await booting.cancel().catch(() => {});
+          }
+          await vi.waitFor(
+            async () =>
+              expect(["completed", "cancelled"]).toContain(await getRun(lateChild.runId).status),
+            { timeout: 40_000 },
+          );
+          await vi.waitFor(
+            async () =>
+              expect(["completed", "cancelled"]).toContain(await getRun(nestedRunId!).status),
+            { timeout: 40_000 },
+          );
+          expect(
+            ofType(session.events(), "child.opened").filter(
+              (event) => event.data.sessionId === lateChild.runId,
+            ),
+          ).toEqual([]);
+        } finally {
+          await lateChild.cancel().catch(() => {});
+        }
+        expect(childId).toBeDefined();
+        await vi.waitFor(
+          async () => expect(["completed", "cancelled"]).toContain(await getRun(childId!).status),
+          {
+            timeout: 5_000,
+          },
+        );
+      },
+    );
+    expect(turnOutcomes(events)).toEqual([
+      "turn_0:completed",
+      "turn_1:completed",
+      "turn_2:completed",
+      "turn_3:completed",
+    ]);
+    expect(ofType(events, "interaction.opened")).toEqual([]);
+    const [ended] = ofType(events, "task.ended");
+    expect(ended?.data.outcome).toBe("cancelled");
+    expect(
+      ofType(events, "call.settled").find((event) => event.data.callId === "call_cancel")?.data,
+    ).toMatchObject({ output: `Stopped ${ended!.data.taskId}; it won't report back.` });
+    const history: SessionStreamEvent[] = [];
+    const reader = readSessionEventHistory(parentId!).getReader();
+    for (let next = await reader.read(); !next.done; next = await reader.read())
+      history.push(next.value);
+    expect(
+      history
+        .slice(history.findIndex((event) => event.type === "task.ended") + 1)
+        .filter((event) => event.scope?.taskId === ended?.data.taskId),
+    ).toEqual([]);
+    expect(ofType(history, "session.ended")).toEqual([]);
+  });
+
   it("relays a child's approval to its parent, and answering it there runs the child's call", async () => {
     const { events, ran } = await withSession(
       "edge-child-approval",
