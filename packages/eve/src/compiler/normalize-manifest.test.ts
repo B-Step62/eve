@@ -447,7 +447,7 @@ describe("compileAgentManifest source graph", () => {
     ]!(undefined, {
       model: null,
       session: { id: "session", auth: { current: null, initiator: null } },
-      channel: {},
+      channel: { kind: "unknown", metadata: {} },
       messages: [],
     });
     expect(Object.keys(tools as object).sort()).toEqual(
