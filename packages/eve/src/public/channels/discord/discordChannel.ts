@@ -1,3 +1,5 @@
+import type { ChannelEventContext, ChannelEventOf } from "#public/definitions/channel.js";
+import type { SessionEvent } from "#protocol/session-event.js";
 import type { DiscordInstrumentationMetadata } from "#public/channels/discord/index.js";
 import type { SessionHistoryMessage } from "#shared/session-history.js";
 import type { ChannelFrom } from "#channel/channel-operations.js";
@@ -7,10 +9,8 @@ import {
 } from "#channel/inactive-prompt.js";
 import type { SessionHandle } from "#channel/session.js";
 import type { SessionAuthContext, TurnPolicy } from "#channel/types.js";
-import type { SessionContext } from "#public/definitions/callback-context.js";
 import type { ChannelContinuationOps } from "#public/definitions/channel.js";
 import { createLogger, logError } from "#internal/logging.js";
-import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import {
   callDiscordApi,
   createDiscordFollowupMessage,
@@ -33,8 +33,8 @@ import {
   editDiscordResolvedPrompt,
 } from "#public/channels/discord/defaults.js";
 import {
-  deriveComponentInputResponses,
-  deriveModalInputResponses,
+  deriveComponentAnswers,
+  deriveModalAnswers,
   buildFreeformModalResponse,
   isDiscordFreeformComponent,
 } from "#public/channels/discord/hitl.js";
@@ -65,22 +65,20 @@ import {
   createDiscordFetchFile,
   discordCommandContent,
 } from "#public/channels/discord/attachments.js";
-import type { InputOption, ValidatedInputResponse } from "#shared/input.js";
+import type { ValidatedAnswer } from "#shared/input.js";
+import type { InteractionOption } from "#protocol/session-events/families/interaction.js";
 import type { ChannelAudience } from "#shared/channel-audience.js";
 import { discordAudience, discordInstrumentationMetadata } from "./audience.js";
 
 const log = createLogger("discord.channel");
-
-type EventData<T extends UnstampedMessageStreamEvent["type"]> =
-  Extract<UnstampedMessageStreamEvent, { type: T }> extends { data: infer D } ? D : undefined;
 
 /** Pre-dispatch Discord context passed to inbound command hooks. */
 export interface DiscordContext {
   readonly discord: DiscordHandle;
 }
 
-/** Context passed to `discordChannel({ onInputResponse })` before eve answers the pending request. */
-export interface DiscordInputResponseContext extends DiscordContext {
+/** Context passed to `discordChannel({ onAnswers })` before eve answers the pending request. */
+export interface DiscordAnswerContext extends DiscordContext {
   /** Auth derived from the Discord user who pressed or submitted, as `defaultDiscordAuth` builds it. */
   readonly defaultAuth: SessionAuthContext;
 }
@@ -100,6 +98,8 @@ export interface DiscordChannelState {
   conversationId: string | null;
   /** Discord guild id, when the interaction was invoked in a guild. */
   guildId: string | null;
+  /** The Discord channel type the interaction came from, such as 1 for a DM. */
+  channelType?: number;
   /** Discord application id from the inbound interaction. */
   applicationId: string | null;
   /** Latest interaction token available to the channel. */
@@ -110,13 +110,15 @@ export interface DiscordChannelState {
   hasMessageAnchor: boolean;
   /** Posted prompts with components, keyed by requestId, until eve resolves them. */
   hitlPrompts?: Record<string, DiscordHitlPrompt>;
+  /** The sign-ins the default flow posted for, by connection name. */
+  pendingSignIns?: Record<string, string>;
 }
 
 /** What a posted prompt needs so its message can be edited once eve resolves it. */
 export interface DiscordHitlPrompt {
   readonly content: string;
   readonly messageId: string;
-  readonly options: readonly Pick<InputOption, "id" | "label">[];
+  readonly options: readonly Pick<InteractionOption, "id" | "label">[];
 }
 
 /** Discord channel credentials. */
@@ -152,43 +154,34 @@ export type DiscordCommandResult = {
 /** Sync or async {@link DiscordCommandResult}. */
 export type DiscordCommandResultOrPromise = DiscordCommandResult | Promise<DiscordCommandResult>;
 
-/** Result of {@link DiscordChannelConfig.onInputResponse}: `{ auth }` to accept the answer, or `null` to drop it. */
-export type DiscordInputResponseResult = { readonly auth: SessionAuthContext | null } | null;
+/** Result of {@link DiscordChannelConfig.onAnswers}: `{ auth }` to accept the answer, or `null` to drop it. */
+export type DiscordAnswerResult = { readonly auth: SessionAuthContext | null } | null;
 
 /** A Discord interaction that answers a pending request: a button press, a select, or a modal submission. */
-export type DiscordInputResponseInteraction =
-  | DiscordComponentInteraction
-  | DiscordModalSubmitInteraction;
+export type DiscordAnswerInteraction = DiscordComponentInteraction | DiscordModalSubmitInteraction;
 
-type DiscordEventHandler<T extends UnstampedMessageStreamEvent["type"]> = (
-  data: EventData<T>,
-  channel: DiscordEventContext,
-  ctx: SessionContext,
+type DiscordEventHandler<T extends SessionEvent["type"]> = (
+  event: ChannelEventOf<T>,
+  ctx: ChannelEventContext<DiscordEventContext>,
 ) => void | Promise<void>;
 
-type DiscordSessionFailedHandler = (
-  data: EventData<"session.failed">,
-  channel: DiscordEventContext,
-) => void | Promise<void>;
-
-/** Per-event handlers for `discordChannel({ events })`. Supplied handlers override built-in defaults per key; unspecified events keep their defaults. `session.failed` receives only `(data, channel)` and exposes the ID as `data.sessionId`; every other handler also gets the session `ctx`. */
+/**
+ * Per-event handlers for `discordChannel({ events })`. Supplied handlers override built-in
+ * defaults per key; unspecified events keep their defaults. Each handler receives the event and
+ * a `ctx` whose `channel` is the Discord context.
+ */
 export interface DiscordChannelEvents {
   readonly "turn.started"?: DiscordEventHandler<"turn.started">;
-  readonly "actions.requested"?: DiscordEventHandler<"actions.requested">;
-  readonly "action.partial"?: DiscordEventHandler<"action.partial">;
-  readonly "action.result"?: DiscordEventHandler<"action.result">;
-  readonly "message.completed"?: DiscordEventHandler<"message.completed">;
-  readonly "message.appended"?: DiscordEventHandler<"message.appended">;
-  readonly "input.requested"?: DiscordEventHandler<"input.requested">;
-  readonly "input.resolved"?: DiscordEventHandler<"input.resolved">;
-  readonly "turn.failed"?: DiscordEventHandler<"turn.failed">;
-  readonly "turn.completed"?: DiscordEventHandler<"turn.completed">;
-  readonly "turn.cancelled"?: DiscordEventHandler<"turn.cancelled">;
-  readonly "session.failed"?: DiscordSessionFailedHandler;
-  readonly "session.completed"?: DiscordEventHandler<"session.completed">;
-  readonly "session.waiting"?: DiscordEventHandler<"session.waiting">;
-  readonly "authorization.required"?: DiscordEventHandler<"authorization.required">;
-  readonly "authorization.completed"?: DiscordEventHandler<"authorization.completed">;
+  readonly "call.requested"?: DiscordEventHandler<"call.requested">;
+  readonly "call.progress"?: DiscordEventHandler<"call.progress">;
+  readonly "call.settled"?: DiscordEventHandler<"call.settled">;
+  readonly "content.completed"?: DiscordEventHandler<"content.completed">;
+  readonly "content.delta"?: DiscordEventHandler<"content.delta">;
+  readonly "interaction.opened"?: DiscordEventHandler<"interaction.opened">;
+  readonly "interaction.settled"?: DiscordEventHandler<"interaction.settled">;
+  readonly "turn.settled"?: DiscordEventHandler<"turn.settled">;
+  readonly "session.ended"?: DiscordEventHandler<"session.ended">;
+  readonly "delivery.settled"?: DiscordEventHandler<"delivery.settled">;
 }
 
 /** Configuration for {@link discordChannel}. */
@@ -211,13 +204,13 @@ export interface DiscordChannelConfig {
    * pending request. Return `{ auth }` to accept the answer, or `null` to drop
    * it and keep the request pending. Thrown errors are logged and drop the
    * answer. Defaults to the interacting user's Discord auth. With a custom
-   * `onCommand` and no `onInputResponse`, every answer is dropped: set it to
+   * `onCommand` and no `onAnswers`, every answer is dropped: set it to
    * give a person's answers the same principal, and gating, as their commands.
    */
-  onInputResponse?(
-    ctx: DiscordInputResponseContext,
-    interaction: DiscordInputResponseInteraction,
-  ): DiscordInputResponseResult | Promise<DiscordInputResponseResult>;
+  onAnswers?(
+    ctx: DiscordAnswerContext,
+    interaction: DiscordAnswerInteraction,
+  ): DiscordAnswerResult | Promise<DiscordAnswerResult>;
 
   readonly events?: DiscordChannelEvents;
 }
@@ -270,9 +263,8 @@ export interface DiscordChannel extends Channel<
 /** Discord channel factory for HTTP Interactions and proactive channel messages. */
 export function discordChannel(config: DiscordChannelConfig = {}): DiscordChannel {
   const onCommand = config.onCommand ?? defaultOnCommand;
-  const onInputResponse =
-    config.onInputResponse ??
-    (config.onCommand === undefined ? acceptAsPresser : dropUnmappedInputResponse);
+  const onAnswers =
+    config.onAnswers ?? (config.onCommand === undefined ? acceptAsPresser : dropUnmappedAnswer);
   const mergedEvents: DiscordChannelEvents = { ...defaultEvents, ...config.events };
 
   return defineChannel<
@@ -320,7 +312,7 @@ export function discordChannel(config: DiscordChannelConfig = {}): DiscordChanne
             config,
             interaction,
             onCommand,
-            onInputResponse,
+            onAnswers,
             from,
             waitUntil,
           });
@@ -543,7 +535,7 @@ async function handleInteraction(input: {
   readonly config: DiscordChannelConfig;
   readonly interaction: DiscordInteraction;
   readonly onCommand: NonNullable<DiscordChannelConfig["onCommand"]>;
-  readonly onInputResponse: NonNullable<DiscordChannelConfig["onInputResponse"]>;
+  readonly onAnswers: NonNullable<DiscordChannelConfig["onAnswers"]>;
   readonly from: ChannelFrom<DiscordChannelState>;
   readonly waitUntil: (task: Promise<unknown>) => void;
 }): Promise<Response> {
@@ -560,7 +552,7 @@ async function handleInteraction(input: {
     return handleComponentInteraction({
       config: input.config,
       interaction: input.interaction,
-      onInputResponse: input.onInputResponse,
+      onAnswers: input.onAnswers,
       from: input.from,
       waitUntil: input.waitUntil,
     });
@@ -568,7 +560,7 @@ async function handleInteraction(input: {
   return handleModalSubmitInteraction({
     config: input.config,
     interaction: input.interaction,
-    onInputResponse: input.onInputResponse,
+    onAnswers: input.onAnswers,
     from: input.from,
     waitUntil: input.waitUntil,
   });
@@ -615,7 +607,7 @@ async function handleCommandInteraction(input: {
 function handleComponentInteraction(input: {
   readonly config: DiscordChannelConfig;
   readonly interaction: DiscordComponentInteraction;
-  readonly onInputResponse: NonNullable<DiscordChannelConfig["onInputResponse"]>;
+  readonly onAnswers: NonNullable<DiscordChannelConfig["onAnswers"]>;
   readonly from: ChannelFrom<DiscordChannelState>;
   readonly waitUntil: (task: Promise<unknown>) => void;
 }): Response {
@@ -629,14 +621,14 @@ function handleComponentInteraction(input: {
     );
   }
 
-  const inputResponses = deriveComponentInputResponses(input.interaction);
-  if (inputResponses.length > 0) {
+  const answers = deriveComponentAnswers(input.interaction);
+  if (answers.length > 0) {
     input.waitUntil(
-      dispatchInputResponses({
+      dispatchAnswers({
         config: input.config,
-        onInputResponse: input.onInputResponse,
+        onAnswers: input.onAnswers,
         conversationId: input.interaction.messageId,
-        inputResponses,
+        answers,
         interaction: input.interaction,
         from: input.from,
       }),
@@ -648,18 +640,18 @@ function handleComponentInteraction(input: {
 function handleModalSubmitInteraction(input: {
   readonly config: DiscordChannelConfig;
   readonly interaction: DiscordModalSubmitInteraction;
-  readonly onInputResponse: NonNullable<DiscordChannelConfig["onInputResponse"]>;
+  readonly onAnswers: NonNullable<DiscordChannelConfig["onAnswers"]>;
   readonly from: ChannelFrom<DiscordChannelState>;
   readonly waitUntil: (task: Promise<unknown>) => void;
 }): Response {
-  const inputResponses = deriveModalInputResponses(input.interaction);
-  if (inputResponses.length > 0) {
+  const answers = deriveModalAnswers(input.interaction);
+  if (answers.length > 0) {
     input.waitUntil(
-      dispatchInputResponses({
+      dispatchAnswers({
         config: input.config,
-        onInputResponse: input.onInputResponse,
+        onAnswers: input.onAnswers,
         conversationId: input.interaction.messageId ?? input.interaction.id,
-        inputResponses,
+        answers,
         interaction: input.interaction,
         from: input.from,
       }),
@@ -704,12 +696,12 @@ async function dispatchCommand(input: {
   }
 }
 
-async function dispatchInputResponses(input: {
+async function dispatchAnswers(input: {
   readonly config: DiscordChannelConfig;
-  readonly onInputResponse: NonNullable<DiscordChannelConfig["onInputResponse"]>;
+  readonly onAnswers: NonNullable<DiscordChannelConfig["onAnswers"]>;
   readonly conversationId: string;
-  readonly inputResponses: readonly ValidatedInputResponse[];
-  readonly interaction: DiscordInputResponseInteraction;
+  readonly answers: readonly ValidatedAnswer[];
+  readonly interaction: DiscordAnswerInteraction;
   readonly from: ChannelFrom<DiscordChannelState>;
 }): Promise<void> {
   const state = stateFromInteraction(input.interaction, {
@@ -719,9 +711,9 @@ async function dispatchInputResponses(input: {
     initialResponseSent: true,
   });
   const discord = buildDiscordHandle({ config: input.config, state });
-  let result: DiscordInputResponseResult;
+  let result: DiscordAnswerResult;
   try {
-    result = await input.onInputResponse(
+    result = await input.onAnswers(
       {
         defaultAuth: defaultDiscordAuth(input.interaction),
         discord,
@@ -738,7 +730,7 @@ async function dispatchInputResponses(input: {
     discordContinuationToken(input.interaction.channelId, input.conversationId),
   );
   const response = await respondOrRetireInactivePrompt(
-    () => source.respond(input.inputResponses, { auth }),
+    () => source.respond(input.answers, { auth }),
     {
       // The session's record of the prompt is gone, so its text comes from the
       // pressed message. A modal submitted outside a message has neither, and
@@ -768,7 +760,7 @@ async function sendInactiveNotice(discord: DiscordHandle): Promise<void> {
   }
 }
 
-function acceptAsPresser(ctx: DiscordInputResponseContext): DiscordInputResponseResult {
+function acceptAsPresser(ctx: DiscordAnswerContext): DiscordAnswerResult {
   return { auth: ctx.defaultAuth };
 }
 
@@ -776,9 +768,9 @@ function acceptAsPresser(ctx: DiscordInputResponseContext): DiscordInputResponse
  * A custom `onCommand` may map users to its own principals or keep some out.
  * The default Discord auth would match neither, so answers fail closed.
  */
-function dropUnmappedInputResponse(): null {
+function dropUnmappedAnswer(): null {
   log.warn(
-    "dropped a Discord input response: onCommand is customized but onInputResponse is not; set onInputResponse to accept button presses and modal submissions",
+    "dropped a Discord input response: onCommand is customized but onAnswers is not; set onAnswers to accept button presses and modal submissions",
   );
   return null;
 }
@@ -794,6 +786,7 @@ function stateFromInteraction(
   return {
     audience: discordAudience(interaction.channelType),
     applicationId: interaction.applicationId,
+    ...(interaction.channelType !== undefined && { channelType: interaction.channelType }),
     channelId: interaction.channelId,
     conversationId: options.conversationId,
     guildId: interaction.guildId ?? null,
