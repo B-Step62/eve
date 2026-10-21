@@ -119,7 +119,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const labelPrefix = "Deploy";
       const executePrefix = "execute";
       const resultPrefix = "Deployed to";
@@ -214,7 +214,7 @@ function referencedApproval() {
 
 export default defineDynamic({
   events: {
-    "session.started": async () => ({
+    "beforeSession": async () => ({
       arrow: defineTool({
         description: "Arrow approval",
         inputSchema: { type: "object" },
@@ -260,7 +260,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       const apiUrl = "https://api.example.com";
       const tenantName = "Acme";
       return {
@@ -298,7 +298,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => ({
+    "beforeSession": async () => ({
       tool: defineTool({
         description: "T",
         inputSchema: { type: "object" },
@@ -334,7 +334,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const config = { endpoint: "/api/v1", retries: 3 };
       return {
         tool: defineTool({
@@ -366,7 +366,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const multiplier = 10;
       return {
         calc: defineTool({
@@ -399,7 +399,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const prefix = "RESULT";
       const separator = "::";
       return {
@@ -438,7 +438,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const db = "prod-db";
       return {
         read_data: defineTool({
@@ -486,7 +486,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const tools = {};
 
       tools.probe_alpha = defineTool({
@@ -541,7 +541,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const fallback = "missing";
       const field = "value";
       return {
@@ -579,7 +579,7 @@ export default defineDynamic({
       `
       import { defineDynamic, defineTool } from "eve/tools";
       import { z } from "zod";
-      export default defineDynamic({ events: { "turn.started": () => {
+      export default defineDynamic({ events: { "beforeTurn": () => {
         const [first, ...rest] = ["a", "b"];
         return { pick: defineTool({
           description: "Pick",
@@ -602,7 +602,7 @@ export default defineDynamic({
       "tools/rest-param.ts",
       `
       import { defineDynamic, defineTool } from "eve/tools";
-      export default defineDynamic({ events: { "turn.started": (...args) => ({
+      export default defineDynamic({ events: { "beforeTurn": (...args) => ({
         count: defineTool({
           description: "Count",
           inputSchema: { type: "object" },
@@ -623,7 +623,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const result = "captured";
       return {
         tool: defineTool({
@@ -651,7 +651,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const TypeName = "type-only";
       const asserted = "asserted";
       const nonNull = "non-null";
@@ -688,7 +688,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const baseUrl = "https://api.test";
       return {
         fetch_data: defineTool({
@@ -721,7 +721,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const tools = {};
       const prefix = "tool";
       for (const name of ["alpha", "beta"]) {
@@ -840,7 +840,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const baseUrl = "https://api.example.com";
 
       function buildTool(action) {
@@ -895,7 +895,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       let counter = 0;
       function makeDescription(name) {
         counter++;
@@ -940,7 +940,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const mode = "production";
       if (mode === "production") {
         return {
@@ -976,7 +976,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const factor = 2;
       return {
         double: defineTool({
@@ -1003,7 +1003,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const secret = "s3cr3t";
       return {
         reveal: defineTool({
@@ -1030,7 +1030,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const tier = "premium";
       switch (tier) {
         case "premium":
@@ -1068,7 +1068,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const fallbackMsg = "service unavailable";
       try {
         const config = { ready: true };
@@ -1107,7 +1107,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const config = {
         endpoints: { search: "/api/search", export: "/api/export" },
         maxResults: 100,
@@ -1160,7 +1160,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       return null;
     },
   },
@@ -1178,7 +1178,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const enabled = true;
       if (!enabled) return null;
       return {
@@ -1206,7 +1206,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const enabled = false;
       if (!enabled) return null;
       return {
@@ -1237,7 +1237,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const featureA = false;
       const featureB = true;
 
@@ -1282,7 +1282,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const label = "test";
       const helper = function(x) { return x * 2; };
       return {
@@ -1323,7 +1323,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       const tenant = "Acme";
       return {
         tool: defineTool({
@@ -1361,7 +1361,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const name = "outer";
       function buildTool(name) {
         return defineTool({
@@ -1401,7 +1401,7 @@ function makeTool(e) {
 }
 
 export default defineDynamic({
-  events: { "session.started": async () => ({ tool: makeTool(() => "echo") }) },
+  events: { "beforeSession": async () => ({ tool: makeTool(() => "echo") }) },
 });
 `;
 
@@ -1430,7 +1430,7 @@ function makeTool(fallback) {
 }
 
 export default defineDynamic({
-  events: { "session.started": async () => ({ tool: makeTool(10) }) },
+  events: { "beforeSession": async () => ({ tool: makeTool(10) }) },
 });
 `;
 
@@ -1452,7 +1452,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       const resolverSessionId = ctx.session.id;
       const resolverHasAuth = ctx.session.auth.current !== null;
       return {
@@ -1495,7 +1495,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const tools = {};
       for (let i = 0; i < 2; i++) {
         const tag = "item" + i;
@@ -1529,7 +1529,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const orgId = "org-1";
       function buildCategory(category) {
         const prefix = orgId + "/" + category;
@@ -1578,7 +1578,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const prefix = "v1";
       function buildTool(name) {
         const endpoint = "/" + prefix + "/" + name;
@@ -1607,7 +1607,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const prefix = "api";
       const buildTool = (name) => defineTool({
         description: name,
@@ -1635,7 +1635,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const base = "https://api";
       const names = ["alpha", "beta"];
       const toolMap = {};
@@ -1667,7 +1667,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const secret = "s3cr3t";
       const tools = (function() {
         return {
@@ -1697,7 +1697,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const version = "v2";
       const endpoints = [
         { name: "search", path: "/search" },
@@ -1731,7 +1731,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       function createToolSet(prefix) {
         function makeTool(name) {
           return defineTool({
@@ -1761,7 +1761,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const baseUrl = "https://api.test";
       function buildTools(url) {
         return {
@@ -1795,7 +1795,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const version = "v3";
       function buildTool(name) {
         return defineTool({
@@ -1828,7 +1828,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const org = "acme";
       function makeTool(action) {
         return defineTool({
@@ -1864,7 +1864,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const tenant = { name: "Acme", region: "us-east" };
       function createTool(tenant) {
         const label = tenant.name + " (" + tenant.region + ")";
@@ -1905,7 +1905,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const config = { base: "https://api.example.com" };
       function buildTool(name) {
         const url = config.base + "/" + name;
@@ -1943,7 +1943,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const endpoint = "/api";
       const myExec = (input) => endpoint + input.path;
       return {
@@ -1971,7 +1971,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       function makeExec(endpoint) {
         return async (input) => {
           return endpoint + input.path;
@@ -2000,7 +2000,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const client = { search(input) { return input; } };
       return {
         search: {
@@ -2042,7 +2042,7 @@ import { defineDynamic, defineTool as tool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": () => ({
+    "beforeSession": () => ({
       aliased: tool({
         description: "Aliased",
         inputSchema: { type: "object" },
@@ -2068,7 +2068,7 @@ function executeMarker(input) {
 
 export default defineDynamic({
   events: {
-    "session.started": () => ({
+    "beforeSession": () => ({
       marker: defineTool({
         description: "Marker",
         inputSchema: { type: "object" },
@@ -2117,7 +2117,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       return null;
     },
   },
@@ -2210,7 +2210,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       const data = await fetchData(ctx.session.id);
       return {
         tool_a: defineTool({
@@ -2258,7 +2258,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const a = 1;
       return {
         t1: defineTool({ description: "1", inputSchema: {}, execute() { return a; } }),
@@ -2285,7 +2285,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       return {
         tool: defineTool({
           description: "T",
@@ -2319,7 +2319,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       const alpha = 1;
       const beta = 2;
       const unused = 999;
@@ -2358,7 +2358,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       const flags = { analytics: true };
       return defineTool({
         description: "Analytics",
@@ -2384,7 +2384,7 @@ const MODULE_CONSTANT = "hello";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       return {
         tool: defineTool({
           description: MODULE_CONSTANT,
@@ -2409,7 +2409,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const tools = {};
       for (const item of getItems()) {
         tools[item.name] = defineTool({
@@ -2441,13 +2441,13 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async () => {
+    "beforeSession": async () => {
       const sessionVal = "s";
       return {
         s_tool: defineTool({ description: "S", inputSchema: {}, execute() { return sessionVal; } }),
       };
     },
-    "step.started": async () => {
+    "beforeModel": async () => {
       const stepVal = "p";
       return {
         p_tool: defineTool({ description: "P", inputSchema: {}, execute() { return stepVal; } }),
@@ -2473,7 +2473,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (event, ctx) => {
+    "beforeSession": async (event, ctx) => {
       const resolverSessionId = ctx.session.id;
 
       return {
@@ -2512,7 +2512,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 
 export default defineDynamic({
   events: {
-    "session.started": async (_input, ctx) => {
+    "beforeSession": async (_input, ctx) => {
       const tag = "typed";
       return {
         tool: defineTool({
@@ -2545,7 +2545,7 @@ describe("durable schema expression transform", () => {
       import { defineTool, defineDynamic } from "eve/tools";
       import { z } from "zod";
       const output = z.object({ value: z.string().trim() });
-      export default defineDynamic({ events: { "session.started": (_event, ctx) => {
+      export default defineDynamic({ events: { "beforeSession": (_event, ctx) => {
         const limit = ctx.limit;
         return { checked: defineTool({
           description: "Checked",

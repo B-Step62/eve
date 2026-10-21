@@ -75,15 +75,16 @@ function loggingResolver(
   log: string[],
   kind: string,
   logicalPath: string,
-  keys: readonly ("session.started" | "turn.started" | "step.started")[],
+  keys: readonly ("beforeSession" | "beforeTurn" | "beforeModel")[],
   result: (key: string) => unknown = () => null,
   received?: { key: string; event: unknown }[],
 ) {
+  const labels = { beforeSession: "session", beforeTurn: "turn", beforeModel: "step" };
   const events = Object.fromEntries(
     keys.map((key) => [
       key,
       (event: unknown) => {
-        log.push(`${kind}:${key.split(".")[0]}`);
+        log.push(`${kind}:${labels[key]}`);
         received?.push({ event, key });
         return result(key);
       },
@@ -119,7 +120,7 @@ describe("participant timing", () => {
         definition: defineAgent({
           model: defineDynamic({
             events: {
-              "step.started": () => {
+              beforeModel: () => {
                 log.push("model:step");
                 return { model, modelContextWindowTokens: 200_000 };
               },
@@ -161,9 +162,9 @@ describe("participant timing", () => {
           log,
           "tools",
           "tools/lookup.ts",
-          ["session.started", "turn.started", "step.started"],
+          ["beforeSession", "beforeTurn", "beforeModel"],
           (key) =>
-            key === "step.started"
+            key === "beforeModel"
               ? {
                   lookup: defineTool({
                     description: "Look something up.",
@@ -179,10 +180,10 @@ describe("participant timing", () => {
               : {},
           toolEvents,
         ),
-        loggingResolver(log, "skills", "skills/playbook.ts", ["session.started", "turn.started"]),
+        loggingResolver(log, "skills", "skills/playbook.ts", ["beforeSession", "beforeTurn"]),
         loggingResolver(log, "instructions", "instructions/policy.ts", [
-          "session.started",
-          "turn.started",
+          "beforeSession",
+          "beforeTurn",
         ]),
       ],
     });
@@ -245,10 +246,8 @@ describe("participant timing", () => {
     // turn's request for each model run.
     const factOf = (key: string) =>
       toolEvents.filter((entry) => entry.key === key).map((entry) => entry.event);
-    expect(factOf("session.started")).toEqual([
-      expect.objectContaining({ type: "session.started" }),
-    ]);
-    expect(factOf("turn.started")).toEqual(
+    expect(factOf("beforeSession")).toEqual([expect.objectContaining({ type: "session.started" })]);
+    expect(factOf("beforeTurn")).toEqual(
       ["turn_0", "turn_1"].map((turnId) =>
         expect.objectContaining({
           data: expect.objectContaining({
@@ -259,8 +258,8 @@ describe("participant timing", () => {
         }),
       ),
     );
-    expect(factOf("step.started")).toHaveLength(4);
-    for (const fact of factOf("step.started")) {
+    expect(factOf("beforeModel")).toHaveLength(4);
+    for (const fact of factOf("beforeModel")) {
       expect(fact).toMatchObject({
         data: { owner: { turnId: expect.stringMatching(/^turn_/u) }, runId: expect.any(String) },
         scope: { turnId: expect.stringMatching(/^turn_/u) },

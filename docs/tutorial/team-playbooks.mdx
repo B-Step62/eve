@@ -31,7 +31,7 @@ const PLAYBOOKS: Record<string, { title: string; markdown: string }> = {
 
 export default defineDynamic({
   events: {
-    "session.started": async (_event, ctx) => {
+    beforeSession: async (_event, ctx) => {
       const team = ctx.session.auth.current?.attributes.team;
       const key = Array.isArray(team) ? team[0] : team;
       const playbook = key ? PLAYBOOKS[key] : undefined;
@@ -48,7 +48,7 @@ export default defineDynamic({
 });
 ```
 
-`session.started` fires once per session. The resolver reads the team once, and the resulting skill stays available for every turn that follows. Returning `null` produces no skill, so a caller with no team gets no playbook.
+`beforeSession` fires once per session. The resolver reads the team once, and the resulting skill stays available for every turn that follows. Returning `null` produces no skill, so a caller with no team gets no playbook.
 
 ## See it route
 
@@ -75,7 +75,7 @@ export default eveChannel({
 });
 ```
 
-Restart with `npm run dev` and ask "Summarize May 2026 revenue using our team's playbook." The model loads the skill with `eve__skill`, queries the sample data, and applies Growth's daily and plan groupings. Switch `team` to `"finance"`, restart, and start a new session before asking again. The resolver runs at `session.started`, so changing the team does not replace the playbook in an existing session. The same question in the new session uses Finance's reconciliation rules.
+Restart with `npm run dev` and ask "Summarize May 2026 revenue using our team's playbook." The model loads the skill with `eve__skill`, queries the sample data, and applies Growth's daily and plan groupings. Switch `team` to `"finance"`, restart, and start a new session before asking again. The resolver runs at `beforeSession`, so changing the team does not replace the playbook in an existing session. The same question in the new session uses Finance's reconciliation rules.
 
 Because the team comes from authenticated claims, not from the message, one tenant can't borrow another's playbook through the message content.
 
