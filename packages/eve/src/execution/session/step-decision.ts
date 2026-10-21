@@ -26,7 +26,7 @@ export type TurnPause =
 
 /**
  * Everything `decideStep` reads, sampled by `step-reading.ts` as a step leaves the session.
- * Private records and native-engine history stay on that side of the boundary.
+ * Private records and engine histories stay on that side of the boundary.
  */
 export interface StepState {
   /** The stream ended the session. */
@@ -44,8 +44,9 @@ export interface StepState {
   /** Calls the runtime runs for the turn's suspended steps. */
   readonly calls?: Omit<Extract<TurnPause, { readonly on: "calls" }>, "on">;
   /**
-   * The model has input it hasn't read: the history ends on something it hasn't answered, or a
-   * task's result waits to be delivered.
+   * The engine has input it hasn't read: the native history ends on something the model hasn't
+   * answered, an opaque-history engine has results it hasn't read, or a task's result waits to be
+   * delivered.
    */
   readonly unreadInput: boolean;
   /** Tasks with calls still to answer. */

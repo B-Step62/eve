@@ -1781,6 +1781,7 @@ describe("SessionLoop between turns", () => {
       sessionId: sessionState.sessionId,
       ownerRunId: "owner-run",
       start: { kind: "parked" },
+      step: turnStep,
     });
 
     await expect(loop.run()).resolves.toMatchObject({ kind: "done" });
@@ -1927,6 +1928,7 @@ function createExecution(input: {
         sessionId: input.sessionState.sessionId,
         ownerRunId: "owner-run",
         start: { input: turn?.delivery, kind: "turn" },
+        step: turnStep,
       }).run({ control: options.control }),
   };
 }

@@ -2,6 +2,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { expect, it, vi } from "vitest";
 
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { nativeTurnEngine } from "#harness/turn-engine.js";
 import type { HarnessSession, HarnessStepInput } from "#harness/types.js";
 import { eachEvent, withPublished } from "#internal/testing/session-machine.js";
 import type { SessionEvent } from "#protocol/session-event.js";
@@ -72,13 +73,16 @@ const prompted = (call: MockLanguageModelV3["doStreamCalls"][number] | undefined
 it("reads imported history before each turn's context and message, and records it consumed", async () => {
   const llm = model();
   const events: SessionEvent[] = [];
-  const harness = createToolLoopHarness({
-    handleEvent: eachEvent(async (event) => {
-      events.push(event);
-    }),
-    resolveModel: async () => llm,
-    tools: new Map(),
-  });
+  const harness = createToolLoopHarness(
+    {
+      handleEvent: eachEvent(async (event) => {
+        events.push(event);
+      }),
+      resolveModel: async () => llm,
+      tools: new Map(),
+    },
+    nativeTurnEngine,
+  );
   const session: HarnessSession = {
     agent: { modelReference: { id: "m" }, system: "You help Alice.", tools: [] },
     compaction: { recentWindowSize: 10, threshold: 100_000 },

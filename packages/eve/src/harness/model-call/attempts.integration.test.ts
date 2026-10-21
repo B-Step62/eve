@@ -3,6 +3,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { nativeTurnEngine } from "#harness/turn-engine.js";
 import type { HarnessSession } from "#harness/types.js";
 import { eachEvent } from "#internal/testing/session-machine.js";
 import type { SessionEvent } from "#protocol/session-event.js";
@@ -60,23 +61,26 @@ async function runTurn(doStream: MockLanguageModelV3["doStream"]): Promise<Sessi
     history: [],
     sessionId: "attempts",
   };
-  await createToolLoopHarness({
-    handleEvent: eachEvent(async (event) => {
-      events.push(event);
-    }),
-    resolveModel: async () => new MockLanguageModelV3({ doStream }),
-    tools: new Map([
-      [
-        "lookup",
-        {
-          description: "Looks up a report.",
-          execute: async () => "The weekly summary.",
-          inputSchema: jsonSchema({ type: "object" }),
-          name: "lookup",
-        },
-      ],
-    ]),
-  })(session, { message: "Alice asks for the weekly summary." });
+  await createToolLoopHarness(
+    {
+      handleEvent: eachEvent(async (event) => {
+        events.push(event);
+      }),
+      resolveModel: async () => new MockLanguageModelV3({ doStream }),
+      tools: new Map([
+        [
+          "lookup",
+          {
+            description: "Looks up a report.",
+            execute: async () => "The weekly summary.",
+            inputSchema: jsonSchema({ type: "object" }),
+            name: "lookup",
+          },
+        ],
+      ]),
+    },
+    nativeTurnEngine,
+  )(session, { message: "Alice asks for the weekly summary." });
   return events.filter((event) => event.type.startsWith("model."));
 }
 

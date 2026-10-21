@@ -1,5 +1,3 @@
-import type { ModelMessage } from "ai";
-
 import type { SubagentInteractionHookPayload } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import { callSettledFrom } from "#harness/call-facts.js";
@@ -55,14 +53,22 @@ import type { Transition } from "./commit.js";
 import { signInAttemptKey } from "#harness/hitl/sign-ins.js";
 import type { Relay, WorkflowAskRoute } from "#harness/hitl/relays.js";
 import type { StoppedCall } from "#harness/inline-tool-authorization.js";
-import type { ApprovedCall, SuspendedStep, TurnState } from "./state.js";
-import { activeTurnId, answeredCallIds, turnPosition, type SessionView } from "./view.js";
+import type {
+  ApprovedCall,
+  CallReceipt,
+  StepTranscript,
+  SuspendedStep,
+  TurnState,
+} from "./state.js";
+import { activeTurnId, answeredStepCallIds, turnPosition, type SessionView } from "./view.js";
 import {
   isComplete,
+  release,
   stepCallIds,
   suspend,
-  withResult,
-  withoutResults,
+  withStepResult,
+  withUnansweredResults,
+  withoutStepResults,
   type ToolResultPart,
 } from "./suspended-steps.js";
 
@@ -210,14 +216,11 @@ export function fail(
           outcome: "failed",
         })),
   ];
-  return {
-    commit: stopped.flatMap(cancelledTranscript),
-    events,
-    turn: {
-      ...view.turn,
-      suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
-    },
-  };
+  const released = release(
+    { ...view.turn, suspended: view.turn.suspended.filter((step) => !stopped.includes(step)) },
+    stopped.map(cancelledStep),
+  );
+  return { commit: released.commit, events, turn: released.turn };
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +238,8 @@ export interface SettledCall {
 
 /**
  * Results reach the steps that made their calls. A step whose every call now has a result
- * commits to history, where the model reads it.
+ * releases to its engine: to history, where the model reads it, or as an opaque-history engine's
+ * receipt.
  */
 export function settle(view: SessionView, input: { readonly results: readonly SettledCall[] }) {
   const events: SessionEvent[] = [];
@@ -244,10 +248,7 @@ export function settle(view: SessionView, input: { readonly results: readonly Se
     const index = steps.findIndex((step) => stepCallIds(step).has(part.toolCallId));
     const step = steps[index];
     if (step === undefined) continue;
-    steps[index] = withoutApproved(
-      { ...step, messages: withResult(step.messages, part) },
-      new Set([part.toolCallId]),
-    );
+    steps[index] = withoutApproved(withStepResult(step, part), new Set([part.toolCallId]));
     const recorded = result === undefined ? undefined : view.projection.view.calls[result.callId];
     if (result !== undefined && recorded?.taskId === undefined && recorded?.status !== "settled") {
       // A task's start receipt is model history only. Its public call stays open until the
@@ -257,12 +258,8 @@ export function settle(view: SessionView, input: { readonly results: readonly Se
       if (usage !== undefined) events.push(delegatedUsageFact(result.callId, usage));
     }
   }
-  const complete = steps.filter(isComplete);
-  return {
-    commit: complete.flatMap((step) => step.messages),
-    events,
-    turn: { ...view.turn, suspended: steps.filter((step) => !complete.includes(step)) },
-  } satisfies Transition;
+  const released = release({ ...view.turn, suspended: steps }, steps.filter(isComplete));
+  return { commit: released.commit, events, turn: released.turn } satisfies Transition;
 }
 
 /**
@@ -298,14 +295,42 @@ export function discardAttempt(
 }
 
 /**
- * A model response made calls the runtime runs. The response waits in a suspended step until
- * every call it made has a result, so a call never reaches the model without its result.
+ * A model response made calls the runtime runs, or an opaque-history engine proposed calls. The
+ * response waits in a suspended step until every call it made has a result, so a call never
+ * reaches its engine without its result.
  */
 export function suspendStep(
   view: SessionView,
-  step: Pick<SuspendedStep, "event" | "messages" | "tasks">,
+  step: Pick<SuspendedStep, "event" | "tasks"> & StepTranscript,
 ): Transition {
   return { events: [], turn: suspend(view.turn, { ...step, requests: [] }) };
+}
+
+/**
+ * An opaque-history engine read its receipts into the snapshot it saves with this step: they
+ * leave the turn, so it never reads a result twice.
+ */
+export function completeEngineStep(
+  view: SessionView,
+  input: { readonly read: readonly CallReceipt[]; readonly engineSnapshot?: unknown },
+): Transition {
+  const key = (receipt: CallReceipt) =>
+    JSON.stringify([
+      receipt.event.turnId,
+      receipt.event.stepIndex,
+      receipt.results.map((result) => result.toolCallId).sort(),
+    ]);
+  const read = new Set(input.read.map(key));
+  const { receipts: previous = [], ...turn } = view.turn;
+  const receipts = previous.filter((receipt) => !read.has(key(receipt)));
+  return {
+    events: [],
+    turn: {
+      ...turn,
+      ...(receipts.length > 0 && { receipts }),
+      ...(Object.hasOwn(input, "engineSnapshot") && { engineSnapshot: input.engineSnapshot }),
+    },
+  };
 }
 
 /** The step without the approved calls in `callIds`, which have run or joined the runtime. */
@@ -734,8 +759,7 @@ export function awaitSignIns(
   });
   const callIds = new Set(calls.map((call) => call.call.callId));
   return {
-    ...step,
-    messages: withoutResults(step.messages, callIds),
+    ...withoutStepResults(step, callIds),
     approved: [...(step.approved ?? []).filter((call) => !callIds.has(call.call.callId)), ...calls],
   };
 }
@@ -864,7 +888,7 @@ export function cancel(view: SessionView, input: { readonly cause?: Cause } = {}
   const stopped = view.turn.suspended.filter(
     (step) =>
       (turnId !== undefined && step.event.turnId === turnId) ||
-      step.tasks.some((task) => !answeredCallIds(step.messages).has(task.callId)) ||
+      step.tasks.some((task) => !answeredStepCallIds(step).has(task.callId)) ||
       (step.approved?.length ?? 0) > 0,
   );
   const stoppedRequestIds = new Set(
@@ -891,15 +915,16 @@ export function cancel(view: SessionView, input: { readonly cause?: Cause } = {}
     ...unreadSettled(view),
   );
   const { queued: _queued, ...turn } = view.turn;
+  const released = release(
+    { ...turn, suspended: view.turn.suspended.filter((step) => !stopped.includes(step)) },
+    stopped.map(cancelledStep),
+  );
   return {
-    commit: stopped.flatMap(cancelledTranscript),
+    commit: released.commit,
     events,
     // Every sign-in the turn held ends with it.
     signIns: [],
-    turn: {
-      ...turn,
-      suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
-    },
+    turn: released.turn,
   };
 }
 
@@ -910,24 +935,9 @@ function unreadSettled(view: SessionView): SessionEvent[] {
     .map(({ deliveryId }) => fact("delivery.settled", { deliveryId, outcome: "ignored" }));
 }
 
-/** A stopped step's response, each call without a result answered as cancelled. */
-function cancelledTranscript(step: SuspendedStep): ModelMessage[] {
-  const answered = answeredCallIds(step.messages);
-  let messages = [...step.messages];
-  for (const message of step.messages) {
-    if (message.role !== "assistant" || typeof message.content === "string") continue;
-    for (const part of message.content) {
-      if (part.type !== "tool-call" || part.providerExecuted === true) continue;
-      if (answered.has(part.toolCallId)) continue;
-      messages = withResult(messages, {
-        output: { type: "text", value: CANCELLED_CALL_RESULT },
-        toolCallId: part.toolCallId,
-        toolName: part.toolName,
-        type: "tool-result",
-      });
-    }
-  }
-  return messages;
+/** A stopped step, each call without a result answered as cancelled. */
+function cancelledStep(step: SuspendedStep): SuspendedStep {
+  return withUnansweredResults(step, { type: "text", value: CANCELLED_CALL_RESULT });
 }
 
 /**

@@ -5,7 +5,7 @@ import type { SessionAuthContext } from "#channel/types.js";
 import { AuthKey, SessionKey } from "#context/keys.js";
 import type { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-authorization.js";
 import { validateHarnessModelMessages } from "#harness/messages.js";
-import { fail } from "#harness/session-machine/transitions.js";
+import { fail, suspendStep } from "#harness/session-machine/transitions.js";
 import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
 import type { Step } from "#harness/step/context.js";
 import { park } from "#harness/step/park.js";
@@ -16,7 +16,11 @@ import type {
   StepResult,
 } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
-import type { ApprovalAsk, StepCoordinates } from "#harness/session-machine/view.js";
+import type {
+  ApprovalAsk,
+  StepCoordinates,
+  StepTranscript,
+} from "#harness/session-machine/view.js";
 import { renderPendingApprovalsInstruction } from "./approval-prompt.js";
 import {
   askApprovals,
@@ -49,29 +53,44 @@ export type { PendingResponder } from "./responders.js";
 export { discardClearedHitlState as discardClearedHumanInput } from "./requests.js";
 
 /**
- * A model step made calls that need a person's approval: the step's response waits on them
- * beside any runtime calls it made, asked as the turn's requester.
+ * A model step made calls that need a person's approval, or an opaque-history engine proposed
+ * them: the step waits on them beside any runtime calls it made, asked as the turn's requester.
  */
 export async function askStepApprovals(
   step: Step,
   input: {
     readonly event: StepCoordinates;
-    readonly messages: readonly ModelMessage[];
     readonly requests: readonly ApprovalAsk[];
     readonly tasks: readonly RuntimeWorkflowTaskRequest[];
     /** The entries the step's calls ran, whose approvals the requests ask for. */
     readonly tools: HarnessToolLookup;
-  },
+  } & StepTranscript,
 ): Promise<void> {
   const transition = askApprovals(step.view(), {
-    event: input.event,
-    messages: input.messages,
-    requests: input.requests,
+    ...input,
     requester: currentRequester(step),
     responseAuthRequiredRequestIds: responsePolicyRequestIds(input.tools, input.requests),
-    tasks: input.tasks,
   });
-  await step.apply(transition, [...step.session.history, ...(transition.commit ?? [])]);
+  await step.apply(
+    transition,
+    "proposed" in input ? undefined : [...step.session.history, ...(transition.commit ?? [])],
+  );
+}
+
+/** Holds a response on the calls eve gated, without interpreting the engine's history. */
+export async function holdStep(
+  step: Step,
+  input: Parameters<typeof askStepApprovals>[1] & {
+    readonly signIn?: NonNullable<ReturnType<typeof resolveInlineAuthorizationInterrupt>>;
+  },
+): Promise<StepResult> {
+  // Catalogs contain callbacks; only continuation data belongs in the saved step.
+  const { tools, requests, signIn, ...response } = input;
+  if (requests.length > 0) await askStepApprovals(step, { ...response, requests, tools });
+  else await step.apply(suspendStep(step.view(), response));
+  // Approval precedes sign-in for the same call, not an executing sibling.
+  if (signIn !== undefined) return stopForToolSignIn(step, signIn);
+  return park(step);
 }
 
 /**

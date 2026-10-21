@@ -7,7 +7,10 @@ import { activeTurn, openWork } from "#protocol/session-projection/selectors.js"
 import type { StepState } from "./step-decision.js";
 import type { HarnessModelMessage } from "#harness/messages.js";
 
-/** Samples private records and native-engine history before a synchronous step decision. */
+/**
+ * Samples private records, native-engine history, and opaque-history engines' receipts before a
+ * synchronous step decision.
+ */
 export function readStepState(session: Pick<HarnessSession, "history" | "state">): StepState {
   const projection = storedProjection(session.state);
   const tables = projection.view;
@@ -21,7 +24,10 @@ export function readStepState(session: Pick<HarnessSession, "history" | "state">
     requestIds: [...ownOpenRequestIds(machine)],
     signIns: machine.signIns,
     turnOpen: turnId !== undefined,
-    unreadInput: awaitsModel(session.history) || tasksWithResults(tasks).length > 0,
+    unreadInput:
+      awaitsModel(session.history) ||
+      (machine.turn.receipts?.length ?? 0) > 0 ||
+      tasksWithResults(tasks).length > 0,
     unweighedAnswers:
       turnId !== undefined &&
       (() => {

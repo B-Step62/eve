@@ -2,9 +2,7 @@ import { activeTurnIdOf } from "#protocol/session-projection.js";
 import { contextStorage } from "#context/container.js";
 import { StaticModelReferenceKey } from "#context/keys.js";
 import { GenerationSteering } from "#harness/generation-steering.js";
-import { compactHistory, replaceSessionHistory } from "#harness/compaction/step.js";
-import { runModelStep } from "#harness/model-call/run.js";
-import { handleStepResult } from "#harness/step/after-model.js";
+import { replaceSessionHistory } from "#harness/compaction/step.js";
 import type { Publish } from "#harness/session-machine/commit.js";
 import {
   saveProjection,
@@ -28,10 +26,11 @@ import {
   controlDeliveryFor,
   controlled,
   join,
+  completeEngineStep,
 } from "#harness/session-machine/transitions.js";
 import { turnPosition } from "#harness/session-machine/view.js";
 import { createStep, failTurnForReaction, openTurn, type Step } from "#harness/step/context.js";
-import { prepareTurnInput, settleRuntimeWork } from "#harness/step/intake.js";
+import { settleRuntimeWork } from "#harness/step/intake.js";
 import type {
   HarnessSession,
   StepFn,
@@ -42,18 +41,19 @@ import type {
 import type { InstrumentationStepScope } from "#instrumentation/runtime.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import { eventsOf } from "#harness/publication.js";
+import type { TurnEngine } from "#harness/turn-engine.js";
 
 const environment = process.env.NODE_ENV ?? "unknown";
 const eveVersion = resolveInstalledPackageInfo().version;
 
 /**
- * Creates the harness step: one step of a session, backed by the AI SDK's `ToolLoopAgent`.
+ * Creates the harness step: one step of a session, whose model step `engine` runs.
  *
  * A step settles what earlier steps parked and takes its delivery's answers, opens or joins the
- * turn, runs the work those answers approved, then makes one model step and acts on its response.
+ * turn, runs the work those answers approved, then has its engine make one step and act on it.
  * Every lifecycle change goes through the session machine (`Step.apply`).
  */
-export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
+export function createToolLoopHarness(config: ToolLoopHarnessConfig, engine: TurnEngine): StepFn {
   config.instrumentation?.installAiSdkWarningLogger();
 
   async function runStep(
@@ -125,7 +125,11 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     });
 
     if (config.clearOnly === true) return clearContext(step);
-    if (config.compactOnly === true) return compactHistory(step);
+    if (config.compactOnly === true) {
+      if (engine.compact === undefined)
+        throw new Error("The selected engine does not support context compaction.");
+      return engine.compact(step);
+    }
 
     // A step takes what arrived, in order: the runtime's results, then people's answers, then
     // the delivery's input. Then it acts: a hook that failed during the turn fails it, or what
@@ -134,7 +138,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     if ("ended" in runtime) return runtime.ended;
     const answered = await answers(step, runtime);
     if ("ended" in answered) return answered.ended;
-    const turn = await turnInput(step, input, answered);
+    const turn = await turnInput(step, input, answered, engine);
     if ("ended" in turn) return turn.ended;
     const hookFailure = await failTurnForReaction(step);
     if (hookFailure !== undefined) return hookFailure;
@@ -146,11 +150,23 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       await step.apply(queueInput(step.view(), turnInputOnly(answered.input)));
       return { next: step.runStep, session: step.session };
     }
-    return runModelStep(step, {
-      onResponse: (response) => handleStepResult(step, response),
+    const receipts = step.view().turn.receipts ?? [];
+    const result = await engine.run(step, {
       generation,
       turn,
+      message: answered.message,
+      receipts,
     });
+    if (receipts.length === 0 && !Object.hasOwn(result, "engineSnapshot")) return result;
+    const { engineSnapshot, ...finished } = result;
+    step.session = result.session;
+    await step.apply(
+      completeEngineStep(step.view(), {
+        read: receipts,
+        ...(Object.hasOwn(result, "engineSnapshot") && { engineSnapshot }),
+      }),
+    );
+    return { ...finished, session: step.session };
   }
 
   return runStep;
@@ -205,8 +221,11 @@ async function turnInput(
   step: Step,
   input: HarnessStepInput | undefined,
   { input: received, intake, message }: Exclude<Awaited<ReturnType<typeof answers>>, Ended>,
+  engine: TurnEngine,
 ) {
-  const turn = await prepareTurnInput(step, received, { consumedMessage: intake.consumedMessage });
+  const turn = await engine.prepareInput(step, received, {
+    consumedMessage: intake.consumedMessage,
+  });
   // A delivery an earlier step queued joins with the input the queue carried it in.
   const deliveries = deliveriesOf(input, received);
   if (intake.opensTurn) {

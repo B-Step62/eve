@@ -5,6 +5,7 @@ import type { Runtime, SessionCapabilities } from "#channel/types.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import type { ExecutionInstrumentation } from "#instrumentation/runtime.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { nativeTurnEngine } from "#harness/turn-engine.js";
 import type { HandleEventFn, HarnessToolMap, StepFn } from "#harness/types.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import { createLogger } from "#internal/logging.js";
@@ -84,22 +85,25 @@ export function createExecutionNodeStep(input: CreateExecutionNodeStepInput): St
   const tools = createNodeHarnessTools({ node: input.node });
   const instrumentation = input.instrumentation;
   const sessionInstrumentation = instrumentation?.prepareExecution();
-  const step = createToolLoopHarness({
-    steeringSignal: input.steeringSignal,
-    abortSignal: input.abortSignal,
-    capabilities: input.capabilities,
-    clearOnly: input.clearOnly,
-    compactOnly: input.compactOnly,
-    controlDelivery: input.controlDelivery,
-    handleEvent: input.handleEvent,
-    instrumentation: sessionInstrumentation,
-    signInCompletions: input.signInCompletions,
-    resolveModel,
-    runtimeIdentity: buildRuntimeIdentity(input.node),
-    sessionUsageLimit: input.sessionUsageLimit,
-    tools,
-    titleAttributeWrite: input.titleAttributeWrite,
-  });
+  const step = createToolLoopHarness(
+    {
+      steeringSignal: input.steeringSignal,
+      abortSignal: input.abortSignal,
+      capabilities: input.capabilities,
+      clearOnly: input.clearOnly,
+      compactOnly: input.compactOnly,
+      controlDelivery: input.controlDelivery,
+      handleEvent: input.handleEvent,
+      instrumentation: sessionInstrumentation,
+      signInCompletions: input.signInCompletions,
+      resolveModel,
+      runtimeIdentity: buildRuntimeIdentity(input.node),
+      sessionUsageLimit: input.sessionUsageLimit,
+      tools,
+      titleAttributeWrite: input.titleAttributeWrite,
+    },
+    nativeTurnEngine,
+  );
   if (instrumentation === undefined) return step;
   return async (session, stepInput) => {
     try {

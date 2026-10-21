@@ -52,16 +52,46 @@ export interface ApprovedCall {
   readonly responder?: SessionAuthContext;
 }
 
+type ToolResponsePart = Extract<ModelMessage, { role: "tool" }>["content"][number];
+/** One call's result, as the engine that made the call reads it. */
+export type ToolResultPart = Extract<ToolResponsePart, { type: "tool-result" }>;
+
+/**
+ * The calls an opaque-history engine proposed in one step, and the results they returned so far.
+ * The engine keeps its own history, so eve keeps the results until every call has one.
+ */
+export interface ProposedCalls {
+  readonly calls: readonly { readonly callId: string; readonly toolName: string }[];
+  readonly results: readonly ToolResultPart[];
+}
+
+/**
+ * What a suspended step withholds from its engine: the native engine's model response, whose
+ * results join it as they arrive, or an opaque-history engine's proposed calls.
+ */
+export type StepTranscript =
+  | { readonly messages: readonly ModelMessage[] }
+  | { readonly proposed: ProposedCalls };
+
+/**
+ * The results of an opaque-history engine's step whose every call has one, which the engine hasn't
+ * read yet. They leave once the engine saves the snapshot that read them.
+ */
+export interface CallReceipt {
+  readonly event: StepCoordinates;
+  readonly results: readonly ToolResultPart[];
+}
+
 /**
  * A model step whose calls can't all settle yet: some await an approval or a sign-in, others the
  * runtime.
  * Its response stays out of history until every call it made has a result there, so a call
  * never reaches the model without its result.
  */
-export interface SuspendedStep {
+export type SuspendedStep = SuspendedStepRecord & StepTranscript;
+
+interface SuspendedStepRecord {
   readonly event: StepCoordinates;
-  /** The withheld response. Results join it as they arrive. */
-  readonly messages: readonly ModelMessage[];
   /**
    * The approvals the response's calls asked for. How each was answered is the session's
    * interaction and response tables'; this only remembers what was asked.
@@ -86,6 +116,10 @@ export interface TurnState {
    */
   readonly queued?: HarnessStepInput;
   readonly suspended: readonly SuspendedStep[];
+  /** Results opaque-history engines' completed steps returned, which their engine reads next. */
+  readonly receipts?: readonly CallReceipt[];
+  /** The engine's checkpoint; only its adapter interprets this value. */
+  readonly engineSnapshot?: unknown;
   /** Human approvals remembered by `once()` for the rest of the session. */
   readonly grants: readonly ApprovalGrant[];
 }
@@ -101,7 +135,13 @@ export function writeTurnState<T extends { readonly state?: SessionStateMap }>(
   turn: TurnState,
 ): T {
   const state = { ...session.state };
-  if (turn.suspended.length === 0 && turn.queued === undefined && turn.grants.length === 0) {
+  if (
+    turn.suspended.length === 0 &&
+    turn.queued === undefined &&
+    turn.grants.length === 0 &&
+    (turn.receipts?.length ?? 0) === 0 &&
+    !Object.hasOwn(turn, "engineSnapshot")
+  ) {
     delete state[TURN_STATE_KEY];
   } else {
     state[TURN_STATE_KEY] = turn;

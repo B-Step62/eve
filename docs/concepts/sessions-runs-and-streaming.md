@@ -171,6 +171,10 @@ To follow an accepted receipt in a client view, use `delivery(view, receipt.deli
 | `status: "consumed"` | A turn took the input; `turnId` identifies it.                                            |
 | `status: "settled"`  | The delivery ended; `outcome` says how.                                                   |
 
+While a turn waits, eve can admit deliveries held for a later turn. They appear in
+`queue(view)` without running the channel's `deliver` hook or rebinding the active turn's
+caller. Those effects occur when eve takes the delivery.
+
 A `session.ended` event also ends the wait. After a degraded termination that could not record
 all closures, a retained delivery may still say `admitted` or `consumed`; do not wait for another
 `delivery.settled` on a closed stream.

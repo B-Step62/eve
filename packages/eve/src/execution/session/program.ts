@@ -9,6 +9,7 @@ import type { HarnessModelMessage } from "#harness/messages.js";
 import type { SessionEnd, SessionStart } from "#execution/session/scheduler/state.js";
 import { SessionLoop } from "#execution/session/session-loop.js";
 import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
+import { turnStep } from "#execution/session/turn-step.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { finalizeSession, type SessionTerminalOutcome } from "#execution/session/finalization.js";
 import type { SessionInboxHandle } from "#execution/session-inbox/inbox.js";
@@ -90,6 +91,7 @@ export async function runPreparedSession(
     ownerRunId: getWorkflowMetadata().workflowRunId,
     sessionTimeoutControl: boot.sessionTimeoutControl,
     start: boot.start,
+    step: turnStep,
   });
   let result: WorkflowEntryResult = { output: "", isError: true };
   let loop: SessionLoopOutcome | undefined;

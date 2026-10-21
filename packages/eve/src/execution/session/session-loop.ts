@@ -31,7 +31,7 @@ import { settleControlDeliveryStep } from "#execution/session/settle-control-del
 import type { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { startTaskToolCallsStep } from "#execution/session/task-tool-tracing-step.js";
 import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
-import { turnStep } from "#execution/session/turn-step.js";
+import type { TurnStepInput, TurnStepResult } from "#execution/session/turn-step-types.js";
 import {
   sessionCommandHookToken,
   sessionInboxHookToken,
@@ -65,6 +65,8 @@ import {
 } from "#subagents/parent-notification.js";
 
 export interface SessionLoopInput {
+  /** Runs one step of a turn, as one durable step: `turnStep`. */
+  readonly step: (input: TurnStepInput) => Promise<TurnStepResult>;
   readonly capabilities?: SessionCapabilities;
   readonly cursor: SessionStateCursor;
   readonly inbox: SessionInboxReader;
@@ -200,8 +202,10 @@ export class SessionLoop {
       }
       case "step": {
         const signals = this.#turn!;
+        // Workflow serializes a step's receiver too; don't bind the host's cursor and inbox.
+        const run = this.#input.step;
         const result = await cursor.advanceWithHistory((state) =>
-          turnStep({
+          run({
             ...state,
             abortSignal: signals.cancellation,
             caller: asks.caller,

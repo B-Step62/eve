@@ -7,6 +7,7 @@ import { contextStorage } from "#context/container.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import { runtimeWait } from "#harness/session-machine/view.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { nativeTurnEngine } from "#harness/turn-engine.js";
 import type { HarnessSession, ToolLoopHarnessConfig } from "#harness/types.js";
 import {
   createApprovalContext,
@@ -79,7 +80,7 @@ function setup(
     input?: Parameters<ReturnType<typeof createToolLoopHarness>>[1],
   ) =>
     contextStorage.run(recorder.enter(createApprovalContext()), () =>
-      createToolLoopHarness(config)(current, input),
+      createToolLoopHarness(config, nativeTurnEngine)(current, input),
     );
   return { events, session, step };
 }

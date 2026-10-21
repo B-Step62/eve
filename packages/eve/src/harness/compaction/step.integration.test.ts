@@ -2,6 +2,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { nativeTurnEngine } from "#harness/turn-engine.js";
 import { eventsOf } from "#harness/publication.js";
 import { sessionUsage, takeSessionUsageDelta } from "#harness/session-usage.js";
 import type { HarnessSession } from "#harness/types.js";
@@ -58,12 +59,15 @@ async function compactWith(
     ],
     sessionId: "compaction-session",
   };
-  return createToolLoopHarness({
-    compactOnly: true,
-    handleEvent: (publication) => handleEvent(eventsOf(publication)),
-    resolveModel: async () => model,
-    tools: new Map(),
-  })(session, {});
+  return createToolLoopHarness(
+    {
+      compactOnly: true,
+      handleEvent: (publication) => handleEvent(eventsOf(publication)),
+      resolveModel: async () => model,
+      tools: new Map(),
+    },
+    nativeTurnEngine,
+  )(session, {});
 }
 
 describe("compaction summary call", () => {

@@ -1,5 +1,4 @@
 import type { SessionEvent } from "#protocol/session-event.js";
-import type { ModelMessage } from "ai";
 import type { ApprovalGrant } from "#approval/evaluation.js";
 
 import type { ResponderCheck } from "./responders.js";
@@ -44,6 +43,7 @@ import type {
   ApprovalAsk,
   ApprovedCall,
   StepCoordinates,
+  StepTranscript,
   SuspendedStep,
   TurnState,
 } from "#harness/session-machine/view.js";
@@ -53,7 +53,7 @@ import {
   settle,
   withoutApproved,
 } from "#harness/session-machine/transitions.js";
-import { stepCallIds, suspend, withResult } from "#harness/session-machine/suspended-steps.js";
+import { stepCallIds, suspend, withStepResult } from "#harness/session-machine/suspended-steps.js";
 import {
   ownOpenRequestIds,
   runningTasks,
@@ -76,42 +76,45 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * A model response made calls that need a person's approval. The response waits in a suspended
- * step, beside any runtime calls it made. The approvals are asked now, or once the step's tasks
- * finish (`openDeferredApprovals`).
+ * A model response made calls that need a person's approval, or an opaque-history engine proposed
+ * them. The response waits in a suspended step, beside any runtime calls it made. The approvals
+ * are asked now, or once the step's tasks finish (`openDeferredApprovals`).
  */
 export function askApprovals(
   view: SessionView,
   input: {
     readonly event: StepCoordinates;
-    readonly messages: readonly ModelMessage[];
     readonly requests: readonly ApprovalAsk[];
     readonly tasks: readonly RuntimeWorkflowTaskRequest[];
     readonly responseAuthRequiredRequestIds?: readonly string[];
     readonly requester?: SuspendedStep["requester"];
-  },
+  } & StepTranscript,
 ): Transition {
   // Every anonymous caller shares one synthetic identity, so an anonymous requester can't be told
   // apart from another anonymous responder: record none.
   const requester = input.requester?.principalType === "anonymous" ? null : input.requester;
-  // Results of work resumed in this step stay ahead of the notice; the rest waits for approval.
-  const pendingStart = input.messages.findIndex((message) => message.role !== "tool");
-  const committed = pendingStart === -1 ? input.messages : input.messages.slice(0, pendingStart);
-  const snippet = renderPendingApprovalsSnippet(input.requests);
-  const turn = suspend(view.turn, {
+  const events = input.tasks.length > 0 ? [] : input.requests.map((ask) => approvalOpened(ask));
+  const asked = {
     event: input.event,
-    messages: input.messages.slice(committed.length),
     requester,
     requests: input.requests,
     responseAuthRequiredRequestIds: input.responseAuthRequiredRequestIds,
     tasks: input.tasks,
-  });
+  };
+  // An opaque-history engine keeps its own history: nothing commits, and it reads no notice.
+  if ("proposed" in input)
+    return { events, turn: suspend(view.turn, { ...asked, proposed: input.proposed }) };
+  // Results of work resumed in this step stay ahead of the notice; the rest waits for approval.
+  const pendingStart = input.messages.findIndex((message) => message.role !== "tool");
+  const committed = pendingStart === -1 ? input.messages : input.messages.slice(0, pendingStart);
+  const snippet = renderPendingApprovalsSnippet(input.requests);
+  const turn = suspend(view.turn, { ...asked, messages: input.messages.slice(committed.length) });
   return {
     commit: [
       ...committed,
       ...(snippet === undefined ? [] : [createFrameworkUserMessage("context.state", snippet)]),
     ],
-    events: input.tasks.length > 0 ? [] : input.requests.map((ask) => approvalOpened(ask)),
+    events,
     turn,
   };
 }
@@ -274,7 +277,7 @@ export function settleApprovals(
     const complete = pending.every((request) => answerOf(request) !== undefined);
     if (!input.steer && !complete) return step;
     answered ||= complete;
-    let messages = step.messages;
+    let settled = step;
     for (const request of pending) {
       const { callId, toolName } = request.call;
       const { approved: approves, reason, status } = resolveApprovalOutcome(answerOf(request));
@@ -297,13 +300,13 @@ export function settleApprovals(
       }
       if (status === "ignored") decide(request, "withdrawn", SUPERSEDED_BY_MESSAGE);
       else decide(request, status === "invalid" ? "invalid" : "declined");
-      messages = withResult(messages, {
+      settled = withStepResult(settled, {
         output: { reason, type: "execution-denied" },
         toolCallId: callId,
         toolName,
         type: "tool-result",
       });
-      const settled = callSettledFrom(
+      const denied = callSettledFrom(
         {
           callId,
           isError: true,
@@ -319,11 +322,11 @@ export function settleApprovals(
         { rejected: true },
       );
       events.push({
-        ...settled,
-        data: { ...settled.data, cause: { interactionId: request.interactionId } },
+        ...denied,
+        data: { ...denied.data, cause: { interactionId: request.interactionId } },
       });
     }
-    return { ...step, messages };
+    return settled;
   });
   return {
     answered,
@@ -349,20 +352,20 @@ export function withdrawUnavailable(
   const gone = new Set(input.interactionIds);
   const events: SessionEvent[] = [];
   const suspended = view.turn.suspended.map((step) => {
-    let messages = step.messages;
+    let withdrawn = step;
     for (const request of pendingApprovals(view, step)) {
       if (!gone.has(request.interactionId)) continue;
       const { callId, toolName } = request.call;
       const message = unavailableToolMessage(toolName, input.searchable(request));
       const failed = failedCall({ callId, message, toolName });
-      messages = withResult(messages, failed.part);
+      withdrawn = withStepResult(withdrawn, failed.part);
       responses.closeOthers(request.interactionId, undefined);
       events.push(
         interactionSettled(request.interactionId, "withdrawn", { reason: message }),
         callSettledFrom(failed.result),
       );
     }
-    return messages === step.messages ? step : { ...step, messages };
+    return withdrawn;
   });
   return { events: [...responses.facts(), ...events], turn: { ...view.turn, suspended } };
 }

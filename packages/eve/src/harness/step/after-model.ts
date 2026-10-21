@@ -19,7 +19,7 @@ import type { EndsTurnTools } from "#harness/model-call/tools.js";
 import type { JsonValue } from "#shared/json.js";
 import { failTurnForReaction, type Step } from "#harness/step/context.js";
 import { turnSettled } from "#harness/facts.js";
-import { fail, suspendStep } from "#harness/session-machine/transitions.js";
+import { fail } from "#harness/session-machine/transitions.js";
 import { type ToolResultPart, withResult } from "#harness/session-machine/suspended-steps.js";
 import { clearTurnClientContextState } from "#harness/turn-client-context.js";
 import { collectWorkflowCalls } from "#harness/coordination.js";
@@ -27,8 +27,8 @@ import {
   createToolResultMessagePartFromToolError,
   isToolResultError,
 } from "#harness/action-result-helpers.js";
-import { askStepApprovals, stopForToolSignIn } from "#harness/hitl/index.js";
-import { hasQueuedTurnInput, park } from "#harness/step/park.js";
+import { holdStep } from "#harness/hitl/index.js";
+import { hasQueuedTurnInput } from "#harness/step/park.js";
 import {
   getInvalidToolCallInputError,
   isInvalidToolCall,
@@ -148,14 +148,12 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
         clearedBy: result.policyApprovals?.[task.callId],
       })),
     };
-    if (approvalRequests.length > 0) {
-      await askStepApprovals(step, { ...parked, requests: approvalRequests, tools: input.catalog });
-    } else {
-      await step.apply(suspendStep(step.view(), parked));
-    }
-    // Approval only precedes sign-in for the same call, not an executing sibling.
-    if (authorizationInterrupt) return stopForToolSignIn(step, authorizationInterrupt);
-    return park(step);
+    return holdStep(step, {
+      ...parked,
+      requests: approvalRequests,
+      tools: input.catalog,
+      signIn: authorizationInterrupt,
+    });
   }
 
   // --- Continue or terminate ------------------------------------------------

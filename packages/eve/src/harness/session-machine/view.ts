@@ -17,6 +17,7 @@ import { openRequests } from "#protocol/session-projection/reader.js";
 import {
   readTurnState,
   type StepCoordinates,
+  type StepTranscript,
   type SuspendedStep,
   type TurnState,
 } from "./state.js";
@@ -29,8 +30,12 @@ import {
 export type {
   ApprovalAsk,
   ApprovedCall,
+  CallReceipt,
+  ProposedCalls,
   StepCoordinates,
+  StepTranscript,
   SuspendedStep,
+  ToolResultPart,
   TurnState,
 } from "./state.js";
 
@@ -130,9 +135,15 @@ export function answeredCallIds(messages: readonly ModelMessage[]): ReadonlySet<
   return answered;
 }
 
+/** The ids of the step's calls that already have a result. */
+export function answeredStepCallIds(step: StepTranscript): ReadonlySet<string> {
+  if ("messages" in step) return answeredCallIds(step.messages);
+  return new Set(step.proposed.results.map((result) => result.toolCallId));
+}
+
 /** Workflow and agent calls of `step` the runtime still runs. */
 export function runningTasks(step: SuspendedStep): readonly RuntimeWorkflowTaskRequest[] {
-  const answered = answeredCallIds(step.messages);
+  const answered = answeredStepCallIds(step);
   return step.tasks.filter((task) => !answered.has(task.callId));
 }
 
@@ -148,7 +159,8 @@ export interface RuntimeWait {
 export function runtimeWait(state: SessionStateMap | undefined): RuntimeWait | undefined {
   const waiting = suspendedSteps(state).flatMap((step) => {
     const tasks = runningTasks(step);
-    const taskToolCalls = pendingTaskToolCalls(step.messages);
+    // Only the native engine calls the task tools.
+    const taskToolCalls = "messages" in step ? pendingTaskToolCalls(step.messages) : [];
     return tasks.length === 0 && taskToolCalls.length === 0 ? [] : [{ step, tasks, taskToolCalls }];
   });
   const first = waiting[0];

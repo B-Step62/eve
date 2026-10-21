@@ -6,6 +6,7 @@ import type { ApprovalResponsePolicy } from "#approval/definition.js";
 import { contextStorage } from "#context/container.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { nativeTurnEngine } from "#harness/turn-engine.js";
 import type { HarnessSession, HarnessStepInput, ToolLoopHarnessConfig } from "#harness/types.js";
 import {
   createApprovalContext,
@@ -71,7 +72,7 @@ function setup(tools: readonly HarnessToolDefinition[]) {
   };
   const ctx = recorder.enter(createApprovalContext());
   const step = (current: HarnessSession, input?: HarnessStepInput) =>
-    contextStorage.run(ctx, () => createToolLoopHarness(config)(current, input));
+    contextStorage.run(ctx, () => createToolLoopHarness(config, nativeTurnEngine)(current, input));
   /** The approval the step asked for `toolName`'s call. */
   const approvalOf = (toolName: string): string => {
     const opened = events.find(

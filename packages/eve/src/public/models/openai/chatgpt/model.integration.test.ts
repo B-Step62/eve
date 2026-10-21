@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDurableSessionValues } from "#execution/durable-session-store.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
+import { nativeTurnEngine } from "#harness/turn-engine.js";
 import type { HarnessSession } from "#harness/types.js";
 import { createCodexSubscriptionModel } from "./model.js";
 
@@ -38,21 +39,24 @@ describe("ChatGPT streamed reasoning replay", () => {
       },
     );
     const execute = vi.fn(async () => ({ id: "invoice-1", total: 42 }));
-    const runStep = createToolLoopHarness({
-      handleEvent: async () => {},
-      resolveModel: async () => model,
-      tools: new Map([
-        [
-          "get_invoice",
-          {
-            name: "get_invoice",
-            description: "Read the invoice.",
-            inputSchema: jsonSchema({ type: "object", properties: {} }),
-            execute,
-          },
-        ],
-      ]),
-    });
+    const runStep = createToolLoopHarness(
+      {
+        handleEvent: async () => {},
+        resolveModel: async () => model,
+        tools: new Map([
+          [
+            "get_invoice",
+            {
+              name: "get_invoice",
+              description: "Read the invoice.",
+              inputSchema: jsonSchema({ type: "object", properties: {} }),
+              execute,
+            },
+          ],
+        ]),
+      },
+      nativeTurnEngine,
+    );
     const session: HarnessSession = {
       agent: {
         modelReference: { id: "chatgpt-reasoning-test" },
