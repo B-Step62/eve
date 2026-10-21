@@ -89,7 +89,11 @@ export class EvalSessionManager {
       signal: options.signal ?? this.#signal,
     });
     const driver = this.#register(session);
-    return await driver.consume(response, message).result();
+    return await driver
+      .consume(response.stream({ signal: options.signal ?? this.#signal }), message, {
+        deliveryId: response.deliveryId,
+      })
+      .result();
   }
 
   attach(sessionId: string, options?: { readonly startIndex?: number }): EvalSessionDriver {

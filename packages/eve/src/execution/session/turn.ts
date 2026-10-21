@@ -208,7 +208,8 @@ export class SessionExecution {
       // that raises a request publishes it before it returns, so they may
       // reply to it.
       const stepAdmission = this.input.queue.nextAdmission;
-      await turn.admitBoundary();
+      const settles = result.action === "parked" && result.settled !== undefined;
+      await turn.admitBoundary(settles);
       const ending = result.action === "done";
       await this.handleBoundaryMessages(
         turn.takeBoundaryMessages(),
@@ -218,7 +219,6 @@ export class SessionExecution {
 
       if (result.action === "cancelled") return await this.finishCancelledTurn(turn);
       // A settled turn stands, and calls the turn waits on still report, so neither cancels here.
-      const settles = result.action === "parked" && result.settled !== undefined;
       const waitsOnCalls = result.action === "paused" && result.on === "calls";
       if (!settles && !waitsOnCalls && turn.signal.aborted) {
         return await this.finishCancelledTurn(turn);

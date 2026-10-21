@@ -1,1 +1,1 @@
-export { default } from "eve/tools/web_search";
+export { webSearch as default } from "eve/tools/web_search";

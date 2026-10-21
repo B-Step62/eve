@@ -1,5 +1,4 @@
-// The shared fold, its public tables, and the selectors readers need over them. The tables are
-// plain records, so a row is `view.calls[callId]`; selectors answer what takes more than a lookup.
+// Internal fold and table selectors. Public immutable snapshots and queries live in public-view.ts.
 
 export * from "./fold.js";
 export { requestStatus, type RequestStatus } from "./request-status.js";

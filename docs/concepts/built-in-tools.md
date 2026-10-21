@@ -197,7 +197,7 @@ eve add tool/web_search
 ```
 
 ```ts title="agent/tools/web_search.ts"
-export { default } from "eve/tools/web_search";
+export { webSearch as default } from "eve/tools/web_search";
 ```
 
 Override the provider-managed configuration for AI Gateway:

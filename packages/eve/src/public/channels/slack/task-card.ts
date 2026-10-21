@@ -8,6 +8,12 @@ import {
   waiting,
 } from "#protocol/session-projection/selectors.js";
 import type { CallRow, InteractionRow, SessionView } from "#protocol/session-projection/tables.js";
+import { sessionTables } from "#protocol/session-projection/session-view.js";
+
+type RenderCard = Omit<TaskCard, "view" | "calls"> & {
+  readonly view: SessionView;
+  readonly calls: readonly CallRow[];
+};
 import type { JsonObject, JsonValue } from "#shared/json.js";
 import { firstSentence, normalizePresentationText } from "#shared/presentation-text.js";
 import { contextStorage } from "#context/container.js";
@@ -60,7 +66,13 @@ interface SlackTaskObject {
  * with `eve__task_cancel` shows as done, since it no longer needed the work; a
  * failed task, or one stopped any other way, shows as an error.
  */
-export function renderDefaultSlackTaskCard(card: TaskCard): SlackTaskCard | null {
+export function renderDefaultSlackTaskCard(snapshot: TaskCard): SlackTaskCard | null {
+  const view = sessionTables(snapshot.view);
+  const card: RenderCard = {
+    ...snapshot,
+    view,
+    calls: snapshot.calls.flatMap((entry) => view.calls[entry.callId] ?? []),
+  };
   const tasks = card.calls.filter((row) => row.taskId !== undefined);
   if (tasks.length === 0) return null;
   const { earlier, rows } = collapseEarlierRows(card.view, tasks);
@@ -79,7 +91,7 @@ export function renderDefaultSlackTaskCard(card: TaskCard): SlackTaskCard | null
   return { blocks, text: truncateMessageText(`${title}: ${titles}`) };
 }
 
-function planTitle(card: TaskCard, tasks: readonly CallRow[]): string {
+function planTitle(card: RenderCard, tasks: readonly CallRow[]): string {
   const { view } = card;
   if (card.state === "blocked") {
     const asked = tasks.flatMap((row) => waiting(view, { callId: row.callId })?.interactions ?? []);
@@ -178,7 +190,7 @@ function collapseEarlierRows(
   return { earlier, rows: kept.slice(-(MAX_PLAN_ROWS - 1)) };
 }
 
-function toSlackTask(card: TaskCard, row: CallRow): SlackTaskObject {
+function toSlackTask(card: RenderCard, row: CallRow): SlackTaskObject {
   const { view } = card;
   const slackTask: SlackTaskObject = {
     status: slackStatus(view, row),
@@ -206,7 +218,7 @@ function slackStatus(view: SessionView, row: CallRow): SlackTaskStatus {
   }
 }
 
-function outputLine(card: TaskCard, row: CallRow): string | undefined {
+function outputLine(card: RenderCard, row: CallRow): string | undefined {
   const { view } = card;
   const took = taskDuration(row);
   switch (callState(view, row.callId)) {
@@ -244,7 +256,7 @@ function stoppedLine(reason: CallRow["reason"]): string {
 }
 
 /** What a request asks; its prompt or the connection's name only in a private conversation. */
-function blockerLine(card: TaskCard, asked: InteractionRow): string {
+function blockerLine(card: RenderCard, asked: InteractionRow): string {
   const { request } = asked;
   const waitingOn = waitingText(request.kind);
   if (card.audience !== "private") return waitingOn;
@@ -337,7 +349,8 @@ export function withTaskCards(
           ...line.facts.flatMap((fact) => fact.scope?.turnId ?? []),
           ...Object.keys(channel.state.taskCards ?? {}),
         ]);
-        for (const turnId of turnIds) await writeTaskCards(channel, view, turnId, taskCard);
+        for (const turnId of turnIds)
+          await writeTaskCards(channel, sessionTables(view), turnId, taskCard);
       }
     },
   };

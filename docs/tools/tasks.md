@@ -231,8 +231,9 @@ person answers or signs in.
 
 The TypeScript client's `send(...).result()` and the MCP channel's `agent_get` read past a pause
 on tasks and report the final reply rather than the text written before the wait. `result()` stops
-at a pause only while the turn waits on a person, and returns `status: "waiting"`; `respond()` then
-reads the same turn to its end. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
+at a pause only while the turn waits on a person, such as for a question, approval, sign-in, or
+`session-limit` prompt, and returns `status: "awaiting-input"`. Answer with `respond()`; its
+delivery's `result()` reads the same turn to its end. See [Aggregate a turn](/docs/guides/client/streaming#aggregate-a-turn).
 Channels such as [Slack](/docs/channels/slack) post a root session's text before the wait as an
 ordinary reply, then post the reply after the results as another message. Slack also shows each
 turn's tasks in a live [task card](/docs/channels/slack#task-card).
@@ -301,9 +302,10 @@ and ACP clients leave those calls out; the terminal UI shows each task's start a
   and enforce per-person access inside the tool.
 - **Working tasks.** A session runs at most 32 working tasks at once. An idle resumable task doesn't
   count, and a call that makes it work again does.
-- **No time limits.** Tasks have no timeout of their own. The session lifetime,
-  `limits.sessionTimeoutMs` (30 days by default), bounds all work in a session. A body that needs a
-  deadline races `sleep` against its work.
+- **No time limits.** Tasks have no timeout of their own, and the session timeout does not bound
+  them. A turn held open while its tasks work keeps the session open, and
+  `limits.sessionTimeoutMs` (30 idle days by default) counts from when that turn settles. A body
+  that needs a deadline races `sleep` against its work.
 
 ## Upgrade from background tasks
 

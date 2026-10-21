@@ -36,6 +36,10 @@ export class ConversationClient {
     this.#conversation.confirmSubmission(id, deliveryId);
   }
 
+  holdUnconfirmedMessages(hold: boolean): void {
+    this.#conversation.holdUnconfirmedMessages(hold);
+  }
+
   get following(): boolean {
     return this.#follower !== undefined;
   }
