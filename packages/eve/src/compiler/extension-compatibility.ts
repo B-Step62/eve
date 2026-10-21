@@ -20,10 +20,16 @@ interface ExtensionCapabilityContract {
 }
 
 const EXTENSION_CAPABILITY_CONTRACTS = {
-  extension: { current: 1, supported: [1], dropped: {} },
+  extension: {
+    current: 2,
+    supported: [2],
+    dropped: {
+      1: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
+    },
+  },
   tool: {
-    current: 101,
-    supported: [101],
+    current: 102,
+    supported: [102],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -125,6 +131,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       98: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       99: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
       100: "eve-owned decision and platform contracts changes the authoring contract; rebuild the extension.",
+      101: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
     },
   },
   dynamicTool: {
@@ -225,8 +232,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   channel: {
-    current: 68,
-    supported: [68],
+    current: 69,
+    supported: [69],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -295,11 +302,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       65: "Typed channel delivery hooks and canonical identity changes the authoring contract; rebuild the extension.",
       66: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       67: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      68: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
     },
   },
   schedule: {
-    current: 38,
-    supported: [38],
+    current: 39,
+    supported: [39],
     dropped: {
       1: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
       2: "v27 removes v26 conversation event keys, metadata and handler payloads; migrate handlers to eve/events facts and explicit lifecycle scopes, then rebuild the extension",
@@ -338,6 +346,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       35: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       36: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       37: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
+      38: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
     },
   },
   subagent: {
@@ -389,8 +398,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 57,
-    supported: [57],
+    current: 58,
+    supported: [58],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -448,11 +457,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       54: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
       55: "Delivery receipts and explicit command outcomes changes the authoring contract; rebuild the extension.",
       56: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      57: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
     },
   },
   hook: {
-    current: 50,
-    supported: [50],
+    current: 51,
+    supported: [51],
     dropped: {
       1: "Model identity moved from session.started runtime metadata to step.started call attribution.",
       2: "Model identity moved from session.started runtime metadata to step.started call attribution.",
@@ -503,6 +513,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       47: "v27 replaces v26 session event payloads; rebuild the extension against eve/events facts",
       48: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       49: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
+      50: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
     },
   },
   skill: { current: 3, supported: [1, 2, 3], dropped: {} },
@@ -602,7 +613,13 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       42: "Curated public entrypoints and authoring types changes the authoring contract; rebuild the extension.",
     },
   },
-  config: { current: 1, supported: [1], dropped: {} },
+  config: {
+    current: 2,
+    supported: [2],
+    dropped: {
+      1: "Prune internal exports and use the existing grep tool changes the authoring contract; rebuild the extension.",
+    },
+  },
   state: {
     current: 15,
     supported: [15],
