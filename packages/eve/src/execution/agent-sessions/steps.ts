@@ -5,6 +5,7 @@ import {
   getWorkflowMetadata,
 } from "#compiled/@workflow/core/index.js";
 import { SessionStrandedError } from "#channel/session-stranded-error.js";
+import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import type { SessionAuth } from "#context/session-context.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
@@ -14,7 +15,15 @@ import {
   resolveAgentStartTarget,
   type SubagentStartTarget,
 } from "#execution/agent-sessions/target.js";
-import { sessionInboxHookToken } from "#execution/session-inbox/address.js";
+import {
+  sessionCommandHookToken,
+  sessionInboxHookToken,
+} from "#execution/session-inbox/address.js";
+import {
+  lateAgentSessionRetirementWorkflowReference,
+  startWorkflowOnCurrentDeployment,
+} from "#execution/workflow-runtime.js";
+import { resumeHook } from "#internal/workflow/runtime.js";
 import {
   createWorkflowCallbackUrl,
   resolveWorkflowCallbackBaseUrl,
@@ -270,6 +279,51 @@ export async function endAgentSessionsStep(input: {
   "use step";
 
   await Promise.all(input.sessions.map(endAgentSession));
+}
+
+/** A late address cannot rely on its cancelled run to clean up the child. */
+export async function stopLateAgentSessionStep(opened: OpenedAgentSession): Promise<void> {
+  "use step";
+  if (opened.address.kind === "remote") {
+    await endAgentSession(opened);
+    return;
+  }
+  const { sessionId } = opened.address;
+  try {
+    // The child claims this hook before starting its turn. Accepting a reset leaves
+    // finalization (including its owned runs and children) with the child, without
+    // waiting for that work or for a not-yet-claimed inbox in the parent turn.
+    await resumeHook(sessionInboxHookToken(sessionCommandHookToken(sessionId)), {
+      kind: "reset",
+      reason: RUN_FINISHED_REASON,
+      deliveryId: agentDeliveryId("reset", sessionId),
+    });
+    return;
+  } catch (error) {
+    if (!HookNotFoundError.is(error)) {
+      logError(log, "could not reset late child immediately; scheduling retirement", error, {
+        sessionId,
+      });
+    }
+  }
+  try {
+    await startWorkflowOnCurrentDeployment(lateAgentSessionRetirementWorkflowReference, [
+      {
+        sessionId,
+        reason: RUN_FINISHED_REASON,
+        deliveryId: agentDeliveryId("reset", sessionId),
+      },
+    ]);
+  } catch (error) {
+    logError(
+      log,
+      "could not schedule late child retirement; inspect its run and session inbox",
+      error,
+      {
+        sessionId,
+      },
+    );
+  }
 }
 
 async function endAgentSession(opened: OpenedAgentSession): Promise<void> {
