@@ -436,7 +436,7 @@ export default defineDynamic({
     beforeSession: (_event, ctx) => {
       const team = ctx.session.auth.current?.attributes.team;
       const markdown = team ? PLAYBOOKS[team] : undefined;
-      return markdown ? defineSkill({ markdown }) : null;
+      return markdown ? defineSkill({ content }) : null;
     },
   },
 });
