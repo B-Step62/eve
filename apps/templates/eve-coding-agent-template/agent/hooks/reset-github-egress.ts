@@ -8,7 +8,7 @@ import { brokerGitHubLease } from "../lib/github";
 export default defineHook({
   events: {
     async "turn.started"(_event, ctx) {
-      if (ctx.channel.kind !== "github") return;
+      if (ctx.channel.kind !== "channel:github") return;
       try {
         await brokerGitHubLease(await ctx.getSandbox(), null);
       } catch (error) {
