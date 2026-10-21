@@ -82,6 +82,7 @@ export function Chat() {
 | `prewarm`          | Create the durable session without starting a turn.                           |
 | `send`, `respond`  | Submit a message or answers; resolve with a `Delivery` receipt when accepted. |
 | `resume`           | Replay through the current durable tail, then keep following independently.   |
+| `follow`           | Follow a same-session delivery receipt, including one sent by another store.  |
 | `cancel`           | Request durable cancellation of the active turn.                              |
 | `clear`, `compact` | Queue a context change and return its delivery.                               |
 | `reset`            | Retire the server-side session and return its delivery.                       |
@@ -168,14 +169,60 @@ its cursor after a disconnect or the
 server's renewable 60-second lease; lease renewal does not start a turn or clear UI state.
 Unmounting or calling `newSession()` closes the local stream without cancelling the old durable session.
 
-An open stream reconnects for as long as the chat stays mounted, even when nothing happens. If
-your UI only shows replies to its own messages, such as a help sidebar that stays mounted across
-pages, pass `followIdle: false`. The binding then closes the stream once the session is idle: no
-turn is running or parked, no task is working, and no sign-in is pending. A prewarmed session
-opens no stream until its first message. The next `send()`, `respond()`, or `resume()` reopens
-the stream from the session cursor, so events that arrived in between are applied then. Leave
-`followIdle` on when other sources, such as schedules, channels, or another tab, can start turns
-in the session while your UI is idle.
+By default, the stream remains open between turns, so events from schedules, channels, or other
+clients arrive as they happen. For a help sidebar that only needs updates during machine work,
+close it when the committed session view becomes idle. Bind both stores to the same existing
+`ClientSession`, kept stable across renders:
+
+```tsx
+import type { ClientSession } from "eve/client";
+import { idle } from "eve/events";
+import { useEveAgent } from "eve/react";
+
+function useSessionPanels(session: ClientSession) {
+  const chat = useEveAgent({ session });
+  const sidebar = useEveAgent({ session, followWhile: (view) => !idle(view) });
+
+  async function send(message: string) {
+    const receipt = await chat.send(message);
+    sidebar.follow(receipt);
+    return receipt;
+  }
+
+  return { chat, sidebar, send };
+}
+```
+
+`followWhile(view)` means **keep following while** the predicate returns true. It runs only
+at complete stream-line boundaries, after catch-up reaches the tail, or after a local obligation
+clears. It cannot close a stream during a POST, while an accepted receipt has not settled, or
+while `resume()` is catching up. Unlike the previous idle-only policy, it may close during an
+active turn or while waiting for an interaction; the last snapshot can remain `"busy"` until the
+stream reopens. A closed stream cannot observe a change that would make the predicate true again.
+`send()`, `respond()`, `resume()`, or `follow()` reopen it from the store's last committed line,
+not a cursor advanced by another reader. A prewarmed session opens no stream until its first
+message unless the predicate allows following immediately. React reads the latest predicate
+without remounting the store, even for an inline callback; Vue and Svelte read the current
+callback from their options object.
+
+The `send` wrapper passes the chat's accepted receipt to the sidebar, so the sidebar follows
+that delivery even before its admission appears. Both stores must point to the same session. `follow()` throws without a session or for a different
+session ID, does not create a session, and does not grant stream access. It registers an idempotent
+barrier until that delivery settles or the session ends, even if catch-up first finds an idle tail
+before admission. Calling it again after a stream error retries observation, including from
+`onError`. A receipt already settled in the local view does not reopen the stream, replay
+completion callbacks, or clear an existing error. Following an already-ended session is also
+a no-op; it preserves the terminal outcome without retrying it. To retain the former idle-only policy
+(including parked turns and sign-ins), use:
+
+```tsx
+import { activeTurn, idle, openInteractions } from "eve/events";
+
+const followWhile = (view: Parameters<typeof idle>[0]) =>
+  !idle(view) ||
+  activeTurn(view) !== undefined ||
+  openInteractions(view, { kind: "sign-in" }).length > 0;
+```
 
 `newSession()` reuses the hook instance and clears the local conversation. `reset()` instead retires the server-side session and returns its delivery. Call `newSession()` to clear the retired conversation and prepare a fresh one. If `prewarm` is true, that call prepares the next owned session; otherwise, the next send creates it. An explicitly
 supplied `session` remains externally owned and is never replaced by prewarming or `newSession()`. Use
@@ -442,13 +489,13 @@ Store the full `session` object (`sessionId`, `streamIndex`). The session cursor
 lets eve continue the exact durable conversation; the event log lets your UI
 render historical messages without replaying the whole stream. A database-backed
 chat app should persist committed events and the matching cursor as they change. Do not save only
-in `onFinish`: a turn paused for a person has not finished, but its events must survive a reload.
+in `onFinish`: a turn paused on an interaction has not finished, but its events must survive a reload.
 
 `initialEvents` must be an ordered prefix of the same session's stream, but its endpoint does not have to line up exactly with where the stream resumes. Catch-up starts at the next complete line in the saved log, using line positions rather than the number of materialized events. A partial line is replayed from its start; already observed events are skipped. Every event carries a stable [`meta.position`](/docs/concepts/sessions-runs-and-streaming#positions), and the store drops any event whose position it has already applied, so an overlapping replay renders once and `onEvent` only fires for events your UI has not seen.
 
-For multiple chat threads, keep one saved event log and session cursor per thread. `agent`, `host`, `session`, `initialEvents`, `initialSession`, `auth`, `headers`, `optimistic`, `followIdle`, and `resume` are read when the hook creates its store, so remount the chat component when switching threads, for example with `key={chat.id}`. React reads `prewarm` on every render.
+For multiple chat threads, keep one saved event log and session cursor per thread. `agent`, `host`, `session`, `initialEvents`, `initialSession`, `auth`, `headers`, `optimistic`, and `resume` are read when the hook creates its store, so remount the chat component when switching threads, for example with `key={chat.id}`. React reads `prewarm` and `followWhile` on every render.
 
-Pass `resume: true` with `initialSession` to rebuild the projection from the durable stream after mount. While `status` is `"resuming"`, render hydrated `messages` but disable message and HITL submission; do not present cancellation or active-turn progress controls. `resume()` resolves when catch-up reaches the durable tail, even if a turn is still running. The binding then reports `"busy"` and continues following it. The stream reports its initial durable tail so catch-up can finish without closing the connection or waiting for an idle timeout. A settled tail changes directly to `"idle"`; a newer turn or pending authorization remains `"busy"`. The connection stays open to receive later events. A terminal session failure sets `error`.
+Pass `resume: true` with `initialSession` to rebuild the projection from the durable stream after mount. While `status` is `"resuming"`, render hydrated `messages` but disable message and HITL submission; do not present cancellation or active-turn progress controls. `resume()` resolves when catch-up reaches the durable tail, even if a turn is still running. The binding then reports `"busy"` while the turn remains active. The stream reports its initial durable tail so catch-up can finish without closing the connection or waiting for an idle timeout. A settled tail changes directly to `"idle"`; a newer turn or pending authorization remains `"busy"`. By default, the connection stays open to follow the turn and receive later events. A `followWhile` predicate can close it after catch-up once local obligations clear. A terminal session failure sets `error`.
 
 ```tsx
 const agent = useEveAgent({

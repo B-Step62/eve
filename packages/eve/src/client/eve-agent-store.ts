@@ -22,7 +22,7 @@ import {
   waitWithSignal,
 } from "#client/eve-agent-store-helpers.js";
 import { activeTurn, failure, idle } from "#protocol/session-projection/selectors.js";
-import { openSignIns } from "#protocol/session-projection/reader.js";
+import type { DeliveryReceipt } from "#protocol/delivery.js";
 import { toError } from "#shared/errors.js";
 import type { ClientSessionState, SendTurnPayload } from "#client/types.js";
 
@@ -42,7 +42,7 @@ export class EveAgentStore {
   readonly #client: Client | undefined;
   readonly #autoPrewarm: boolean;
   readonly #followChildStreams: boolean;
-  readonly #followIdle: boolean;
+  readonly #followWhile: NonNullable<EveAgentStoreInit["followWhile"]>;
   readonly #externalSession: boolean;
   readonly #subscribers = new Set<() => void>();
   readonly #turnWaiters = new Set<() => void>();
@@ -72,7 +72,7 @@ export class EveAgentStore {
   constructor(init: EveAgentStoreInit) {
     this.#autoPrewarm = init.prewarm ?? false;
     this.#followChildStreams = init.followAgents ?? false;
-    this.#followIdle = init.followIdle ?? true;
+    this.#followWhile = init.followWhile ?? (() => true);
     this.#externalSession = init.session !== undefined;
     this.#client = this.#externalSession
       ? undefined
@@ -125,7 +125,11 @@ export class EveAgentStore {
         this.#fail(error);
       throw error;
     }
-    if (lifetime === this.#controller && this.#followIdle) this.#ensureStream();
+    if (
+      lifetime === this.#controller &&
+      this.#followWhile(this.#conversationClient.conversation.view)
+    )
+      this.#ensureStream();
   }
 
   /** Accepts a message or answers. Observe the stream for its durable result. */
@@ -201,7 +205,26 @@ export class EveAgentStore {
     }
   }
 
-  /** Replays through the current durable tail, then follows independently of this promise. */
+  /**
+   * Follow an accepted delivery in this session until it settles or the session ends.
+   * The receipt may come from another store. Repeating it is safe and retries a closed stream.
+   * Normal session stream authorization still applies.
+   */
+  follow(receipt: DeliveryReceipt): void {
+    if (this.#session === undefined)
+      throw new Error("An eve session is required before following.");
+    if (receipt.sessionId !== this.#session.id)
+      throw new Error("The delivery belongs to a different eve session.");
+    const view = this.#conversationClient.view;
+    const delivery = view.deliveries[receipt.deliveryId];
+    if (view.session.status === "ended" || delivery?.status === "settled") return;
+    this.#error = undefined;
+    this.#acceptReceipt(receipt.deliveryId);
+    if (this.#accepted.has(receipt.deliveryId)) this.#ensureStream();
+    this.#publish();
+  }
+
+  /** Replays through the durable tail; subsequent following obeys `followWhile`. */
   resume(): Promise<void> {
     if (this.#resumePromise !== undefined) return this.#resumePromise;
     if (this.#session === undefined)
@@ -214,10 +237,6 @@ export class EveAgentStore {
     const promise = stream.caughtUp
       .then(() => {
         if (lifetime === this.#controller) this.#error ??= this.#recordedFailure();
-      })
-      .catch((error: unknown) => {
-        if (lifetime === this.#controller && !isAbortError(error)) this.#fail(error);
-        throw error;
       })
       .finally(() => {
         if (lifetime !== this.#controller) return;
@@ -306,6 +325,13 @@ export class EveAgentStore {
   [attachStore](): void {
     this.#attached = true;
     this.#followAgents();
+    if (
+      this.#accepted.size > 0 ||
+      this.#pending.size > 0 ||
+      this.#posting > 0 ||
+      this.#resumePromise
+    )
+      this.#ensureStream();
     if (this.#autoPrewarm && this.#session === undefined) void this.prewarm().catch(() => {});
   }
 
@@ -406,6 +432,7 @@ export class EveAgentStore {
     this.#followAgents();
     const lifetime = this.#controller;
     return this.#conversationClient.stream(this.#session, {
+      startIndex: this.#conversationClient.view.position,
       ...options,
       onEvent: (event, historical) => {
         if (lifetime === this.#controller) this.#acceptServerEvent(event, historical);
@@ -485,15 +512,13 @@ export class EveAgentStore {
   }
 
   #closeStreamWhenIdle(): void {
-    const view = this.#conversationClient.view;
+    if (this.#inLine) return;
     if (
-      this.#followIdle ||
       this.#resumePromise !== undefined ||
       this.#pending.size > 0 ||
+      this.#posting > 0 ||
       this.#accepted.size > 0 ||
-      activeTurn(view) !== undefined ||
-      !idle(view) ||
-      openSignIns(view).length > 0
+      this.#followWhile(this.#conversationClient.conversation.view)
     )
       return;
     this.#conversationClient.closeStream();
@@ -567,9 +592,13 @@ export class EveAgentStore {
   #publish(force = false): void {
     if (this.#resumePromise !== undefined && !force) return;
     if (this.#inLine) {
-      if (this.#error === undefined) return;
-      // Transport or observer failure must be visible without publishing an unfinished line.
-      this.#snapshot = { ...this.#snapshot, error: this.#error };
+      if (this.#error === undefined && this.#accepted.size === 0) return;
+      // Keep the committed projection intact even when an obligation or failure arrives mid-line.
+      this.#snapshot = {
+        ...this.#snapshot,
+        error: this.#error,
+        status: this.#accepted.size > 0 ? "busy" : this.#snapshot.status,
+      };
       for (const subscriber of this.#subscribers) subscriber();
       return;
     }
