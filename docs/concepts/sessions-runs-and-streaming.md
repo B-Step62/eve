@@ -122,6 +122,15 @@ It never removes or renames a fact or field, changes what a fact means or which 
 
 Readers stay correct across these additions: they ignore fact and progress types and fields they don't know, and a terminal fact with an outcome they don't know still ends its row, keeping the outcome as sent. The TypeScript types name today's values only, so when you switch on an outcome, kind, display, or style, keep a default branch.
 
+For a lifecycle row still retained in the view, the fold ignores repeated introductions and
+terminals: the first introduction and the first terminal win. An update with a required prior
+status, such as `delivery.consumed`, applies only while the row is in that status; repeating it
+cannot move the row backwards or replace its first consumption. Other updates can apply again
+while their row remains open, such as `model.started` for a new attempt. The fold skips lines
+it already folded, so overlapping replay after reconnect applies once. It does not deduplicate
+a repeated payload at a new position: another `content.delta` appends, and another
+`usage.recorded` counts spend again.
+
 The optional `data.trace` on `session.started` and `turn.started` contains eve-owned W3C trace coordinates: `traceId`, `spanId`, and `traceFlags`. Use it to correlate stream consumers such as eval reporters with an observability backend. An uninstrumented target omits it.
 
 ### Streamed output
@@ -162,6 +171,29 @@ channel, eve takes the answer into the waiting turn as a separate delivery. The 
 the receipt's `deliveryId` and waits for that sender's turn. Follow the message by its receipt;
 follow the answer through its interaction's response and settlement. A message from the turn's
 own caller is not split and can steer that turn.
+
+To follow an accepted receipt in a client view, use `delivery(view, receipt.deliveryId)` from
+`eve/events`:
+
+| Observation          | Meaning                                                                                   |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `undefined`          | The delivery has not been observed in this view. Acceptance can precede stream admission. |
+| `status: "admitted"` | Admitted but not yet consumed; `queue(view)` lists these while the session is open.       |
+| `status: "consumed"` | A turn took the input; `turnId` identifies it.                                            |
+| `status: "settled"`  | The delivery ended; `outcome` says how.                                                   |
+
+A `session.ended` event also ends the wait. After a degraded termination that could not record
+all closures, a retained delivery may still say `admitted` or `consumed`; do not wait for another
+`delivery.settled` on a closed stream.
+
+Client views retain the complete observed history, so a settled delivery remains queryable.
+Hook and channel views use operational retention and can drop settled deliveries from older
+turns; a missing observation there can also mean the row was pruned. An arbitrary ID without
+an accepted receipt cannot distinguish an unknown delivery from one not yet admitted.
+A delivery can settle `ignored` or `refused` without being consumed. `Delivery.result().status`
+reports the settled request as `completed`, `awaiting-input`, `failed`, or `cancelled`, rather
+than exposing a live readiness state.
+
 A stranded reset records its control's admission and settlement before ending the session, with
 `session.ended.data.cause.deliveryId` naming the reset.
 
