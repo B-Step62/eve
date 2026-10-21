@@ -1,7 +1,4 @@
 [
   "CredentialPolicyBroker",
-  "GitHubAttribution",
-  "GitHubLeaseBroker",
-  "GitHubLeaseRule",
   "default"
 ]

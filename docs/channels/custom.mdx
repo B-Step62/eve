@@ -533,15 +533,7 @@ export default defineChannel({
 
 The input contains the channel's `state`, `caller`, `channel`, and `environment`. A principal caller omits `principalId`, `issuer`, and `subject`, but its `attributes` come from route auth and can still contain identifying values. Return `"public"`, `"private"`, or `"unknown"`. Return `"unknown"` when the channel does not have enough evidence to classify confidently; consumers treat it as non-public. A missing, throwing, asynchronous, or malformed classifier also fails closed to `"unknown"`. A `metadata()` projection's `audience` field does not classify visibility; use `audience(input)`.
 
-When you explicitly annotate a callback, use `AudienceContext<TState>`. `AudienceInput<TState>` remains supported for existing callbacks while you migrate.
-
-Existing callbacks can continue using `auth?.principalType` while you migrate:
-
-```ts
-audience({ auth }) {
-  return auth?.principalType === "user" ? "private" : "unknown";
-}
-```
+When you explicitly annotate a callback, use `AudienceContext<TState>`. The retired `AudienceInput`, `AudiencePrincipal`, and `auth` input are not supported; classify the privacy-limited `caller` instead.
 
 Classification is fixed when the session is created. Continuation turns from a different caller do not reclassify an existing session. When a parent dispatches a local subagent, the child inherits the parent's audience while the framework forwards the parent's custom channel metadata separately.
 
