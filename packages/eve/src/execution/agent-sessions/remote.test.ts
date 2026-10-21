@@ -20,8 +20,8 @@ describe("resolveRemoteAgentForAction", () => {
   it("overlays a selected dynamic remote config on the compiled delegation node", async () => {
     const definition = {
       dynamic: {
-        eventNames: ["session.started"],
-        events: { "session.started": () => null },
+        eventNames: ["beforeSession"],
+        events: { beforeSession: () => null },
         logicalPath: "subagents/research.ts",
         sourceId: "subagents/research.ts",
         sourceKind: "module",

@@ -39,12 +39,15 @@ async function createExtensionPackage(pkg?: Record<string, unknown>): Promise<st
   await mkdir(join(root, "extension", "tools"), { recursive: true });
   await writeFile(
     join(root, "extension", "extension.ts"),
-    'import { defineExtension } from "eve/extension";\nexport default defineExtension();\n',
+    `import { defineExtension } from "eve/extension";
+export default defineExtension();
+`,
     "utf8",
   );
   await writeFile(
     join(root, "extension", "tools", "crm_search.ts"),
-    'export default { description: "Search the CRM.", async execute() { return {}; } };\n',
+    `export default { description: "Search the CRM.", async execute() { return {}; } };
+`,
     "utf8",
   );
   await writeFile(
@@ -297,7 +300,9 @@ export default defineHook({ events: { "turn.started": async () => {
     await mkdir(join(root, "extension", "lib"), { recursive: true });
     await writeFile(
       join(root, "extension", "lib", "counter.ts"),
-      "let count = 0;\nexport const next = () => ++count;\n",
+      `let count = 0;
+export const next = () => ++count;
+`,
       "utf8",
     );
     for (const name of ["first", "second"]) {
@@ -403,7 +408,7 @@ export default defineHook({ events: { "turn.started": async () => {
         'import { defineDynamic, defineTool } from "eve/tools";',
         "export default defineDynamic({",
         "  events: {",
-        '    "session.started": async () => defineTool({',
+        '    "beforeSession": async () => defineTool({',
         '      description: "Search the CRM.",',
         '      inputSchema: { type: "object", properties: {}, additionalProperties: false },',
         "      async execute() { return {}; },",
@@ -471,7 +476,8 @@ export default defineHook({ events: { "turn.started": async () => {
       "---\ndescription: Triage a request.\n---\n\nRun scripts/check.js.\n",
       "utf8",
     );
-    const script = 'export const token = "skill-script-resource";\n';
+    const script = `export const token = "skill-script-resource";
+`;
     await writeFile(
       join(root, "extension", "skills", "triage", "scripts", "check.js"),
       script,
@@ -513,7 +519,8 @@ export default defineHook({ events: { "turn.started": async () => {
     const root = await createExtensionPackage();
     await writeFile(
       join(root, "extension", "tools", "get-weather.ts"),
-      'export default { description: "Get the weather.", async execute() { return {}; } };\n',
+      `export default { description: "Get the weather.", async execute() { return {}; } };
+`,
       "utf8",
     );
     const config = await tryReadExtensionBuildConfig(root);
@@ -545,7 +552,9 @@ export default defineHook({ events: { "turn.started": async () => {
     await writeFile(join(outDir, "last-success.txt"), "keep\n", "utf8");
     await writeFile(
       join(root, "extension", "tools", "crm_search.ts"),
-      'const invalid: "expected" = "actual";\nexport default { description: invalid, async execute() { return {}; } };\n',
+      `const invalid: "expected" = "actual";
+export default { description: invalid, async execute() { return {}; } };
+`,
       "utf8",
     );
 
@@ -556,7 +565,12 @@ export default defineHook({ events: { "turn.started": async () => {
   it("explains a tsconfig whose include misses the extension source", async () => {
     const root = await createExtensionPackage();
     await mkdir(join(root, "scripts"), { recursive: true });
-    await writeFile(join(root, "scripts", "release.ts"), "export const release = true;\n", "utf8");
+    await writeFile(
+      join(root, "scripts", "release.ts"),
+      `export const release = true;
+`,
+      "utf8",
+    );
     await writeFile(
       join(root, "tsconfig.json"),
       JSON.stringify({
@@ -581,7 +595,8 @@ export default defineHook({ events: { "turn.started": async () => {
     const root = await createExtensionPackage();
     await writeFile(
       join(root, "extension", "tools", "excluded.mts"),
-      'export default { description: "Excluded declaration.", async execute() { return {}; } };\n',
+      `export default { description: "Excluded declaration.", async execute() { return {}; } };
+`,
       "utf8",
     );
     const config = await tryReadExtensionBuildConfig(root);
