@@ -116,8 +116,8 @@ const ASK_QUESTION_OUTPUT_SCHEMA = defineJsonSchema<AskQuestionOutput>({
  * turn waits for the answer without holding an application runtime open. A new
  * message that does not answer the question withdraws it.
  */
-export function askQuestion(): WorkflowExecuteToolDefinition<AskQuestionInput, AskQuestionOutput> {
-  return frameworkTool(
+export const askQuestion: WorkflowExecuteToolDefinition<AskQuestionInput, AskQuestionOutput> =
+  frameworkTool(
     defineWorkflowTool({
       description: ASK_QUESTION_TOOL_DESCRIPTION,
       execute: executeAskQuestionTool,
@@ -126,5 +126,4 @@ export function askQuestion(): WorkflowExecuteToolDefinition<AskQuestionInput, A
       toModelOutput: toInterruptibleModelOutput,
     }),
   );
-}
 import { frameworkTool } from "./framework-tool.js";
