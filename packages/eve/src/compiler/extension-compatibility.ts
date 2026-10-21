@@ -22,8 +22,8 @@ interface ExtensionCapabilityContract {
 const EXTENSION_CAPABILITY_CONTRACTS = {
   extension: { current: 1, supported: [1], dropped: {} },
   tool: {
-    current: 97,
-    supported: [97],
+    current: 98,
+    supported: [98],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -121,11 +121,12 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       94: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       95: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       96: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      97: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
     },
   },
   dynamicTool: {
-    current: 89,
-    supported: [89],
+    current: 90,
+    supported: [90],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -215,6 +216,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       86: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       87: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       88: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      89: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
     },
   },
   channel: {
@@ -377,8 +379,8 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
     },
   },
   connection: {
-    current: 54,
-    supported: [54],
+    current: 55,
+    supported: [55],
     dropped: {
       1: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       2: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
@@ -433,6 +435,7 @@ const EXTENSION_CAPABILITY_CONTRACTS = {
       51: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       52: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
       53: "v27 committed session facts replace the previous session event contract; rebuild the extension.",
+      54: "Scoped once approval grants changes the authoring contract; rebuild the extension.",
     },
   },
   hook: {
