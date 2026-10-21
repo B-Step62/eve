@@ -83,10 +83,48 @@ function setup(tools: readonly HarnessToolDefinition[]) {
     if (opened?.type !== "interaction.opened") throw new Error(`No approval for ${toolName}.`);
     return opened.data.interactionId;
   };
-  return { approvalOf, events, session, step };
+  return { approvalOf, events, model, session, step };
 }
 
 describe("approval answers (real AI SDK)", () => {
+  it("preserves a newer message when runtime results release an older queued message", async () => {
+    const deploy = {
+      ...gated("deploy"),
+      execute: undefined,
+      workflowId: "workflow//./agent/tools/deploy//execute",
+    };
+    const fixture = setup([deploy]);
+    const parked = await fixture.step(fixture.session, { message: "Deploy Alice's release." });
+    const running = await fixture.step(parked.session, {
+      answers: [
+        {
+          deliveryId: "d-approve",
+          interactionId: fixture.approvalOf("deploy"),
+          optionId: "approve",
+          responseId: "r-approve",
+        },
+      ],
+      message: "First, check the deployment notes.",
+    });
+    let resumed = await fixture.step(running.session, {
+      message: "Then, notify Bob.",
+      runtimeActionResults: [
+        {
+          callId: "call-deploy",
+          kind: "tool-result",
+          output: "deployed",
+          toolName: "deploy",
+        },
+      ],
+    });
+    while (typeof resumed.next === "function") resumed = await fixture.step(resumed.session);
+
+    const prompt = JSON.stringify(fixture.model.doStreamCalls.at(-1)?.prompt);
+    expect(prompt).toContain("First, check the deployment notes.");
+    expect(prompt).toContain("Then, notify Bob.");
+    expect(prompt.indexOf("First, check")).toBeLessThan(prompt.indexOf("Then, notify"));
+  });
+
   // #4817: a second press of the same Approve reaches the pass that authorizes the first.
   it("authorizes a pending approval when a duplicate answer joins its pass", async () => {
     const response = vi.fn<ApprovalResponsePolicy>(() => ({ status: "allowed" }));
