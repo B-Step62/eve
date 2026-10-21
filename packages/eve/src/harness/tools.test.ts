@@ -919,7 +919,7 @@ describe("buildToolSet", () => {
       });
     });
 
-    it.each(["status", "boolean"])(
+    it.each(["status", "boolean", "undefined"])(
       "once() retains grant provenance through %s results",
       async (format) => {
         const policy = once();
@@ -934,7 +934,10 @@ describe("buildToolSet", () => {
               approval:
                 format === "status"
                   ? policy
-                  : async (context) => (await policy(context)) === "user-approval",
+                  : async (context) => {
+                      const status = await policy(context);
+                      return format === "boolean" ? status === "user-approval" : undefined;
+                    },
             },
           ],
         ]);
@@ -947,6 +950,36 @@ describe("buildToolSet", () => {
           denied: false,
           clearedBy: { grant: { interactionId: "approval-1" } },
         });
+      },
+    );
+
+    it.each([
+      { status: "approved", expected: { denied: false, clearedBy: { policy: "approval" } } },
+      { status: "denied", expected: { denied: true, reason: undefined } },
+      { status: "user-approval", expected: { denied: false, awaitsPerson: true } },
+    ] as const)(
+      "a final $status verdict takes precedence over a remembered grant",
+      async ({ status, expected }) => {
+        const remembered = once();
+        const tools: HarnessToolMap = new Map([
+          [
+            "deploy",
+            {
+              name: "deploy",
+              description: "Deploy Alice's release",
+              inputSchema: jsonSchema({}),
+              approval: async (context) => {
+                await remembered(context);
+                return status;
+              },
+            },
+          ],
+        ]);
+        await expect(
+          resolveApproval(tools, "deploy", {}, undefined, {
+            approvalGrants: [{ toolName: "deploy", interactionId: "previous-approval" }],
+          }),
+        ).resolves.toEqual(expected);
       },
     );
 

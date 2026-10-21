@@ -1,6 +1,6 @@
 import type { ApprovalStatus } from "#approval/definition.js";
 import type { ClearedBy } from "#protocol/session-events/families/call.js";
-import type { OnceApproval } from "#approval/evaluation.js";
+import type { ApprovalGrant, OnceApproval } from "#approval/evaluation.js";
 
 export type NormalizedApprovalStatus = Exclude<ApprovalStatus, boolean>;
 
@@ -39,6 +39,25 @@ export interface ApprovalDecision {
   readonly denied: boolean;
   readonly awaitsPerson?: true;
   readonly reason?: string;
+}
+
+/** Combines a policy verdict with remembered grants and whether the call already cleared approval. */
+export function callApprovalDecision(
+  decision: ApprovalDecision,
+  evaluation: { readonly once?: OnceApproval; readonly grant?: ApprovalGrant } | undefined,
+  recheck: boolean,
+): ApprovalDecision {
+  if (recheck && decision.awaitsPerson === true) return { denied: false };
+  if (decision.awaitsPerson === true && evaluation?.grant === undefined)
+    return { ...decision, once: evaluation?.once };
+  if (
+    !decision.denied &&
+    decision.awaitsPerson !== true &&
+    decision.clearedBy === undefined &&
+    evaluation?.grant !== undefined
+  )
+    return { ...decision, clearedBy: { grant: { interactionId: evaluation.grant.interactionId } } };
+  return decision;
 }
 
 export function approvalDecision(value: unknown): ApprovalDecision {
