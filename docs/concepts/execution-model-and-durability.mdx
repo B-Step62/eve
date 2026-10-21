@@ -208,10 +208,18 @@ Provider keys, tool secrets, and MCP, OpenAPI, and connection credentials stay i
 
 ## Resuming after a crash
 
-Crash the process, hit a timeout, or redeploy mid-turn, and the run picks up from the last completed step rather than replaying the whole turn. Completed steps never re-run; eve replays the recorded result. A step interrupted mid-execution re-runs, so make non-idempotent side effects like charges or emails idempotent, or gate them with approval. Whatever that step already wrote to the session stream stays there, and the re-run emits its events again under new ids, so a stream consumer sees both attempts — see [the event envelope](./sessions-runs-and-streaming#the-event-envelope).
+Crash the process, hit a timeout, or redeploy mid-turn, and the run picks up from the last completed step rather than replaying the whole turn. Completed steps never re-run; eve replays the recorded result. If an interrupted turn step wrote no session stream lines, it retries normally: model calls and inline tool executions in that step can run again. Make external side effects such as charges or emails idempotent, or gate them with approval.
+
+If an interrupted turn step already wrote session stream lines, eve does not run that step's model or tools again. It reconciles the recorded events: an already settled turn retains its outcome, an open turn fails with `STEP_INTERRUPTED` (or settles cancelled if a replayed cancellable event's hook cancels it), and an already ended session closes rather than accepting more messages. After recovery of an open session, it accepts another message. The saved conversation includes consumed message text and a completed reply when available, but the public stream cannot restore unsaved model and tool details.
+
+Stream-event hooks and channel handlers can receive the recorded events again at their original positions. Deduplicate side effects by event position. Terminal session-end publication also reads the recorded tail before closing the stream, but does not dispatch stream-event hooks for `session.ended` and remains best effort if the context cannot be restored.
+
+Non-turn operations need their private state as well as their events. Fixed event publications and single-commit transitions can adopt a complete durable write on retry. A recorded clear discards the old conversation. If a non-turn step wrote only part of a publication, wrote multiple commits whose private intermediate result was lost, or lost a compaction's private history, eve ends the session with `STEP_INTERRUPTED` rather than guessing or replaying the operation. Start a new session after that failure.
+
+These are durable-step retries, not the model provider's retry loop or ordinary tool errors handled within a step. Recovery does not guarantee exactly-once external effects: a step interrupted before its first session stream write can still have performed work elsewhere.
 
 With `experimental.workflow.modelCallsPerStep` greater than `1`, an
-interrupted Workflow step can also repeat earlier model calls and inline tool
+interrupted step that wrote no session stream lines can repeat earlier model calls and inline tool
 executions from the same batch. Approval, input, and blocking coordination
 boundaries still force a checkpoint before eve waits.
 
