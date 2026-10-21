@@ -39,6 +39,7 @@ const templateSummaries = templateManifest
       integrations,
       preview,
       slug,
+      tagline,
       title: templateTitle,
     }) => ({
       category,
@@ -47,6 +48,7 @@ const templateSummaries = templateManifest
       integrations,
       preview,
       slug,
+      tagline,
       title: templateTitle,
     }),
   );

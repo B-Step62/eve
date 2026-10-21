@@ -39,7 +39,14 @@ interface TemplateGalleryProps {
 
 type TemplateGalleryEntry = Pick<
   TemplateManifestEntry,
-  "category" | "description" | "featured" | "integrations" | "preview" | "slug" | "title"
+  | "category"
+  | "description"
+  | "featured"
+  | "integrations"
+  | "preview"
+  | "slug"
+  | "tagline"
+  | "title"
 >;
 
 interface FilterSelectProps<T extends string> {
@@ -115,8 +122,8 @@ const TemplateCard = ({
           </Badge>
         ) : null}
       </div>
-      <p className="mt-2 line-clamp-3 max-w-[90%] text-balance text-[14px] leading-[1.3] text-gray-800">
-        {entry.description}
+      <p className="mt-1 line-clamp-2 text-[14px] leading-[1.3] text-gray-800">
+        {entry.tagline ?? entry.description}
       </p>
       <ul aria-label="Integrations" className="mt-auto flex items-center gap-2 pt-4">
         {entry.integrations.map((integration) => {
@@ -174,7 +181,13 @@ export const TemplateGallery = ({ entries }: TemplateGalleryProps) => {
         return true;
       }
 
-      return [entry.title, entry.description, entry.category, ...entry.integrations]
+      return [
+        entry.title,
+        entry.tagline ?? "",
+        entry.description,
+        entry.category,
+        ...entry.integrations,
+      ]
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery);

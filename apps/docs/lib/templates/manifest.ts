@@ -75,6 +75,8 @@ export interface TemplateManifestEntry {
   featured?: boolean;
   /** Hide from the gallery while keeping the detail page available. */
   unlisted?: boolean;
+  /** One-line summary for the gallery card, about 40 characters. Listed templates need one. */
+  tagline?: string;
   description: string;
   descriptionLink?: { text: string; href: string };
   demoHref?: string;
@@ -97,6 +99,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     featured: true,
     setupPrompt:
       "Set up the eve chat template in my current workspace using https://github.com/vercel/eve/tree/main/apps/templates/eve-chat-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required environment variables or manual setup steps.",
+    tagline: "Next.js chat with per-user memory",
     description:
       "A persisted Next.js chat template for eve, with per-user long-term memory, Better Auth, Drizzle, Neon, and Upstash Redis.",
     sourceHref: "https://github.com/vercel/eve/tree/main/apps/templates/eve-chat-template",
@@ -138,6 +141,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Full Stack Agent with Python Backend",
     setupPrompt:
       "Set up the eve agent with Python template in my current workspace using https://github.com/vercel-labs/eve-agent-python-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about the required Python, uv, password, database, and Vercel setup steps.",
+    tagline: "Next.js chat on a FastAPI backend",
     description:
       "A Next.js web chat with a Python FastAPI backend, where an eve agent manages a shared task list and runs Python tools for statistics and text analysis.",
     sourceHref: "https://github.com/vercel-labs/eve-agent-python-template/tree/main",
@@ -174,6 +178,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Voice Agent",
     setupPrompt:
       "Set up the eve voice template in my current workspace using https://github.com/vercel/eve/tree/main/apps/templates/eve-voice-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required environment variables or manual setup steps.",
+    tagline: "Real-time voice calls with your agent",
     description:
       "A Next.js voice app where GPT-Live-1 on AI Gateway handles listening and speaking while your eve agent runs tools, asks for approvals, and keeps durable state.",
     sourceHref: "https://github.com/vercel/eve/tree/main/apps/templates/eve-voice-template",
@@ -214,6 +219,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Slack Assistant",
     setupPrompt:
       "Set up the eve Slack agent template in my current workspace using https://github.com/vercel/eve/tree/main/apps/templates/eve-slack-agent-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required environment variables or manual setup steps.",
+    tagline: "A starter Slack agent, ready to deploy",
     description:
       "A Slack agent template with webhook handling, Vercel Connect, a starter agent, and an example tool ready to deploy on Vercel.",
     sourceHref: "https://github.com/vercel/eve/tree/main/apps/templates/eve-slack-agent-template",
@@ -254,6 +260,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     featured: true,
     setupPrompt:
       "Set up the eve company brain template in my current workspace using https://github.com/vercel/eve/tree/main/apps/templates/eve-company-brain-template as the source. Copy the project files, install its dependencies, and follow the README to build the sample data and configure Slack. Preserve the existing project if the workspace is not empty. Use local DuckDB for development and explain how to switch to MotherDuck when deployed, including separate writer and read-only credentials and Slack access allowlists.",
+    tagline: "Business answers in Slack from dbt",
     description:
       "Answer employees' business questions in Slack using documented dbt models, with local DuckDB or deployed MotherDuck and a Jaffle Shop sample dataset.",
     sourceHref: "https://github.com/vercel/eve/tree/main/apps/templates/eve-company-brain-template",
@@ -295,6 +302,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Coding Agent on Slack",
     setupPrompt:
       "Set up the eve coding agent template in my current workspace using https://github.com/vercel/eve/tree/main/apps/templates/eve-coding-agent-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about the required Slack, GitHub, and Vercel setup steps.",
+    tagline: "Bug fixes and PRs from a Slack mention",
     description:
       "A coding agent you mention in Slack or on GitHub that investigates bugs, reviews changes, and opens pull requests from an isolated Vercel Sandbox, with GitHub tokens scoped to one repository per command.",
     sourceHref: "https://github.com/vercel/eve/tree/main/apps/templates/eve-coding-agent-template",
@@ -338,6 +346,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Data Analyst",
     setupPrompt:
       "Set up the eve data analyst template in my current workspace using https://github.com/vercel-labs/eve-data-analyst-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required database, Slack, and Vercel setup steps.",
+    tagline: "Ask Postgres questions in Slack",
     description:
       "A Slack-based data analyst that answers business questions from Postgres, with charts and tables for useful results.",
     sourceHref: "https://github.com/vercel-labs/eve-data-analyst-template/tree/main",
@@ -374,6 +383,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Contentful Assistant",
     setupPrompt:
       "Set up the eve Contentful agent template in my current workspace using https://github.com/vercel-labs/eve-contentful-agent-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required Contentful, Slack, and Vercel setup steps.",
+    tagline: "Draft and edit Contentful from Slack",
     description:
       "A Slack-based Contentful assistant that searches, drafts, and edits entries, with approval before publishing content.",
     sourceHref: "https://github.com/vercel-labs/eve-contentful-agent-template/tree/main",
@@ -412,6 +422,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Team Knowledge Assistant",
     setupPrompt:
       "Set up the eve Vercel Drives starter in my current workspace using https://github.com/vercel-labs/eve-vercel-drives-starter as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about the Slack and Vercel setup steps.",
+    tagline: "Search and add notes on a Vercel Drive",
     description:
       "An eve agent that searches files on a Vercel Drive and saves new notes or documents, through Slack or the terminal.",
     sourceHref: "https://github.com/vercel-labs/eve-vercel-drives-starter/tree/main",
@@ -447,6 +458,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Memory Agent",
     setupPrompt:
       "Set up the eve memory agent template in my current workspace using https://github.com/vercel-labs/eve-memory-agent-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required Slack and Vercel setup steps.",
+    tagline: "A Slack assistant that remembers you",
     description:
       "A Slack assistant that remembers each user's preferences and shared channel conventions in separate long-term memories.",
     sourceHref: "https://github.com/vercel-labs/eve-memory-agent-template/tree/main",
@@ -482,6 +494,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "TanStack Start Chat",
     setupPrompt:
       "Set up the eve TanStack Start template in my current workspace using https://github.com/vercel-labs/eve-tanstack-start-template as the source. Copy the project files, install its dependencies, and follow the repository README to configure it. Preserve the existing project if the workspace is not empty, and tell me about any required password and deployment setup steps.",
+    tagline: "Generative UI chat on TanStack Start",
     description:
       "A password-protected web chat built with eve and TanStack Start, with generative UI for search results, forms, and data tables.",
     sourceHref: "https://github.com/vercel-labs/eve-tanstack-start-template/tree/main",
@@ -518,6 +531,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     featured: true,
     setupPrompt:
       "I want to build a software factory with the eve framework, using the Foreman template. Read the setup instructions at https://ask-foreman.dev/docs/getting-started and follow them. They cover deploying the template, connecting GitHub and Linear, running it locally, and how the pipeline works overall.",
+    tagline: "GitHub and Linear tasks to reviewed PRs",
     description:
       "Foreman, a software factory that takes tasks from GitHub and Linear, runs each through classifier, analyst, implementer, and reviewer stations, and delivers a reviewed draft pull request on your repository.",
     sourceHref: "https://github.com/vercel-labs/eve-software-factory-template/tree/main",
@@ -546,6 +560,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Marketing Team Coordinator",
     setupPrompt:
       "I want to build a team of marketing agents with the eve framework, using the marketing team template. Read the setup instructions at https://agent-resources.dev/marketing-team-eve-template.md and follow them. They will cover deploying the template, building with eve, how everything works overall, and more.",
+    tagline: "A team of marketing agents in Slack",
     description:
       "A team of marketing agents: a lead routes work to specialists for positioning, long-form content, social, SEO, and email, publishing through Notion, Typefully, and Resend.",
     sourceHref: "https://github.com/vercel-labs/marketing-team-eve-template/tree/main",
@@ -582,6 +597,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "iMessage Agent as a Service",
     setupPrompt:
       "I want to build a multi-tenant iMessage agent service with eve, using OpenInstinct at https://github.com/Merit-Systems/OpenInstinct. Read its README and follow its deployment instructions. Preserve the existing project if my workspace is not empty. Explain the required Linq, Kernel, database, storage, and model provider setup, and distinguish optional account integrations from required services. Call out the repository's warning that the application is not intended for production use.",
+    tagline: "Multi-tenant iMessage agents on Linq",
     description:
       "OpenInstinct, a multi-tenant iMessage agent service built with eve and Linq, with user accounts, scoped memory, an encrypted vault, cloud browser automation, and Stripe Link wallet integration.",
     descriptionLink: { text: "Stripe Link", href: "https://stripe.com/payments/link" },
@@ -621,6 +637,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "GitHub Project Maintainer",
     setupPrompt:
       "I want to build a GitHub maintainer agent with the eve framework, using the Kody template. Read the setup instructions at https://agent-resources.dev/kody-eve-template.md and follow them. They will cover deploying the template, building with eve, how everything works overall, and more.",
+    tagline: "A GitHub maintainer that works by email",
     description:
       "Kody, a personal GitHub maintainer agent that emails you a weekly digest of open issues, acts on your email replies, summarizes new pull requests, answers @mentions, and works delegated Linear issues.",
     sourceHref: "https://github.com/vercel-labs/kody-eve-template/tree/main",
@@ -648,6 +665,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Social Media Manager",
     setupPrompt:
       "I want to build a Slack agent with the eve framework, using the Typefully social media agent template. Read the setup instructions at https://agent-resources.dev/typefully-eve-template.md and follow them. They will cover deploying the template, building with eve, how everything works overall, and more.",
+    tagline: "Draft and queue social posts from Slack",
     description:
       "A Slack-based social media agent that drafts posts and threads for X, LinkedIn, Threads, Bluesky, and Mastodon through Typefully, manages the publishing queue, and pulls briefs from Notion.",
     sourceHref: "https://github.com/vercel-labs/typefully-eve-template/tree/main",
@@ -688,6 +706,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Incident Investigation Assistant",
     setupPrompt:
       "I want to set up sre, an incident response agent built with the eve framework. Read the setup instructions at https://github.com/vercel-labs/eve-sre-agent-template/blob/main/docs/setup-for-agents.md and follow them. They cover creating and linking the Vercel project, connecting Slack, GitHub, Datadog, and Vercel, deploying the agent, and verifying it in Slack.",
+    tagline: "Investigate alerts with live evidence",
     description:
       "sre, an incident response agent that investigates alerts from Slack or webhooks using live Datadog, GitHub, and Vercel evidence, with read-only access by default.",
     sourceHref: "https://github.com/vercel-labs/eve-sre-agent-template/tree/main",
@@ -729,6 +748,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Sanity Content Assistant",
     setupPrompt:
       "I want to build a Slack agent with the eve framework, using the Sanity copilot template. Read the setup instructions at https://agent-resources.dev/sanity-copilot-eve-template.md and follow them. They will cover deploying the template, building with eve, how everything works overall, and more.",
+    tagline: "Query and edit Sanity content from Slack",
     description:
       "A Slack-based Sanity copilot that queries and edits content with GROQ, inspects and shapes schemas, manages drafts and releases, and drafts long-form pieces into Notion.",
     sourceHref: "https://github.com/vercel-labs/sanity-copilot-eve-template/tree/main",
@@ -768,6 +788,7 @@ export const templateManifest: TemplateManifestEntry[] = [
     title: "Company Design Assistant",
     setupPrompt:
       "Set up the eve design agent template in my current workspace using https://github.com/vercel-labs/eve-design-template/tree/main as the source. Copy the project files, install its dependencies, and follow the repository README and BOOTSTRAP.md to configure it. Preserve the existing project if the workspace is not empty, tell me about any required environment variables or manual setup steps, and do not approve or publish the design corpus for me.",
+    tagline: "Your design guidance, answered in Slack",
     description:
       "A Slack design collaborator that answers from a reviewed, versioned corpus of your organization's approved design guidance.",
     sourceHref: "https://github.com/vercel-labs/eve-design-template/tree/main",

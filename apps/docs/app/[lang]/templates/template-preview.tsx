@@ -29,6 +29,7 @@ export const TemplatePreview = ({ integrations, preview, title }: TemplatePrevie
     aria-hidden="true"
     className="relative -mx-4 -mt-4 mb-4 h-44 overflow-hidden rounded-t-lg border-b border-gray-alpha-400 bg-background-200"
   >
+    <DotMatrix seed={title} />
     {preview ? (
       <Conversation agent={preview.agent ?? title} preview={preview} />
     ) : (
@@ -36,6 +37,24 @@ export const TemplatePreview = ({ integrations, preview, title }: TemplatePrevie
     )}
   </div>
 );
+
+/** Matches SEEDS in scripts/generate-dot-matrix.mjs. */
+const DOT_MATRIX_VARIANTS = 4;
+
+/**
+ * Dot-matrix backdrop after the vercel.com/agent OG image. The SVG masks
+ * gray-1000, so light and dark mode come from tokens.
+ */
+const DotMatrix = ({ seed }: { seed: string }) => {
+  let hash = 0;
+  for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return (
+    <div
+      className="absolute inset-0 bg-gray-1000 [mask-position:0_0] [mask-repeat:no-repeat]"
+      style={{ maskImage: `url(/templates/dot-matrix/${hash % DOT_MATRIX_VARIANTS}.svg)` }}
+    />
+  );
+};
 
 const Conversation = ({ agent, preview }: { agent: string; preview: TemplatePreviewData }) => {
   if (preview.surface === "imessage") {
@@ -380,7 +399,6 @@ const MAX_PLACEHOLDER_ICONS = 4;
 
 const Placeholder = ({ integrations }: { integrations: TemplateIntegration[] }) => (
   <>
-    <div className="absolute inset-0 bg-[radial-gradient(var(--color-gray-alpha-400)_1px,transparent_1px)] [mask-image:radial-gradient(ellipse_at_center,black_30%,transparent_80%)] bg-size-[14px_14px]" />
     <div className="absolute inset-0 flex items-center justify-center gap-2.5 px-4">
       <Tile>
         <LogoEveSvg height={14} />

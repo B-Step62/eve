@@ -10,6 +10,15 @@ import { templateManifest } from "./manifest";
 const pathNames = (path: string) => path.replace(/\.(md|ts|tsx)$/, "").split("/");
 
 describe("template previews", () => {
+  it.each(
+    templateManifest
+      .filter((entry) => !entry.unlisted)
+      .map((entry) => [entry.slug, entry.tagline] as const),
+  )("%s has a one-line tagline", (_slug, tagline) => {
+    expect(tagline?.length).toBeGreaterThan(0);
+    expect(tagline?.length).toBeLessThanOrEqual(40);
+  });
+
   const withPreview = templateManifest.filter((entry) => entry.preview);
 
   it.each(withPreview.map((entry) => [entry.slug, entry] as const))(
