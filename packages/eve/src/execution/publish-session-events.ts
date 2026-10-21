@@ -58,7 +58,7 @@ import type { SessionEvent, SessionStreamEvent } from "#protocol/session-event.j
 import { encodeLineBytes, type FactPosition } from "#protocol/session-events/envelope.js";
 import { initialSessionProjection, type SessionProjection } from "#protocol/session-projection.js";
 import type { Cause, ErrorInfo } from "#protocol/session-events/envelope.js";
-import { sessionEndedFacts } from "#harness/facts.js";
+import { sessionEndedFacts, type ControlSettlement } from "#harness/facts.js";
 import { createStreamChecker, type StreamChecker } from "#protocol/session-events/checker.js";
 import type { SessionView } from "#protocol/session-projection/tables.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
@@ -584,6 +584,7 @@ export function readSessionProjection(ctx: ContextContainer): SessionProjection 
 /** How a session ends from outside a turn. */
 export interface SessionEnding {
   readonly outcome: "completed" | "failed";
+  readonly settles?: readonly ControlSettlement[];
   readonly cause?: Cause;
   /** The reset control that ends the session, when it named its delivery. */
   readonly control?: ControlDelivery;
