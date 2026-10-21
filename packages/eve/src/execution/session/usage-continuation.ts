@@ -12,10 +12,10 @@ import { SESSION_LIMIT_CONTINUE_OPTION_ID } from "#harness/hitl/budget-request.j
 export async function applySessionUsageContinuation(input: {
   readonly cursor: SessionStateCursor;
   readonly queue: SessionInputQueue;
-  readonly requestId: string | undefined;
+  readonly requestIds: readonly string[];
 }): Promise<DeliveryAdmission | undefined> {
   const { approved } = await input.cursor.advance((state) =>
-    applySessionUsageContinuationStep({ ...state, requestId: input.requestId }),
+    applySessionUsageContinuationStep({ ...state, requestIds: input.requestIds }),
   );
   if (approved.length === 0) return undefined;
   const delivery: DeliverHookPayload = {

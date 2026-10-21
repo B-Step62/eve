@@ -127,12 +127,16 @@ export function resolveSessionLimitContinuation(input: {
   const granted = sessionLimitDecision(response);
   if (granted === undefined) return undefined;
   const windowIndex = /:limit:usage:(\d+)$/u.exec(request.requestId)?.[1];
-  return windowIndex === undefined ? { granted } : { granted, windowIndex: Number(windowIndex) };
+  const { requestId } = request;
+  return windowIndex === undefined
+    ? { granted, requestId }
+    : { granted, requestId, windowIndex: Number(windowIndex) };
 }
 
 /** An answer to a session-limit prompt, and the usage window the prompt was for. */
 export interface SessionLimitAnswer {
   readonly granted: boolean;
+  readonly requestId: string;
   readonly windowIndex?: number;
 }
 

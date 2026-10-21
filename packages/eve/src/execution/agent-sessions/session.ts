@@ -45,7 +45,7 @@ export function createAgentSessions(
   usage: RunUsageTally,
 ): {
   readonly close: () => Promise<void>;
-  readonly continueUsage: (requestId?: string) => Promise<void>;
+  readonly continueUsage: (requestIds: readonly string[]) => Promise<void>;
   readonly open: (name: string, options?: AgentSessionOptions) => AgentSession;
 } {
   const sessions: OpenedAgentSession[] = [];
@@ -60,9 +60,9 @@ export function createAgentSessions(
       return new RunAgentSession({ key, name, options, run, sessions, usage });
     },
     // A session still opening misses it, and asks once itself.
-    continueUsage: async (requestId) => {
+    continueUsage: async (requestIds) => {
       if (sessions.length === 0) return;
-      await continueAgentSessionsUsageStep({ requestId, sessions: [...sessions] });
+      await continueAgentSessionsUsageStep({ requestIds, sessions: [...sessions] });
     },
     close: async () => {
       if (sessions.length === 0) return;

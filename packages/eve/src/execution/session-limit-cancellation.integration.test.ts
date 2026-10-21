@@ -250,13 +250,16 @@ describe("session usage continuation pushed from above", () => {
   };
   const bob: SessionAuthContext = { ...alice, principalId: "bob" };
 
-  async function pushContinuation(continuationToken: string, requestId?: string): Promise<void> {
+  async function pushContinuation(
+    continuationToken: string,
+    requestIds: readonly string[] = ["parent-session:0:limit:usage:0"],
+  ): Promise<void> {
     const deadline = Date.now() + 15_000;
     while (true) {
       try {
         await resumeHook(sessionInboxHookToken(continuationToken), {
           kind: "usage-continued",
-          requestId,
+          requestIds,
         });
         return;
       } catch (error) {
@@ -372,7 +375,7 @@ describe("session usage continuation pushed from above", () => {
       const second = requestIdFromPromptTurn(await stream.nextTurn());
       expect(second).not.toBe(first);
 
-      await pushContinuation(continuationToken, first);
+      await pushContinuation(continuationToken, [first]);
       await answer("stop", second);
       const stopped = await stream.nextTurn();
 

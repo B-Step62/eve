@@ -15,7 +15,7 @@ type SessionAdmission =
   | { readonly admission: DeliveryAdmission; readonly kind: "delivery" }
   | { readonly kind: "cancel" }
   | { readonly kind: "consumed" }
-  | { readonly kind: "usage-continued"; readonly requestId: string | undefined }
+  | { readonly kind: "usage-continued"; readonly requestIds: readonly string[] }
   | { readonly kind: "runtime-action-result"; readonly payload: RuntimeActionResultHookPayload }
   | { readonly kind: "workflow"; readonly message: WorkflowToolRunMessage };
 
@@ -32,7 +32,7 @@ export async function admitSessionInboxPayload(
 ): Promise<SessionAdmission> {
   if (value.kind === "session-failure") throw new Error(value.error);
   if (value.kind === "usage-continued") {
-    return { kind: "usage-continued", requestId: value.requestId };
+    return { kind: "usage-continued", requestIds: value.requestIds };
   }
   if (value.kind === "runtime-action-result")
     return { kind: "runtime-action-result", payload: value };

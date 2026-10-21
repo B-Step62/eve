@@ -192,7 +192,7 @@ describe("routeDeliverPayload", () => {
       },
     ]);
     expect(routed.parentAction).toEqual({ kind: "cancel-turn" });
-    expect(routed.continued).toBeUndefined();
+    expect(routed.continued).toEqual([]);
   });
 
   it.each([
@@ -216,7 +216,7 @@ describe("routeDeliverPayload", () => {
     });
 
     expect(routed.forChildren).toMatchObject([{ childContinuationToken: "child-a" }]);
-    expect(routed.continued).toBe(continues ? "req-limit" : undefined);
+    expect(routed.continued).toEqual(continues ? ["req-limit"] : []);
     expect(routed.parentAction).toBeUndefined();
   });
 });

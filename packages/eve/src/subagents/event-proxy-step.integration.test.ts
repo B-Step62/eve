@@ -32,12 +32,22 @@ import { routeDeliverPayload } from "#subagents/hitl-proxy.js";
 import { routeProxiedDeliverStep } from "#execution/proxied-deliver-step.js";
 import type { DeliverHookPayload, SessionAuthContext } from "#channel/types.js";
 import { countRunUsage } from "#execution/agent-sessions/usage.js";
-import { continueSessionUsage } from "#execution/session-usage-continuation.js";
+import {
+  applySessionUsageContinuationStep,
+  continueSessionUsage,
+} from "#execution/session-usage-continuation.js";
 import { readDurableSession } from "#execution/durable-session-read.js";
 import { applySessionStateDelta } from "#execution/session/state-delta.js";
 import { createTask, readTaskTable, writeTaskTable } from "#execution/tasks/table.js";
 import { DEFAULT_SESSION_USAGE_LIMIT } from "#harness/hitl/budget.js";
-import { getSessionUsage, getSessionUsageWindow } from "#harness/turn-tag-state.js";
+import {
+  getSessionUsage,
+  getSessionUsageWindow,
+  getSessionUsageWindowIndex,
+} from "#harness/turn-tag-state.js";
+import { storedProjection } from "#harness/session-machine/view.js";
+import { openInputs } from "#protocol/session-projection.js";
+import type { DurableSessionState } from "#execution/durable-session-store.js";
 import type { TokenUsage } from "#shared/token-usage.js";
 
 const sent = vi.hoisted(() => ({
@@ -758,6 +768,9 @@ describe("a Continue on a relayed session-limit prompt", () => {
         durableSession: parked,
         hookPayload: {
           ...f.hookPayload,
+          // Each prompt comes from its own session in the run's tree.
+          childContinuationToken:
+            index === 0 ? f.hookPayload.childContinuationToken : `nested-token-${String(index)}`,
           childSessionInbox: { sessionId: "child-session" },
           event: { ...f.hookPayload.event, requests: [next], sequence: index },
         },
@@ -767,7 +780,7 @@ describe("a Continue on a relayed session-limit prompt", () => {
     }
     sent.hook.mockClear();
     sent.session.mockClear();
-    return { f, relayed, request };
+    return { f, relayed, request, requests };
   }
 
   async function answer(
@@ -846,8 +859,11 @@ describe("a Continue on a relayed session-limit prompt", () => {
   it("credits one run's overlapping prompts once, by the largest", async () => {
     // A worker at 45M and its nested worker at 45M, which the worker already counted 30M of.
     const root = await rootWithChildPrompt({ root: "a", totals: [usage(45 * M), usage(45 * M)] });
+    const parked = readDurableSession(root.relayed.sessionState);
+    expect(openInputs(storedProjection(parked.state))).toHaveLength(2);
+    expect(readHitlState(parked.state).relays.size).toBe(2);
 
-    const session = continueSessionUsage(readDurableSession(root.relayed.sessionState));
+    const session = continueSessionUsage(parked, [root.request.requestId]);
 
     const reported = countRunUsage(session, usage(60 * M));
     expect(getSessionUsageWindow(reported).inputTokens).toBe(15 * M);
@@ -861,6 +877,65 @@ describe("a Continue on a relayed session-limit prompt", () => {
 
     const reported = countRunUsage(session, priced(5), priced(2));
     expect(getSessionUsageWindow(reported).costUsd).toBe(0);
+  });
+
+  describe("grants a Continue once when it reaches a session as both answer and push", () => {
+    async function pushTo(
+      state: {
+        readonly serializedContext: Record<string, unknown>;
+        readonly sessionState: DurableSessionState;
+      },
+      requestIds: readonly string[],
+    ) {
+      const values = { history: [], ...state };
+      const applied = await applySessionUsageContinuationStep({
+        ...state,
+        requestIds,
+        sessionWritable: new WritableStream(),
+      });
+      return applySessionStateDelta(values, applied.stateDelta);
+    }
+
+    it("answer first, then the push", async () => {
+      const root = await rootWithChildPrompt({ root: "a" });
+      const { next } = await answer(root, continueOn(root.request.requestId, alice));
+      expect(sent.hook).toHaveBeenCalledTimes(1);
+
+      const pushed = await pushTo(next, [root.request.requestId]);
+
+      expect(sent.hook).toHaveBeenCalledTimes(1);
+      expect(getSessionUsageWindowIndex(readDurableSession(pushed.sessionState))).toBe(1);
+    });
+
+    it("push first, then the answer", async () => {
+      const root = await rootWithChildPrompt({ root: "a" });
+      const pushed = await pushTo(root.relayed, [root.request.requestId]);
+      expect(sent.hook).toHaveBeenCalledTimes(1);
+
+      const { session } = await answer(
+        { ...root, relayed: { ...root.relayed, ...pushed } },
+        continueOn(root.request.requestId, alice),
+      );
+
+      expect(sent.hook).toHaveBeenCalledTimes(1);
+      expect(getSessionUsageWindowIndex(session)).toBe(1);
+    });
+  });
+
+  it("pushes every prompt one payload approves, so each asker knows its copy", async () => {
+    const root = await rootWithChildPrompt({ root: "a", totals: [usage(45 * M), usage(45 * M)] });
+    const ids = root.requests.map((request) => request.requestId);
+
+    const { session } = await answer(root, {
+      auth: alice,
+      kind: "deliver",
+      payloads: [{ inputResponses: ids.map((requestId) => ({ optionId: "continue", requestId })) }],
+    });
+
+    expect(sent.hook.mock.calls).toEqual([
+      ["a-run-hook", { kind: "usage-continued", requestIds: ids }],
+    ]);
+    expect(getSessionUsageWindowIndex(session)).toBe(1);
   });
 
   it("still renews the root when the push to a run fails, so that child asks itself", async () => {
@@ -879,7 +954,7 @@ describe("a Continue on a relayed session-limit prompt", () => {
 
     await answer(a, continueOn(a.request.requestId, alice));
     expect(sent.hook.mock.calls).toEqual([
-      ["a-run-hook", { kind: "usage-continued", requestId: a.request.requestId }],
+      ["a-run-hook", { kind: "usage-continued", requestIds: [a.request.requestId] }],
     ]);
 
     sent.hook.mockClear();

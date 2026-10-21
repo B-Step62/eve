@@ -223,7 +223,7 @@ export async function admitApprovedWork(step: Step, work: ApprovedWork): Promise
     // A Continue pushed from above may already have started the next window.
     const current = getSessionUsageWindowIndex(step.session);
     if ((work.limit.windowIndex ?? current) === current) {
-      step.session = resetSessionUsageWindow(step.session);
+      step.session = resetSessionUsageWindow(step.session, [work.limit.requestId]);
     }
   }
   await step.apply(settle(step.view(), { results: [] }));

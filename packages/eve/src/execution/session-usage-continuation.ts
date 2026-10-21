@@ -14,7 +14,11 @@ import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
 import type { WorkflowToolRunControlMessage } from "#execution/tools/workflow/messages.js";
 import { readHitlState } from "#harness/hitl/index.js";
 import { storedProjection } from "#harness/session-machine/view.js";
-import { resetSessionUsageWindow, type TokenUsageDelta } from "#harness/turn-tag-state.js";
+import {
+  getSessionUsageGrant,
+  resetSessionUsageWindow,
+  type TokenUsageDelta,
+} from "#harness/turn-tag-state.js";
 import { getBlockingWorkflowToolRuns } from "#harness/workflow-tool-runs.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
@@ -53,7 +57,10 @@ const NO_USAGE: UsageCredit = {
  * unreported spend, so the credit can fall short, never overshoot. Only task
  * runs report usage up, so only their prompts earn credit.
  */
-export function continueSessionUsage(session: DurableSession): DurableSession {
+export function continueSessionUsage(
+  session: DurableSession,
+  grant: readonly string[],
+): DurableSession {
   const relays = readHitlState(session.state).relays;
   const tasks = readTaskTable(session.state).tasks;
   const byRun = new Map<string, UsageCredit>();
@@ -77,15 +84,18 @@ export function continueSessionUsage(session: DurableSession): DurableSession {
     for (const field of USAGE_FIELDS) unreported[field] += credit[field];
   }
   const { costUsd, ...tokens } = unreported;
-  return resetSessionUsageWindow(session, costUsd > 0 ? unreported : tokens);
+  return resetSessionUsageWindow(session, grant, costUsd > 0 ? unreported : tokens);
 }
 
-/** Tells the session's started task runs and blocking workflow tool runs. */
-export async function pushSessionUsageContinuation(
-  session: DurableSession,
-  requestId?: string,
-): Promise<void> {
-  const message: WorkflowToolRunControlMessage = { kind: "usage-continued", requestId };
+/**
+ * Tells the session's started task runs and blocking workflow tool runs about
+ * the Continue that started its current window.
+ */
+export async function pushSessionUsageContinuation(session: DurableSession): Promise<void> {
+  const message: WorkflowToolRunControlMessage = {
+    kind: "usage-continued",
+    requestIds: getSessionUsageGrant(session),
+  };
   const runs = [
     ...readTaskTable(session.state).tasks.flatMap((task) => (task.run?.started ? [task.run] : [])),
     ...getBlockingWorkflowToolRuns(session.state).map((run) => run.address),
@@ -105,18 +115,14 @@ export async function pushSessionUsageContinuation(
  * starts at the session's totals, so they no longer hold.
  */
 export async function applySessionUsageContinuationStep(
-  input: SessionStepState & { readonly requestId: string | undefined },
+  input: SessionStepState & { readonly requestIds: readonly string[] },
 ): Promise<SessionStateTransition & { readonly approved: readonly string[] }> {
   "use step";
   return await withSessionStateDelta(input, async (state) => {
     const current = readDurableSession(state.sessionState);
-    // The session that raised the prompt takes its answer directly; a push
-    // that reaches it later would grant that Continue twice.
-    if (input.requestId?.startsWith(`${current.sessionId}:`)) {
-      return { approved: [], sessionState: state.sessionState };
-    }
-    const session = continueSessionUsage(current);
-    await pushSessionUsageContinuation(session, input.requestId);
+    const session = continueSessionUsage(current, input.requestIds);
+    if (session === current) return { approved: [], sessionState: state.sessionState };
+    await pushSessionUsageContinuation(session);
     const relays = readHitlState(session.state).relays;
     return {
       approved: openInputs(storedProjection(session.state))

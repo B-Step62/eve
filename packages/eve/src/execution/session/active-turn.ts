@@ -296,7 +296,7 @@ export class ActiveTurn {
       case "usage-continued": {
         const approval = await applySessionUsageContinuation({
           ...this.input,
-          requestId: admitted.requestId,
+          requestIds: admitted.requestIds,
         });
         if (approval === undefined) return false;
         this.admitted.add(approval.sequence);

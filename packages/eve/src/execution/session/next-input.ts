@@ -73,7 +73,7 @@ export async function nextTurnDelivery(input: {
       wasIdle && admitted.kind === "delivery" ? admitted.admission.sequence : undefined;
     if (admitted.kind === "workflow") return { kind: "workflow", message: admitted.message };
     if (admitted.kind === "usage-continued") {
-      await applySessionUsageContinuation({ ...input, requestId: admitted.requestId });
+      await applySessionUsageContinuation({ ...input, requestIds: admitted.requestIds });
       continue;
     }
     if (

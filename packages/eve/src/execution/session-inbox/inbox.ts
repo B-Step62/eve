@@ -48,7 +48,7 @@ export interface SessionHandoverPayload {
  */
 export interface SessionUsageContinuedPayload {
   readonly kind: "usage-continued";
-  readonly requestId?: string;
+  readonly requestIds: readonly string[];
 }
 
 export type SessionInboxPayload =
