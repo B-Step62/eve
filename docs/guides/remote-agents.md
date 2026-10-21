@@ -41,7 +41,7 @@ import { defineDynamic, defineRemoteAgent } from "eve";
 
 export default defineDynamic({
   events: {
-    "session.started": (_event, ctx) =>
+    beforeSession: (_event, ctx) =>
       ctx.session.auth.current?.attributes.region === "us"
         ? defineRemoteAgent({
             description: "Answers weather questions for US customers.",
@@ -52,7 +52,7 @@ export default defineDynamic({
 });
 ```
 
-Dynamic remote subagents support `session.started` and `turn.started`. The
+Dynamic remote subagents support `beforeSession` and `beforeTurn`. The
 returned definition may select different remote settings at either scope. eve
 resolves function-valued URLs when the event handler runs. Auth and headers
 remain lazy and resolve before each outbound request without entering durable
