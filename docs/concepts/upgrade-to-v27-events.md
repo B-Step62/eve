@@ -357,6 +357,33 @@ contexts share the environment type. These type changes do not rename OpenTeleme
 Principal field unification is not enabled here: the connection principal migration must ship
 with a compatible Vercel Connect release, never as an eve-only runtime rename.
 
+## Naming conventions
+
+- Experimental connection callback types live at `eve/experimental/connections` without an
+  `Experimental_` prefix. A connection opts in with `experimental: { events }`, not
+  `experimental_events`. Connect's private bridge metadata keeps its existing wire fields.
+- Computer use lives under `eve/extensions/computer-use`; self-modification mounts use
+  `eve/extensions/self-modification/local` or `/remote`. The router tool path is
+  `eve/tools/agent_router`.
+- `sleep`, `noReply`, and `askQuestion` are tool values, not zero-argument factories.
+  `webSearch` is a named factory only; its module has no default tool export.
+- Reporter factories are `consoleReporter`, `junitReporter`, `braintrustReporter`, and
+  `datadogReporter`. React's hook result is `UseEveAgentReturn`, as in Vue and Svelte.
+- Channel options use `EveChannelConfig` and `McpChannelConfig`. Platforms have one
+  `*ChannelCredentials` type, and continuation-token helpers take one object. GitHub now exports
+  `githubContinuationToken`. Redundant `*ResultOrPromise` aliases are inlined as unions.
+- Authored instructions, skills, and schedule prompts use `content`; the old instruction
+  `markdown` alias is rejected. Markdown files themselves remain supported.
+- Every sandbox operation option uses `signal`; eval contexts and memory backend inputs handed
+  to handlers use `abortSignal`. Linear activity `signal` is domain data, not an AbortSignal,
+  and keeps its protocol name. Outbound auth uses `httpBasic`, matching the inbound verifier.
+- Next config helpers preserve the app's generic config without importing Next's whole declaration
+  graph. Import `NextConfig` from `next` when annotating configs or callbacks. Nuxt's default
+  entry is an opaque setup module; its loader metadata is not an authoring API.
+- `DefaultSandbox` exposes only `autoInstall` and `prepare` for its just-bash fallback.
+  Configure SDK-specific filesystem factories and commands on `JustBashSandbox.environment()`.
+  just-bash 3.6 fixes missing declarations shipped by 3.1; typed integration requires 3.6 or later.
+
 ## Clients and frontends
 
 - **Frontend commands resolve on acceptance.** `EveAgentStore.send()` and the frontend hooks'
@@ -445,7 +472,7 @@ with a compatible Vercel Connect release, never as an eve-only runtime rename.
   definitions; separate schema constants are no longer exported.
 - `eve/setup` is no longer public. Scaffold integrations move to `eve/internal/scaffold`.
   `eve/internal/*` and `eve/experimental/*` have no compatibility promise.
-- Mount `eve/self-modification/local` or `/remote` explicitly. The bare entry and `/config` are
+- Mount `eve/extensions/self-modification/local` or `/remote` explicitly. The bare entry and `/config` are
   removed. Preserve authored changes before removing the retired
   `agent/subagents/self-modification/` layout; setup reports the replacement mount rather than
   deleting those files.

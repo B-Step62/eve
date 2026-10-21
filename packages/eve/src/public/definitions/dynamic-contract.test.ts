@@ -40,7 +40,7 @@ describe("slot-typed dynamic authoring", () => {
   });
 
   it("accepts skills but excludes model boundaries from skill handlers", async () => {
-    const skill = defineSkill({ description: "Review a summary", markdown: "Read the summary." });
+    const skill = defineSkill({ description: "Review a summary", content: "Read the summary." });
     const resolver = skills({
       events: {
         beforeTurn(event) {

@@ -273,7 +273,7 @@ The user can always type their own answer instead of picking an option, so the m
 ```ts title="agent/tools/ask_question.ts"
 import { askQuestion } from "eve/tools/ask_question";
 
-export default askQuestion();
+export default askQuestion;
 ```
 
 `ask_question` is an ordinary [workflow tool](/docs/tools/workflows) built on `ctx.ask()`. Write your own workflow tool with `ctx.ask()` when you need a different schema or want to act on the answer in the same call. Without any asking tool, the model asks in its reply text and the user's next message carries the answer.
