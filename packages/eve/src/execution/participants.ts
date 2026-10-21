@@ -78,6 +78,30 @@ export interface SessionParticipants extends StepParticipants {
   rehydrateConnections(input: { readonly turn: TurnRef | undefined }): Promise<void>;
 }
 
+/** Restores connection bindings from the last checkpoint, without replaying model or tool work. */
+export async function rehydrateSessionConnections(input: {
+  readonly ctx: ContextContainer;
+  readonly bundle: CompiledBundle;
+  readonly effectiveAgent: ReturnType<typeof resolveEffectiveAgentRuntime>;
+}): Promise<void> {
+  const { ctx, bundle, effectiveAgent } = input;
+  const projection = currentProjection(ctx);
+  if (!projection.view.session.startedAt) return;
+  const turnId = activeTurnIdOf(projection);
+  const position = turnCoordinates(projection);
+  const participants = bindSessionParticipants({
+    abortSignal: new AbortController().signal,
+    bundle,
+    ctx,
+    effectiveAgent,
+    effectiveNode: { ...bundle.graph.root, turnAgent: effectiveAgent.turnAgent },
+    instrumentation: undefined,
+  });
+  await participants.rehydrateConnections({
+    turn: turnId === undefined ? undefined : { sequence: position.sequence, turnId },
+  });
+}
+
 /** Binds the bundle's participants to one turn step. */
 export function bindSessionParticipants(input: {
   readonly abortSignal: AbortSignal;
