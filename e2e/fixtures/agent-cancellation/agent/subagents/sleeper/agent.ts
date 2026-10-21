@@ -7,7 +7,7 @@ export default defineAgent({
   description: "Waits until its delegated turn is cancelled.",
   ...e2eSubagentConfig({
     mock: ({ lastUserMessage, toolResults, userMessages }) => {
-      // A continued task reaches the same session, so the first message is still in it.
+      // A restarted task must not inherit the cancelled session's earlier message.
       if (lastUserMessage?.includes("SLEEPER-FOLLOW-UP") === true) {
         return `SLEEPER-REMEMBERS=${String(
           userMessages.some((entry) => entry.includes("Please wait for cancellation.")),

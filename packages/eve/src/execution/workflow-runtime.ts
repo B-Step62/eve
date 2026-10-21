@@ -87,6 +87,7 @@ import type { DynamicSubagentAgentConfig } from "#runtime/subagents/dynamic-agen
 import { initializeSessionInstrumentation } from "#instrumentation/runtime.js";
 import {
   SESSION_TIMEOUT_WORKFLOW_NAME,
+  LATE_AGENT_SESSION_RETIREMENT_WORKFLOW_NAME,
   WORKFLOW_TOOL_RUN_WORKFLOW_NAME,
   WORKFLOW_ENTRY_NAME,
   CONNECTION_EVENT_WORKFLOW_NAME,
@@ -119,6 +120,10 @@ export const workflowEntryReference = {
 /** Stable workflow reference for session deadline timers. */
 export const sessionTimeoutWorkflowReference = {
   workflowId: `workflow//${STABLE_ID_BASE}//${SESSION_TIMEOUT_WORKFLOW_NAME}`,
+};
+
+export const lateAgentSessionRetirementWorkflowReference = {
+  workflowId: `workflow//${STABLE_ID_BASE}//${LATE_AGENT_SESSION_RETIREMENT_WORKFLOW_NAME}`,
 };
 
 /** Stable workflow reference for authored workflow tool runs. */
