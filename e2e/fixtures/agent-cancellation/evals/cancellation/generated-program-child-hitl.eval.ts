@@ -29,6 +29,6 @@ export default defineEval({
     t.event("child.opened", { count: 1, data: { name: "sleeper" } });
     t.messageIncludes("CHILD_HITL_RESULT=");
     t.messageIncludes("GENERATED-HITL-MARKER");
-    t.noFailedActions();
+    t.noFailedCalls();
   },
 });

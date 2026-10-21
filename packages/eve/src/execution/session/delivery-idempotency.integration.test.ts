@@ -44,8 +44,8 @@ describe("delivery idempotency", () => {
           .from(address)
           .send("Alice asks for a report.", { auth: null, idempotencyKey: "initial" });
       const initial = await Promise.all([send(), send()]);
-      expect(initial[0]!.id).toBe(initial[1]!.id);
-      const session = initial[0]!;
+      expect(initial[0]!.sessionId).toBe(initial[1]!.sessionId);
+      const session = createSession(initial[0]!.sessionId, runtime);
       const stream = captureTurnEvents(getRun(session.id));
       let completed = false;
       try {
