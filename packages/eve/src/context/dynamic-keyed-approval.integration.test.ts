@@ -52,13 +52,13 @@ function createContext() {
 it("rebinds keyed approval using persisted captures after losing its callback registry", async () => {
   let workspace = "alice";
   const resolver: ResolvedDynamicToolResolver = {
-    eventNames: ["turn.started"],
+    eventNames: ["beforeTurn"],
     slug: "scoped",
     logicalPath: "tools/scoped.ts",
     sourceId: "test:scoped",
     sourceKind: "module",
     events: {
-      "turn.started": () => ({
+      beforeTurn: () => ({
         deploy: defineTool({
           description: "Deploy Alice's release",
           inputSchema: defineDurableSchema({

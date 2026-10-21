@@ -217,7 +217,7 @@ export async function resolveRuntimeModelSelection(input: {
   validateRuntimeLanguageModel(selectedModel);
   if (input.durability === "durable") {
     throw new InvalidRuntimeModelSelectionError(
-      'Dynamic model selection returned a provider object, but durable model selections must be serializable. Return a model id string, or use a "step.started" model resolver.',
+      'Dynamic model selection returned a provider object, but durable model selections must be serializable. Return a model id string, or use a "beforeModel" model resolver.',
     );
   }
 

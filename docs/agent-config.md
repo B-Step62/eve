@@ -160,7 +160,7 @@ import { defineAgent, defineDynamic } from "eve";
 export default defineAgent({
   model: defineDynamic({
     events: {
-      "session.started": (_event, ctx) => {
+      beforeSession: (_event, ctx) => {
         if (ctx.session.auth.initiator?.attributes.plan === "enterprise") {
           return "anthropic/claude-opus-5.5";
         }
@@ -177,16 +177,16 @@ context](./guides/dynamic-capabilities) and return a gateway model id, an AI
 SDK `LanguageModel`, or a selection object. Returning `null` or `undefined`
 fails the turn.
 
-- **Scopes.** `session.started` (once per session), `turn.started` (once per
-  turn), `step.started` (every model step). Precedence: step > turn >
-  session. Prefer `session.started`: prompt caches are per model, so every
+- **Scopes.** `beforeSession` (once per session), `beforeTurn` (once per
+  turn), `beforeModel` (every model step). Precedence: step > turn >
+  session. Prefer `beforeSession`: prompt caches are per model, so every
   switch re-ingests the conversation at uncached prices. If no active
   selection exists before model-dependent work begins, the turn fails.
 - **Failures stop the turn.** A resolver that throws, returns no model, or
   returns an invalid selection fails before the provider call. A selected
   model without valid credentials fails at request time.
 - **Serialization.** Session/turn selections must be model id strings; return
-  live `LanguageModel` objects only from `step.started`.
+  live `LanguageModel` objects only from `beforeModel`.
 - **Selection object.** `{ model, reasoning?, modelContextWindowTokens?, modelOptions? }`.
   When `modelContextWindowTokens` is omitted, eve resolves it from the AI
   Gateway catalog and caches successful metadata in durable session state for

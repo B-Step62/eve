@@ -82,7 +82,7 @@ A reset cannot be undone. A fresh session started by a message can read at most 
 
 A replacement session is a new session with its own ID, stream, auth, channel binding, and state. It starts with no history from the stranded session. `ctx.session.predecessor` and the `session.started` event's `data.predecessor` name the session it replaced: `{ sessionId }`.
 
-To let the model continue the conversation, read the stranded session's recorded stream with `sessions.attach()` from `eve/server`, read it with `transcriptOf()` from `eve/client`, and return the result from a [dynamic user-role instruction](../instructions#dynamic-instructions) at `session.started`:
+To let the model continue the conversation, read the stranded session's recorded stream with `sessions.attach()` from `eve/server`, read it with `transcriptOf()` from `eve/client`, and return the result from a [dynamic user-role instruction](../instructions#dynamic-instructions) at `beforeSession`:
 
 ```ts title="agent/instructions/replaced-conversation.ts"
 import { transcriptOf } from "eve/client";
@@ -91,7 +91,7 @@ import { sessions } from "eve/server";
 
 export default defineDynamic({
   events: {
-    "session.started": async (_event, ctx) => {
+    beforeSession: async (_event, ctx) => {
       const predecessor = ctx.session.predecessor;
       if (predecessor === undefined) return null;
 

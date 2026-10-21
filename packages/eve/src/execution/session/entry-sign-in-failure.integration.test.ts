@@ -102,7 +102,7 @@ describe("workflowEntry sign-in failure", () => {
         definition: defineAgent({
           model: defineDynamic({
             events: {
-              "step.started": () => ({ model: scriptedModel, modelContextWindowTokens: 200_000 }),
+              beforeModel: () => ({ model: scriptedModel, modelContextWindowTokens: 200_000 }),
             },
           }),
         }),
