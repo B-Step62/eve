@@ -40,8 +40,7 @@ import type { SessionView } from "#protocol/session-projection/tables.js";
 // thing it holds (`held.ts`): a control, or deliveries, which start a turn. A turn (`turn.ts`)
 // runs steps; after each, it goes on, waits (`waits.ts`) on a person, on calls, or on tasks, or
 // ends. What arrives meanwhile may answer the turn (`answers.ts`), steer it, or wait for the turn
-// to end. A cancel stops the turn. `internal/testing/scheduler-checker.ts` checks what holds of
-// it.
+// to end. A cancel stops the turn.
 
 /**
  * What the scheduler reads of the session before it decides. Steps change the session's durable
@@ -131,11 +130,6 @@ export type Next =
   | { readonly kind: "hand-off" }
   | { readonly kind: "end"; readonly end: SessionEnd };
 
-/**
- * Each delivery the session holds goes to the children whose questions it answers first, once,
- * in arrival order, whenever the session decides in a turn or idly between turns; the session
- * holds what's left. Whatever then takes it takes only what's the session's own.
- */
 /** Whether the session started: nothing else is on its stream until it has. */
 function started(reading: SessionReading): boolean {
   return reading.view.session.status !== "new";
@@ -148,6 +142,7 @@ function ended(state: Scheduler): boolean {
   return phase.kind === "turn" && endsSession(phase.turn);
 }
 
+/** Routes held deliveries to their asking children before the session takes the remainder. */
 function route(state: Scheduler): Made | undefined {
   const { phase } = state;
   const deciding =

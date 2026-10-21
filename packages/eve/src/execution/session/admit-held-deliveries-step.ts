@@ -42,6 +42,6 @@ export async function admitHeldDeliveriesStep(
         event.type !== "delivery.admitted" || view.deliveries[event.data.deliveryId] === undefined,
     );
     if (facts.length === 0) return {};
-    return await publishSessionEvents(state, facts);
+    return await publishSessionEvents(state, facts, { announce: false });
   });
 }

@@ -635,11 +635,6 @@ async function runSessionStepBody(
   }
 }
 
-/**
- * The step stopped for an interaction: it says so, or it stopped with nothing of its own to wait on,
- * and the tables say whether that's an interaction (`announceWaiting`).
- */
-
 /** A cancel the commit's hooks raised after it was written; the cancel already underway handles it. */
 function ignoreTurnCancellation(error: unknown): void {
   if (!isTurnCancellation(error)) throw error;

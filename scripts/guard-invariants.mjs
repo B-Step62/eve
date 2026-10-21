@@ -1534,9 +1534,6 @@ const PHASE_BOUNDARY_DIRS = [
 const PHASE_IMPORT_RE =
   /(from\s+|import\s+)(?:type\s+)?['"]phase(?:\/[^'"]*)?['"]|require\(\s*['"]phase(?:\/[^'")]*)?['"]\s*\)|import\(\s*['"]phase(?:\/[^'")]*)?['"]\s*\)/;
 
-/**
- * @returns {Promise<Violation[]>}
- */
 const SESSION_DECISION_ENTRIES = [
   "packages/eve/src/execution/session/scheduler/next.ts",
   "packages/eve/src/execution/session/scheduler/events.ts",
@@ -1649,6 +1646,7 @@ async function checkRule56DecisionsLoadNoHost() {
   return violations;
 }
 
+/** @returns {Promise<Violation[]>} */
 async function checkRule34PhaseBoundary() {
   /** @type {Violation[]} */
   const violations = [];
