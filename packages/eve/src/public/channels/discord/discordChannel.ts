@@ -56,6 +56,10 @@ import {
   discordJsonBody,
   readMessageContent,
 } from "#public/channels/discord/responses.js";
+import {
+  createDiscordGatewayRoute,
+  type DiscordGatewayConfig,
+} from "#public/channels/discord/messages.js";
 import { type DiscordWebhookVerifier } from "#public/channels/discord/verify.js";
 import { verifyDiscordInbound } from "#public/channels/discord/verifyInbound.js";
 import { readNonEmptyString } from "#shared/guards.js";
@@ -219,6 +223,13 @@ export interface DiscordChannelConfig {
     interaction: DiscordInputResponseInteraction,
   ): DiscordInputResponseResult | Promise<DiscordInputResponseResult>;
 
+  /**
+   * Accepts ordinary messages (DMs, mentions, and thread follow-ups) that a
+   * relay forwards from the Discord Gateway, such as `experimental_runDiscordGatewayRelay`
+   * from `eve/channels/discord/gateway`. Mounts `POST /eve/v1/discord/gateway`.
+   */
+  readonly gateway?: DiscordGatewayConfig;
+
   readonly events?: DiscordChannelEvents;
 }
 
@@ -267,7 +278,10 @@ export interface DiscordChannel extends Channel<
   DiscordReceiveTarget,
   DiscordInstrumentationMetadata
 > {}
-/** Discord channel factory for HTTP Interactions and proactive channel messages. */
+/**
+ * Discord channel factory for HTTP Interactions, proactive channel messages,
+ * and, with `gateway`, ordinary messages forwarded from the Discord Gateway.
+ */
 export function discordChannel(config: DiscordChannelConfig = {}): DiscordChannel {
   const onCommand = config.onCommand ?? defaultOnCommand;
   const onInputResponse =
@@ -326,6 +340,15 @@ export function discordChannel(config: DiscordChannelConfig = {}): DiscordChanne
           });
         },
       ),
+      ...(config.gateway === undefined
+        ? []
+        : [
+            createDiscordGatewayRoute({
+              buildContext: (state) => ({ discord: buildDiscordHandle({ config, state }) }),
+              config,
+              gateway: config.gateway,
+            }),
+          ]),
     ],
 
     async receive(input, { from }) {
@@ -396,13 +419,12 @@ function buildDiscordHandle(input: {
   const credentials = mergeCredentials(input.config.credentials, state);
 
   /**
-   * The first posted message anchors the conversation. A press finds its
-   * session by the id of the message it is on, so every later message with
-   * components, such as a second pending question, is aliased too.
+   * The first posted message anchors the conversation. Every posted message
+   * is aliased too: a press finds its session by the id of the message it is
+   * on, and a Gateway reply by the id of the message it replies to.
    */
-  function anchor(posted: DiscordPostedMessage, body: DiscordMessageBody): void {
+  function anchor(posted: DiscordPostedMessage): void {
     if (!posted.id) return;
-    if (state.hasMessageAnchor && body.components === undefined) return;
     if (!state.hasMessageAnchor) {
       state.conversationId = posted.id;
       state.hasMessageAnchor = true;
@@ -425,7 +447,7 @@ function buildDiscordHandle(input: {
       fetch: api?.fetch,
       channelId,
     });
-    anchor(posted, body);
+    anchor(posted);
     return posted;
   }
 
@@ -443,7 +465,7 @@ function buildDiscordHandle(input: {
       interactionToken,
     });
     state.initialResponseSent = true;
-    anchor(posted, body);
+    anchor(posted);
     return posted;
   }
 
@@ -460,7 +482,7 @@ function buildDiscordHandle(input: {
       fetch: api?.fetch,
       interactionToken,
     });
-    anchor(posted, body);
+    anchor(posted);
     return posted;
   }
 
